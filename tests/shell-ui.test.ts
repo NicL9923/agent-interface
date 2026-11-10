@@ -3,12 +3,13 @@ import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
+import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
 import { api, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
+import { advance, mountRoot, renderedProps, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -65,15 +66,6 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
-/**
- * The props React last rendered onto an element. React replaces this object whenever the element's
- * component renders again, and keeps it when a memoized component above it skips rendering.
- */
-const renderedProps = (element: Element) => {
-  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
-  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
-  return (element as unknown as Record<string, unknown>)[key];
-};
 const render = async () => { await mount.render(createElement(App)); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
@@ -354,6 +346,150 @@ describe("composer", () => {
     expect(field().value).toBe("こんにちは");
     await press({ key: "Enter", keyCode: 13 });
     expect(sends().map(([, body]) => (body as { text: string }).text)).toEqual(["こんにちは"]);
+  });
+
+  it("keeps focus in the message box when Send is pressed, so a phone's keyboard stays up, and still sends", async () => {
+    await render();
+    const sendButton = () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
+    await typeInto(field(), "Feed the horses");
+    field().focus();
+    // jsdom has no focusing steps, so a press does what the HTML spec has a browser do on mousedown,
+    // which a tap also fires: focus the pressed button unless the page prevented that default.
+    await act(async () => {
+      const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      if (sendButton().dispatchEvent(press)) sendButton().focus();
+    });
+    expect(document.activeElement).toBe(field());
+    await act(async () => sendButton().click());
+    const sent = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages");
+    expect(sent.map(([, body]) => (body as { text: string }).text)).toEqual(["Feed the horses"]);
+  });
+
+  describe("Return", () => {
+    // A phone or tablet with no keyboard: its only pointer is a finger.
+    const touchOnly = () => stubMatchMedia(query => query === "(any-pointer: coarse)");
+    const sends = () => vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages")
+      .map(([, body]) => (body as { text: string }).text);
+    const hint = () => field().getAttribute("enterkeyhint");
+    /**
+     * Presses a key in the message box, then does what a browser does when the page leaves the key
+     * alone: Enter inserts a line break at the caret. Returns whether the page left it alone.
+     */
+    const press = (init: KeyboardEventInit) => act(async () => {
+      const unhandled = field().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+      if (unhandled && init.key === "Enter" && init.keyCode !== 229) {
+        const value = `${field().value}\n`;
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field(), value);
+        field().dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return unhandled;
+    });
+
+    it("starts a new line on a touch screen, and the Send button sends", async () => {
+      touchOnly();
+      await render();
+      expect(hint()).toBe("enter");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+      await typeInto(field(), "Feed the horses\nand the dogs");
+      await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+      expect(sends()).toEqual(["Feed the horses\nand the dogs"]);
+    });
+
+    it("sends on Enter and starts a new line on Shift+Enter with a mouse or trackpad", async () => {
+      // A touch-screen laptop: a finger and a trackpad.
+      stubMatchMedia(query => query === "(any-pointer: coarse)" || query === "(any-pointer: fine)");
+      await render();
+      expect(hint()).toBe("send");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", shiftKey: true, keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(false);
+      expect(sends()).toEqual(["Feed the horses\n"]);
+    });
+
+    it("starts a new line on a touch screen whatever keys came before, and sends nothing", async () => {
+      touchOnly();
+      await render();
+      await typeInto(field(), "Feed the horses");
+      // An iPhone's on-screen Shift and Caps Lock fire these too, and third-party keyboards send Tab.
+      for (const key of ["Shift", "CapsLock", "Tab"]) await press({ key, shiftKey: key === "Shift" });
+      expect(hint()).toBe("enter");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+    });
+
+    it.each([
+      ["a touch screen", "Ctrl", touchOnly],
+      ["a touch screen", "Cmd", touchOnly],
+      ["a mouse or trackpad", "Ctrl", () => stubMatchMedia(query => query === "(any-pointer: fine)")],
+      ["a mouse or trackpad", "Cmd", () => stubMatchMedia(query => query === "(any-pointer: fine)")],
+    ])("sends on %s with %s+Enter", async (_, modifier, device) => {
+      device();
+      await render();
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13, ctrlKey: modifier === "Ctrl", metaKey: modifier === "Cmd" })).toBe(false);
+      expect(sends()).toEqual(["Feed the horses"]);
+    });
+
+    it("follows a trackpad connected and removed while the page is open", async () => {
+      const pointers = new Set(["(any-pointer: coarse)"]);
+      const changed = new Set<() => void>();
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        get matches() { return pointers.has(query); },
+        media: query,
+        addEventListener: (_: string, listener: () => void) => changed.add(listener),
+        removeEventListener: (_: string, listener: () => void) => changed.delete(listener),
+      }));
+      const connect = (on: boolean) => act(async () => {
+        if (on) pointers.add("(any-pointer: fine)"); else pointers.delete("(any-pointer: fine)");
+        for (const listener of [...changed]) listener();
+      });
+      await render();
+      expect(hint()).toBe("enter");
+      await connect(true);
+      expect(hint()).toBe("send");
+      await connect(false);
+      expect(hint()).toBe("enter");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(sends()).toEqual([]);
+    });
+
+    it("lists what Enter does on this device in the shortcut list, and that Ctrl+Enter or Cmd+Enter always sends", async () => {
+      const keys = () => Object.fromEntries([...document.body.querySelectorAll(".shortcuts-dialog .shortcut-row")]
+        .map(row => [row.querySelector("kbd")!.textContent, row.querySelector("dt")!.textContent]));
+      const note = () => document.body.querySelector(".shortcuts-dialog .shortcut-note")?.textContent ?? "";
+      touchOnly();
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(keys()).toMatchObject({ Enter: "Start a new line", "Ctrl+Enter or ⌘Enter": "Send your message" });
+      expect(keys()).not.toHaveProperty("Shift+Enter");
+      // The one case the rule gets wrong: a keyboard with no trackpad on a touch screen.
+      expect(note()).toContain("keyboard without a trackpad");
+      await mount.render(createElement("div"));
+      stubMatchMedia(query => query === "(any-pointer: fine)");
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(keys()).toMatchObject({ Enter: "Send your message", "Shift+Enter": "Start a new line", "Ctrl+Enter or ⌘Enter": "Send your message" });
+      expect(note()).toBe("");
+    });
+
+    it.each([
+      ["Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Enter", "a touch screen", touchOnly],
+      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Ctrl+Enter", "a touch screen", touchOnly],
+    ])("leaves the %s that confirms an IME word to the input method with %s", async (keys, _, device) => {
+      device();
+      await render();
+      await typeInto(field(), "こんにちは");
+      expect(await press({ key: "Enter", ctrlKey: keys === "Ctrl+Enter", isComposing: false, keyCode: 229 })).toBe(true);
+      expect(field().value).toBe("こんにちは");
+      expect(sends()).toEqual([]);
+    });
   });
 
   it("never recalls into a draft while its send is in flight", async () => {

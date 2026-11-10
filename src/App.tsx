@@ -111,7 +111,7 @@ export function App() {
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
   const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { conversation, setConversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
@@ -122,7 +122,10 @@ export function App() {
   useDeviceActivity(userId);
   const readThrough = useReadThrough(userId, shownBotId, shownBotId
     ? latestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation?.botId === shownBotId ? conversation.messages : undefined) : undefined);
-  const connectionLost = session.disconnected || conversationDisconnected || offline;
+  // A failed conversation read refuses anything that needs the connection at once (`connectionLost`),
+  // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
+  const connectionLost = session.disconnected || conversationReadFailed || offline;
+  const connectionShown = session.disconnected || conversationDisconnected || offline;
   const { pending, receipt, sending, send, retry, discard, reset } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
@@ -348,12 +351,12 @@ export function App() {
   const dock = useMemo(() => {
     const items: DockItem[] = [];
     if (!boot) return items;
-    if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+    if (connectionShown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
       appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
-    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionLost} count={decisions} onReview={() => reviewFirstDecision()} /> });
+    if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionShown} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
-  }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  }, [boot, connectionShown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
   const liveBot = boot?.bots.find(bot => bot.id === botId);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
@@ -386,7 +389,7 @@ export function App() {
       </main>
     );
   const selected = boot.bots.find((bot) => bot.id === botId);
-  const state: ActivityState = connectionLost
+  const state: ActivityState = connectionShown
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
   const active = ["thinking", "working", "waiting", "blocked"].includes(state);
@@ -398,7 +401,7 @@ export function App() {
   return (
     <div className="app-shell">
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
-        connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
+        connectionLost={connectionShown} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
         onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection}
         onChooseMain={chooseMainFromHome} onDismissMainSuggestion={dismissMainSuggestion} />
@@ -410,7 +413,7 @@ export function App() {
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
-            showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
+            showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost} connectionShown={connectionShown}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
@@ -418,7 +421,7 @@ export function App() {
             onDraft={addToDraft} onCreate={newBot} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
             state={state}
-            active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
+            active={active} connectionLost={connectionLost} connectionShown={connectionShown} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
@@ -444,7 +447,7 @@ export function App() {
       {panel?.kind === "details" && detailsBot && (
         <Loading>
           <BotDetails key={`${boot.user.id}:${detailsBot.id}`} boot={boot} bot={detailsBot}
-            avatarState={detailsBot.id === botId ? avatarState : connectionLost ? "disconnected" : detailsBot.activity}
+            avatarState={detailsBot.id === botId ? avatarState : connectionShown ? "disconnected" : detailsBot.activity}
             conversation={conversation} connectionLost={connectionLost} startNewSection={panel.newSection}
             editPreferences={session.editPreferences} onFind={findInChat} onMain={setMain} onCheckIns={setCheckIns}
             onSettings={bot => open({ kind: "settings", bot })} onClose={() => closePanels("details")} />
@@ -459,7 +462,7 @@ export function App() {
         bots={boot.bots} currentVersion={boot.connection.version} currentRevisionDate={boot.connection.revisionDate} /></Loading>}
       {panel?.kind === "preferences" && (
         <Loading>
-          <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
+          <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionShown} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
             onClose={() => sheetClosed("preferences")} closer={panelClose} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
@@ -467,7 +470,7 @@ export function App() {
         </Loading>
       )}
       {overlay === "palette" && <CommandPalette boot={boot} botId={botId} rooms={rooms} onSelectRoom={id => { setPanel(null); selectRoom(id); }} onNewGroup={homeGroups.canCreate ? () => { setPanel(null); newGroup(); } : undefined} shownBotId={shownBotId} readThrough={readThrough}
-        connectionLost={connectionLost} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
+        connectionLost={connectionShown} onClose={closeOverlay} onSelectBot={id => { setPanel(null); selectBot(id); }}
         onView={next => { setPanel(null); showView(next); }} onSearch={text => { setPanel(null); searchMessages(text); }}
         onSettings={destination => setPanel({ kind: "preferences", destination })} onUsage={openUsage} onNewBot={newBot} onTheme={setTheme} onShortcuts={showShortcuts}
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} onAsk={askMain} />}

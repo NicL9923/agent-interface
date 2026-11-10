@@ -1,0 +1,5335 @@
+{
+ "method": "Chromium phone emulation, e2e/server.ts build, faked visualViewport; extra notice and talk panels are inserted into the DOM for layout only",
+ "before": [
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "textarea": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "extras": {
+    "top": 610,
+    "bottom": 610,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "textarea": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "extras": {
+    "top": 610,
+    "bottom": 610,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 339,
+    "bottom": 659,
+    "height": 320
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 344,
+    "bottom": 410,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 301,
+    "bottom": 355,
+    "height": 54
+   },
+   "textarea": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "extras": {
+    "top": 306,
+    "bottom": 306,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 301,
+    "bottom": 355,
+    "height": 54
+   },
+   "textarea": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "extras": {
+    "top": 306,
+    "bottom": 306,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 101,
+    "bottom": 355,
+    "height": 254
+   },
+   "textarea": {
+    "top": 106,
+    "bottom": 306,
+    "height": 200
+   },
+   "extras": {
+    "top": 106,
+    "bottom": 106,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 357,
+    "bottom": 401,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 86,
+    "bottom": 406,
+    "height": 320
+   },
+   "textarea": {
+    "top": 157,
+    "bottom": 357,
+    "height": 200
+   },
+   "extras": {
+    "top": 91,
+    "bottom": 157,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 101,
+    "bottom": 355,
+    "height": 254
+   },
+   "textarea": {
+    "top": 106,
+    "bottom": 306,
+    "height": 200
+   },
+   "extras": {
+    "top": 106,
+    "bottom": 106,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 363,
+    "bottom": 407,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 158,
+    "bottom": 412,
+    "height": 254
+   },
+   "textarea": {
+    "top": 163,
+    "bottom": 363,
+    "height": 200
+   },
+   "extras": {
+    "top": 163,
+    "bottom": 163,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 870,
+    "bottom": 924,
+    "height": 54
+   },
+   "textarea": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "extras": {
+    "top": 875,
+    "bottom": 875,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 870,
+    "bottom": 924,
+    "height": 54
+   },
+   "textarea": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "extras": {
+    "top": 875,
+    "bottom": 875,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 604,
+    "bottom": 924,
+    "height": 320
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 609,
+    "bottom": 675,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 486,
+    "bottom": 540,
+    "height": 54
+   },
+   "textarea": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "extras": {
+    "top": 491,
+    "bottom": 491,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 486,
+    "bottom": 540,
+    "height": 54
+   },
+   "textarea": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "extras": {
+    "top": 491,
+    "bottom": 491,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 220,
+    "bottom": 540,
+    "height": 320
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 225,
+    "bottom": 291,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 313,
+    "bottom": 367,
+    "height": 54
+   },
+   "textarea": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "extras": {
+    "top": 318,
+    "bottom": 318,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 313,
+    "bottom": 367,
+    "height": 54
+   },
+   "textarea": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "extras": {
+    "top": 318,
+    "bottom": 318,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 135,
+    "bottom": 367,
+    "height": 233
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 140,
+    "bottom": 206,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 96,
+    "bottom": 150,
+    "height": 54
+   },
+   "textarea": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "extras": {
+    "top": 101,
+    "bottom": 101,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 90,
+    "bottom": 134,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": true,
+   "header": {
+    "top": -11,
+    "bottom": 79,
+    "height": 90
+   },
+   "form": {
+    "top": 85,
+    "bottom": 139,
+    "height": 54
+   },
+   "textarea": {
+    "top": 90,
+    "bottom": 134,
+    "height": 44
+   },
+   "extras": {
+    "top": 90,
+    "bottom": 90,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 121,
+    "bottom": 165,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -93,
+    "bottom": -3,
+    "height": 90
+   },
+   "form": {
+    "top": 3,
+    "bottom": 170,
+    "height": 167
+   },
+   "textarea": {
+    "top": 8,
+    "bottom": 121,
+    "height": 113
+   },
+   "extras": {
+    "top": 8,
+    "bottom": 8,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 121,
+    "bottom": 165,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -159,
+    "bottom": -69,
+    "height": 90
+   },
+   "form": {
+    "top": -63,
+    "bottom": 170,
+    "height": 233
+   },
+   "textarea": {
+    "top": 8,
+    "bottom": 121,
+    "height": 113
+   },
+   "extras": {
+    "top": -58,
+    "bottom": 8,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 121,
+    "bottom": 165,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -103,
+    "bottom": -13,
+    "height": 90
+   },
+   "form": {
+    "top": 3,
+    "bottom": 170,
+    "height": 167
+   },
+   "textarea": {
+    "top": 8,
+    "bottom": 121,
+    "height": 113
+   },
+   "extras": {
+    "top": 8,
+    "bottom": 8,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 77,
+    "bottom": 121,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": false,
+   "tappable": true,
+   "header": {
+    "top": -209,
+    "bottom": -119,
+    "height": 90
+   },
+   "form": {
+    "top": -41,
+    "bottom": 126,
+    "height": 167
+   },
+   "textarea": {
+    "top": -36,
+    "bottom": 77,
+    "height": 113
+   },
+   "extras": {
+    "top": -36,
+    "bottom": -36,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 328,
+    "bottom": 382,
+    "height": 54
+   },
+   "textarea": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "extras": {
+    "top": 333,
+    "bottom": 333,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 328,
+    "bottom": 382,
+    "height": 54
+   },
+   "textarea": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "extras": {
+    "top": 333,
+    "bottom": 333,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 145,
+    "bottom": 382,
+    "height": 237
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 150,
+    "bottom": 216,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -28,
+    "bottom": 62,
+    "height": 90
+   },
+   "form": {
+    "top": 68,
+    "bottom": 239,
+    "height": 171
+   },
+   "textarea": {
+    "top": 73,
+    "bottom": 190,
+    "height": 117
+   },
+   "extras": {
+    "top": 73,
+    "bottom": 73,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -94,
+    "bottom": -4,
+    "height": 90
+   },
+   "form": {
+    "top": 2,
+    "bottom": 239,
+    "height": 237
+   },
+   "textarea": {
+    "top": 73,
+    "bottom": 190,
+    "height": 117
+   },
+   "extras": {
+    "top": 7,
+    "bottom": 73,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -38,
+    "bottom": 52,
+    "height": 90
+   },
+   "form": {
+    "top": 68,
+    "bottom": 239,
+    "height": 171
+   },
+   "textarea": {
+    "top": 73,
+    "bottom": 190,
+    "height": 117
+   },
+   "extras": {
+    "top": 73,
+    "bottom": 73,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -100,
+    "bottom": -10,
+    "height": 90
+   },
+   "form": {
+    "top": 68,
+    "bottom": 239,
+    "height": 171
+   },
+   "textarea": {
+    "top": 73,
+    "bottom": 190,
+    "height": 117
+   },
+   "extras": {
+    "top": 73,
+    "bottom": 73,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 96,
+    "bottom": 150,
+    "height": 54
+   },
+   "textarea": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "extras": {
+    "top": 101,
+    "bottom": 101,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 96,
+    "bottom": 150,
+    "height": 54
+   },
+   "textarea": {
+    "top": 101,
+    "bottom": 145,
+    "height": 44
+   },
+   "extras": {
+    "top": 101,
+    "bottom": 101,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 150,
+    "bottom": 194,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -68,
+    "bottom": 22,
+    "height": 90
+   },
+   "form": {
+    "top": 28,
+    "bottom": 199,
+    "height": 171
+   },
+   "textarea": {
+    "top": 33,
+    "bottom": 150,
+    "height": 117
+   },
+   "extras": {
+    "top": 33,
+    "bottom": 33,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 150,
+    "bottom": 194,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -134,
+    "bottom": -44,
+    "height": 90
+   },
+   "form": {
+    "top": -38,
+    "bottom": 199,
+    "height": 237
+   },
+   "textarea": {
+    "top": 33,
+    "bottom": 150,
+    "height": 117
+   },
+   "extras": {
+    "top": -33,
+    "bottom": 33,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 150,
+    "bottom": 194,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -78,
+    "bottom": 12,
+    "height": 90
+   },
+   "form": {
+    "top": 28,
+    "bottom": 199,
+    "height": 171
+   },
+   "textarea": {
+    "top": 33,
+    "bottom": 150,
+    "height": 117
+   },
+   "extras": {
+    "top": 33,
+    "bottom": 33,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 150,
+    "bottom": 194,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -140,
+    "bottom": -50,
+    "height": 90
+   },
+   "form": {
+    "top": 28,
+    "bottom": 199,
+    "height": 171
+   },
+   "textarea": {
+    "top": 33,
+    "bottom": 150,
+    "height": 117
+   },
+   "extras": {
+    "top": 33,
+    "bottom": 33,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 368,
+    "bottom": 422,
+    "height": 54
+   },
+   "textarea": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "extras": {
+    "top": 373,
+    "bottom": 373,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 368,
+    "bottom": 422,
+    "height": 54
+   },
+   "textarea": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "extras": {
+    "top": 373,
+    "bottom": 373,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 173,
+    "bottom": 422,
+    "height": 249
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 178,
+    "bottom": 244,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -40,
+    "bottom": 50,
+    "height": 90
+   },
+   "form": {
+    "top": 56,
+    "bottom": 239,
+    "height": 183
+   },
+   "textarea": {
+    "top": 61,
+    "bottom": 190,
+    "height": 129
+   },
+   "extras": {
+    "top": 61,
+    "bottom": 61,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -106,
+    "bottom": -16,
+    "height": 90
+   },
+   "form": {
+    "top": -10,
+    "bottom": 239,
+    "height": 249
+   },
+   "textarea": {
+    "top": 61,
+    "bottom": 190,
+    "height": 129
+   },
+   "extras": {
+    "top": -5,
+    "bottom": 61,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -50,
+    "bottom": 40,
+    "height": 90
+   },
+   "form": {
+    "top": 56,
+    "bottom": 239,
+    "height": 183
+   },
+   "textarea": {
+    "top": 61,
+    "bottom": 190,
+    "height": 129
+   },
+   "extras": {
+    "top": 61,
+    "bottom": 61,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 190,
+    "bottom": 234,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": false,
+   "tappable": false,
+   "header": {
+    "top": -112,
+    "bottom": -22,
+    "height": 90
+   },
+   "form": {
+    "top": 56,
+    "bottom": 239,
+    "height": 183
+   },
+   "textarea": {
+    "top": 61,
+    "bottom": 190,
+    "height": 129
+   },
+   "extras": {
+    "top": 61,
+    "bottom": 61,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 738,
+    "bottom": 792,
+    "height": 54
+   },
+   "textarea": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "extras": {
+    "top": 743,
+    "bottom": 743,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 738,
+    "bottom": 792,
+    "height": 54
+   },
+   "textarea": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "extras": {
+    "top": 743,
+    "bottom": 743,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 472,
+    "bottom": 792,
+    "height": 320
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 477,
+    "bottom": 543,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  }
+ ],
+ "after": [
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "textarea": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "extras": {
+    "top": 610,
+    "bottom": 610,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "textarea": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "extras": {
+    "top": 610,
+    "bottom": 610,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 339,
+    "bottom": 659,
+    "height": 320
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 344,
+    "bottom": 410,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 610,
+    "bottom": 654,
+    "height": 44
+   },
+   "shellBottom": 667,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 405,
+    "bottom": 659,
+    "height": 254
+   },
+   "textarea": {
+    "top": 410,
+    "bottom": 610,
+    "height": 200
+   },
+   "extras": {
+    "top": 410,
+    "bottom": 410,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 301,
+    "bottom": 355,
+    "height": 54
+   },
+   "textarea": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "extras": {
+    "top": 306,
+    "bottom": 306,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 301,
+    "bottom": 355,
+    "height": 54
+   },
+   "textarea": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "extras": {
+    "top": 306,
+    "bottom": 306,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 101,
+    "bottom": 355,
+    "height": 254
+   },
+   "textarea": {
+    "top": 106,
+    "bottom": 306,
+    "height": 200
+   },
+   "extras": {
+    "top": 106,
+    "bottom": 106,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 86,
+    "bottom": 355,
+    "height": 269
+   },
+   "textarea": {
+    "top": 157,
+    "bottom": 306,
+    "height": 149
+   },
+   "extras": {
+    "top": 91,
+    "bottom": 157,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 159,
+    "bottom": 355,
+    "height": 196
+   },
+   "textarea": {
+    "top": 164,
+    "bottom": 306,
+    "height": 142
+   },
+   "extras": {
+    "top": 164,
+    "bottom": 164,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE portrait",
+   "w": 375,
+   "h": 667,
+   "kb": 363,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 306,
+    "bottom": 350,
+    "height": 44
+   },
+   "shellBottom": 363,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 149,
+    "bottom": 355,
+    "height": 206
+   },
+   "textarea": {
+    "top": 154,
+    "bottom": 306,
+    "height": 152
+   },
+   "extras": {
+    "top": 154,
+    "bottom": 154,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 870,
+    "bottom": 924,
+    "height": 54
+   },
+   "textarea": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "extras": {
+    "top": 875,
+    "bottom": 875,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 870,
+    "bottom": 924,
+    "height": 54
+   },
+   "textarea": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "extras": {
+    "top": 875,
+    "bottom": 875,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 604,
+    "bottom": 924,
+    "height": 320
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 609,
+    "bottom": 675,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 875,
+    "bottom": 919,
+    "height": 44
+   },
+   "shellBottom": 932,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 670,
+    "bottom": 924,
+    "height": 254
+   },
+   "textarea": {
+    "top": 675,
+    "bottom": 875,
+    "height": 200
+   },
+   "extras": {
+    "top": 675,
+    "bottom": 675,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 486,
+    "bottom": 540,
+    "height": 54
+   },
+   "textarea": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "extras": {
+    "top": 491,
+    "bottom": 491,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 486,
+    "bottom": 540,
+    "height": 54
+   },
+   "textarea": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "extras": {
+    "top": 491,
+    "bottom": 491,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 220,
+    "bottom": 540,
+    "height": 320
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 225,
+    "bottom": 291,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max portrait",
+   "w": 430,
+   "h": 932,
+   "kb": 548,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 491,
+    "bottom": 535,
+    "height": 44
+   },
+   "shellBottom": 548,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 80,
+    "height": 80
+   },
+   "form": {
+    "top": 286,
+    "bottom": 540,
+    "height": 254
+   },
+   "textarea": {
+    "top": 291,
+    "bottom": 491,
+    "height": 200
+   },
+   "extras": {
+    "top": 291,
+    "bottom": 291,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 313,
+    "bottom": 367,
+    "height": 54
+   },
+   "textarea": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "extras": {
+    "top": 318,
+    "bottom": 318,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 313,
+    "bottom": 367,
+    "height": 54
+   },
+   "textarea": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "extras": {
+    "top": 318,
+    "bottom": 318,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 135,
+    "bottom": 367,
+    "height": 233
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 140,
+    "bottom": 206,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 318,
+    "bottom": 362,
+    "height": 44
+   },
+   "shellBottom": 375,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 201,
+    "bottom": 367,
+    "height": 167
+   },
+   "textarea": {
+    "top": 206,
+    "bottom": 318,
+    "height": 113
+   },
+   "extras": {
+    "top": 206,
+    "bottom": 206,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -38,
+    "bottom": 52,
+    "height": 90
+   },
+   "form": {
+    "top": 58,
+    "bottom": 112,
+    "height": 54
+   },
+   "textarea": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "extras": {
+    "top": 63,
+    "bottom": 63,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -38,
+    "bottom": 52,
+    "height": 90
+   },
+   "form": {
+    "top": 58,
+    "bottom": 112,
+    "height": 54
+   },
+   "textarea": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "extras": {
+    "top": 63,
+    "bottom": 63,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -82,
+    "bottom": 8,
+    "height": 90
+   },
+   "form": {
+    "top": 14,
+    "bottom": 112,
+    "height": 98
+   },
+   "textarea": {
+    "top": 19,
+    "bottom": 63,
+    "height": 44
+   },
+   "extras": {
+    "top": 19,
+    "bottom": 19,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -82,
+    "bottom": 8,
+    "height": 90
+   },
+   "form": {
+    "top": 14,
+    "bottom": 112,
+    "height": 98
+   },
+   "textarea": {
+    "top": 19,
+    "bottom": 63,
+    "height": 44
+   },
+   "extras": {
+    "top": 19,
+    "bottom": 27,
+    "height": 8
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -92,
+    "bottom": -2,
+    "height": 90
+   },
+   "form": {
+    "top": 14,
+    "bottom": 112,
+    "height": 98
+   },
+   "textarea": {
+    "top": 19,
+    "bottom": 63,
+    "height": 44
+   },
+   "extras": {
+    "top": 19,
+    "bottom": 19,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "SE landscape",
+   "w": 667,
+   "h": 375,
+   "kb": 120,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 63,
+    "bottom": 107,
+    "height": 44
+   },
+   "shellBottom": 120,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -110,
+    "bottom": -20,
+    "height": 90
+   },
+   "form": {
+    "top": 14,
+    "bottom": 112,
+    "height": 98
+   },
+   "textarea": {
+    "top": 19,
+    "bottom": 63,
+    "height": 44
+   },
+   "extras": {
+    "top": 19,
+    "bottom": 19,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 328,
+    "bottom": 382,
+    "height": 54
+   },
+   "textarea": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "extras": {
+    "top": 333,
+    "bottom": 333,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 328,
+    "bottom": 382,
+    "height": 54
+   },
+   "textarea": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "extras": {
+    "top": 333,
+    "bottom": 333,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 145,
+    "bottom": 382,
+    "height": 237
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 150,
+    "bottom": 216,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 333,
+    "bottom": 377,
+    "height": 44
+   },
+   "shellBottom": 390,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 211,
+    "bottom": 382,
+    "height": 171
+   },
+   "textarea": {
+    "top": 216,
+    "bottom": 333,
+    "height": 117
+   },
+   "extras": {
+    "top": 216,
+    "bottom": 216,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -12,
+    "bottom": 78,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -12,
+    "bottom": 78,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 97,
+    "height": 8
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -22,
+    "bottom": 68,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 190,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -40,
+    "bottom": 50,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -8,
+    "bottom": 82,
+    "height": 90
+   },
+   "form": {
+    "top": 88,
+    "bottom": 142,
+    "height": 54
+   },
+   "textarea": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "extras": {
+    "top": 93,
+    "bottom": 93,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -8,
+    "bottom": 82,
+    "height": 90
+   },
+   "form": {
+    "top": 88,
+    "bottom": 142,
+    "height": 54
+   },
+   "textarea": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "extras": {
+    "top": 93,
+    "bottom": 93,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -52,
+    "bottom": 38,
+    "height": 90
+   },
+   "form": {
+    "top": 44,
+    "bottom": 142,
+    "height": 98
+   },
+   "textarea": {
+    "top": 49,
+    "bottom": 93,
+    "height": 44
+   },
+   "extras": {
+    "top": 49,
+    "bottom": 49,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -52,
+    "bottom": 38,
+    "height": 90
+   },
+   "form": {
+    "top": 44,
+    "bottom": 142,
+    "height": 98
+   },
+   "textarea": {
+    "top": 49,
+    "bottom": 93,
+    "height": 44
+   },
+   "extras": {
+    "top": 49,
+    "bottom": 57,
+    "height": 8
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -62,
+    "bottom": 28,
+    "height": 90
+   },
+   "form": {
+    "top": 44,
+    "bottom": 142,
+    "height": 98
+   },
+   "textarea": {
+    "top": 49,
+    "bottom": 93,
+    "height": 44
+   },
+   "extras": {
+    "top": 49,
+    "bottom": 49,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "844x390 landscape",
+   "w": 844,
+   "h": 390,
+   "kb": 150,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 93,
+    "bottom": 137,
+    "height": 44
+   },
+   "shellBottom": 150,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -80,
+    "bottom": 10,
+    "height": 90
+   },
+   "form": {
+    "top": 44,
+    "bottom": 142,
+    "height": 98
+   },
+   "textarea": {
+    "top": 49,
+    "bottom": 93,
+    "height": 44
+   },
+   "extras": {
+    "top": 49,
+    "bottom": 49,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 368,
+    "bottom": 422,
+    "height": 54
+   },
+   "textarea": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "extras": {
+    "top": 373,
+    "bottom": 373,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 368,
+    "bottom": 422,
+    "height": 54
+   },
+   "textarea": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "extras": {
+    "top": 373,
+    "bottom": 373,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 173,
+    "bottom": 422,
+    "height": 249
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 178,
+    "bottom": 244,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 373,
+    "bottom": 417,
+    "height": 44
+   },
+   "shellBottom": 430,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 239,
+    "bottom": 422,
+    "height": 183
+   },
+   "textarea": {
+    "top": 244,
+    "bottom": 373,
+    "height": 129
+   },
+   "extras": {
+    "top": 244,
+    "bottom": 244,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 128,
+    "bottom": 182,
+    "height": 54
+   },
+   "textarea": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "extras": {
+    "top": 133,
+    "bottom": 133,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -12,
+    "bottom": 78,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -12,
+    "bottom": 78,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 97,
+    "height": 8
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -22,
+    "bottom": 68,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "Pro Max landscape",
+   "w": 932,
+   "h": 430,
+   "kb": 190,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 133,
+    "bottom": 177,
+    "height": 44
+   },
+   "shellBottom": 190,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": -40,
+    "bottom": 50,
+    "height": 90
+   },
+   "form": {
+    "top": 84,
+    "bottom": 182,
+    "height": 98
+   },
+   "textarea": {
+    "top": 89,
+    "bottom": 133,
+    "height": 44
+   },
+   "extras": {
+    "top": 89,
+    "bottom": 89,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "empty",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 738,
+    "bottom": 792,
+    "height": 54
+   },
+   "textarea": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "extras": {
+    "top": 743,
+    "bottom": 743,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "one",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 738,
+    "bottom": 792,
+    "height": 54
+   },
+   "textarea": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "extras": {
+    "top": 743,
+    "bottom": 743,
+    "height": 0
+   },
+   "layout": "inline"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "attachments",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 472,
+    "bottom": 792,
+    "height": 320
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 477,
+    "bottom": 543,
+    "height": 66
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "notice",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  },
+  {
+   "name": "desktop",
+   "w": 1280,
+   "h": 800,
+   "kb": null,
+   "draft": "long",
+   "extra": "talk",
+   "send": {
+    "top": 743,
+    "bottom": 787,
+    "height": 44
+   },
+   "shellBottom": 800,
+   "inside": true,
+   "tappable": true,
+   "header": {
+    "top": 0,
+    "bottom": 90,
+    "height": 90
+   },
+   "form": {
+    "top": 538,
+    "bottom": 792,
+    "height": 254
+   },
+   "textarea": {
+    "top": 543,
+    "bottom": 743,
+    "height": 200
+   },
+   "extras": {
+    "top": 543,
+    "bottom": 543,
+    "height": 0
+   },
+   "layout": "stacked"
+  }
+ ]
+}

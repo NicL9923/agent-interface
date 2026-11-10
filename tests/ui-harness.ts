@@ -100,3 +100,12 @@ export function stubMatchMedia(matches: boolean | ((query: string) => boolean) =
     removeEventListener: vi.fn(),
   })));
 }
+/**
+ * The props React last rendered onto an element. React replaces this object whenever the element's
+ * component renders again, and keeps it when a memoized component above it skips rendering.
+ */
+export const renderedProps = (element: Element) => {
+  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
+  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
+  return (element as unknown as Record<string, unknown>)[key];
+};
