@@ -221,9 +221,9 @@ still win.
 - The chat header lifts with a border and shadow once messages scroll under it. This uses
   scroll-driven animations where the browser supports them.
 - While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
-- While a reply streams, its text appears at a steady pace instead of jumping a line or two at
-  each of the server's updates, up to four a second. Each update is revealed within about a third
-  of a second of arriving, however long it is, with at most 30 paints a second, and a reply
+- While a reply streams, its text appears at a steady pace instead of jumping at each of the
+  server's updates, up to ten a second. Each update is revealed within about a third of a second
+  of arriving, however long it is, with at most 30 paints a second, and a reply
   already under way when the chat opens shows at once. A caret at the text's logical end, right of
   Latin text and left of Arabic or Hebrew, or past the line's end where text of the other direction
   touches that edge with no space, pulses until the reply is saved, and follows a code
@@ -458,7 +458,7 @@ Its **Automations** tab lists next runs, recent execution or delivery failures, 
 
 The avatar at the top of home opens your profile menu: **Usage**, **Settings** and **Sign out**. **Usage** shows plan limits and credits for each provider account your assistants run on, as Hermes reads them from the provider: ChatGPT session and weekly limits with banked resets, Claude sign-in session and weekly limits, OpenRouter credits and key quota, Nous Portal credits, and any provider plugin that reports usage. Each account shows once, with the assistants that use it and whether it is only a fallback. A banked ChatGPT reset can be spent after a confirmation, which warns when no limit is used up yet. Providers without a usage endpoint say so. Usage reads each account at most once a minute, or every 15 seconds with Refresh.
 
-Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include.
+Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include. Images in the conversation hold their space while they load. A sent image keeps the shape its preview had; an image this tab has not shown before, such as a reply's generated picture, holds a 4:3 frame while it loads, and if its own shape is more than 10% off it takes that shape once loaded. While you are scrolled up with that image's message in view, it waits until the message leaves the view or you return to the end of the chat, so nothing you are reading moves; in a chat too short for the message ever to leave the view, it takes its shape at once, and what follows it moves by the difference. A tall image, such as a phone screenshot, sits in a narrower card at the 400 px height cap instead of between bars. An image that fails to load keeps its frame and says it couldn't load. Hermes reports no image sizes.
 
 An empty conversation on web and iOS offers a role discussion using the assistant's description and adds it to the draft. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
@@ -676,7 +676,23 @@ its update routes refuse with a message pointing to the app. Running
 describes recovery.
 
 Conversations show an animated avatar inline after the latest message while
-Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
+Hermes thinks or uses tools. A message sent while nothing is running shows the
+assistant thinking at once, beside the message, and Hermes's own report takes over
+the same row without a second announcement, also when Hermes's saved copy of the
+message arrives one read before that report. That early row goes if the send is
+refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
+when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
+copy arrives and no report of the turn follows within 5 seconds. A reply already
+after the copy ends the row on that read. A failed or interrupted report in the
+read that brings the copy may still be the last turn's, since Hermes saves the
+message before it opens the run. So the row keeps thinking through that read,
+until the next read or the 5 seconds; a turn that fails before any read sees it
+running therefore shows its failure, and its Retry, that much late. A message sent
+while the assistant works adds none. Stop appears once Hermes reports the turn.
+One case still shows thinking for the echo's 30 seconds with nothing running:
+Hermes's typed stop phrase, which acts only while Hermes's own voice mode is on
+for the session. WildBots never turns that mode on, and the add-on reports the
+phrase as accepted like any message. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning

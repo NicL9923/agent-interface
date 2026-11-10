@@ -16,9 +16,17 @@
  * holds an email draft card revising the one before, and every sixth turn's tool makes a file, so the
  * transcript exercises origins, reply files and draft revisions as a long real one does. Nothing
  * leaves the machine.
+ *
+ * For timing a live reply: STREAM_MS sets the time between growths (default 40). TOKENS=N makes the answer
+ * N numbered words, `w0001 w0002 …`, twelve to a paragraph, so a page can tell which word shows by reading
+ * the largest number in it. BURSTY=1 streams the answer in seeded bursts instead of evenly: 4 to 10
+ * growths of 8 to 16 characters 30 ms apart, then a pause of 200 to 800 ms, about 120 characters a second.
+ * TIMELINE_FILE names a file that gets `{ points: [[epochMs, length], …] }` for the answer once it is saved,
+ * the moment each growth was noticed and how long the answer was then, on the same clock a page reads as
+ * `performance.timeOrigin + performance.now()`. .agents/tools/measure-live-latency.mjs drives these.
  */
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { createApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
 import { botFixture, capabilitiesFixture, conversationFixture } from "../../tests/helpers/runtime-fixtures.js";
@@ -26,7 +34,8 @@ import type { Activity, Inflight, LiveTurn, Message, Runtime, ToolCall } from ".
 
 if (!existsSync("dist/client/index.html")) throw new Error("Run `npm run build` first: the preview serves dist/client.");
 const port = Number(process.argv[2] ?? 4190);
-const step = Number(process.env.STREAM_CHARS ?? 6);
+const step = Number(process.env.STREAM_CHARS ?? 6), stepMs = Number(process.env.STREAM_MS ?? 40);
+const tokens = Number(process.env.TOKENS ?? 0), bursty = process.env.BURSTY === "1", timelineFile = process.env.TIMELINE_FILE;
 const saveDelay = Number(process.env.SAVE_DELAY_MS ?? 0);
 const first = "Let me check the gate log before I answer.";
 const codeBlock = process.env.CODE_BLOCK === "1";
@@ -45,7 +54,8 @@ const prose = [
     + "is found while there is still light to fix it.\n"),
   "That is everything for today.",
 ].join("\n");
-const answer = codeBlock ? "```ts\n" + Array.from({ length: 700 }, (_, index) => `const post${index} = check("fence", ${index});`).join("\n") : prose;
+const numbered = Array.from({ length: tokens }, (_, index) => `w${String(index + 1).padStart(4, "0")}${index % 12 === 11 ? "\n\n" : " "}`).join("").trimEnd();
+const answer = codeBlock ? "```ts\n" + Array.from({ length: 700 }, (_, index) => `const post${index} = check("fence", ${index});`).join("\n") : tokens ? numbered : prose;
 // Where the answer's stream starts: a code block arrives 20,000 characters long, then grows.
 const answerStart = codeBlock ? 20_000 : 0;
 
@@ -96,11 +106,30 @@ function structural() {
   }, 60);
 }
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function stream(text: string, from = 0) {
-  for (let at = from; at < text.length; at += step) {
-    turn!.live = text.slice(0, at + step);
+// A seeded generator, so a bursty answer arrives the same way on every run.
+let seed = 0x5eed;
+const random = () => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed / 2 ** 31; };
+const between = (low: number, high: number) => low + Math.floor(random() * (high - low + 1));
+async function stream(text: string, from = 0, timeline?: [number, number][]) {
+  const grow = (length: number) => {
+    turn!.live = text.slice(0, length);
     notify("inflight");
-    await pause(40);
+    timeline?.push([performance.timeOrigin + performance.now(), turn!.live.length]);
+  };
+  if (bursty && timeline) {
+    for (let at = from; at < text.length;) {
+      for (let count = between(4, 10); count > 0 && at < text.length; count--) {
+        at += between(8, 16);
+        grow(at);
+        await pause(30);
+      }
+      await pause(between(200, 800));
+    }
+    return;
+  }
+  for (let at = from; at < text.length; at += step) {
+    grow(at + step);
+    await pause(stepMs);
   }
 }
 async function run(runId: string) {
@@ -118,7 +147,9 @@ async function run(runId: string) {
   turn.calls = [{ ...call, status: "completed", completedAt: new Date().toISOString() }];
   thread.push({ id: randomUUID(), runId, role: "tool", text: "", toolCall: turn.calls[0], createdAt: new Date().toISOString() });
   structural();
-  await stream(answer, answerStart);
+  const timeline: [number, number][] = [];
+  await stream(answer, answerStart, timeline);
+  if (timelineFile) writeFileSync(timelineFile, JSON.stringify({ points: timeline }));
   await pause(saveDelay);
   thread.push({ id: randomUUID(), runId, role: "assistant", text: answer, createdAt: new Date().toISOString() });
   turn.live = "";

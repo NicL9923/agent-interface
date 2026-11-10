@@ -17,7 +17,15 @@ export function pingFor(query: unknown): { every: number; text: string; atOpen: 
 
 /** An open server-sent event stream. */
 /** send reports whether the text was written: false once the stream ended or the viewer lost access. */
-export type EventStream = { send: (text: string) => boolean; end: () => void };
+export type EventStream = {
+  send: (text: string) => boolean;
+  /**
+   * Whether the client has taken in what was already written, past the socket's buffer. When it has not,
+   * `retry` runs once it has, once however often this is asked meanwhile, and never after the stream ends.
+   */
+  writable: (retry: () => void) => boolean;
+  end: () => void;
+};
 
 /**
  * Follows an event stream request's connection from the start of its handler, so setup that
@@ -70,13 +78,22 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   options: { allowed: () => boolean; teardown: () => void; ping: ReturnType<typeof pingFor> }, closed: boolean): EventStream {
   reply.hijack();
   const response = reply.raw;
-  let ended = false;
+  let ended = false, draining = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const send = (text: string) => {
     if (!options.allowed()) { end(); return false; }
     if (ended) return false;
     response.write(text);
     return true;
+  };
+  const writable = (retry: () => void) => {
+    if (ended) return false;
+    if (!response.writableNeedDrain) return true;
+    if (!draining) {
+      draining = true;
+      response.once("drain", () => { draining = false; if (!ended) retry(); });
+    }
+    return false;
   };
   function end() {
     if (ended) return;
@@ -88,7 +105,7 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   // The close event already fired for a client that left during setup.
   if (closed || response.destroyed) {
     end();
-    return { send, end };
+    return { send, writable, end };
   }
   // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
   response.writeHead(200, {
@@ -107,5 +124,5 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   // Clients refetch on open; an initial notice would duplicate that read. A fast-ping stream pings at
   // once, so its client learns the interval before it could mistake silence for a dead stream.
   response.write(`retry: 3000\n\n${options.ping.atOpen ? options.ping.text : ""}`);
-  return { send, end };
+  return { send, writable, end };
 }
