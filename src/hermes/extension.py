@@ -431,17 +431,23 @@ class LaneQueue:
 
 
 class Reservation:
-    """One admission reservation, released at most once, so a second release cannot free another request's."""
+    """One admission reservation, released at most once, so a second release cannot free another request's.
 
-    def __init__(self, retirement):
-        self.retirement, self.lock, self.held = retirement, threading.Lock(), True
+    ``unlist`` runs just after the release, both under ``lock``, so a reader holding ``lock`` sees the
+    reservation and what lists it go together, and nothing is unlisted while its reservation is held.
+    """
+
+    def __init__(self, retirement, lock, unlist=None):
+        self.retirement, self.lock, self.unlist, self.held = retirement, lock, unlist, True
 
     def release(self):
         with self.lock:
             held, self.held = self.held, False
-        if held:
-            self.retirement.release()
-        else:
+            if held:
+                self.retirement.release()
+                if self.unlist is not None:
+                    self.unlist()
+        if not held:
             logging.getLogger(__name__).error("An admission reservation was released twice; the second release was ignored", stack_info=True)
 
 
@@ -627,6 +633,10 @@ class Bridge:
         self.submission_lock = threading.RLock()
         self.reads = LaneQueue(READ_WORKERS, "read")
         self.sends = LaneQueue(SEND_WORKERS, "send")
+        # Each queued app send, from its reservation until it is answered: [profile, "queued" or "admitting"].
+        # Maintenance status lists them as active work, as acquire already counts their reservations.
+        self.sends_in_flight = {}
+        self.sends_in_flight_lock = threading.Lock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
@@ -692,14 +702,23 @@ class Bridge:
         return json.loads(path.read_text())
 
     def busy_sessions(self):
+        """Active work for maintenance: busy sessions, then app sends that wait for or hold a lane.
+
+        A send staging images or inside Hermes's admission call has not marked its session running,
+        and one waiting on its lane has not reached Hermes at all. Each holds an admission
+        reservation, so acquire refuses; status lists them so its callers refuse first.
+        """
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
         # native reservations cover work queued after this snapshot.
         sessions = self.server._sessions.copy()
+        with self.sends_in_flight_lock:
+            sends = [tuple(send) for send in self.sends_in_flight.values()]
         return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
                 for sid, session in sessions.items()
                 if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
-                or session.get("pending_steer") or session.get("_auto_continue_scheduled")]
+                or session.get("pending_steer") or session.get("_auto_continue_scheduled")] + [
+            {"sessionId": self.canonical.get(profile), "profile": profile, "state": state} for profile, state in sends]
 
     def maintenance(self, rid, params):
         server = self.server
@@ -788,13 +807,30 @@ class Bridge:
             return self.original_dispatch(request, *args, **kwargs)
         from tui_gateway.transport import bind_transport
         server, retirement = self.server, self.retirement
-        if not retirement.acquire():
-            return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
-        reservation = Reservation(retirement)
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        profile = params.get("profile", "default")
+        # Listed whenever its reservation is held, so maintenance status and acquire agree about it. Maintenance
+        # reads both under maintenance_lock, so listing and reserving are one step to it, and so are releasing
+        # and unlisting in Reservation.release. Neither step waits on anything but the native fence.
+        send = [profile if isinstance(profile, str) else None, "queued"] if method in QUEUED_SENDS else None
+        def unlist():
+            with self.sends_in_flight_lock:
+                self.sends_in_flight.pop(id(send), None)
+        with self.maintenance_lock:
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    self.sends_in_flight[id(send)] = send
+            if not retirement.acquire():
+                unlist()
+                return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        reservation = Reservation(retirement, self.maintenance_lock, unlist if send is not None else None)
         context = contextvars.copy_context()
         def answer(requests):
             # Each merged request holds its own admission reservation until it is answered.
             started = time.perf_counter()
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    send[1] = "admitting"
             try:
                 # Native activation and admission attach the session to the transport bound here,
                 # the caller's, which every merged request shares.
@@ -810,8 +846,6 @@ class Bridge:
             finally:
                 for *_, held in requests:
                     held.release()
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        profile = params.get("profile", "default")
         # A profile that is not a name still gets its handler's answer, from a lane of its own.
         lane = (method, profile if method in PROFILE_LANES and isinstance(profile, str) else None)
         merge = None
