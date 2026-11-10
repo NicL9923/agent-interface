@@ -538,6 +538,9 @@ One longer than about a short sentence shows as typed until it closes. A table h
 while its line is typed, shows as typed while the delimiter row, the `| --- |` line under it,
 arrives, and becomes a table once that row is recognized. Code blocks show every character as
 it arrives, and a code block still arriving keeps your text selection.
+On the web, the reply keeps growing across tool calls: after each tool the server reads the
+running turn itself and sends its saved parts with the reply, so text resumes about one Hermes
+read later instead of waiting for the chat to reload. The iOS app still reloads after each tool.
 Scrolling up stops the view from following; it follows again once you return to
 the end. Each finished turn folds its tool calls and delegated work into one row,
 such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
@@ -569,8 +572,19 @@ browser's text size setting.
 On a phone, the message box sits directly above the on-screen keyboard and the latest
 message stays in view as the keyboard opens and closes. Android browsers resize the page
 for the keyboard through the viewport's `interactive-widget=resizes-content`. Safari on
-iPhone and iPad and the installed iOS web app ignore it, so `src/app/keyboard-viewport.ts`
-sizes the app to the visible area while the keyboard is up; a pinch zoom never resizes it.
+iPhone and iPad and the installed iOS web app ignore it through iOS 27.2, so
+`src/app/keyboard-viewport.ts` sizes the app to the visible area while the keyboard is up.
+WebKit added the setting in the iOS 27.3 beta ([bug 259770](https://bugs.webkit.org/show_bug.cgi?id=259770)),
+where a report says the field still ends up behind the keyboard; the app's behavior on that
+beta is unverified. The code compares the visible area with the page instead of checking the
+browser, so it steps aside wherever the browser resizes the page itself. A pinch zoom leaves
+the app's size alone, except one within 1% of normal scale, which counts as unzoomed.
+
+When the visible area is too short for everything, the transcript gives up its space first,
+then the notices, the Talk panel, the attachment tray and the message box, which scroll inside
+their own boxes down to one line of text, and last the header, cut from the top. Send and Stop
+stay on screen whenever the area is at least as tall as one line of text and the row of
+buttons, about 112 pixels.
 Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
 messages. Attach and Talk switch to the file picker or your voice, so they let it close.
 

@@ -10,8 +10,12 @@
  * moved down to where it was panned. The check is the visual viewport against the layout viewport,
  * not a guess at the browser, so a browser that starts honoring the meta needs no change here.
  *
+ * WebKit implements the meta from the iOS 27.3 beta (bug 259770), where it is reported to leave the
+ * field behind the keyboard still; how this code and that beta interact is unverified.
+ *
  * A pinch zoom shrinks the visual viewport too. While the page is zoomed nothing changes, so a
- * zoom never resizes the shell; the next event at normal scale sets it right.
+ * zoom does not resize the shell; the next event at normal scale sets it right. A scale within
+ * UNZOOMED of 1 counts as normal, so a zoom that slight is treated as a keyboard would be.
  */
 export type ViewportLike = Pick<VisualViewport, "height" | "scale" | "pageTop" | "addEventListener" | "removeEventListener">;
 type Host = { innerHeight: number; visualViewport?: ViewportLike | null; document: Pick<Document, "documentElement"> };

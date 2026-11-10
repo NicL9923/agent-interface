@@ -520,7 +520,7 @@ describe('pushed conversation updates',()=>{
   const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
   const opened=async()=>{
     await renderApp();await advance(20);
-    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=2&drafts=1']);
+    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=3&drafts=1']);
     const stream=[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.
     const before=reads();

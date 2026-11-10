@@ -1088,6 +1088,39 @@ describe("send anchor", () => {
     expect(hook.endSpace.current!.style.height).toBe("");
   });
 
+  // A phone's keyboard opening and closing shrinks and restores the view while nothing new arrives. A smaller view
+  // needs less space below the message, which is not what follows the message filling the view.
+  it("gives the reserved space back when a view that shrank grows again", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    let view = 400;
+    const reserved = () => Number.parseFloat(hook.endSpace.current?.style.height || "0") || 0;
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(() => 2000 + reserved());
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? view : 0; });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this === hook.endSpace.current ? reserved() : 0;
+    });
+    const observed: { target: Element; callback: () => void }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: () => void) {}
+      observe(target: Element) { observed.push({ target, callback: this.callback }); }
+      disconnect() {}
+    });
+    const resize = (to: number) => act(async () => {
+      view = to;
+      for (const { target, callback } of observed) if (target.classList.contains("transcript")) callback();
+    });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    await show([...conversation.messages, prompt("mine", "Check the feed order")]);
+    expect(hook.endSpace.current!.style.height).toBe("176px");
+    await resize(200);
+    expect(hook.endSpace.current!.style.height).toBe("");
+    await resize(400);
+    expect(hook.endSpace.current!.style.height).toBe("176px");
+    expect(top("mine")).toBe(24);
+  });
+
   it("keeps this person's sent message near the top when another member posts after it", async () => {
     layout({ q: 400, a: 600, mine: 1800, theirs: 2200 });
     conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
