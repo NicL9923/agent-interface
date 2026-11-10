@@ -286,3 +286,13 @@ Written first against `848bc91`'s rule: 9 failed. Then each line broken by hand 
 | An unordered version counts as later | the same 10 |
 | A later read never ends the row | 5: the later-read case, the three UI outcomes, the UI stale test |
 | The copy's version is not stored | the same 10 as the first |
+
+## Fourth review: Grok 4.7 on `45b99a8`
+
+Ready, one P3: the README said a finished report keeps the row and that the later read brings "its Retry" for every
+outcome. A reply already after the copy ends the row on that read, and Retry follows only a failure. The README now
+says so. The reviewer ran `nextEcho`, `awaitingTurn` and `retryTarget` for the seven rows of its earlier table: every
+row keeps thinking on the copy's read, and a later comparable read ends it. The 5 second bound held for a copy read
+without a version, a server restart between the reads, and a chat left and returned to. Its three breaks of
+`settledHere` each failed 10 of the 60 tests. It agreed the two-reads-in-one-admission remainder belongs to the change
+that has the server read the admission answer's `turn` field.
