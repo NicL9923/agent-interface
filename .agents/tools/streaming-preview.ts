@@ -10,7 +10,12 @@
  * answer is one open code block that starts at 20,000 characters and keeps growing, the case where
  * each paint re-parses the most. SAVE_DELAY_MS holds the finished answer live that long before
  * saving it (default 0), to select text before the hand-off. ANSWER_PARAGRAPHS sets how many closing
- * paragraphs the answer has (default 6; 80 makes it about 21,000 characters). Nothing leaves the machine.
+ * paragraphs the answer has (default 6; 80 makes it about 21,000 characters). SEED_TURNS puts that
+ * many finished turns before the first send (default 0), each a prompt, a progress line, three tool
+ * calls whose JSON results are SEED_RESULT_KB kilobytes (default 16), and a reply. Every fourth reply
+ * holds an email draft card revising the one before, and every sixth turn's tool makes a file, so the
+ * transcript exercises origins, reply files and draft revisions as a long real one does. Nothing
+ * leaves the machine.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -46,6 +51,31 @@ const answerStart = codeBlock ? 20_000 : 0;
 
 const bot = botFixture({ id: "ranch", name: "Ranch Hand" });
 const thread: Message[] = [{ id: "seed-1", role: "assistant", text: "Morning. The north fence is fixed.", createdAt: new Date().toISOString() }];
+thread.push(...seedTurns(Number(process.env.SEED_TURNS ?? 0), Number(process.env.SEED_RESULT_KB ?? 16)));
+function seedTurns(count: number, resultKb: number): Message[] {
+  const rows: Message[] = [];
+  const start = Date.now() - count * 600_000;
+  const at = (turn: number, step: number) => new Date(start + turn * 600_000 + step * 1000).toISOString();
+  const result = (turn: number, call: number) => JSON.stringify({ turn, call, entries: Array.from({ length: Math.ceil(resultKb * 1024 / 64) },
+    (_, index) => ({ post: index, state: index % 3 ? "latched" : "open", note: "checked at dusk" })) });
+  for (let turn = 1; turn <= count; turn++) {
+    const runId = `seed-run-${turn}`;
+    rows.push({ id: `seed-${turn}-prompt`, runId, role: "user", text: `Check fence section ${turn} and tell me what needs fixing.`, createdAt: at(turn, 0) });
+    rows.push({ id: `seed-${turn}-progress`, runId, role: "assistant", interim: true, text: "Let me read the gate log first.", createdAt: at(turn, 1) });
+    for (const [call, name] of ["terminal", "read_file", "web_search"].entries()) {
+      const toolCall: ToolCall = { id: `seed-${turn}-call-${call}`, name, status: "completed", arguments: JSON.stringify({ section: turn, step: call }),
+        result: result(turn, call), startedAt: at(turn, 2 + call), completedAt: at(turn, 3 + call) };
+      rows.push({ id: `seed-${turn}-tool-${call}`, runId, role: "tool", text: "", toolCall, createdAt: at(turn, 3 + call),
+        ...turn % 6 === 0 && call === 0 ? { files: [{ id: `seed-file-${turn}`, name: `section-${turn}.csv`, mime: "text/csv", size: 2048 }] } : {} });
+    }
+    const card = turn % 4 === 0 ? ["", "```agent-ui", JSON.stringify({ version: 1, cards: [{ id: turn > 4 ? `fence-${turn}__revises__fence-${turn - 4}` : `fence-${turn}`, type: "email",
+      title: "Fence repair note", to: ["neighbor@example.test"], subject: `Fence section ${turn}`, body: `Section ${turn} needs two new posts and a wire splice before Friday.` }] }), "```"] : [];
+    rows.push({ id: `seed-${turn}-reply`, runId, role: "assistant", createdAt: at(turn, 9), text: [`## Section ${turn}`, "",
+      `The **gate** in section ${turn} is latched. Two posts lean east and one wire is loose near the cattle guard.`, "",
+      "1. Reset the leaning posts.", "2. Splice the loose wire.", "3. Walk the line again at dusk.", ...card].join("\n") });
+  }
+  return rows;
+}
 let turn: { runId: string; prompt: number; live: string; calls: ToolCall[]; done: boolean } | undefined;
 const watchers = new Set<(kind?: "inflight") => void>();
 const notify = (kind?: "inflight") => { for (const changed of watchers) changed(kind); };

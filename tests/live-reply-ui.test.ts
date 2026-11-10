@@ -380,3 +380,62 @@ describe("a live reply's row when it is saved", () => {
     expect(document.getSelection()!.toString()).toBe("north gate");
   });
 });
+
+// While a reply streams, work over the saved rows is done once and kept until a read changes them.
+const card = (id: string, body: string) => `\`\`\`agent-ui\n${JSON.stringify({ version: 1, cards: [{ id, type: "email", title: "Gate note", body }] })}\n\`\`\``;
+const draft = (id: string, cardId: string, body: string): Message => ({ id, role: "assistant", text: `Here is the note.\n\n${card(cardId, body)}`, createdAt: "2026-11-10T14:00:00Z" });
+const revision = (id: string) => row(id)?.querySelector(".email-draft-revision")?.textContent;
+async function grow(text: string, from: number) {
+  await send("inflight-delta", { botId: "home", messageId: "s1-inflight", baseTextLength: from, baseReasoningLength: 0, appendText: text, activity: running });
+}
+
+describe("the saved rows while a reply streams", () => {
+  it("reads the saved drafts once, not again on each delta", async () => {
+    server = { ...server, messages: [draft("d0", "fence-0", "Two posts."), ...[1, 2, 3, 4].map(at => draft(`d${at}`, `fence-${at}__revises__fence-${at - 1}`, `Posts ${at}.`)), question] };
+    await open();
+    await send("inflight", live("The"));
+    const parse = vi.spyOn(JSON, "parse");
+    let text = "The";
+    for (let at = 0; at < 10; at++) { await grow(" gate", text.length); text += " gate"; }
+    const cardReads = parse.mock.calls.filter(([value]) => typeof value === "string" && value.includes('"type":"email"'));
+    parse.mockRestore();
+    expect(cardReads).toEqual([]);
+    expect(revision("d4")).toContain("Revises “Gate note”");
+  });
+
+  it("marks a live draft against the earlier one as a read during the reply last changed it", async () => {
+    server = { ...server, messages: [draft("d0", "fence-0", "Meet at noon."), question] };
+    await open();
+    const reply = `Updated.\n\n${card("fence-1__revises__fence-0", "Meet at one.")}`;
+    await send("inflight", live(reply));
+    await advance(CATCH_UP_MS * 4);
+    expect(revision("s1-inflight")).toContain("Revises “Gate note”");
+    // The earlier draft is edited under the same ID; the live draft now matches it.
+    generation++;
+    server = { ...server, messages: [draft("d0", "fence-0", "Meet at one."), question], version: version() };
+    await act(async () => stream().emit("message", "change"));
+    await advance(0);
+    expect(revision("s1-inflight")).toContain("Same as “Gate note”");
+  });
+
+  it("drops a reply a read redacts, with its file chip, and keeps another reply with the same words", async () => {
+    const chart = { id: "chart", name: "chart.png", mime: "image/png" };
+    const ask = (id: string): Message => ({ id, role: "user", text: "Chart the gates", sender: { id: "one", name: "One" }, createdAt: "2026-11-10T13:00:00Z" });
+    const done = (id: string, text = "Here is the chart."): Message => ({ id, role: "assistant", text, createdAt: "2026-11-10T13:01:00Z" });
+    const made: Message = { id: "t0", role: "tool", text: "", files: [chart], toolCall: { id: "call-0", name: "terminal", status: "completed" }, createdAt: "2026-11-10T13:00:30Z" };
+    server = { ...server, messages: [ask("q0"), made, done("r0"), ask("q1"), done("r1"), question], files: [chart] };
+    await open();
+    await send("inflight", live("The north"));
+    const chips = (id: string) => [...row(id)?.querySelectorAll(".reply-file-name") ?? []].map(name => name.textContent);
+    expect(chips("r0")).toEqual(["chart.png"]);
+    expect(chips("r1")).toEqual([]);
+    generation++;
+    server = { ...server, messages: [ask("q0"), made, done("r0", ""), ask("q1"), done("r1"), question], version: version() };
+    await act(async () => stream().emit("message", "change"));
+    await advance(0);
+    expect(row("r0")).toBeNull();
+    expect(mount.container.querySelector(".reply-files")).toBeNull();
+    expect(replyText("r1")).toBe("Here is the chart.");
+    expect(replyText("s1-inflight")).toBe("The north");
+  });
+});

@@ -1,0 +1,199 @@
+diff --git a/src/App.tsx b/src/App.tsx
+index 797aba9..96a3f47 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,4 +1,5 @@
+-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { Profiler, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import { rendered } from "./probe";
+ import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
+ import { MAX_ATTACHMENTS } from "./shared/uploads";
+ import { api, write } from "./client-api";
+@@ -409,13 +410,13 @@ export function App() {
+         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
+         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
+         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
+-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
++          <Profiler id="conversation" onRender={rendered}><Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
+             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost}
+             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
+             reconnect={session.reconnect} error={error} setError={setError}
+             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
+             onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
+-            onDraft={addToDraft} onCreate={newBot} />
++            onDraft={addToDraft} onCreate={newBot} /></Profiler>
+           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
+             state={state}
+             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
+diff --git a/src/app/Conversation.tsx b/src/app/Conversation.tsx
+index 46f7a73..b960103 100644
+--- a/src/app/Conversation.tsx
++++ b/src/app/Conversation.tsx
+@@ -48,6 +48,7 @@ import { draftRevisions } from "../shared/draft-diff";
+ import { conversationArtifacts, replyArtifacts, windowReplyArtifacts, type Artifact } from "../shared/artifacts";
+ import { useEarlierFiles } from "./use-earlier-files";
+ import "./transcript.css";
++import { count, conversationBody } from "../probe";
+ // The panel loads when a file chip first opens it, as it does from the assistant's details.
+ const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
+ const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
+@@ -94,6 +95,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId,
+   /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
+   reviewed?: boolean;
+ }) {
++  conversationBody();
++  const probeStart = performance.now();
+   const prefs = boot.preferences;
+   const advanced = prefs.presentation === "advanced";
+   const blocks = useMemo(() => turns(conversation, advanced), [conversation, advanced]);
+@@ -104,6 +107,7 @@ export const Conversation = memo(function Conversation({ boot, selected, botId,
+   const replyFiles = useMemo(() => conversation ? windowReplyArtifacts(conversation, earlierFiles.messages) : new Map<string, Artifact[]>(), [conversation, earlierFiles.messages]);
+   // Email drafts that revise an earlier one here, so their cards can mark what changed.
+   const revisions = useMemo(() => draftRevisions(conversation?.messages ?? []), [conversation?.messages]);
++  count("derive.ms", performance.now() - probeStart);
+   // The Artifacts panel opened from a chip, on one file or, from "+N more", on the first.
+   const [artifactFocus, setArtifactFocus] = useState<{ fileId?: string } | null>(null);
+   const openFile = useStableCallback((fileId?: string) => setArtifactFocus({ fileId }));
+@@ -392,6 +396,7 @@ function HistoryEdge({ history, scroll, name, disabled }: {
+ type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
+ const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
+ function turns(conversation: SavedConversation | null, advanced: boolean) {
++  count("turns.calls"); count("turns.messages", conversation?.messages.length ?? 0);
+   const blocks: Turn[] = [];
+   for (const message of withMessageOrigins(conversation?.messages || [])) {
+     // A person's message or a scheduled prompt starts a turn. Subagent, process and agent rows that
+@@ -488,12 +493,14 @@ function sameTurn(a: Turn, b: Turn) {
+   const left = [...a.tools], right = [...b.tools];
+   return left.every(([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]));
+ }
+-const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
++const sameTurnProps = (a: TurnProps, b: TurnProps) => { count("compare.calls"); return sameTurnPropsReal(a, b); };
++const sameTurnPropsReal = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
+   && a.botId === b.botId && a.userId === b.userId && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
+   && a.onOpenFile === b.onOpenFile && sameFiles(a.files, b.files) && sameTurn(a.block, b.block);
+ const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) => a === b || !!a && !!b && a.replyId === b.replyId
+   && a.artifacts.length === b.artifacts.length && a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file));
+ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
++  count("TurnView.body");
+   const work = [...block.tools.values()];
+   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
+   // first reply when there is only reasoning, or at the end.
+diff --git a/src/components/EmailDraftCard.tsx b/src/components/EmailDraftCard.tsx
+index 257dd81..ae91e30 100644
+--- a/src/components/EmailDraftCard.tsx
++++ b/src/components/EmailDraftCard.tsx
+@@ -4,11 +4,13 @@ import type { EmailCard } from "../shared/reply-cards";
+ import { draftChanges, draftKey, type AddressPart, type DiffPart } from "../shared/draft-diff";
+ import { Button } from "./ui/button";
+ import { Icon } from "./Icon";
++import { count } from "../probe";
+ 
+ /** The earlier draft each email card in the conversation revises, by draftKey; see draftRevisions. */
+ export const DraftRevisions = createContext<Map<string, EmailCard>>(new Map());
+ /** The draft this card revises, when the conversation holds it. */
+ export const useRevisedDraft = (messageId: string | undefined, cardId: string) => {
++  count("emailCard.revisionReads");
+   const revisions = useContext(DraftRevisions);
+   return messageId ? revisions.get(draftKey(messageId, cardId)) : undefined;
+ };
+diff --git a/src/shared/artifacts.ts b/src/shared/artifacts.ts
+index dbadc53..75ef356 100644
+--- a/src/shared/artifacts.ts
++++ b/src/shared/artifacts.ts
+@@ -1,6 +1,7 @@
+ import type { EarlierFiles } from "./history";
+ import { isConversationReply, messageOrigin, withMessageOrigins } from "./message-origin";
+ import type { FileRef, Message } from "./types";
++import { count } from "../probe";
+ 
+ /**
+  * Which files a conversation holds and which reply each one came with. The Artifacts panel and the
+@@ -31,6 +32,7 @@ export const REPLY_CHIP_LIMIT = 4;
+ 
+ /** Every file in the conversation, earlier pages first, in conversation order. A person's file is Shared; the assistant's or a tool's is Generated. */
+ export function conversationArtifacts(messages: Pick<Message, "role" | "files">[], earlier: EarlierFiles["messages"] = [], files: FileRef[] = []): Artifact[] {
++  count("conversationArtifacts.calls"); count("conversationArtifacts.messages", messages.length);
+   const byId = new Map<string, Artifact>();
+   // Earlier files go first, keeping the list in conversation order.
+   for (const message of earlier) for (const file of message.files || []) byId.set(file.id, { file, source: "Artifact" });
+@@ -55,6 +57,7 @@ const startsTurn = (message: Message) => message.role === "user" && [undefined,
+  * holds the file-bearing messages before `messages`, as the panel reads them.
+  */
+ export function replyArtifacts(messages: Message[], artifacts: Artifact[], earlier: EarlierFiles["messages"] = []): Map<string, Artifact[]> {
++  count("replyArtifacts.calls"); count("replyArtifacts.messages", messages.length);
+   const listed = new Map(artifacts.map(artifact => [artifact.file.id, artifact]));
+   // A file that first appeared before these messages belongs to that earlier turn.
+   const seen = new Set(earlier.flatMap(message => (message.files ?? []).map(file => file.id))), result = new Map<string, Artifact[]>();
+diff --git a/src/shared/draft-diff.ts b/src/shared/draft-diff.ts
+index e729dd0..807c661 100644
+--- a/src/shared/draft-diff.ts
++++ b/src/shared/draft-diff.ts
+@@ -1,5 +1,6 @@
+ import type { EmailCard } from "./reply-cards";
+ import { replyCardsFromText } from "./reply-cards";
++import { count } from "../probe";
+ 
+ /**
+  * Word changes between an email draft and the draft it revises. iOS mirrors this in DraftDiff.swift,
+@@ -101,6 +102,7 @@ export function draftLineage(id: string): { draft: string; revises?: string } {
+  * are never matched. A card naming itself or a later card revises nothing.
+  */
+ export function draftRevisions(messages: { id: string; role: string; text: string }[]): Map<string, EmailCard> {
++  count("draftRevisions.calls"); count("draftRevisions.messages", messages.length);
+   const drafts = new Map<string, EmailCard>(), revisions = new Map<string, EmailCard>();
+   for (const message of messages) {
+     if (message.role !== "assistant") continue;
+diff --git a/src/shared/message-origin.ts b/src/shared/message-origin.ts
+index 681a027..bff5b96 100644
+--- a/src/shared/message-origin.ts
++++ b/src/shared/message-origin.ts
+@@ -1,5 +1,6 @@
+ import type { Message, MessageOrigin } from "./types";
+ import { agentEnvelope } from "./collaboration";
++import { count } from "../probe";
+ 
+ const kinds = new Set(["human", "agent", "scheduled", "subagent", "process", "diagnostic"]);
+ const bounded = (value: unknown) => typeof value === "string" && value.trim() ? value.trim().slice(0, 160) : undefined;
+@@ -49,6 +50,7 @@ export function wireOrigin(message: Message, row: Record<string, unknown>): Mess
+ }
+ /** Responses inherit provenance until the next user prompt, including desktop prompts. */
+ export function withMessageOrigins(messages: Message[], seed?: MessageOrigin): Message[] {
++  count("withMessageOrigins.calls"); count("withMessageOrigins.messages", messages.length);
+   let prompt = seed;
+   return messages.map(message => {
+     const own = messageOrigin(message);
+diff --git a/src/shared/reply-cards.ts b/src/shared/reply-cards.ts
+index 0b3bc54..4e99602 100644
+--- a/src/shared/reply-cards.ts
++++ b/src/shared/reply-cards.ts
+@@ -1,3 +1,4 @@
++import { count } from "../probe";
+ // Hand-written guards rather than a schema library: this module reaches the browser, and a
+ // schema library would ship to every phone for these few shapes. They accept exactly what the
+ // schemas they replace did, including trimmed text and strict objects with no extra keys.
+@@ -187,10 +188,12 @@ function replyDocument(value: unknown): ReplyDocument | null {
+ /** Invalid or oversized card blocks remain readable code rather than actionable UI. */
+ export function parseReplyDocument(code: string): ReplyDocument | null {
+   if (code.length > 100_000) return null;
++  count("parseReplyDocument.calls");
+   try { return replyDocument(JSON.parse(code)); }
+   catch { return null; }
+ }
+ export function replyCardsFromText(text: string): ReplyCard[] {
++  count("replyCardsFromText.calls");
+   const cards: ReplyCard[] = [];
+   const ids = new Set<string>();
+   for (const match of text.matchAll(/^```agent-ui\s*\n([\s\S]*?)^```\s*$/gm)) {
+diff --git a/vite.config.ts b/vite.config.ts
+index 9eea1d6..fc90464 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
+ import { fileURLToPath } from "node:url";
+ export default defineConfig({
+   plugins: [react(), tailwindcss()],
+-  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
++  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)), ...process.env.PROBE ? { "react-dom/client": "react-dom/profiling" } : {} } },
+   server: { host: "127.0.0.1", proxy: { "/api": {target: "http://127.0.0.1:3000", ws: true}, "/inline-ui": "http://127.0.0.1:3000" } },
+   // The iOS app's shared desktop viewer and system terminal are their own small pages, served at
+   // /native/computer and /native/terminal.
