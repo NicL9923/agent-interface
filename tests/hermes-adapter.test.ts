@@ -1335,46 +1335,142 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
   });
 
-  it('bounds read requests, drops a dead transport, and never replays an uncertain mutation', async () => {
+  it('bounds read requests, drops the transport for an unanswered mutation, and never replays it', async () => {
     vi.useFakeTimers();
     deferredMethods.add('agent-interface.submit');
     const submitted = runtime.submit(input());
     await vi.advanceTimersByTimeAsync(0);
     deferredMethods.add('profiles.describe');
     const read = runtime.tools('shared');
-    const rejected = expect(read).rejects.toThrow('timed out');
+    const rejected = expect(read).rejects.toThrow('Hermes profiles.describe timed out. Try again.');
     await vi.advanceTimersByTimeAsync(10_000);
     await rejected;
-    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain'});
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
+    expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain', message: expect.stringContaining('agent-interface.submit timed out')});
+    expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
     await runtime.reconnect!();
     expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
   });
 
-  it('fails all concurrent RPCs with the same timeout and removes old socket listeners', async () => {
-    vi.useFakeTimers();
-    const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, {
-      frame: () => {}, disconnected: () => {}, connected: () => {}, watching: () => false,
+  describe('request timeouts on the shared socket', () => {
+    const transportHooks = () => ({frame: vi.fn(), disconnected: vi.fn(), connected: vi.fn(), watching: () => false});
+    async function connected(given = transportHooks()) {
+      vi.useFakeTimers();
+      const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, given);
+      const ready = transport.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      await ready;
+      return {transport, hooks: given};
+    }
+
+    it('fails a slow read alone, keeps the socket for other requests, and drops its late answer', async () => {
+      const {transport, hooks} = await connected();
+      deferredMethods.add('profiles.describe');
+      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await read).toMatchObject({code: 'unreachable', message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      expect(await transport.rpc('profiles.list')).toMatchObject({profiles: [{name: 'shared'}]});
+      expect(transport.connection?.ws).toBe(sockets[0]);
+      // Hermes answers the timed-out read after all. Nothing is waiting for it and it is not a session frame.
+      const late = calls.find(call => call.method === 'profiles.describe')! as Record<string, any>;
+      expect(() => sockets[0].receive({jsonrpc: '2.0', id: late.id, result: {toolsets: []}})).not.toThrow();
+      expect(hooks.frame).not.toHaveBeenCalled();
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      // A new read of the same method is sent afresh, not answered by the stale shared one.
+      deferredMethods.clear();
+      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
+      transport.close();
     });
-    const connected = transport.connect();
-    await vi.advanceTimersByTimeAsync(0);
-    await connected;
-    const old = sockets[0];
-    const remove = vi.spyOn(old, 'removeEventListener');
-    deferredMethods.add('profiles.describe');
-    deferredMethods.add('agent-interface.submit');
-    const read = transport.rpc('profiles.describe').catch(error => error);
-    const mutation = transport.rpc('agent-interface.submit').catch(error => error);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(10_000);
-    const [first, second] = await Promise.all([read, mutation]);
-    expect(first).toBe(second);
-    expect(first.message).toContain('timed out');
-    expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
-    await transport.reconnect();
-    old.dispatchEvent(new Event('error'));
-    expect(transport.connection?.ws).toBe(sockets[1]);
-    transport.close();
+
+    // Steady session events keep the socket looking busy, so the heartbeat never probes it. A read
+    // timeout has to ask for the liveness probe itself, or a socket that answers nothing stays verified.
+    const tokens = async (socket: WireSocket, ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+        if (socket.readyState === WireSocket.OPEN) socket.receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'x'}}});
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+    };
+    const probes = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+
+    it('probes at once when a read times out under steady events and drops the socket if the probe goes unanswered', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      deferredMethods.add('agent-interface.capabilities');
+      // A shared capabilities read is in flight when the probe starts. The probe must not join it.
+      const shared = transport.rpc('agent-interface.capabilities').catch(error => error);
+      const first = transport.rpc('profiles.describe', {name: 'one'}).catch(error => error);
+      await tokens(sockets[0], 1_000);
+      const second = transport.rpc('profiles.describe', {name: 'two'}).catch(error => error);
+      await tokens(sockets[0], 9_000);
+      expect(await first).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await shared).toMatchObject({message: 'Hermes agent-interface.capabilities timed out. Try again.'});
+      // Two reads timed out at ten seconds. One probe went out for both, apart from the shared read.
+      expect(probes()).toBe(handshake + 2);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(await second).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 2);
+      // The bound: the unanswered probe drops the socket ten seconds after the first read timed out.
+      await tokens(sockets[0], 8_000);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(await transport.status()).toMatchObject({connected: false, detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      transport.close();
+    });
+
+    it('keeps the socket when the probe after a read timeout is answered, and later reads work', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      await tokens(sockets[0], 10_000);
+      expect(await read).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 1);
+      await tokens(sockets[0], 30_000);
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      deferredMethods.clear();
+      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(transport.connection?.ws).toBe(sockets[0]);
+      transport.close();
+    });
+
+    it('drops the socket when the heartbeat liveness probe times out', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      deferredMethods.add('agent-interface.capabilities');
+      // The heartbeat probes a socket quiet for ten seconds, then gives the probe ten more.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls.filter(call => call.method === 'agent-interface.capabilities')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
+      expect(await transport.status()).toMatchObject({connected: false, code: 'unreachable', detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      transport.close();
+    });
+
+    it('drops the socket for an unanswered mutation and removes its listeners', async () => {
+      const {transport, hooks} = await connected();
+      const old = sockets[0];
+      const remove = vi.spyOn(old, 'removeEventListener');
+      deferredMethods.add('agent-interface.submit');
+      const mutation = transport.rpc('agent-interface.submit').catch(error => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect((await mutation).message).toBe('Hermes agent-interface.submit timed out. Do not replay an uncertain submission.');
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
+      await transport.reconnect();
+      old.dispatchEvent(new Event('error'));
+      expect(transport.connection?.ws).toBe(sockets[1]);
+      transport.close();
+    });
   });
 
   it('settles concurrent pending calls on disconnect and does not resend a closed submission', async () => {
@@ -1409,15 +1505,29 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
   });
 
-  it('disables every capability if the read-only image probe loses the verified connection', async () => {
+  it('keeps the connection when the image probe times out and asks again on the next read', async () => {
     vi.useFakeTimers();
     await runtime.status();
     deferredMethods.add('image.generate');
     const capabilities = runtime.capabilities();
     await vi.advanceTimersByTimeAsync(10_000);
+    const value = await capabilities;
+    expect(value.chat.supported).toBe(true);
+    expect(value.imageGeneration).toMatchObject({supported: false});
+    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+    deferredMethods.clear();
+    imageReady = true;
+    expect((await runtime.capabilities()).imageGeneration.supported).toBe(true);
+    expect(calls.filter(call => call.method === 'image.generate')).toMatchObject([{params: {probe: true}}, {params: {probe: true}}]);
+  });
+
+  it('disables every capability if the image probe loses the verified connection', async () => {
+    await runtime.status();
+    deferredMethods.add('image.generate');
+    const capabilities = runtime.capabilities();
+    await vi.waitFor(() => expect(calls.some(call => call.method === 'image.generate')).toBe(true));
+    sockets[0].close();
     expect(Object.values(await capabilities).every(value => !value.supported)).toBe(true);
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
-    expect(calls.filter(call => call.method === 'image.generate')).toMatchObject([{params: {probe: true}}]);
   });
 
   it('verifies liveness after socket silence and keeps a healthy manual reconnect read-only', async () => {

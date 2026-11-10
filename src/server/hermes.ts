@@ -520,15 +520,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       result.chat = result.idempotency;
       result.steering = result.idempotency;
       result.durableEvents = supported(connected && contract.extension, 'The durable lifecycle journal add-on is required.');
-      let image = false;
-      if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; } catch { /* A failed probe never enables generation. */ }
+      let image = false, probeTimedOut = false;
+      if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; }
+      catch (error) {
+        // A failed probe never enables generation. A timed-out one leaves the socket open, so it is
+        // asked again on the next read instead of being remembered for the whole connection.
+        probeTimedOut = error instanceof TransportError && error.code === 'unreachable';
+      }
       const usable = connected && transport.connection === current && current?.verified === true &&
         current.ws.readyState === WebSocket.OPEN && contract.extension;
       if (!usable) {
         for (const key of keys) result[key] = supported(false, transport.detail ?? 'Hermes is disconnected.');
       } else {
         result.imageGeneration = result.portraitGeneration = supported(image, 'A verified Hermes add-on and a usable image-generation provider are required.');
-        capabilityCache = result;
+        if (!probeTimedOut) capabilityCache = result;
       }
       return result;
     })();
