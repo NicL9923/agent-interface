@@ -9,6 +9,7 @@ import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shar
 import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 import { DRAFT_POLL_MS } from '../src/app/use-draft';
+import { LIVE_POLL_MS } from '../src/app/stream-health';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -40,7 +41,8 @@ beforeEach(()=>{
   vi.mocked(api).mockImplementation(async <T>(path:string)=>{
     if(path==='/bootstrap?roster=lean')return boot as T;
     const bot=/^\/bots\/(\w+)\/(draft|conversation)/.exec(path);
-    if(bot?.[2]==='conversation')return {botId:bot[1],messages:[],approvals:[],files:[],activity:{state:'idle'}} as T;
+    // A conversation read carries the reader's draft, as the server's does.
+    if(bot?.[2]==='conversation')return {botId:bot[1],messages:[],approvals:[],files:[],activity:{state:'idle'},draft:drafts.get(bot[1])??null} as T;
     if(bot?.[2]==='draft')return (drafts.get(bot[1])??null) as T;
     return null as T;
   });
@@ -275,13 +277,18 @@ describe('draft sync across devices',()=>{
     }finally{Reflect.deleteProperty(document,'visibilityState');}
   });
 
-  it('reloads the open draft when its stream announces a newer revision, and polls only as a slow fallback',async()=>{
+  it('reloads the open draft when its stream announces a newer revision, and polls slowly while it is live',async()=>{
     FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
     try{
       phone.edit('shared','Buy feed');
       await renderApp();
       const stream=[...FakeEventSource.streams].find(stream=>stream.url.startsWith('/api/bots/shared/events'))!;
       const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bots/shared/draft').length;
+      /** Keeps the stream live, as a server that pings every 10 seconds does. */
+      const pinging=async(ms:number)=>{for(let waited=0;waited<ms;waited+=10_000){await act(async()=>stream.emit('ping','10'));await advance(10_000);}};
+      await act(async()=>{stream.connect();stream.emit('ping','10');});
+      await pinging(10_000);
+      await act(async()=>stream.emit('ping','10'));
       const before=reads();
       // A notice for the revision already shown reads nothing.
       await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
@@ -290,15 +297,44 @@ describe('draft sync across devices',()=>{
       await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
       expect(textarea().value).toBe('Fix the gate');
       expect(reads()).toBe(before+1);
-      // While the stream is live, its notices stand in for the poll: a change it never announced waits.
+      // While the stream is live, a change it never announced waits for the slow poll, never longer.
       phone.edit('shared','Oil the hinge');
-      await advance(DRAFT_POLL_MS);
+      await pinging(DRAFT_POLL_MS);
       expect(textarea().value).toBe('Fix the gate');
-      // Once it drops, the poll catches up at its next tick.
+      await pinging(LIVE_POLL_MS);
+      expect(textarea().value).toBe('Oil the hinge');
+      // The draft's own read, which still works when Hermes, and so the conversation read, is down.
+      expect(reads()).toBe(before+2);
+      // Once the stream drops, the poll reads at its next 30-second tick.
+      phone.edit('shared','Mend the fence');
       await act(async()=>stream.drop());
       await advance(DRAFT_POLL_MS);
-      expect(textarea().value).toBe('Oil the hinge');
+      expect(textarea().value).toBe('Mend the fence');
       expect(draftPuts('shared')).toEqual([]);
+    }finally{vi.unstubAllGlobals();stubMatchMedia();}
+  });
+
+  // The reviewer's reproduction: the stream drops, the phone sends the draft, and the stream is back before
+  // the next poll. The reconnect's conversation read carries the new draft, and nothing else would show it.
+  it('takes a draft changed during a reconnect from the read that reconnect makes, so sent text never lingers',async()=>{
+    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
+    try{
+      phone.edit('shared','Buy feed');
+      await renderApp();
+      const chat=()=>[...FakeEventSource.streams].filter(stream=>stream.url.startsWith('/api/bots/shared/events')).at(-1)!;
+      const draftReads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bots/shared/draft').length;
+      // A healthy stream: connected, greeted, and pinged again 10 seconds later.
+      await act(async()=>{chat().connect();chat().emit('ping','10');});
+      await advance(10_000);
+      await act(async()=>chat().emit('ping','10'));
+      expect(textarea().value).toBe('Buy feed');
+      await act(async()=>chat().drop());
+      phone.send('shared','Buy feed');
+      await advance(3_000);
+      const before=draftReads();
+      await act(async()=>{chat().connect();chat().emit('ping','10');});await advance(0);
+      expect(textarea().value).toBe('');
+      expect(draftReads(),'the conversation read already carried it').toBe(before);
     }finally{vi.unstubAllGlobals();stubMatchMedia();}
   });
 

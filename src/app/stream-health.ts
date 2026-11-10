@@ -12,6 +12,13 @@ const streams = new Map<string, { up: boolean; since: number }>();
  * deploy's restart or a network handoff, which reconnect in a few seconds, so those never show it.
  */
 export const STREAM_NOTICE_MS = 20_000;
+/**
+ * How often a poll still reads while the stream that announces its changes is live. The stream is the
+ * fast path and the poll the safety net: streams do not announce everything, and a notice can always be
+ * missed, so a poll never stops, and nothing stays stale longer than this and one poll tick. While the
+ * stream is down, polls read at their own interval.
+ */
+export const LIVE_POLL_MS = 2 * 60_000;
 /** The name the open chat's change stream reports under, which the draft's poll reads too. */
 export const chatStream = (botId: string) => `chat:${botId}`;
 const listeners = new Set<() => void>();

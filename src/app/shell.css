@@ -141,6 +141,9 @@ kbd {
 /* Status dock: the notices above the composer, one stack sorted by urgency. */
 .status-dock { display: grid; gap: 8px; margin-bottom: 10px; }
 .status-dock:empty { display: none; }
+/* The same notices at the top of a view without a composer, such as Today. */
+.view-dock { margin: 10px 12px 0; flex-shrink: 0; }
+.view-dock .status-dock { margin-bottom: 0; }
 .dock-item { animation: dock-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes dock-in { from { opacity: 0; transform: translateY(6px); } }
 .status-dock .notice, .status-dock .app-update { margin: 0; }

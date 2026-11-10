@@ -528,27 +528,29 @@ describe('pushed conversation updates',()=>{
     expect(reads()).toBe(before+1);
     return stream;
   };
-  it('refetches on each change notice, and polls every 30 seconds only while the stream is down',async()=>{
+  it('refetches on each change notice, and polls every 2 minutes while the stream is live and every 30 seconds while it is down',async()=>{
     const stream=await opened();
     const first=reads();
     conversation={...conversation,messages:[...conversation.messages,{id:'answer-two',role:'assistant',text:'Pushed answer'}]};
     await act(async()=>stream.emit('message','change'));await advance(20);
     expect(reads()).toBe(first+1);
     expect(container.textContent).toContain('Pushed answer');
-    // A live stream stands in for the poll: pings only show it is alive, and a minute passes with no read.
-    for(let tick=0;tick<6;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
+    // A live stream is the fast path, and the poll slows down to a safety net: nothing for almost 2 minutes,
+    // then a read at the first 30-second tick 2 minutes after the last read.
+    for(let tick=0;tick<12;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
     expect(reads()).toBe(first+1);
-    // A drop, which EventSource retries itself: the poll reads at its next tick until the stream is back.
+    for(let tick=0;tick<3;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
+    expect(reads(),'the slow poll never stops').toBe(first+2);
+    // A drop: the stream retries within 2 seconds, and the poll reads at its next tick until the stream is back.
     await act(async()=>stream.drop());
     await advance(30_000);
-    expect(reads()).toBe(first+2);
-    // The watchdog replaced the silent stream meanwhile; its replacement connects.
+    expect(reads()).toBe(first+3);
     const replacement=[...FakeEventSource.streams].find(item=>item.url.includes('/bots/'))!;
     expect(replacement).not.toBe(stream);
-    await act(async()=>replacement.connect());await advance(20);
-    expect(reads(),'connecting reads, as notices sent meanwhile are lost').toBe(first+3);
+    await act(async()=>{replacement.connect();replacement.emit('ping','10');});await advance(20);
+    expect(reads(),'connecting reads, as notices sent meanwhile are lost').toBe(first+4);
     for(let tick=0;tick<6;tick++){await act(async()=>replacement.emit('ping','10'));await advance(10_000);}
-    expect(reads()).toBe(first+3);
+    expect(reads()).toBe(first+4);
   });
   it('reloads after each reconnect, retries a refused stream within 2 seconds, and replaces a silent one within 25 seconds and its retry',async()=>{
     const stream=await opened();
@@ -610,10 +612,12 @@ describe('live updates and the connection notice',()=>{
   };
   const live=async()=>{
     await renderApp();await advance(20);
-    // A `?ping=10` server pings as each stream opens.
-    await act(async()=>{for(const item of FakeEventSource.streams){item.connect();item.emit('ping','10');}});await advance(20);
+    // A `?ping=10` server pings as each stream opens, and a stream is live once it pings again 10 seconds later.
+    await act(async()=>{for(const item of FakeEventSource.streams){item.connect();item.emit('ping','10');}});
+    await advance(10_000);
+    await pinging(1_000);
   };
-  it('shows one quiet notice 20 seconds into an outage, keeps it through the watchdog replacing the stream, and clears it once the stream is back',async()=>{
+  it('shows one quiet notice 20 seconds into an outage, keeps it through the stream being replaced, and clears it once the stream is back',async()=>{
     await live();
     const cut=household();
     await act(async()=>cut.drop());
@@ -621,11 +625,14 @@ describe('live updates and the connection notice',()=>{
     expect(panels()).toEqual([]);
     await pinging(1_000,cut);
     expect(notice()).toEqual(['Reconnecting live updates']);
-    // The watchdog replaces the silent stream at 25 seconds; the outage goes on, and so does the notice.
+    // The drop was closed and retried within 2 seconds; that replacement has not connected, so the outage goes on.
     await pinging(10_000,cut);
     expect(FakeEventSource.created.filter(url=>url.startsWith('/api/events'))).toHaveLength(2);
     expect(notice()).toEqual(['Reconnecting live updates']);
-    await act(async()=>household().connect());await advance(20);
+    // Connecting alone, or its greeting, is not live: the stream is back once it pings again an interval later.
+    await act(async()=>{household().connect();household().emit('ping','10');});await advance(20);
+    expect(notice()).toEqual(['Reconnecting live updates']);
+    await pinging(11_000);
     expect(panels()).toEqual([]);
   });
   it('never shows for a brief drop',async()=>{
@@ -642,6 +649,59 @@ describe('live updates and the connection notice',()=>{
     await act(async()=>{window.dispatchEvent(new Event('offline'));chat().drop();});
     await pinging(25_000,chat());
     expect(notice()).toEqual(["You're offline"]);
+  });
+  // The reviewer's reproductions.
+  it('keeps polling and keeps the notice while a replacement that sent only its headers stays silent',async()=>{
+    const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
+    await live();
+    const cut=chat();
+    await pinging(27_000,cut);
+    const replacement=chat();
+    expect(replacement).not.toBe(cut);
+    // Headers and `retry: 3000`, then nothing: open is not data.
+    await act(async()=>replacement.connect());await advance(20);
+    const connected=reads();
+    await pinging(60_000,replacement);
+    expect(reads(),'the 30-second poll stands in').toBeGreaterThanOrEqual(connected+2);
+    expect(notice()).toEqual(['Reconnecting live updates']);
+  });
+  it('reloads and rebinds the open chat when bootstrap names a new canonical session, which Hermes announces only on the roster',async()=>{
+    boot={...boot,bots:[{...boot.bots[0],sessionId:'session-one'}]};
+    await live();
+    expect(container.textContent).toContain('Existing canonical answer');
+    const first=chat();
+    // Another device starts a new session. Hermes tells roster watchers, not chat watchers.
+    conversation={...conversation,sessionId:'session-two',messages:[{id:'fresh',role:'assistant',text:'Fresh session answer'}]};
+    boot={...boot,bots:[{...boot.bots[0],sessionId:'session-two'}]};
+    await act(async()=>household().emit('roster','roster'));await advance(20);
+    expect(container.textContent).toContain('Fresh session answer');
+    expect(container.textContent).not.toContain('Existing canonical answer');
+    expect(first.readyState,'the old session\'s stream is replaced').toBe(FakeEventSource.CLOSED);
+    expect(chat()).not.toBe(first);
+  });
+  it('does not rebind for a session named for the first time',async()=>{
+    await live();
+    const first=chat();
+    boot={...boot,bots:[{...boot.bots[0],sessionId:'session-one'}]};
+    await act(async()=>household().emit('roster','roster'));await advance(20);
+    expect(first.readyState,'a session named for the first time is not a new one').toBe(FakeEventSource.OPEN);
+    expect(FakeEventSource.created.filter(url=>url.includes('/bots/'))).toHaveLength(1);
+  });
+  it('shows one panel, not two, in a chat with no assistant once the connection is lost',async()=>{
+    boot={...boot,bots:[]};
+    await live();
+    Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>false});
+    await act(async()=>window.dispatchEvent(new Event('offline')));await advance(20);
+    expect(notice()).toEqual(["You're offline"]);
+  });
+  it('shows the notice on Today, which has no composer',async()=>{
+    boot.preferences={...boot.preferences,startPage:'today'};
+    await live();
+    expect(container.querySelector('textarea')).toBeNull();
+    const cut=household();
+    await act(async()=>cut.drop());
+    await pinging(21_000,cut);
+    expect(notice()).toEqual(['Reconnecting live updates']);
   });
   it('reads bootstrap every 5 minutes while the household stream is live, and every 45 seconds while it is down',async()=>{
     const bootstraps=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;

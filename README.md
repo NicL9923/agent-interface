@@ -408,12 +408,17 @@ then stalls keeps backing off. A timer that fires far late, as after a laptop wa
 one more deadline instead of replacing it. A hidden tab replaces nothing, and showing it, the network
 returning or a manual reconnect connects at once.
 
-While its streams are live, an idle tab polls nothing they announce. The open chat's conversation and
-draft are read every 30 seconds only while the chat's stream is down, and bootstrap every 45 seconds
-only while the household stream is down, otherwise every 5 minutes for what no stream announces, such
-as preferences saved on another device. Today, chat presence and device activity keep their own
-intervals. When the household stream or the open chat's has been down for 20 seconds, the connection
-notice says live updates are reconnecting, and it clears once the stream hears from the server again. Manual reconnect checks immediately. The transport bounds
+Streams are the fast path and polls the safety net, so polls slow down while their stream is live and
+never stop. The open chat's conversation and draft are read every 30 seconds while the chat's stream is
+down and every 2 minutes while it is live. Bootstrap is read every 45 seconds while the household stream
+is down and every 5 minutes while it is live. Every conversation read carries the draft, so a draft
+changed while the stream was reconnecting shows with the reconnect's read, and a new canonical session
+in bootstrap reloads the open chat and reconnects its stream. A stream counts as live only on data
+after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
+own intervals. When the household stream or the open chat's has been down for 20 seconds, the
+connection notice says live updates are reconnecting, above the composer in a chat and at the top of
+Today, Find and group chats. It clears once the stream is live again. Manual reconnect checks
+immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.

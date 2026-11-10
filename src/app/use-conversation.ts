@@ -8,8 +8,8 @@ import type { Inflight, Message, TurnEvent } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
-import { DRAFT_EVENT } from "./use-draft";
-import { chatStream, reportStream, streamUp } from "./stream-health";
+import { DRAFT_EVENT, type DraftNotice } from "./use-draft";
+import { chatStream, LIVE_POLL_MS, reportStream, streamUp } from "./stream-health";
 import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -46,7 +46,13 @@ const editable = (target: EventTarget | null) =>
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && message.interim !== true && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
-export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
+/** How often the open chat is read while its stream is down, as `main` always did. */
+export const CHAT_POLL_MS = 30_000;
+/**
+ * `sessionId` is the open assistant's canonical session as bootstrap names it. Hermes announces a new
+ * one on the household roster only, so a change reloads the chat and reconnects its stream.
+ */
+export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void, sessionId?: string) {
   const missing = useRef(onMissing);
   missing.current = onMissing;
   const [conversation, setConversation] = useState<SavedConversation | null>(
@@ -97,6 +103,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   current.current = conversation;
   const requestEarlier = useRef<() => void>(() => {});
   const requestStart = useRef<(messageId: string) => void>(() => {});
+  const rebind = useRef<() => void>(() => {});
   const botIdRef = useRef(botId);
   botIdRef.current = botId;
   useEffect(() => {
@@ -173,7 +180,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       else heldTurn = undefined;
       return patch(shown, latestInflight);
     };
-    let loading = false, again = false, more = false, gone = false;
+    let loading = false, again = false, more = false, gone = false, lastRead = 0;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
@@ -246,6 +253,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
         }
         setConversation(compose(result));
+        lastRead = Date.now();
+        // Every read carries this person's draft. A reconnect's read is how a draft changed while the
+        // stream was down shows at once; the draft hook applies it only if it is newer than its copy.
+        if ("draft" in result) window.dispatchEvent(new CustomEvent<DraftNotice>(DRAFT_EVENT, { detail: { botId, revision: result.draft?.revision ?? 0, draft: result.draft } }));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
@@ -342,10 +353,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       stream.reconnect();
       void load();
     };
-    // Change notices drive updates. While the stream is down, as from a cut until its watchdog reconnects
-    // it, this poll reads every 30 seconds instead. Showing the page reads too: a hidden page closed the
-    // stream, so it is not up then.
-    const stopPolling = pollWhileVisible(() => { if (!streamUp(chatStream(botId))) wake(); }, 30_000);
+    // Change notices drive updates, and this poll is their safety net: every 30 seconds while the stream is
+    // down, as from a cut until its watchdog reconnects it, and every LIVE_POLL_MS while it is live. Showing
+    // the page reads too: a hidden page closed the stream, so it is not up then.
+    const stopPolling = pollWhileVisible(() => {
+      if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
+    }, CHAT_POLL_MS);
+    // A new canonical session: the server's stream state for this chat followed the old one.
+    rebind.current = () => {
+      stream.close();
+      if (document.visibilityState !== "hidden") stream.open();
+      void load();
+    };
     // A hidden page holds no stream; showing it again reloads and reopens one.
     const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
     window.addEventListener("online", revive);
@@ -355,6 +374,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       live = false;
       requestEarlier.current = () => {};
       requestStart.current = () => {};
+      rebind.current = () => {};
       stopPolling();
       stream.close();
       window.removeEventListener("online", revive);
@@ -362,6 +382,13 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);
+  // Only a change from one known session to another rebinds: a first value, or none, is not a new session.
+  const bound = useRef<{ botId: string; sessionId?: string }>(undefined);
+  useEffect(() => {
+    const previous = bound.current;
+    bound.current = { botId, sessionId };
+    if (previous?.botId === botId && previous.sessionId && sessionId && previous.sessionId !== sessionId) rebind.current();
+  }, [botId, sessionId]);
   // Only messages with something to read count as seen, so a reply that was still
   // reasoning when the reader looked away is new once its text arrives.
   const markSeen = (messages: Message[]) => {

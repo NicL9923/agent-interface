@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { chatStream, streamUp } from "./stream-health";
+import { chatStream, LIVE_POLL_MS, streamUp } from "./stream-health";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
@@ -10,8 +10,9 @@ import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
 /** Dispatched on window by the open chat's event stream when the person's draft gets a new revision. */
 export const DRAFT_EVENT = "agent-interface:draft";
-export type DraftNotice = { botId: string; revision: number };
-// Only a stream that fails unnoticed leaves this poll to catch another device's edit.
+/** A new revision, from the stream's `event: draft`, or the draft a conversation read carried with it. */
+export type DraftNotice = { botId: string; revision: number; draft?: SavedDraft | null };
+/** How often the draft is read while the chat's stream is down. While it is live, every LIVE_POLL_MS. */
 export const DRAFT_POLL_MS = 30_000;
 type SetDraft = (update: (current: Draft) => Draft) => void;
 // Keepalive requests in flight share a 64 KiB budget, and the browser rejects one over it. A
@@ -117,6 +118,14 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // is still the sent copy after a reload or a switch back.
     setDraftState({ ...(cached || { text: "", attachments: [] }), botId, userId });
     if (cached) setDraftReady(true);
+    let lastRead = 0;
+    /** Reconciles the copy with the server's draft, from a draft read or a conversation read. Older ones change nothing. */
+    const apply = (saved: SavedDraft) => {
+      draftLoaded = true;
+      setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
+      setDraftReady(true);
+      setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
+    };
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
       if (loadingDraft) { loadAgain = true; return; }
@@ -124,10 +133,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       try {
         const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
         if (!live) return;
-        draftLoaded = true;
-        setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
-        setDraftReady(true);
-        setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
+        lastRead = Date.now();
+        apply(saved);
       } catch (e) {
         // Unsaved text on screen is already the person's draft, and a loaded draft stays usable;
         // keep retrying quietly.
@@ -142,17 +149,22 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       if (navigator.onLine !== false && document.visibilityState !== "hidden") void loadDraft();
     };
     // The chat's event stream announces each new revision; a copy that already has it skips the read.
+    // A conversation read brings the draft itself, which is applied without a read of its own.
     const announced = (event: Event) => {
-      const { botId: changed, revision } = (event as CustomEvent<DraftNotice>).detail;
+      const { botId: changed, revision, draft: carried } = (event as CustomEvent<DraftNotice>).detail;
       const shown = latestDraft.current;
       if (changed !== botId || shown.botId !== botId || shown.userId !== userId) return;
+      if (carried !== undefined) { apply(savedDraft(carried)); return; }
       if (!Number.isSafeInteger(revision) || draftLoaded && revision <= (shown.baseRevision ?? 0)) return;
       wake();
     };
-    // The chat's stream announces each revision. While it is down, or no chat follows this assistant,
-    // this poll reads every 30 seconds instead. Showing the page reads too: a hidden page closed the
+    // The chat's stream announces each revision, and every conversation read carries the draft. This poll
+    // is their safety net: every 30 seconds while the stream is down, or no chat follows this assistant,
+    // and every LIVE_POLL_MS while it is live. Showing the page reads too: a hidden page closed the
     // stream, so it is not up then.
-    const stopPolling = pollWhileVisible(() => { if (!streamUp(chatStream(botId))) wake(); }, DRAFT_POLL_MS);
+    const stopPolling = pollWhileVisible(() => {
+      if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
+    }, DRAFT_POLL_MS);
     window.addEventListener(DRAFT_EVENT, announced);
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);

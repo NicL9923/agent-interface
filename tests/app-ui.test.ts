@@ -690,7 +690,10 @@ describe("conversation state", () => {
 
   it("does not re-render the app when bootstrap and conversation reads find nothing new", async () => {
     await render();
-    await act(async () => { for (const stream of FakeEventSource.streams) stream.connect(); });
+    // Live streams: each greets as it connects and is up once it pings again 10 seconds later.
+    await act(async () => { for (const stream of FakeEventSource.streams) { stream.connect(); stream.emit("ping", "10"); } });
+    await advance(10_000);
+    await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
     await advance(2000);
     const settled = renders.avatar;
     expect(settled).toBeGreaterThan(0);

@@ -42,7 +42,7 @@ import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
-import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
+import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
@@ -118,7 +118,7 @@ export function App() {
     gone(id);
     setBotId("");
     void session.refresh();
-  });
+  }, boot?.bots.find(bot => bot.id === botId)?.sessionId);
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
   const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
   useChatPresence(shownBotId, userId);
@@ -361,7 +361,13 @@ export function App() {
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
   }, [boot, connectionLost, liveDown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  // Today, Find, a group chat and a chat with no assistant have no composer, so the same connection item
+  // shows at the top of the view instead. A chat with no assistant shows its own full panel once the
+  // connection is lost, so there it adds only the live-updates notice.
+  const inChat = view !== "find" && view !== "group" && view !== "today";
   const liveBot = boot?.bots.find(bot => bot.id === botId);
+  const viewDock = useMemo(() => inChat && liveBot ? [] : dock.filter(item => item.kind === "connection" && !(inChat && connectionLost)),
+    [inChat, liveBot, dock, connectionLost]);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
     && ["thinking", "working", "waiting", "blocked"].includes(liveState ?? "idle");
@@ -414,6 +420,7 @@ export function App() {
           onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
+        {viewDock.length > 0 && <div className="view-dock"><StatusDock items={viewDock} /></div>}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
