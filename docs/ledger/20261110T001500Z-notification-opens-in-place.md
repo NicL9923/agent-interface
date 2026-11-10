@@ -492,3 +492,94 @@ page's port is released.
   overlapping taps. The worker cases fake the browser APIs at their boundary; the e2e calls
   `openChat`.
 - Safari, Firefox and an installed iOS web app: not run.
+
+## November 10 fifth review round: bringing the notification back
+
+GPT-6.1 Sol's fifth review at `4f6fc28` cleared the four rules, the 13-row table, the overlap rows
+and every rejecting call except two, both in bringing the notification back. This round does not
+merge `main`. Checks ran on NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromium).
+
+### Findings and changes
+
+1. A tap on the brought-back notification before its `showNotification()` settled joined the
+   attempt that was ending, closed the notification, and left no window in front and nothing on
+   screen. The Notifications standard lets the notification show before the promise resolves.
+   Each attempt in `openChat` now carries `restoring`, set when it starts bringing the
+   notification back. A tap that finds its chat's attempt restoring waits for it to settle, then
+   calls `openChat` again. The first such tap starts a new attempt and the rest join it as
+   overlapping taps do, so several share one new attempt. The new attempt runs whatever the
+   restoration did, so a restoration the tap itself closed never counts for that tap.
+2. A rejected `showNotification()` escaped the shared attempt: both joined taps rejected and
+   nothing was on screen. `restore()` now retries once inside the attempt and swallows a second
+   failure, so every joined tap ends cleanly. That double failure is the one case the invariant
+   does not cover, and the comment and README say so.
+
+The comment above `openChat` gained one sentence for each. The README paragraph after the rules
+now describes both. No state was added beyond `restoring`; late listening, answer counting and
+a second window for a window that answered stay out.
+
+### Tests
+
+`tests/service-worker.test.ts`, "notification taps with the app open":
+
+- "a tap while the notification is being brought back": the reviewer's sequence (rule 2, the
+  window cannot come forward) with only the completion of `showNotification()` held. One case
+  taps the notification on screen, which closes it, and asserts the window is not asked again
+  before the restoration settles, then the invariant through `ending()` and one more ask. The
+  other adds a second tap and asserts the two share one new attempt: two asks and two
+  `showNotification()` calls in all.
+- "bringing the notification back fails": a rejection then success, for one tap and two joined
+  taps, through `ending()`; and two rejections, asserting both taps fulfil and no third
+  `showNotification()` call follows.
+- The `tap` helper now lets a test pass the notification's `close`, so a tap can close the one
+  on screen.
+
+The 13 table rows and five overlap rows pass unchanged; no expected count in them changed.
+
+### Red before the fix
+
+The new tests against `4f6fc28`'s worker:
+`npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 5 failed,
+27 passed.
+
+| Test | Failure on `4f6fc28` |
+| --- | --- |
+| starts a new attempt once the notification is back… | "a window in front, or the notification back: expected 1 to be +0": nothing on screen |
+| starts one new attempt for several taps | the same |
+| tries once more, for 1 tap(s) and for 2 tap(s) | the tap rejected with "Failed to store the notification." |
+| ends every tap without a rejection when the second try fails too | both taps rejected |
+
+### Mutants
+
+Each line was broken by hand, `tests/service-worker.test.ts` run (81 tests), and the source
+restored.
+
+| Mutation | Result |
+| --- | --- |
+| R1 `restoring` never set | failed: both "a tap while…" cases |
+| R2 A tap while restoring joins the ending attempt | failed: both "a tap while…" cases |
+| R3 The new attempt starts before the restoration settles | failed: both "a tap while…" cases ("not asked again before the notification is back") |
+| R4 Each tap while restoring starts its own attempt | failed: "starts one new attempt for several taps" |
+| R5 No retry | failed: 3 |
+| R6 Second failure not caught | failed: "ends every tap without a rejection…" |
+| R7 Retry not bounded | failed: "ends every tap without a rejection…" |
+
+A first version kept a shared `next` promise for the taps while restoring. A mutant that
+replaced it on every tap survived, because a second `openChat` after the restoration already
+joins the attempt the first started, so the field was removed. A mutant starting the new attempt
+at once also survived that first version; the "not asked again before the notification is back"
+assertion was added after the red run above to catch it, and R3 shows it can fail.
+
+### Checks
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
+  tests/close-request.test.ts`: 3 files, 108 tests passed.
+- `npm test`: 173 files, 2,721 tests passed.
+- `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed.
+
+### Not exercised
+
+- A real notification tap during a real pending `showNotification()`, and a real storage
+  failure. The worker cases fake the browser APIs at their boundary.
+- Safari, Firefox and an installed iOS web app: not run.

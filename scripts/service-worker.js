@@ -265,19 +265,36 @@ function askToOpen(client, url) {
 // answer. The notification comes back only as the direct result of a tap, so it cannot loop on its
 // own. A tap on a chat that already has an attempt in flight joins that attempt, so two taps never
 // ask, navigate, open a window or bring the notification back twice.
+// A tap that arrives while the attempt is bringing the notification back may be a tap on that very
+// notification, so it is a new request, and once the bringing back settles it starts one new
+// attempt that every such tap shares.
+// Bringing the notification back is retried once, and if the retry fails too, every tap on the
+// attempt ends with nothing on screen, the one case the invariant does not cover.
 const attempts = new Map();
 function openChat(notification) {
   const url = conversationUrl(notification.data?.url);
-  let attempt = attempts.get(url);
-  if (!attempt) {
-    attempt = reach(notification, url)
-      // A way of opening that failed unexpectedly has not reached the person either.
-      .catch(() => false)
-      .then((inFront) => inFront || showAgain(notification))
-      .finally(() => attempts.delete(url));
-    attempts.set(url, attempt);
+  const current = attempts.get(url);
+  // The first such tap starts the new attempt, and the rest join it as overlapping taps do.
+  if (current?.restoring) return current.done.then(() => openChat(notification));
+  if (current) return current.done;
+  const attempt = { restoring: false, done: undefined };
+  attempt.done = reach(notification, url)
+    // A way of opening that failed unexpectedly has not reached the person either.
+    .catch(() => false)
+    .then((inFront) => inFront || restore(notification, attempt))
+    .finally(() => attempts.delete(url));
+  attempts.set(url, attempt);
+  return attempt.done;
+}
+
+// Chromium rejects showNotification when it cannot store the notification, so it is tried once more.
+async function restore(notification, attempt) {
+  attempt.restoring = true;
+  try {
+    await showAgain(notification);
+  } catch {
+    await showAgain(notification).catch(() => {});
   }
-  return attempt;
 }
 
 // Follows the table above. True when a window known to be in front shows the chat.

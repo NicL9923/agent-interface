@@ -623,7 +623,7 @@ describe('service worker notification taps with the app open', () => {
   const cameBack = { ...tapped, data: { url: '/?bot=ranch', reshown: true } };
   async function tap(sw: ReturnType<typeof worker>, notification: Partial<typeof tapped> & { data: Record<string, unknown> } = tapped) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.notificationclick({ notification: { ...tapped, ...notification, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.notificationclick({ notification: { ...tapped, close: vi.fn(), ...notification }, waitUntil: (value: Promise<unknown>) => { done = value; } });
     return done!;
   }
   /** The notification the worker brought back, as a tap on it delivers it. */
@@ -804,6 +804,78 @@ describe('service worker notification taps with the app open', () => {
       expect(sw.showNotification).toHaveBeenCalledTimes(row.ends === 'back' ? 1 : 0);
       expect(counts(sw, window)).toEqual(row.calls);
     } finally { vi.useRealTimers(); }
+  });
+
+  // The page answers, the window cannot come forward, and the notification is being brought back.
+  // Browsers may put it on screen before showNotification() settles, and a tap on it then is the
+  // person asking again, not part of the attempt that is ending.
+  describe('a tap while the notification is being brought back', () => {
+    const row = rows.find(row => row.rule === 2 && row.ends === 'back' && !row.reshown)!;
+    /** Holds the next showNotification() unsettled after it has put the notification on screen. */
+    const holdNextShow = (sw: ReturnType<typeof worker>) => {
+      let settle!: () => void;
+      const shown = new Promise<void>(resolve => { settle = resolve; });
+      const show = sw.showNotification.getMockImplementation()!;
+      sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => { await show(...args); await shown; });
+      return settle;
+    };
+    /** The brought-back notification as the person taps it: the tap closes it. */
+    const onScreen = (sw: ReturnType<typeof worker>) => ({ ...broughtBack(sw), close: sw.shown[0].close });
+    const showing = async (sw: ReturnType<typeof worker>) => { await vi.waitFor(() => expect(sw.shown).toHaveLength(1)); };
+
+    it('starts a new attempt once the notification is back, so the tap ends in front or with it back again', async () => {
+      const { window, sw } = setUp(row);
+      const settle = holdNextShow(sw);
+      const first = tap(sw);
+      await showing(sw);
+      const second = tap(sw, onScreen(sw));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(window!.postMessage, 'not asked again before the notification is back').toHaveBeenCalledOnce();
+      settle();
+      await Promise.all([first, second]);
+      expect(await ending(sw, window, true)).toBe('back');
+      expect(counts(sw, window)).toEqual({ asked: 2, navigated: 0, opened: 0 });
+    });
+
+    it('starts one new attempt for several taps', async () => {
+      const { window, sw } = setUp(row);
+      const settle = holdNextShow(sw);
+      const first = tap(sw);
+      await showing(sw);
+      // The brought-back notification, and another about the same chat.
+      const taps = [tap(sw, onScreen(sw)), tap(sw, { ...tapped, tag: undefined })];
+      settle();
+      await Promise.all([first, ...taps]);
+      expect(await ending(sw, window, true)).toBe('back');
+      expect(counts(sw, window)).toEqual({ asked: 2, navigated: 0, opened: 0 });
+      expect(sw.showNotification).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // Chromium rejects showNotification() when it cannot store the notification. Overlapping taps
+  // share the attempt, so they share its one retry.
+  describe('bringing the notification back fails', () => {
+    const row = rows.find(row => row.rule === 1 && row.ends === 'back' && !row.reshown)!;
+    const failed = () => new TypeError('Failed to store the notification.');
+
+    it.each([1, 2])('tries once more, for %i tap(s)', async taps => {
+      const { window, sw } = setUp(row);
+      sw.showNotification.mockRejectedValueOnce(failed());
+      await Promise.all(Array.from({ length: taps }, () => tap(sw, { ...tapped, tag: undefined })));
+      expect(await ending(sw, window)).toBe('back');
+      expect(sw.showNotification).toHaveBeenCalledTimes(2);
+    });
+
+    // The one case the invariant cannot cover: nothing is on screen, and every tap still ends cleanly.
+    it('ends every tap without a rejection when the second try fails too', async () => {
+      const { sw } = setUp(row);
+      sw.showNotification.mockRejectedValueOnce(failed()).mockRejectedValueOnce(failed());
+      const taps = [tap(sw, { ...tapped, tag: undefined }), tap(sw, { ...tapped, tag: undefined })];
+      expect(await Promise.allSettled(taps)).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]);
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(sw.showNotification).toHaveBeenCalledTimes(2);
+      expect(sw.shown).toEqual([]);
+    });
   });
 
   it('brings the notification back when a step fails in a way the rules do not name', async () => {

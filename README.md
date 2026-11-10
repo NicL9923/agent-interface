@@ -102,9 +102,12 @@ another application still reports itself visible. The worker follows four rules:
 A window running a release from before pages answered gets the notification back on the
 first tap and the chat on the second, as taps always did. A notification comes back only
 because of a tap, so it never loops on its own. A second tap on the same chat while the
-first is still being handled joins it, so nothing opens, loads or comes back twice. Each
-fallback ends well inside the one second Firefox allows a worker to open a window after a
-tap.
+first is still being handled joins it, so nothing opens, loads or comes back twice. A tap
+while the notification is coming back may be a tap on that notification, so it is handled
+afresh once the notification is back; several such taps share that one new try. When the
+browser refuses to show the notification again, the worker tries once more, and if that also
+fails, nothing is on screen, the one case the rules cannot cover. Each fallback ends well
+inside the one second Firefox allows a worker to open a window after a tap.
 
 An open assistant settings sheet or Settings closes the way its close button does before the
 chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
