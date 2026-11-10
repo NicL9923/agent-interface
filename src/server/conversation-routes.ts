@@ -203,11 +203,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // Followed before the first await, so a client that leaves during setup leaves no watcher.
     const connection = eventStreamConnection(reply);
     const botId = id.parse((req.params as { id: string }).id);
-    // ?inflight=1 sends each live reply whole, as the iOS app and cached web bundles read it.
-    // ?inflight=2 sends only what a reply grew by since the last event this stream sent.
+    // ?inflight=1 sends each live reply whole, as older installed iOS builds and cached web bundles read it.
+    // ?inflight=2 sends only what a reply grew by since the last event this stream sent. The iOS app
+    // and web bundles from before turn events read this one.
     // ?inflight=3 sends growth too, and the running turn's saved messages with each whole reply, as one
     // `turn` event, whenever the read the reply is built on changes. The server then reads the turn
-    // itself after each change to its structure, so live text never waits for a client's refetch.
+    // itself after each change to its structure, so live text never waits for a client's refetch. The
+    // web app reads this one.
     const mode = (req.query as { inflight?: string }).inflight;
     const optedIn = mode === "1" || mode === "2" || mode === "3", deltas = mode === "2" || mode === "3", turns = mode === "3";
     // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any

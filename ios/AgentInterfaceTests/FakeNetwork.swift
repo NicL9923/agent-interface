@@ -56,7 +56,11 @@ final class FakeExchange: URLProtocol, @unchecked Sendable {
     }
     host.receive(self)
   }
-  override func stopLoading() {}
+  private let stopLock = NSLock()
+  private var stoppedLoading = false
+  /// Whether URLSession stopped this request, as it does when the client cancels an open stream.
+  var stopped: Bool { stopLock.withLock { stoppedLoading } }
+  override func stopLoading() { stopLock.withLock { stoppedLoading = true } }
   func fail(_ error: URLError) { client?.urlProtocol(self, didFailWithError: error) }
   /// Opens a server event stream that stays open until the client goes away.
   func openStream() {

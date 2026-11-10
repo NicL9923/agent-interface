@@ -100,12 +100,12 @@ private struct GroupWatch: ViewModifier {
       var failures = 0
       while !Task.isCancelled {
         do {
-          let lines = try await api.events("/api/events?group=\(APIClient.component(roomId))")
+          let stream = try await api.events("/api/events?group=\(APIClient.component(roomId))")
           failures = 0
           // Notices sent before the subscription are lost, so connecting counts as one.
           await changed()
           var event = ""
-          for try await line in lines {
+          for try await line in stream.lines {
             guard !Task.isCancelled else { return }
             if line.hasPrefix("event:") { event = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces) }
             if line.hasPrefix("data:") {

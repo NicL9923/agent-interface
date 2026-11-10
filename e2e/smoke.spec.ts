@@ -62,6 +62,26 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
 });
 
+test("a link to a chat shows sign-in when signed out, then reads the chat beside bootstrap once signed in", async ({ page }) => {
+  // Signed out, the link costs one refused bootstrap (which the fixture excuses) and nothing else.
+  await page.goto("/?bot=ranch");
+  await page.getByRole("button", { name: "Enter local workspace" }).click();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+
+  // Signed in, bootstrap is held until the chat's read has started, which proves the read does not wait for it.
+  let chatRead!: () => void;
+  const chatStarted = new Promise<boolean>(resolve => { chatRead = () => resolve(true); });
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/bots/ranch/conversation") chatRead(); });
+  const heldUntil: boolean[] = [];
+  await page.route("**/api/bootstrap?*", async route => {
+    heldUntil.push(await Promise.race([chatStarted, new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2_000))]));
+    await route.continue();
+  });
+  await page.goto("/?bot=ranch");
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  expect(heldUntil[0]).toBe(true);
+});
+
 test.describe("after a deploy retires a lazy screen's file", () => {
   // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
   test.use({ serviceWorkers: "block" });
@@ -193,4 +213,19 @@ test("a reply keeps growing across a tool call, and its saved segment never disa
   const from = seen.find(view => view.text.includes("Post"))!.at, to = seen.find(view => view.text.includes(after))!.at;
   const steps = new Set(lengths).size, readsMeanwhile = reads.filter(at => at >= from && at <= to).length;
   expect(steps, `${steps} growth steps, ${readsMeanwhile} reads`).toBeGreaterThan(readsMeanwhile + 3);
+});
+
+test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
+
+  // The worker's own tap handler, minus the notification: Playwright cannot click one.
+  const [worker] = context.serviceWorkers();
+  await worker.evaluate(() => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: "/?bot=trail" } }));
+  await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
 });

@@ -214,9 +214,11 @@ stream open and reconnect; the server sends no initial notice. Streams without t
 one-change-per-second streaming cadence.
 
 `?inflight=2` opts in to the same stream with growth sent as deltas, so a long
-reply is not resent whole every 250 ms. `?inflight=1` is unchanged, and the iOS
-app and cached web bundles keep using it. A `?inflight=2` stream sends the first
-`event: inflight` whole and then, while the same reply only grows, `event:
+reply is not resent whole every 250 ms. The iOS app uses it, and so do web bundles
+cached from before the web client moved to `?inflight=3`. `?inflight=1` is unchanged
+and stays served, because iOS builds released before the iOS app moved to
+`?inflight=2` and older cached web bundles still use it. A `?inflight=2` stream
+sends the first `event: inflight` whole and then, while the same reply only grows, `event:
 inflight-delta` with JSON `{botId, messageId, baseTextLength, baseReasoningLength,
 appendText?, appendReasoning?, activity, toolCalls?}`. The lengths count UTF-16
 code units of the `message.text` and `message.reasoning` the stream last sent, an
@@ -230,8 +232,12 @@ of that reply may be sent as deltas on the whole event's text and reasoning. Del
 computed on the redacted reply, so redaction applies exactly as for `?inflight=1`.
 If a delta's `messageId` or base lengths do not match the reply you hold, or you
 hold none, discard it, refetch the conversation and reconnect the stream, which
-restarts from a whole event. A server that predates `?inflight=2` treats it as no
-opt-in and sends only change notices, which clients already handle.
+restarts from a whole event. Swift's `String.count` counts characters, so the iOS
+app compares `utf16.count`. The iOS app also drops the reply it holds when it cannot
+decode a whole event, so the next delta reconnects. Its first reconnect after a
+refused delta is immediate; while no delta applies between refusals, each further
+one waits 3 seconds longer, up to 30. A server that predates `?inflight=2` treats it
+as no opt-in and sends only change notices, which clients already handle.
 
 `?inflight=3` opts in to turn events, so a reply keeps streaming across tool calls
 without waiting for a refetch. The web client uses it. `?inflight=1` and
