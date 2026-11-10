@@ -22,16 +22,6 @@ vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: () => createElement("span", { className: "avatar-stub" }),
 }));
-// Counts each render of a transcript child that is not memoized, so it renders whenever the transcript does.
-const attentionRenders = vi.hoisted(() => ({ count: 0 }));
-vi.mock("../src/app/AttentionList", async original => {
-  const actual = await original<typeof import("../src/app/AttentionList")>();
-  const { createElement } = await import("react");
-  return { ...actual, AttentionList: (props: Parameters<typeof actual.AttentionList>[0]) => {
-    attentionRenders.count++;
-    return createElement(actual.AttentionList, props);
-  } };
-});
 vi.mock("../src/components/MessageMarkdown", () => {
   const markdown = (props: { text: string }) => createElement("div", { className: "message-markdown" }, props.text);
   return { MessageMarkdown: markdown, StreamingMarkdown: markdown };
@@ -75,6 +65,15 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
+/**
+ * The props React last rendered onto an element. React replaces this object whenever the element's
+ * component renders again, and keeps it when a memoized component above it skips rendering.
+ */
+const renderedProps = (element: Element) => {
+  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
+  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
+  return (element as unknown as Record<string, unknown>)[key];
+};
 const render = async () => { await mount.render(createElement(App)); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
@@ -354,11 +353,16 @@ describe("composer", () => {
   it("re-renders nothing in the transcript while typing", async () => {
     conversation = { ...conversation, messages: [mine("1", "Plan dinner"), { id: "2", role: "assistant", text: "Sure" }] };
     await render();
-    const before = attentionRenders.count;
-    expect(before).toBeGreaterThan(0);
+    const frame = mount.container.querySelector<HTMLElement>(".transcript-frame")!;
+    const transcript = [frame, ...frame.querySelectorAll<HTMLElement>("*")];
+    const before = new Map(transcript.map(element => [element, renderedProps(element)]));
+    const fieldBefore = renderedProps(field());
     for (const text of ["H", "Ho", "Hor", "Hors", "Horse"]) await typeInto(field(), text);
     expect(field().value).toBe("Horse");
-    expect(attentionRenders.count - before).toBe(0);
+    // The field re-rendered, so a re-render is visible this way.
+    expect(renderedProps(field())).not.toBe(fieldBefore);
+    const rerendered = transcript.filter(element => renderedProps(element) !== before.get(element));
+    expect(rerendered.map(element => `${element.localName}.${element.className}`)).toEqual([]);
   });
 
   it("lets CSS size the field and reads no layout while typing where field-sizing is supported", async () => {
