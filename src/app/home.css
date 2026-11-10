@@ -315,7 +315,6 @@
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: 0 14px 40px #0000003d;
-  animation: bot-menu-in 140ms ease-out;
 }
 .bot-menu:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bot-menu button {
@@ -335,7 +334,6 @@
 .bot-menu-more { margin-left: auto; color: var(--muted); }
 .bot-menu .menu-check { display: inline-grid; place-items: center; width: 16px; color: var(--accent); font-weight: 650; }
 .bot-menu [data-slot="menu-separator"] { height: 1px; margin: 6px 8px; background: var(--line); }
-@keyframes bot-menu-in { from { opacity: 0; transform: scale(0.96); } }
 
 /* Settings: grouped rows in a sheet. */
 .settings-sheet {
@@ -353,7 +351,6 @@
 .settings-sheet[open] {
   display: flex;
   flex-direction: column;
-  animation: settings-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .settings-sheet::backdrop {
   background: #101a1480;
@@ -618,7 +615,6 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 .settings-footer .brand-mark { width: 44px; height: 44px; border-radius: 14px; font-size: 36px; /* px: glyph sized to its fixed box */ line-height: 38px; }
 .settings-footer strong { color: var(--ink); font-size: 1.0625rem; }
 .settings-footer small { font-size: 0.75rem; }
-@keyframes settings-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
 
 @media (max-width: 620px) {
   .bot-rail {
@@ -669,7 +665,7 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
 @keyframes settings-up { from { transform: translateY(40%); opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) {
   .bot-rail, .bot-rail.open, .switch, .switch::after { transition: none; }
-  .settings-sheet[open], .bot-menu { animation: none; }
+  .settings-sheet[open] { animation: none; }
 }
 .settings-notifications .notification-toggle input::before { display: none; }
 

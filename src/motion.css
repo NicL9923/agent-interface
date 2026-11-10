@@ -1,5 +1,7 @@
 /* Motion and ambience: spring timing, the scroll-lifted chat header, per-assistant tints, dark-mode
-   depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css.
+   depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css,
+   but the built app links component stylesheets such as home.css and shell.css after it, so an animation
+   this layer gives a selector is the only one: a second at the same specificity would win in the build.
    Everything that moves here is gated on prefers-reduced-motion: no-preference, so the existing
    reduced-motion rules keep winning. */
 
@@ -282,6 +284,12 @@
   .season-ambience { display: none; }
 }
 
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
+@keyframes settings-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+@keyframes bot-menu-in { from { opacity: 0; transform: scale(0.96); } }
+@keyframes dock-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes jump-latest-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @keyframes message-send { from { opacity: 0; transform: translateY(14px) scale(0.96); } }
 @keyframes caret-pulse { 50% { opacity: 0.2; } }
 @keyframes tape-in { from { opacity: 0; transform: scale(0.4); } }

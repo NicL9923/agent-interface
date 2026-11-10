@@ -511,7 +511,6 @@ a {
   font-weight: 600;
   box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
   transform: translateX(-50%);
-  animation: jump-latest-in 180ms ease-out;
 }
 .jump-latest:hover:enabled {
   background: var(--accent-soft);
@@ -524,9 +523,6 @@ a {
 }
 .jump-latest:active:enabled {
   transform: translate(-50%, 1px);
-}
-@keyframes jump-latest-in {
-  from { opacity: 0; transform: translate(-50%, 8px); }
 }
 .history-skeleton {
   display: grid;
@@ -559,7 +555,6 @@ a {
   to { background-position: 0 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .jump-latest { animation: none; }
   .skeleton-message span { animation: none; }
 }
 .empty-state {
