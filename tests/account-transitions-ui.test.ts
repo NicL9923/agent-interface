@@ -600,6 +600,20 @@ describe("the address after a change", () => {
     expect(new URLSearchParams(location.search).get("bot")).toBe("home");
   });
 
+  // Fourth review, P3: a page that opens while another tab signs in from signed out keeps its address,
+  // as one opened a moment earlier would.
+  it("keeps an address the person opened while another tab was signing in from signed out, once that sign-in names member two", async () => {
+    // The mark a sign-in writes when no account was signed in.
+    data.set(authEpochKey, JSON.stringify({ id: "two-changing", at: NOW, changing: true, fromSignedOut: true }));
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Connecting to your household");
+    cookie = "two";
+    await elsewhere({ id: "two-settled", at: NOW, user: "two" });
+    expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+    expect(location.hash).toBe("#home-1");
+    expect(tab.text()).toContain("Two's home chat");
+  });
+
   it("keeps an address the person opened while signed out when another tab signs member two in", async () => {
     const tab = await openTab("/?bot=home#home-1");
     expect(tab.text()).toContain("Enter local workspace");

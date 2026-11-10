@@ -159,8 +159,8 @@ its way, and starts again from the account check. Meanwhile it shows the connect
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
 address belongs to the account the record named when its screen started, even one still
 connecting, or to the account its check named since. It is reset to `/`, fragment included,
-before a sign-out or another account draws; an address opened while signed out is kept for the
-next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
+before a sign-out or another account draws; an address opened while signed out, or while another
+tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
 is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
@@ -183,7 +183,10 @@ web push names the account it is for, as APNs payloads do (a hash of the account
 service worker shows it only for the account its pages last said is signed in: none while a
 change is under way or after a sign-out. A notification for another account offers no working
 Decline, and a tap on it opens the app without its chat. A push that names no account, from a
-server before this change, shows as before while someone is signed in.
+server before this change, shows as before while someone is signed in. The worker sets the app
+badge from a push only once its notification is on screen and its account is still the one
+signed in, and clears a badge another account's push set when the account changes. Its account
+steps run one at a time, so a late step for an earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:
 
