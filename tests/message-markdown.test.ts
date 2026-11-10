@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageMarkdown, StreamingMarkdown, streamingBlocks } from "../src/components/MessageMarkdown";
+import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 let container: HTMLDivElement;
@@ -270,6 +271,84 @@ describe("streaming Markdown", () => {
       // Code that looks like a definition, comment or footnote keeps its blocks and renders the same.
       "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
     ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+  });
+
+  it("holds a half-written strong marker back until it closes, while the saved reply shows it as typed", async () => {
+    await renderAs(StreamingMarkdown, "Feed the **bo");
+    expect(container.textContent).toBe("Feed the");
+    await renderAs(StreamingMarkdown, "Feed the **bold**");
+    expect(container.querySelector("strong")?.textContent).toBe("bold");
+    await renderAs(MessageMarkdown, "Feed the **bo");
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).toBe("Feed the **bo");
+  });
+
+  /** What the live view shows: the reply less what the hold-back keeps from its last block. */
+  const shownPrefix = (text: string) => {
+    const last = streamingBlocks(text)?.at(-1) ?? text;
+    return text.slice(0, text.length - last.length + streamingHoldBack(last).length);
+  };
+  // React Markdown took about 80 seconds to render this live and saved in jsdom, so only its prefix is checked.
+  const slowToRender = "*a ".repeat(16000) + "b_ ".repeat(16000);
+  // Inputs from both review rounds where the old repair invented content. The live view must now be
+  // exactly what the reply's own prefix renders.
+  it.each([
+    "![".repeat(20000) + "[a](b)".repeat(10000),
+    "- Code:\n\n    ```\n\n  **literal",
+    "[---](https://x.test",
+    "[# Heading](https://x.test",
+    "[r]: https://x.test\n\nRun `[r]",
+    "Intro\r\r    **code",
+    "Compute 2 **3",
+    "Pass **kwargs",
+    "Exclude **test.ts",
+    "[a ".repeat(8000),
+    "See [docs][r].\n\n[r]: https://example.test/_private",
+    "https://example.test/a_[b",
+    "- ```\n  **literal",
+    "> ~~~\n> **literal",
+    "| this is a paragraph",
+    "    | literal code",
+    "Use *.ts files",
+    slowToRender,
+    // The same shape, short enough for the hold-back to read and for React Markdown to render.
+    "*a ".repeat(200) + "b_ ".repeat(200),
+  ])("renders a reviewed input live as its own prefix: %#", async text => {
+    const shown = shownPrefix(text);
+    expect(text.startsWith(shown)).toBe(true);
+    expect(text.length - shown.length).toBeLessThanOrEqual(HOLD_LIMIT);
+    if (text !== slowToRender) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, shown));
+  });
+
+  it("clears copy feedback when a growing code block changes, even mid-copy", async () => {
+    const status = () => container.querySelector('[role="status"]')?.textContent;
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1;");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1;\n");
+    expect(status()).toBe("Code copied.");
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 123;");
+    expect(status()).toBe("");
+    // A copy still pending when the code changes copied the older text, so it must not claim
+    // success, nor end a newer copy's wait.
+    const finish: Array<() => void> = [];
+    writeText.mockImplementation(() => new Promise<void>(resolve => { finish.push(resolve); }));
+    await copy();
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1234;");
+    expect(status()).toBe("");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1234;\n");
+    await act(async () => finish[0]());
+    expect(container.querySelector("button")?.textContent).toBe("Copying…");
+    await act(async () => finish[1]());
+    expect(status()).toBe("Code copied.");
+  });
+
+  it("keeps an unfinished code block's node across updates", async () => {
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')");
+    const code = container.querySelector("pre code")!;
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')\nprint('oats')");
+    expect(container.querySelector("pre code")).toBe(code);
+    expect(code.textContent).toBe("print('hay')\nprint('oats')\n");
   });
 
   // Each case is a fence or definition the per-line splitter cannot follow, so it must parse whole.
