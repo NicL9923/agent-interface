@@ -65,6 +65,15 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
+/**
+ * The props React last rendered onto an element. React replaces this object whenever the element's
+ * component renders again, and keeps it when a memoized component above it skips rendering.
+ */
+const renderedProps = (element: Element) => {
+  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
+  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
+  return (element as unknown as Record<string, unknown>)[key];
+};
 const render = async () => { await mount.render(createElement(App)); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
@@ -93,6 +102,9 @@ describe("command palette", () => {
     await key({ key: "ArrowDown" }, paletteInput());
     expect(activeOption()).toBe('Search messages for "kitch"');
     await key({ key: "ArrowUp" }, paletteInput());
+    // Safari's Enter that confirms an IME word reports isComposing false and keyCode 229. It only confirms the word.
+    await key({ key: "Enter", keyCode: 229 }, paletteInput());
+    expect(palette()?.open).toBe(true);
     await key({ key: "Enter" }, paletteInput());
     expect(palette()).toBeNull();
     expect(new URL(location.href).searchParams.get("bot")).toBe("kitchen");
@@ -326,6 +338,24 @@ describe("composer", () => {
     expect(field().value).toBe("Half a thought");
   });
 
+  it("lets the Enter that confirms an IME word in Safari confirm it without sending", async () => {
+    conversation = { ...conversation, messages: [mine("1", "Plan dinner")] };
+    await render();
+    const press = (init: KeyboardEventInit) => act(async () => {
+      field().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    });
+    const sends = () => vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages");
+    // Safari ends the composition first, so this keydown has isComposing false and only keyCode 229 gives it away.
+    await press({ key: "ArrowUp", isComposing: false, keyCode: 229 });
+    expect(field().value).toBe("");
+    await typeInto(field(), "こんにちは");
+    await press({ key: "Enter", isComposing: false, keyCode: 229 });
+    expect(sends()).toEqual([]);
+    expect(field().value).toBe("こんにちは");
+    await press({ key: "Enter", keyCode: 13 });
+    expect(sends().map(([, body]) => (body as { text: string }).text)).toEqual(["こんにちは"]);
+  });
+
   it("never recalls into a draft while its send is in flight", async () => {
     conversation = { ...conversation, messages: [mine("1", "Plan dinner")] };
     vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => path === "/bots/shared/messages"
@@ -339,6 +369,36 @@ describe("composer", () => {
     const sent = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { text: string };
     expect(sent.text).toBe("Feed the horses");
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/draft")).toEqual([]);
+  });
+
+  it("re-renders nothing in the transcript while typing", async () => {
+    conversation = { ...conversation, messages: [mine("1", "Plan dinner"), { id: "2", role: "assistant", text: "Sure" }] };
+    await render();
+    const frame = mount.container.querySelector<HTMLElement>(".transcript-frame")!;
+    const transcript = [frame, ...frame.querySelectorAll<HTMLElement>("*")];
+    const before = new Map(transcript.map(element => [element, renderedProps(element)]));
+    const fieldBefore = renderedProps(field());
+    for (const text of ["H", "Ho", "Hor", "Hors", "Horse"]) await typeInto(field(), text);
+    expect(field().value).toBe("Horse");
+    // The field re-rendered, so a re-render is visible this way.
+    expect(renderedProps(field())).not.toBe(fieldBefore);
+    const rerendered = transcript.filter(element => renderedProps(element) !== before.get(element));
+    expect(rerendered.map(element => `${element.localName}.${element.className}`)).toEqual([]);
+  });
+
+  it("lets CSS size the field and reads no layout while typing where field-sizing is supported", async () => {
+    vi.spyOn(CSS, "supports").mockImplementation(property => property === "field-sizing");
+    vi.spyOn(HTMLFormElement.prototype, "clientWidth", "get").mockReturnValue(600);
+    vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockReturnValue(96);
+    await render();
+    const styles = vi.spyOn(window, "getComputedStyle");
+    for (const text of ["H", "Ho", "Hor", "Hors", "Horse"]) await typeInto(field(), text);
+    expect(styles.mock.calls.filter(([element]) => element === field())).toEqual([]);
+    const form = field().closest("form")!;
+    expect(form.dataset.layout).toBe("inline");
+    await typeInto(field(), "Horse\nfeed");
+    expect(form.dataset.layout).toBe("stacked");
+    expect(field().style.height).toBe("");
   });
 
   it("attaches a very long paste as a text file and inserts a short one", async () => {

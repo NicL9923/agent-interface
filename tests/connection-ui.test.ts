@@ -500,7 +500,9 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   expect(container.querySelector('textarea')?.value).toBe('My unsent draft');
   expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')?.disabled).toBe(false);
 });
-it('fits a restored multi-line draft when returning to the conversation',async()=>{
+it('fits a restored multi-line draft when returning to the conversation where CSS cannot size it',async()=>{
+  // Browsers without field-sizing: content fall back to the script.
+  vi.spyOn(CSS,'supports').mockImplementation(property=>property!=='field-sizing');
   Object.defineProperty(HTMLTextAreaElement.prototype,'scrollHeight',{configurable:true,get(this:HTMLTextAreaElement){return this.value.split('\n').length*24;}});
   try{
     const previous=vi.mocked(api).getMockImplementation()!;

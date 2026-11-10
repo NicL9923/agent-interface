@@ -125,8 +125,15 @@ credentialed request whether or not it is enabled, so the add-on checks the
 launch profile's `plugins.enabled` and `plugins.disabled` through Hermes's own
 config readers on every status check and again right before each mint. Enabling
 is the consent for the plugin to use the ChatGPT sign-in, so a person does that
-once on the host, then restarts the dashboard. Disabling it stops new sessions
-within the app's 30-second status refresh, and refuses any mint at once:
+once on the host, then restarts the dashboard. Disabling it refuses any mint at
+once. The app keeps the last status it read and answers with it without waiting,
+so a message send or a page load never waits on this check. Once that copy is 30
+seconds old, the next read starts a refresh in the background and still answers
+with the old status; reads after the refresh see the new one. Only the first read
+after the app connects to Hermes waits. A failed status check counts as
+unavailable, with its reason, until the next refresh succeeds, and a disconnect
+drops the copy. A Talk start between disabling and that refresh is refused with
+503 by the mint check. Enable the plugin with:
 
 ```sh
 hermes plugins enable wildbots-voice

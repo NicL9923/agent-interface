@@ -123,6 +123,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let capabilityCache: Capabilities | undefined;
   let voiceStatus: {at: number; value: Capabilities['liveVoice']} | undefined;
   let voiceRead: Promise<Capabilities['liveVoice']> | undefined;
+  // Advances on every disconnect, so a voice read that started on an older connection never lands.
+  let voiceGeneration = 0;
   let changeEpoch = 0;
   const changeGenerations = new Map<string, number>();
   const sharedReads = new Map<string, {generation: string; at: number; value: Promise<Conversation>}>();
@@ -168,6 +170,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       capabilityCache = undefined;
       rosterReuse = undefined;
       voiceStatus = undefined;
+      voiceRead = undefined;
+      voiceGeneration++;
       // A disconnected stream cannot identify which turn is now active. Fresh
       // native snapshots restore current activity, reasoning and tools.
       transient.clear();
@@ -522,22 +526,36 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       files: rows.flatMap(x => x.files ?? []),
     };
   }
-  async function liveVoice(): Promise<Capabilities['liveVoice']> {
-    if (voiceStatus && Date.now() - voiceStatus.at < LIVE_VOICE_MS) return voiceStatus.value;
-    const at = Date.now();
-    const value = voiceRead ??= (async () => {
+  /**
+   * Live voice, as the add-on last reported it. A known value is returned at once and, once 30 seconds
+   * old, refreshed in the background, so a send or a bootstrap never waits on this HTTP probe. Only the
+   * first read on a connection waits. A probe that fails is an answer of unavailable with its reason,
+   * replacing whatever was known, so a lost voice plugin is never reported available for longer than
+   * one refresh. The value is dropped on disconnect.
+   */
+  function liveVoice(): Promise<Capabilities['liveVoice']> {
+    if (!voiceStatus) return readLiveVoice();
+    if (Date.now() - voiceStatus.at >= LIVE_VOICE_MS) readLiveVoice().catch(() => { /* Settled in readLiveVoice. */ });
+    return Promise.resolve(voiceStatus.value);
+  }
+  function readLiveVoice(): Promise<Capabilities['liveVoice']> {
+    if (voiceRead) return voiceRead;
+    const at = Date.now(), generation = voiceGeneration;
+    const read: Promise<Capabilities['liveVoice']> = (async () => {
+      let value: Capabilities['liveVoice'];
       try {
         // POST: Hermes's dashboard answers every unmatched GET under /api/ before the add-on's routes.
         const response = await http('/api/agent-interface/voice/status', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
         const status = await response.json() as Wire;
-        return supported(status.available === true, typeof status.reason === 'string' ? status.reason.slice(0, 500) : 'Hermes live voice is unavailable.');
+        value = supported(status.available === true, typeof status.reason === 'string' ? status.reason.slice(0, 500) : 'Hermes live voice is unavailable.');
       } catch (error) {
-        return supported(false, error instanceof Error && 'statusCode' in error ? error.message : 'Hermes could not report live voice.');
+        value = supported(false, error instanceof Error && 'statusCode' in error ? error.message : 'Hermes could not report live voice.');
       }
-    })().finally(() => { voiceRead = undefined; });
-    const result = await value;
-    voiceStatus = {at, value: result};
-    return result;
+      if (generation === voiceGeneration) voiceStatus = {at, value};
+      return value;
+    })().finally(() => { if (voiceRead === read) voiceRead = undefined; });
+    voiceRead = read;
+    return read;
   }
   async function baseCapabilities(): Promise<Capabilities> {
     if (capabilityRequest) return capabilityRequest;
