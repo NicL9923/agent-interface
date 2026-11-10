@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
 import { ApiError, changeStream, clearResponseCache, request as apiRequest, setCsrf } from "../client-api";
 import { preferenceQueue } from "./preference-queue";
+import { forgetSignIn, prefetchLinkedChat, rememberChats, rememberSignIn } from "./linked-chat";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -72,6 +73,7 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
+        if (next.connection.connected) rememberChats(next.bots.map(bot => bot.id));
         // A save that overlapped this read may be newer than its preferences; keep the saved copy.
         const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
@@ -98,6 +100,7 @@ export function useSession(events: SessionEvents) {
         if (epoch !== identityEpoch.current) return null;
         if (e instanceof ApiError && e.status === 401) {
           nextIdentity();
+          forgetSignIn();
           handlers.current.onIdentityChange();
           setAuth(true); setBoot(null); setCsrf("");
         } else {
@@ -128,6 +131,8 @@ export function useSession(events: SessionEvents) {
     }
   }, [checkingConnection, refresh]);
   useEffect(() => {
+    // A link that names a chat reads it while bootstrap runs, not after.
+    prefetchLinkedChat();
     void refresh();
     const id = setInterval(() => {
       if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
@@ -193,11 +198,13 @@ export function useSession(events: SessionEvents) {
   const editPreferences = (edit: (value: Preferences) => Preferences) =>
     preferences.current!.edit(edit, bootRef.current?.preferences);
   const signedIn = () => {
+    rememberSignIn();
     nextIdentity();
     bootstrapRequest.current = null;
     void refresh();
   };
   const signedOut = () => {
+    forgetSignIn();
     nextIdentity();
     bootstrapRequest.current = null;
     setCsrf("");

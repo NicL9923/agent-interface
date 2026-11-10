@@ -13,20 +13,27 @@ const FRESH_MS = 5_000;
 /** The server serializes some reads, so a sweep across a list never queues more than this. */
 const MAX_PREFETCHES = 2;
 const inflight = new Map<string, Promise<Page>>();
-const readAt = new Map<string, number>();
+// Reads that finished, by when. A chat opened within FRESH_MS of one takes it as its first load.
+const done = new Map<string, { at: number; read: Promise<Page> }>();
 // Reads belong to the account they were made for. A new account starts with none to join.
 let scope = responseScope();
 function current() {
   if (scope === responseScope()) return;
   scope = responseScope();
   inflight.clear();
-  readAt.clear();
+  done.clear();
 }
 
-/** The latest page being prefetched, so opening the chat joins that read instead of repeating it. */
+const fresh = (path: string) => Date.now() - (done.get(path)?.at ?? -Infinity) < FRESH_MS;
+/**
+ * The latest page being prefetched, or read a moment ago, so opening the chat joins that read
+ * instead of repeating it. The chat's change stream reads again as it connects, so nothing that
+ * changed since is missed.
+ */
 export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
   current();
-  return inflight.get(firstPage(botId));
+  const path = firstPage(botId);
+  return inflight.get(path) ?? (fresh(path) ? done.get(path)?.read : undefined);
 }
 
 /**
@@ -40,11 +47,11 @@ export function prefetchFirstPage(botId: string) {
   current();
   const path = firstPage(botId);
   if (inflight.has(path) || inflight.size >= MAX_PREFETCHES) return;
-  if (Date.now() - (readAt.get(path) ?? -Infinity) < FRESH_MS) return;
+  if (fresh(path)) return;
   const read = request("GET /bots/:id/conversation", { params: { id: botId }, query: firstQuery });
   inflight.set(path, read);
   const made = scope;
   // A read that finishes after a sign-out leaves the next account's state alone.
-  void read.then(() => { if (made === responseScope()) readAt.set(path, Date.now()); }, () => {})
+  void read.then(() => { if (made === responseScope()) done.set(path, { at: Date.now(), read }); }, () => {})
     .finally(() => { if (inflight.get(path) === read) inflight.delete(path); });
 }

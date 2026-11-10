@@ -131,13 +131,16 @@ describe("opening a chat after a prefetch", () => {
     return container;
   };
 
-  it("shows the prefetched page at once while checking it again", async () => {
+  // The chat's change stream reads again as it connects, so a read this fresh needs no repeat.
+  it.each([[4_999, 1], [5_000, 2]])("opened %ims after a prefetch finished, reads the chat %i time(s) to show it", async (gap, reads) => {
     const { prefetchFirstPage } = await import("../src/app/conversation-page");
     prefetchFirstPage("barn");
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    respond = hold;
+    vi.setSystemTime(Date.now() + gap);
     const container = await open();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(container.textContent).toBe("Hello");
+    expect(conversationReads()).toHaveLength(reads);
   });
 
   it("uses the read already on its way as the first load", async () => {

@@ -77,6 +77,14 @@ device gets it as before. Security alerts always reach every device. See
 [Device activity](docs/native-api.md#device-activity).
 <!-- END device activity -->
 
+A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
+web app checks the sign-in, instead of after. It does so only when this browser signed in
+within the session's seven days and that sign-in's last check listed the chat, so a
+signed-out browser or a chat you may not see sends no request that would be refused. The
+browser keeps only that lapse time and the chat IDs, in `agent-interface:sign-in-hint`,
+and drops them at sign-out or a refused session. A link to a message, Today or a group
+chat waits for the check as before. See `src/app/linked-chat.ts`.
+
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
 approval notification offers **Review** and **Decline** where the browser supports

@@ -60,3 +60,23 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
 });
+
+test("a link to a chat shows sign-in when signed out, then reads the chat beside bootstrap once signed in", async ({ page }) => {
+  // Signed out, the link costs one refused bootstrap (which the fixture excuses) and nothing else.
+  await page.goto("/?bot=ranch");
+  await page.getByRole("button", { name: "Enter local workspace" }).click();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+
+  // Signed in, bootstrap is held until the chat's read has started, which proves the read does not wait for it.
+  let chatRead!: () => void;
+  const chatStarted = new Promise<boolean>(resolve => { chatRead = () => resolve(true); });
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/bots/ranch/conversation") chatRead(); });
+  const heldUntil: boolean[] = [];
+  await page.route("**/api/bootstrap?*", async route => {
+    heldUntil.push(await Promise.race([chatStarted, new Promise<boolean>(resolve => setTimeout(() => resolve(false), 2_000))]));
+    await route.continue();
+  });
+  await page.goto("/?bot=ranch");
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  expect(heldUntil[0]).toBe(true);
+});
