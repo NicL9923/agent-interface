@@ -155,3 +155,18 @@ real `NATIVE` against a local ticket server and a fake WebSocket client module t
 
 The guarded tool was not run, and `NATIVE` did not reach a real Hermes. The 120 s acquire wait is sized from the add-on's
 source, not from a measured acquire during a compaction.
+
+## Second review: Grok 4.7 on `84e0e8b`
+
+Ready, no findings. The reviewer walked seven ways an acquire can end and found none that exits 75 while a lease can
+still appear. It confirmed that only the add-on's exact busy answer, or a success object that fails the tool's two
+checks, is a refusal; that every other answer exits 2 without a release; and that no other caller of `NATIVE` passes
+`wait` or reads a failed child's output. Eight breaks went red.
+
+Two notes it did not raise as findings are applied here by the orchestrator (Claude Fable 5.2), in a comment and the
+runbook only:
+
+- The comment on `MAINTENANCE_WAIT` said 120 s was enough for four compactions. Nothing caps the chain of preempts,
+  and four full waits do not fit. The comment now says three, and that a longer chain is held for review.
+- The runbook's step 3 now says the temporary file goes in the same directory as `status.json`, and step 1 says why
+  the wait must not be skipped.

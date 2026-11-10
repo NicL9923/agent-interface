@@ -47,7 +47,9 @@ class Refused(Exception):
 BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
 # How long the maintenance RPC waits for each WebSocket message. Before it decides, acquire
 # preempts each canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py
-# PREEMPT_WAIT), one compaction at a time, so it gets enough for four. Other actions answer at once.
+# PREEMPT_WAIT). One compaction runs at a time, so the usual wait is one preempt; another can
+# start as the first ends, and nothing caps the chain. 120 s covers three full waits. A longer
+# chain misses the wait and is held for review like any unanswered acquire. Other actions answer at once.
 MAINTENANCE_WAIT = {"acquire": 120}
 DEFAULT_MAINTENANCE_WAIT = 15
 # Beyond the wait: up to 10 s for the service ticket, 10 s to open the socket and 5 s to close it.

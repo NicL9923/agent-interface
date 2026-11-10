@@ -468,13 +468,17 @@ changed. It tries one release, then exits 2 with `Stopped at fence: Hermes answe
 acquire.` The app, dashboard and gateway keep running, and the app refuses sends with the
 draft-saved message. On the host:
 
-1. Wait five minutes after the tool exited, so any acquire still running has ended.
+1. Wait five minutes after the tool exited, so any acquire still running has ended. Do not skip
+   this: a status restored while the acquire is still running lets the app accept sends under a
+   lease that then appears. If idle compactions are still running one after another, wait until
+   they stop.
 2. Read `maintenanceFile`. If it holds exactly `{"operationId": "OPERATION"}` for this
    operation, the late acquire took the lease: delete the file. Stop and investigate a lease that
    names another operation, or a `.drain_request.json` in the Hermes home.
 3. If `upgradeStateDir/status.json` still has `"phase": "blocked"` and this `operationId`, replace
    it with `appBase/operations/continued-OPERATION/previous-status.json` through a temporary file
-   and `mv`, keeping mode 600. Leave any other content in place.
+   in the same directory as `status.json` and `mv`, keeping mode 600. Leave any other content in
+   place.
 4. Prepare the commit again. The needs-review stage stays as the record.
 
 Before this order, the app stopped first, so a send in that window made the acquire refuse with
