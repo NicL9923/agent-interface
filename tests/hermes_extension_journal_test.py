@@ -25,6 +25,11 @@ ROOT = Path(__file__).resolve().parents[1]
 extension = load_source("src/hermes/extension.py", "extension_journal_test")
 
 
+def saved(result):
+    """An admission answer as the journal saved it: a fresh answer adds its own timings, which a replay does not repeat."""
+    return {key: value for key, value in result.items() if key != "app_timing"}
+
+
 def image_text(text, images):
     return (text or "") + "".join("\n[image: " + path + "]" for path in images)
 
@@ -176,8 +181,8 @@ class ProfilesGateway(FakeGateway):
 class PooledHermes(FakeHermes):
     """FakeHermes behind native dispatch as rpc_dispatch does it: long handlers on an
     8-worker pool, reserved before queueing and released once answered; the rest inline."""
-    def __init__(self):
-        super().__init__([])
+    def __init__(self, environment=None):
+        super().__init__([], environment=environment)
         server, self.native_pool = self.server, concurrent.futures.ThreadPoolExecutor(max_workers=8)
         self.held, self.entered, self.active, counting = threading.Event(), threading.Event(), [0], threading.Lock()
         def acquire():
@@ -325,7 +330,7 @@ class OpenTests(unittest.TestCase):
                 hermes.native_calls.clear()
                 hermes.server.handle_request = Mock(return_value=hermes.server._err("native", code, "Native refused input"))
                 submit = hermes.methods["agent-interface.submit"]
-                original = submit("send", params)["result"]
+                original = saved(submit("send", params)["result"])
                 self.assertEqual(original["status"], status)
                 if status == "rejected":
                     self.assertNotIn("Native refused input", original["message"])
@@ -435,7 +440,7 @@ class OpenTests(unittest.TestCase):
             hermes.native_calls.clear()
             submit=hermes.methods["agent-interface.submit"]
             params={"profile":"default","request_id":"one","sender_id":"member","text":"Hello"}
-            result=submit("send",params)["result"]
+            result=saved(submit("send",params)["result"])
             self.assertEqual(result["status"],"accepted")
             self.assertEqual((result["app_run_id"],result["admission"]),("one","canonical"))
             self.assertNotIn("running",result)
@@ -474,7 +479,7 @@ class OpenTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "journal.db"
             with FakeGateway([], journal_path=path) as hermes:
-                original = hermes.methods["agent-interface.submit"]("send", params)["result"]
+                original = saved(hermes.methods["agent-interface.submit"]("send", params)["result"])
                 self.assertEqual((original["status"], original["userRowId"]), ("accepted", None))
                 with hermes.journal.db:
                     hermes.journal.db.execute("UPDATE receipts SET row_id=42 WHERE request_id='one'")
@@ -526,7 +531,7 @@ class OpenTests(unittest.TestCase):
                     elif mode == "native-refusal":
                         session["running"] = True
                         native.return_value = server._err("native", 4010, "Agent does not support steer")
-                    original = submit("send", params)["result"]
+                    original = saved(submit("send", params)["result"])
                     self.assertEqual((original["status"], original["message"]), (status, message))
                     self.assertEqual(native.call_count, int(mode in ("image-preparation", "native", "native-refusal")))
                     if mode == "image-preparation":
