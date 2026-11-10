@@ -90,3 +90,11 @@ Each line was broken by hand, the named tests went red, and the line was restore
 8. `!echo.ran` removed: "does not show when its turn already showed work".
 9. Bot check removed: "does not show when the message went to another assistant".
 10. Active conversation check removed: "does not show when Hermes reports the turn's own work".
+
+## After merging main at `c2ee202` (#320)
+
+`main` gained #320, which changed `src/App.tsx` and `src/app/use-conversation.ts`; the only conflict was the
+tools index. On merge commit `068654a`: `npm run typecheck`, `npm run lint` and `ruff check .` passed;
+`npm test`: 193 files, 3,224 tests passed; `npm run build` passed; `npm run test:e2e`: 21 passed in Chromium.
+`measure-thinking-gap.mjs --runs 5`: 0 ms echo to row at both admission delays, one row node, none removed,
+one status text, the sent message moved 18 px as on `main`.
