@@ -1,5 +1,5 @@
 import type { Preferences } from "../shared/types";
-import { hintedUser } from "./linked-chat";
+import { hintedUser } from "./account-epoch";
 import { localRead, localRemove, localSave, savedThemeKey } from "./storage";
 
 /**
@@ -10,6 +10,13 @@ import { localRead, localRemove, localSave, savedThemeKey } from "./storage";
  */
 export const SAVED_THEME_VERSION = 1;
 type SavedTheme = { v: typeof SAVED_THEME_VERSION; user: string; theme: Preferences["theme"] };
+
+/** The theme public/boot.js applies: the saved one while the sign-in hint names its account. */
+export function savedTheme(): Preferences["theme"] | null {
+  const user = hintedUser(), saved = localRead<Partial<SavedTheme>>(savedThemeKey);
+  return user && saved?.v === SAVED_THEME_VERSION && saved.user === user && (saved.theme === "light" || saved.theme === "dark" || saved.theme === "system")
+    ? saved.theme : null;
+}
 
 export function rememberTheme(user: string, theme: Preferences["theme"]) {
   // Without a sign-in this browser saw for this account, boot.js would never apply it.

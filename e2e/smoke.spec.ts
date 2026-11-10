@@ -143,7 +143,7 @@ test.describe("a returning member's home", () => {
     await page.reload();
     const ranch = assistants(page).getByRole("button", { name: /Ranch Hand/ });
     await expect(ranch).toBeVisible();
-    await expect(page.locator(".bot-rail").getByRole("status")).toHaveText("Connecting");
+    await expect(page.locator(".bot-rail .home-sync")).toHaveText("Connecting");
     await expect(page.getByText("Fence check is done.")).toHaveCount(0);
     await ranch.focus();
     // The page's own layout-shift entries, from the swap that follows.
@@ -154,10 +154,34 @@ test.describe("a returning member's home", () => {
     });
     release();
     await expect(ranch.getByText("Fence check is done.")).toBeVisible();
-    await expect(page.locator(".bot-rail").getByRole("status")).toHaveCount(0);
+    await expect(page.locator(".bot-rail .home-sync")).toHaveCount(0);
     await expect(ranch).toBeFocused();
     expect(await page.evaluate(() => (window as unknown as { shifted: number }).shifted)).toBeLessThan(0.01);
   });
+});
+
+test("a sign-out or sign-in in one tab changes the account every other tab shows, without a reload", async ({ context, page }) => {
+  await signIn(page);
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  const other = await context.newPage();
+  await other.goto("/");
+  await expect(assistants(other).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
+
+  await other.bringToFront();
+  await other.getByRole("button", { name: "Account" }).click();
+  await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
+  // This checks the tabs, not the sheet's layout, so the press goes to the button whatever overlaps it.
+  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).dispatchEvent("click");
+  await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+  await expect(page.getByText("Ranch Hand")).toHaveCount(0);
+
+  await other.getByLabel("Sign in as").selectOption("two");
+  await other.getByRole("button", { name: "Enter local workspace" }).click();
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByRole("menu", { name: "Account" })).toContainText("two@localhost.invalid");
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
 });
 
 test.describe("after a deploy retires a lazy screen's file", () => {

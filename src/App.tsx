@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
-import { api, write } from "./client-api";
+import { api } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
@@ -9,6 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
+import { chatStream, STREAM_NOTICE_MS, useStreamsDown } from "./app/stream-health";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
@@ -40,16 +41,77 @@ import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph"
 import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
-import { ConnectionPanel } from "./components/ConnectionPanel";
-import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
+import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPanel";
+import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
-import { rememberTheme } from "./app/saved-theme";
+import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
 import { prefetchLinkedChat } from "./app/linked-chat";
 import { savedRosterKey, signInHintKey } from "./app/storage";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
+import { signOutOf } from "./app/account-change";
+
+/**
+ * The app for one account generation at a time (see account-epoch.ts). A sign-in, sign-out, refused
+ * session, another account or a lapsed sign-in hint, in this tab or another, unmounts everything the
+ * previous generation held, its streams, timers and reads included, before anything draws again.
+ * While another tab's sign-in or sign-out is on its way this shows the connecting screen and asks
+ * nothing; then the new generation starts from bootstrap, or from sign-in after a sign-out.
+ */
 export function App() {
+  const [changes, setChanges] = useState(0);
+  const [shown, setShown] = useState(() => ({ changes: 0, start: accountStart(), generation: accountGeneration() }));
+  useEffect(() => watchAccount(() => setChanges(value => value + 1)), []);
+  // A change first unmounts the generation shown, in a commit of its own, so the cleanups it runs
+  // still act under the old record and every request they make is refused. Only then does this
+  // tab take the stored record as its own and draw the next generation.
+  const pending = changes !== shown.changes;
+  useEffect(() => {
+    if (!pending) return;
+    const start = accountStart();
+    // The last account's theme goes with it; the saved one stays while the hint still names its account.
+    document.documentElement.dataset.theme = savedTheme() ?? "system";
+    // An address that named the last account's chat or panel opens nothing of it for the next.
+    if ("start" in start && start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+    setShown({ changes, start, generation: accountGeneration() });
+  }, [pending, changes]);
+  const { start, generation } = shown;
+  const wait = "wait" in start ? start.wait : undefined;
+  useEffect(() => {
+    if (wait === undefined) return;
+    // A tab that closed mid-request never settles its mark; once it is stale, bootstrap decides.
+    const timer = setTimeout(() => setChanges(value => value + 1), Math.max(0, wait - Date.now()));
+    return () => clearTimeout(timer);
+  }, [wait]);
+  useEffect(() => {
+    const until = hintUntil();
+    if (until === undefined) return;
+    const timer = setTimeout(checkHintExpiry, Math.max(0, until - Date.now()));
+    return () => clearTimeout(timer);
+  }, [generation]);
+  if (pending || "wait" in start) return <Connecting />;
+  return <AccountApp key={generation} start={start.start} />;
+}
+
+function Connecting({ unavailable = false, retry }: { unavailable?: boolean; retry?: () => void }) {
+  return (
+    <main className="welcome">
+      <p className="eyebrow">WildBots</p>
+      <AvatarTrio />
+      <h1>
+        Your assistants,
+        <br />
+        in one familiar place.
+      </h1>
+      <p role="status">{unavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+      {unavailable && retry && <button onClick={retry}>Try again</button>}
+    </main>
+  );
+}
+
+function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [view, setView] = useState<View>(initialView);
   // The group chat open in the main pane when the view is "group".
   const [roomId, setRoomId] = useState(initialRoom);
@@ -81,16 +143,11 @@ export function App() {
     setRailOpen(mobile);
   };
   const session = useSession({
-    onIdentityChange: () => {
-      reset(); clearUploads(); toast.dismiss();
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage", "computer"); setError("");
-      setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
-    },
     // A place chosen on the saved home before bootstrap answered stays chosen.
     onFirstBootstrap: next => { if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
     onBotGone: gone,
-  });
+  }, start);
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
@@ -101,8 +158,10 @@ export function App() {
   // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    // A server that never sends `groups` notices gets the 30-second poll home always had.
-    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had, unless its catalog
+    // says group chats are unsupported: that changes only with the server, so the slow poll is enough.
+    deps: [userId], pollMs: session.groupsNotified || groupsHeld.current?.value.catalog?.supported === false
+      ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);
@@ -128,12 +187,12 @@ export function App() {
   }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload } = useDraft({ botId, userId, identityEpoch, setError });
+  const { conversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
-  });
+  }, boot?.bots.find(bot => bot.id === botId)?.sessionId);
   // The chat counts as on screen only when nothing covers it: no panel, and on a phone, not the home list.
   const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
   useChatPresence(shownBotId, userId);
@@ -144,7 +203,7 @@ export function App() {
   // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
   const connectionLost = session.disconnected || conversationReadFailed || offline;
   const connectionShown = session.disconnected || conversationDisconnected || offline;
-  const { pending, receipt, sending, send, retry, discard, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, discard } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
@@ -210,17 +269,12 @@ export function App() {
     setRailOpen(false);
     setError("");
   });
+  // A sign-out that the server takes starts the app again at sign-in, in every tab.
   const signOut = async () => {
+    if (!userId) return;
     try {
       await notifications.disable();
-      await write("/auth/logout", {});
-      session.signedOut();
-      setConversation(null);
-      setDraft({ text: "", attachments: [] });
-      // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); clearUploads(); toast.dismiss();
-      setRailOpen(mobile);
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage");
+      await signOutOf(userId);
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -368,17 +422,27 @@ export function App() {
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
+  // Live updates stopped for long enough to matter: the household stream or this chat's has been down for
+  // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
+  const liveDown = useStreamsDown(useMemo(() => ["household", ...botId ? [chatStream(botId)] : []], [botId]), STREAM_NOTICE_MS);
   // Notices from the rest of the app, rebuilt only when one of them changes.
   const dock = useMemo(() => {
     const items: DockItem[] = [];
     if (!boot) return items;
-    if (connectionShown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
-      appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
+    // One notice either way: a lost connection says so, and otherwise a stopped stream says updates are late.
+    if (connectionShown || liveDown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+      appUnavailable={appUnavailable} liveOnly={!connectionShown} busy={checkingConnection} retry={reconnect} /> });
     if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionShown} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
-  }, [boot, connectionShown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  }, [boot, connectionShown, liveDown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  // Today, Find, a group chat and a chat with no assistant have no composer, so the same connection item
+  // shows at the top of the view instead. A chat with no assistant shows its own full panel once the
+  // connection is lost, so there it adds only the live-updates notice.
+  const inChat = view !== "find" && view !== "group" && view !== "today";
   const liveBot = boot?.bots.find(bot => bot.id === botId);
+  const viewDock = useMemo(() => inChat && liveBot ? [] : dock.filter(item => item.kind === "connection" && !(inChat && connectionShown)),
+    [inChat, liveBot, dock, connectionShown]);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
     && ["thinking", "working", "waiting", "blocked"].includes(liveState ?? "idle");
@@ -399,8 +463,8 @@ export function App() {
   useEffect(() => {
     if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
   }, [boot, connected, catalog, rooms]);
-  // Read for the account the sign-in hint names (see readSavedRoster), and again when another tab
-  // changes it. A sign-in or sign-out on this page shows the sign-in screen until a bootstrap answers.
+  // Read for the account the sign-in hint names (see readSavedRoster), once per account generation:
+  // every change of account, in this tab or another, mounts a new one (see App).
   const early = !boot && saved ? saved : null;
   const earlyHome = useMemo(() => early && savedHome(early), [early]);
   const chooseEarly = useStableCallback((id: string) => {
@@ -412,36 +476,25 @@ export function App() {
   const showEarly = useStableCallback((next: View) => { chosenEarly.current = true; showView(next); });
   const pickRoomEarly = useStableCallback((id: string) => { chosenEarly.current = true; selectRoom(id); });
   const earlyGroups = useMemo(() => ({ ...homeGroups, onSelect: pickRoomEarly }), [homeGroups, pickRoomEarly]);
-  if (session.auth) return <SignIn onSuccess={session.signedIn} />;
-  const connecting = <>
-    <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
-    {appUnavailable && <button onClick={() => void session.refresh()}>Try again</button>}
-  </>;
+  if (session.auth) return <SignIn />;
   // The same tree as the full app below, so bootstrap's answer redraws home in place: rows, scroll and focus stay.
   if (!boot && earlyHome)
     return (
       <div className="app-shell">
+        {/* The app's one connection live region, in the same place as below, so the swap keeps the tree. */}
+        <ConnectionAnnouncer shown={appUnavailable || offline} connection={{ connected: false }} offline={offline} appUnavailable={appUnavailable} />
         <Sidebar boot={earlyHome} saved botId={botId} readThrough={readThrough} groups={earlyGroups} view={view} state="idle"
           connectionLost={appUnavailable || offline} offline={offline} mobile={mobile} open={railOpen} update={null}
           onSelectBot={chooseEarly} onView={showEarly} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
           onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection}
           onChooseMain={chooseMainFromHome} onDismissMainSuggestion={dismissMainSuggestion} />
-        <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>{connecting}</main>
+        <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>
+          <p>{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+          {appUnavailable && <button onClick={refreshSession}>Try again</button>}
+        </main>
       </div>
     );
-  if (!boot)
-    return (
-      <main className="welcome">
-        <p className="eyebrow">WildBots</p>
-        <AvatarTrio />
-        <h1>
-          Your assistants,
-          <br />
-          in one familiar place.
-        </h1>
-        {connecting}
-      </main>
-    );
+  if (!boot) return <Connecting unavailable={appUnavailable} retry={refreshSession} />;
   const selected = boot.bots.find((bot) => bot.id === botId);
   const state: ActivityState = connectionShown
     ? "disconnected"
@@ -454,6 +507,7 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <ConnectionAnnouncer shown={connectionShown || liveDown} connection={boot.connection} offline={offline} appUnavailable={appUnavailable} liveOnly={!connectionShown} />
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionShown} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
@@ -463,6 +517,7 @@ export function App() {
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
+        {viewDock.length > 0 && <div className="view-dock"><StatusDock items={viewDock} /></div>}
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>

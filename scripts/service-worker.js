@@ -153,15 +153,14 @@ async function openShell(event) {
 }
 
 const BOOT = '/boot.js';
-// public/boot.js starts the page's first read and belongs to the shell that loads it, so it follows
-// the shell's rule: this release's copy while the cached shell opens, the server's once that shell is
-// noted as out of date. A boot.js of another release is safe, since the app takes its read only when
-// it is the read the app would make, but this keeps the two from one release.
+// public/boot.js blocks the page's <head>, before any of the app's code or deadlines exist, so a
+// stalled download would leave a blank page until the browser gave up. This release's copy always
+// answers, at once, even after the shell is noted as out of date and opens from the network: a
+// boot.js of another release is safe, since the app takes its read only when it is the read the app
+// would make, so the worst case is one extra bootstrap read. Only a worker with no copy asks the network.
 async function openBoot(request) {
-  const cache = await caches.open(CACHE);
-  const cached = await cache.match(BOOT);
-  if (cached && !await cache.match(OUTDATED)) return cached;
-  try { return await fetch(request); } catch { return cached || Response.error(); }
+  const cached = await (await caches.open(CACHE)).match(BOOT);
+  return cached || fetch(request);
 }
 
 self.addEventListener('fetch', (event) => {

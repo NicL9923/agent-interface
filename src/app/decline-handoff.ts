@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { onAccountEnd } from "./account-epoch";
 
 /**
  * The approval this person just declined in a chat. Until they send their next message there, the
@@ -8,6 +9,8 @@ import { useSyncExternalStore } from "react";
 const declined = new Map<string, string>();
 const listeners = new Set<() => void>();
 const publish = () => { for (const listener of listeners) listener(); };
+// Keyed by chat alone, so another account's decline in a shared assistant must not prompt the next one.
+onAccountEnd(() => { declined.clear(); publish(); });
 
 export function rememberDecline(botId: string, approvalId: string) {
   declined.set(botId, approvalId);

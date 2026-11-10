@@ -97,16 +97,20 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
         } catch { refresh(); }
       },
     });
-    const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.close(); };
+    // A hidden page or an offline device pauses the stream, keeping its retry budget for when it wakes.
+    const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.suspend(); };
+    // The network returning makes the stream's earlier failures stale, so it connects without its backoff,
+    // or, on a hidden page, when the page is shown.
+    const revive = () => stream.reconnect();
     wake();
     const retry = setInterval(wake, 45_000);
-    window.addEventListener('online', wake); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', revive); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
     // The household stream's catalog notice also covers this room leaving the person's list, which ends
     // this stream without a notice of its own.
     window.addEventListener(GROUPS_EVENT, refresh);
     return () => {
       clearInterval(retry); stream.close();
-      window.removeEventListener('online', wake); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('online', revive); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
       window.removeEventListener(GROUPS_EVENT, refresh);
     };
   }, [roomId]);

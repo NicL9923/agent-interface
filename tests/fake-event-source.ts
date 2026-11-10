@@ -7,21 +7,35 @@ export class FakeEventSource extends EventTarget {
   static streams = new Set<FakeEventSource>();
   static created: string[] = [];
   readyState = FakeEventSource.CONNECTING;
+  /** When the page opened this stream, on the test's clock. */
+  readonly at = Date.now();
   onopen: ((event: Event) => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
+  /** Every stream the page opened, in creation order, closed ones included. */
+  static opened: FakeEventSource[] = [];
+  /** When set, answers each new stream as a server would, after the network's millisecond. */
+  static serve: ((source: FakeEventSource) => void) | undefined;
   constructor(readonly url: string) {
     super();
     FakeEventSource.streams.add(this);
     FakeEventSource.created.push(url);
+    FakeEventSource.opened.push(this);
+    const serve = FakeEventSource.serve;
+    if (serve) setTimeout(() => serve(this), 0);
   }
   static reset() {
     FakeEventSource.streams.clear();
     FakeEventSource.created = [];
+    FakeEventSource.opened = [];
+    FakeEventSource.serve = undefined;
   }
-  /** Sends a change notice on every open conversation stream. */
+  /** Sends a change notice on every open stream but the household one, whatever its query names. */
   static notifyAll() {
-    for (const stream of FakeEventSource.streams) if (stream.url !== "/api/events") stream.emit("message", "change");
+    for (const stream of FakeEventSource.streams) {
+      const url = new URL(stream.url, "http://localhost");
+      if (url.pathname !== "/api/events" || url.searchParams.has("group")) stream.emit("message", "change");
+    }
   }
   connect() {
     this.readyState = FakeEventSource.OPEN;
@@ -33,6 +47,11 @@ export class FakeEventSource extends EventTarget {
     const event = new MessageEvent(type, { data });
     if (type === "message") this.onmessage?.(event);
     this.dispatchEvent(event);
+  }
+  /** A dropped connection, which EventSource retries itself. */
+  drop() {
+    this.readyState = FakeEventSource.CONNECTING;
+    this.onerror?.(new Event("error"));
   }
   /** A refusal, which EventSource never retries. */
   fail() {

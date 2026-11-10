@@ -1,6 +1,6 @@
 import type { GroupMember, GroupRoom } from "../shared/collaboration";
 import { defaultPreferences, type Avatar, type Bootstrap, type Bot, type Preferences } from "../shared/types";
-import { hintedUser } from "./linked-chat";
+import { hintedUser } from "./account-epoch";
 import { localRead, localRemove, localSave, savedRosterKey } from "./storage";
 
 /**

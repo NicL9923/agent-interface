@@ -179,8 +179,9 @@ export const Sidebar = memo(function Sidebar({ boot, saved = false, botId, shown
       {season && <SeasonalAmbience season={season} />}
       <header className="home-bar">
         <AccountMenu user={boot.user} status={status} disabled={saved} onUsage={onUsage} onSettings={onSettings} onSignOut={onSignOut} />
-        {(saved || connectionLost) && <span className="home-sync" role="status">
-          {/* The saved home says it is not live yet, and says so plainly when the first bootstrap failed. */}
+        {/* Seen here; the app's one connection live region announces it. The saved home says it is not live
+            yet, and says so plainly when the first bootstrap failed. */}
+        {(saved || connectionLost) && <span className="home-sync">
           <Icon name="spinner" size={16} className={offline || saved && connectionLost ? undefined : "spin"} />
           {offline ? "Offline" : !saved ? "Reconnecting" : connectionLost ? "Can't connect" : "Connecting"}</span>}
         <span className="home-bar-actions">

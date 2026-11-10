@@ -70,9 +70,14 @@ afterEach(() => { Reflect.deleteProperty(navigator, 'onLine'); expect(unexpected
 
 // A change notice asks for a read, which then fails or succeeds.
 const read = async () => { await act(async () => FakeEventSource.notifyAll()); await advance(0); };
-// The household stream reports a change, so the session reads the roster again.
+// The household stream reports a change, so the session reads the roster again. It is the stream at
+// /api/events that names no group; its query, such as the ping interval it asks for, is not part of that.
+const household = (url: string) => { const at = new URL(url, 'http://app.test'); return at.pathname === '/api/events' && !at.searchParams.has('group'); };
 const rosterChanged = async () => {
-  await act(async () => { for (const stream of FakeEventSource.streams) if (stream.url === '/api/events') stream.emit('message', 'change'); });
+  const streams = [...FakeEventSource.streams].filter(stream => household(stream.url));
+  // A helper that finds no stream would leave the roster unread and the test asserting on stale state.
+  expect(streams.length).toBeGreaterThan(0);
+  await act(async () => { for (const stream of streams) stream.emit('message', 'change'); });
   await advance(0);
 };
 const shown = () => container.querySelector('[aria-label="Hermes connection"]') !== null;
@@ -96,6 +101,30 @@ describe('a failed conversation read', () => {
     await advance(DISCONNECT_GRACE_MS - 1);
     failure = undefined; await read();
     await advance(DISCONNECT_GRACE_MS);
+    expect(shown()).toBe(false);
+  });
+
+  // The app's one connection announcement follows what the chat shows, not the first failed read, so a
+  // blip that changes nothing on screen says nothing to a screen reader either.
+  it('announces the connection is down only once the chat shows it', async () => {
+    await opened();
+    const announced = () => container.querySelector('[data-connection-announcer]')!.textContent;
+    failure = blip(); await read();
+    expect(shown()).toBe(false);
+    expect(announced()).toBe('');
+    await read();
+    expect(shown()).toBe(true);
+    expect(announced()).not.toBe('');
+    failure = undefined; await read();
+    expect(announced()).toBe('');
+  });
+
+  // The notice above the composer is rebuilt when the roster is read again. It follows what the chat shows
+  // then too, not the failed read that is still inside its grace period.
+  it('keeps the notice away through a roster refresh during the grace period', async () => {
+    await opened();
+    failure = blip(); await read();
+    await rosterChanged();
     expect(shown()).toBe(false);
   });
 

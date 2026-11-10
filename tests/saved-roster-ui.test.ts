@@ -116,6 +116,8 @@ const rail = () => container.querySelector<HTMLElement>(".bot-rail");
 const railText = () => rail()?.textContent ?? "";
 const row = (name: string) => [...rail()!.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
 const welcome = () => container.querySelector(".welcome");
+/** What the app's one connection live region says. */
+const announced = () => [...container.querySelectorAll('[role="status"]')].map(region => region.textContent).join(" ").trim();
 /** Home's rows top to bottom, by name. */
 const order = () => [...rail()!.querySelectorAll(".pinned-name, .bot-row-name strong")].map(item => item.textContent);
 
@@ -133,7 +135,9 @@ describe("the home this device saved", () => {
     expect(row("Ranch Hand").textContent).toContain("Personal assistant");
     expect(row("Supper plans").textContent).toContain("Group chat with Home and Trail Cook");
     expect(row("Supper plans").textContent).not.toContain("No messages yet");
-    expect(rail()!.querySelector('[role="status"]')?.textContent).toBe("Connecting");
+    // Seen in the rail; the app's one connection live region has nothing to announce yet.
+    expect(railText()).toContain("Connecting");
+    expect(announced()).toBe("");
     // What needs the server waits for it, as it did when the page showed nothing.
     for (const name of ["Account", "Search & saved", "New assistant"])
       expect(rail()!.querySelector<HTMLButtonElement>(`[aria-label="${name}"]`)?.disabled, name).toBe(true);
@@ -156,7 +160,7 @@ describe("the home this device saved", () => {
     expect(document.activeElement).toBe(ranch);
     expect(ranch.textContent).toContain("Fence check is done.");
     expect(ranch.querySelector(".unread-mark")).not.toBeNull();
-    expect(rail()!.querySelector('[role="status"]')).toBeNull();
+    expect(railText()).not.toContain("Connecting");
     // The rooms stay as saved until the catalog answers, rather than leaving and coming back, and stay saved.
     expect(row("Supper plans").textContent).toContain("Group chat with Home and Trail Cook");
     expect((savedRoster() as typeof savedOne).rooms).toEqual(savedOne.rooms);
@@ -318,7 +322,8 @@ describe("using the saved home before bootstrap answers", () => {
     store(savedRosterKey, savedOne);
     await open();
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
-    expect(rail()!.querySelector('[role="status"]')?.textContent).toBe("Can't connect");
+    expect(railText()).toContain("Can't connect");
+    expect(announced()).toContain("Reconnecting to the app");
     expect(container.querySelector(".saved-home-wait")?.textContent).toContain("Can't reach the app right now");
     await act(async () => button("Try again").click());
     await answer("GET /bootstrap?roster=lean", 200, one);

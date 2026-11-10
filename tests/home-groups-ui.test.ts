@@ -118,7 +118,7 @@ describe("group chats on home", () => {
   it("reads the catalog again on the household stream's groups notice, which every connect brings, and polls only every 5 minutes", async () => {
     await render();
     const catalogReads = () => reads(path => path === "/groups");
-    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events?ping=10")!;
     expect(household).toBeDefined();
     await act(async () => household.connect());
     await advance(20);
@@ -129,8 +129,13 @@ describe("group chats on home", () => {
     // One read for the notice; the slower poll it allows restarts only its timer.
     expect(catalogReads()).toBe(connected + 1);
     const opened = catalogReads();
-    await advance(GROUP_FALLBACK_POLL_MS - 1000);
+    // A live server pings every 10 seconds meanwhile, so the stream's watchdog keeps it.
+    for (let waited = 0; waited < GROUP_FALLBACK_POLL_MS - 1000; waited += 10_000) {
+      await advance(Math.min(10_000, GROUP_FALLBACK_POLL_MS - 1000 - waited));
+      await act(async () => household.emit("ping", "10"));
+    }
     expect(catalogReads()).toBe(opened);
+    expect(FakeEventSource.streams.has(household), "still the stream it opened").toBe(true);
     await act(async () => household.emit("groups", "groups"));
     await advance(20);
     expect(catalogReads()).toBe(opened + 1);
@@ -153,7 +158,7 @@ describe("group chats on home", () => {
   it("keeps the 30-second catalog poll for a server that never sends groups notices", async () => {
     await render();
     const catalogReads = () => reads(path => path === "/groups");
-    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events")!;
+    const household = [...FakeEventSource.streams].find(stream => stream.url === "/api/events?ping=10")!;
     await act(async () => household.connect());
     await advance(20);
     const opened = catalogReads();

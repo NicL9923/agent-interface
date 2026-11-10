@@ -125,7 +125,9 @@ The web app's first read, its sign-in check (`/api/bootstrap`), starts before th
 has downloaded. `index.html` loads `public/boot.js` first, a small script served as written,
 which starts that read and leaves it for the app, so a load reads bootstrap once and a
 returning visit no longer waits for the code before asking. The app takes the read only if it
-is the one the app would make, and judges its answer exactly as its own. If the read fails or
+is the one the app would make and the account record below is the one the script saw, and
+judges its answer exactly as its own, discarding it if the record changes before it arrives.
+The script starts no read while another tab's sign-in or sign-out is under way. If the read fails or
 is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
 before. The same script applies the theme this device last showed the signed-in person, so a
 dark theme never opens light. The browser keeps that theme with the account it belongs to, in
@@ -168,8 +170,63 @@ which the chat shows while it reads again. The response cache keeps the body of 
 latest-started read of each path, so a slower, older read that finishes last never replaces
 it. The browser keeps only the lapse time, the account ID and the chat IDs, in
 `agent-interface:sign-in-hint`, and drops them, and the saved theme and home with them, at sign-out,
-a refused session, a new sign-in, or a check that finds another account. A link to a message, Today or a group chat waits for the check
-as before. See `src/app/linked-chat.ts`.
+a refused session, a new sign-in, a check that finds another account, or the lapse time. A link to a message, Today or a group chat
+waits for the check as before. See `src/app/linked-chat.ts`.
+
+### Accounts in one browser
+
+Household members sometimes share a browser profile, and every tab of a profile shares one
+session cookie. So a change of account in one tab is a change in all of them, and each takes
+effect in every tab before anything of the previous account is drawn or used again. The
+changes are a sign-in, a sign-out, a session the server refuses, a check that names another
+account, and the sign-in hint's lapse time passing. Each writes a new
+`agent-interface:auth-epoch` record: before a sign-in or sign-out request can change the
+cookie (marked as under way), and again when it settles. A tab compares the stored record with
+the one it acts under when another tab writes it, when a page comes back from the back-forward
+cache, when it is shown or focused, and before and after every request, live-update event and
+upload. Once they differ, the tab unmounts everything it held for the account, including its
+reads, live connections, drafts in memory and cached responses, discards any answer still on
+its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
+sign-in after a sign-out, and never the previous account's rows. A sign-in that the server
+refuses puts the record back, so other tabs read the same account again. A record left marked
+as under way by a tab that closed mid-request stops counting after 65 seconds. See
+`src/app/account-epoch.ts`.
+
+When another account signs in over one that never signed out here, that account's
+notifications on screen close and the browser's push subscription ends, since the server would
+keep sending the old account's notifications to it. A sign-out closes them too.
+
+What the browser keeps, in localStorage unless noted:
+
+| Record | Holds | Removed |
+| --- | --- | --- |
+| `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
+| `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
+| `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
+| `agent-interface:roster` | The home last shown: assistants, order, group chats and their members, the member's name and picture | With the hint, and at any sign-in |
+| `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
+| `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |
+| `agent-interface:group-send:<account>:<room>` and its `:draft` | A group message on its way, a group draft | Sign-out, or once sent |
+| `agent-interface:group-create:<account>` | A group being made: name, assistants | Sign-out, or once made |
+| `agent-interface:form-reply:<account>:…` | A form's answers | Sign-out |
+| `agent-interface:routine-trial:<account>:<routine>`, `automation-goal-resume:<account>:<assistant>` | A request ID, so a retry is checked rather than repeated | Kept |
+| `agent-interface:notifications-prompt:v2:<account>` | Whether the notification prompt was shown | Kept |
+| `agent-interface:approval:<account>:…` (sessionStorage) | An approval decision on its way | With the tab |
+| `integration-flow:<account>:<profile>` (sessionStorage) | An integration sign-in flow ID | With the tab |
+| `wildbots.device-id` | This profile's device ID | Kept; it names the device, not a member |
+| `computer.trackpad` | A trackpad preference | Kept |
+
+Every record that belongs to an account has the account's ID in its name, and the app reads
+only the signed-in account's, so no member's records are read under another account. A
+sign-out removes the ones that hold what a member wrote. Records that hold only a request ID
+or a choice stay, so an uncertain request is checked, not sent twice, after the member signs
+in again. Records that outlive a session are as private as the browser profile: anyone who can
+open the profile can read its storage.
+
+One change is out of a browser's sight: a session revoked from another device, or a member
+removed from the household, while this browser is offline or has not yet asked the server.
+This browser keeps showing what it already shows until its first answer from the server, which
+refuses the session and so becomes the refused-session change above.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
@@ -338,11 +395,15 @@ when a release changed it.
   the worker stays, so one bad answer never costs a person their work.
 - With no cached shell, as on a first visit or after storage is cleared, the network answers.
 
-`/boot.js` follows the shell: the worker installs it with the shell and serves this release's
-copy while the cached shell opens, and the server's once the shell is noted as out of date. The
-server sends it with `no-cache`, as it does the shell, and answers a missing one with a 404, not
-the shell. A `boot.js` and an app from different releases still work: the app takes the read only
-when it is the read the app would make, so the worst case is one extra bootstrap read.
+`/boot.js` blocks the page's `<head>` before any of the app's code runs, so no deadline of the
+app's covers it: a download that stalls leaves a blank page, with no title, until the browser
+gives up on it. The worker installs it with the shell and always answers this release's copy at
+once, even after the shell is noted as out of date, so an installed app never waits on the
+network for it. A first visit, or a browser without the worker, fetches it, and a stall there
+looks as a stalled shell or bundle did before. The server sends it with `no-cache`, as it does
+the shell, and answers a missing one with a 404, not the shell. A `boot.js` and an app from
+different releases still work: the app takes the read only when it is the read the app would
+make, so the worst case is one extra bootstrap read.
 
 A release that finishes installing is offered with **Refresh**, as before; the worker never
 switches releases under an open page. The shell is not fetched with navigation preload,
@@ -433,7 +494,34 @@ link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
 
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Manual reconnect checks immediately. One failed conversation read
+online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
+and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
+cut it without closing it. A refused, dropped or silent stream waits before its next attempt: 1 to 2
+seconds after the first failure, doubling to at most 5 minutes, each wait a random half or more of its
+ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
+The count starts over once a stream stays healthy past its opening ping, so a server that greets and
+then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
+one more deadline instead of replacing it. A hidden tab holds no stream but keeps its place in the
+backoff: showing it connects at once if the stream never failed or its next attempt fell due while
+hidden, and otherwise when that attempt falls due. The network returning or a manual reconnect connects
+at once the first time in an outage, or when the tab is shown if it arrived while hidden; repeats start
+the next attempt 2 to 4 seconds after the last one they forced, or sooner if the ordinary retry is due
+first, until a stream proves itself.
+
+Streams are the fast path and polls the safety net, so polls slow down while their stream is live and
+never stop. The open chat's conversation and draft are read every 30 seconds while the chat's stream is
+down and every 2 minutes while it is live. Bootstrap is read every 45 seconds while the household stream
+is down and every 5 minutes while it is live. Every conversation read carries the draft, so a draft
+changed while the stream was reconnecting shows with the reconnect's read, and a new canonical session
+in bootstrap reloads the open chat and reconnects its stream. A stream counts as live only on data
+after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
+own intervals. When the household stream or the open chat's has been down for 20 seconds, the
+connection notice says live updates are reconnecting, above the composer in a chat and at the top of
+Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
+connection change once, from one status region the whole app shares; the sidebar's Offline chip and the
+notice show the state without announcing it again.
+
+One failed conversation read
 is not an outage: a chat shows it is disconnected after a second failure in a row, or
 3 seconds without a successful read, and at once when the browser is offline or the
 server answers that Hermes is unavailable. The next successful read clears it. From the
@@ -542,7 +630,8 @@ Hermes profile; a run with only a saved preview says so.
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
 the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
-says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback,
+as it does for a catalog that says group chats are unsupported.
 While any household stream is open, the server checks the catalog once for everyone at most every
 30 seconds, and right away after a group or assistant change made in the app, and tells only the people
 whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log

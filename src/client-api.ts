@@ -2,6 +2,8 @@ import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type
 import type { ErrorCode } from "./shared/errors";
 import type { Inflight, InflightDelta } from "./shared/types";
 import { dropStartupRead, takeStartupRead } from "./startup-read";
+import { AccountChanged, accountMark, accountStill, onAccountEnd, type AccountMark } from "./app/account-epoch";
+export { AccountChanged };
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
@@ -32,6 +34,29 @@ export function clearResponseCache() {
   // boot.js's read carried the cookie from before the account changed.
   dropStartupRead();
 }
+// Nothing read or signed for one account answers for the next.
+onAccountEnd(() => {
+  csrf = "";
+  clearResponseCache();
+});
+/** Routes that carry no account, which a tab may read while it waits for another tab's sign-in. */
+const accountFree = new Set(["/auth/config"]);
+/**
+ * Every request belongs to the account this tab acts under (see account-epoch.ts). One made after
+ * another tab signed in or out never goes, and an answer that arrives after the change is discarded
+ * as an abort, whatever it says: the cookie it carried may not be the cookie in use now.
+ */
+export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const mark = accountFree.has(path) ? null : accountMark();
+  try {
+    const value = await send<T>(path, init, retried);
+    if (mark && !accountStill(mark)) throw new AccountChanged();
+    return value;
+  } catch (error) {
+    if (mark && !accountStill(mark)) throw new AccountChanged();
+    throw error;
+  }
+}
 /** Caches a body unless the entry already holds one from a read that started later. */
 function remember(path: string, entry: Cached) {
   if ((responses.get(path)?.started ?? -1) > entry.started) return;
@@ -61,7 +86,7 @@ export class ApiError extends Error {
     super(message);
   }
 }
-export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+async function send<T>(path: string, init: RequestInit, retried: boolean): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
@@ -174,60 +199,277 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
     document.removeEventListener("visibilitychange", changed);
   };
 }
-/** Server pings keep a stream this fresh; a quieter one may be a dead connection. */
-const STREAM_SILENCE = 60_000;
+/** The ping interval of a server that does not name one: 25 seconds, as before `?ping=10`. */
+const DEFAULT_PING_MS = 25_000;
+/**
+ * How long a stream may stay silent before it counts as dead: two pings and five seconds more, so one
+ * lost or late ping never replaces a live stream. A server that pings every 10 seconds, as one opened
+ * with `?ping=10` does, is found dead within 25 seconds of its last event; one that names no interval,
+ * or has not pinged yet, within 55. This is the health deadline only: when the next attempt may start
+ * is `retryDelay`'s business.
+ */
+export function streamSilence(pingMs: number) {
+  return 2 * pingMs + 5_000;
+}
+/** The first retry after a failure waits between 1 and 2 seconds, faster than EventSource's own 3. */
+export const RETRY_BASE_MS = 2_000;
+/** No retry waits longer than this, however many failed before it. */
+export const MAX_RETRY_MS = 5 * 60_000;
+/**
+ * How long to wait after a stream's `failures`th failure in a row before the next attempt: a ceiling
+ * that doubles from RETRY_BASE_MS to MAX_RETRY_MS, of which a random half or more is waited ("equal
+ * jitter"). The floor keeps a first retry from landing at once; the spread keeps a household's tabs from
+ * reconnecting in step after a restart. `random` returns a number in [0, 1), as Math.random does.
+ */
+export function retryDelay(failures: number, random: () => number) {
+  const ceiling = Math.min(RETRY_BASE_MS * 2 ** (failures - 1), MAX_RETRY_MS);
+  return ceiling / 2 + ceiling / 2 * random();
+}
+/**
+ * The least time between two forced attempts in one outage. A signal that the failures are stale, the
+ * network returning or a manual retry, connects at once the first time; later ones wait until a random
+ * half or more of this has passed since the last forced attempt, unless the ordinary retry comes sooner.
+ * Four seconds is twice the first retry's ceiling: a second press of Retry is answered within 4 seconds,
+ * and a flapping network interface forces at most one attempt every 2 to 4 seconds.
+ */
+export const FORCED_GAP_MS = 4_000;
+/**
+ * A watchdog timer this late was held by a sleeping device or a page frozen far longer than a busy main
+ * thread holds one, so the silence it measured says nothing about the stream.
+ */
+export const LATE_TIMER_MS = 10_000;
+/** Adds `ping=10`, which asks the server to ping every 10 seconds and say so. */
+const withPing = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ping=10`;
+export type StreamOptions = {
+  /** The jitter's random source, in [0, 1). Tests pin it; the app uses Math.random. */
+  random?: () => number;
+  /**
+   * Hears whether the stream is live: true once a connection proves itself with data well after its
+   * headers, as for resetting the backoff, false from each connect or failure until then and while a
+   * resumed stream waits for its retry, and undefined once closed or suspended. Opening alone never counts: a replacement that sends its headers and then nothing is down.
+   */
+  onHealth?: (up: boolean | undefined) => void;
+};
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
- * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
- * named events by their data, such as group chat notices.
+ * connects, since notices sent before the subscription are lost. `named` handles other named events
+ * by their data, such as group chat notices.
+ *
+ * One retry deadline governs every new connection after a failure. A refusal, a dropped connection
+ * (which EventSource would retry itself every 3 seconds) and a stream silent past `streamSilence` all
+ * close the stream and wait `retryDelay` before the next attempt, and `open` never starts one sooner,
+ * however often its owner calls it. The count of failures resets only once a connection has stayed
+ * healthy for longer than its greeting: data at least half a ping interval after it opened, which only a
+ * ping after the greeting can be, allowing for delivery jitter. A server that
+ * greets and then stalls keeps backing off. `reconnect` is for a sign the failures are stale, such as the
+ * network returning or a manual retry that reached the server: the first in an outage drops the backoff
+ * and connects at once, and later ones are coalesced, starting the next attempt no sooner than
+ * `FORCED_GAP_MS` (jittered) after the last forced one and never later than the ordinary retry. A
+ * connection that proves itself, by the rule that resets the backoff, ends the outage.
+ *
+ * `suspend` is for a pause, such as a hidden page or an offline device: it closes the connection and
+ * its timer and keeps the outage's budget, so the next `open` connects at once if the retry deadline
+ * passed meanwhile, or when it does. A stream with no failures connects at once. A `reconnect` during a
+ * pause suspends the stream and is answered by the next `open`. `close` is for an owner that is done
+ * with the stream, and also forgets the budget.
+ *
+ * The watchdog judges silence only after the stream's queued events have run, and a timer that fires
+ * far later than it was set for, as on waking from sleep, restarts the deadline once instead of
+ * replacing the stream. A hidden page's watchdog replaces nothing; its owners suspend the stream anyway.
  */
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
-  onInflightDelta?: (value: InflightDelta) => boolean) {
-  let source: EventSource | undefined, heard = 0;
-  const close = () => {
+  onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
+  const random = options.random ?? Math.random;
+  let health: boolean | undefined;
+  const report = (up: boolean | undefined) => {
+    if (health === up) return;
+    health = up;
+    options.onHealth?.(up);
+  };
+  let source: EventSource | undefined;
+  // When this connection opened (was created, until its headers arrive), the moment its silence counts
+  // from, and the interval its pings name.
+  let openedAt = 0, since = 0, pingMs = DEFAULT_PING_MS;
+  // Whether this connection has proved itself, and whether its watchdog already forgave one late timer.
+  let recovered = false, graced = false;
+  let failures = 0, retryAt = 0;
+  // The earliest moment another forced attempt may start in this outage; 0 until the first one.
+  let forcedNext = 0;
+  // Whether a revival signal arrived while the stream was paused, to be answered when it opens again.
+  let revived = false;
+  // One timer per stream: the watchdog while a stream is open, the retry while none is.
+  let timer: ReturnType<typeof setTimeout> | undefined, due = 0;
+  const deadline = () => since + streamSilence(pingMs);
+  const arm = (at: number, run: () => void) => {
+    clearTimeout(timer);
+    due = Math.max(at, Date.now());
+    timer = setTimeout(run, due - Date.now());
+  };
+  /**
+   * Any event proves the connection. The timer moves only when that brings the deadline closer, so a
+   * stream of growth events sets no timers.
+   */
+  const alive = () => {
+    since = Date.now();
+    graced = false;
+    if (!recovered && since - openedAt >= pingMs / 2) {
+      recovered = true;
+      failures = 0;
+      // A forced attempt can prove itself before the retry it beat was due.
+      retryAt = 0;
+      forcedNext = 0;
+      report(true);
+    }
+    if (deadline() < due) arm(deadline(), check);
+  };
+  const check = () => {
+    timer = undefined;
+    if (!source) return;
+    if (document.visibilityState === "hidden") { arm(Date.now() + streamSilence(pingMs), check); return; }
+    if (!graced && Date.now() - due > LATE_TIMER_MS) {
+      graced = true;
+      since = Date.now();
+      arm(deadline(), check);
+      return;
+    }
+    // A busy page, or a proxy that delivers pings in a burst, can queue a ping behind this timer.
+    timer = setTimeout(judge, 0);
+  };
+  // Silent unless an event moved the deadline past the moment this check was set for.
+  const judge = () => {
+    timer = undefined;
+    if (!source) return;
+    if (deadline() <= due) fail();
+    else arm(deadline(), check);
+  };
+  /** Closes the connection and its timer. */
+  const drop = () => {
+    clearTimeout(timer);
+    timer = undefined;
     source?.close();
     source = undefined;
   };
+  /** Pauses the stream, as `drop` does, keeping the retry budget. A paused stream reports no health. */
+  const suspend = () => {
+    drop();
+    report(undefined);
+  };
+  const fail = () => {
+    drop();
+    report(false);
+    failures++;
+    retryAt = Date.now() + retryDelay(failures, random);
+    arm(retryAt, connect);
+  };
+  const close = () => {
+    suspend();
+    failures = 0;
+    retryAt = 0;
+    forcedNext = 0;
+  };
+  /**
+   * Starts a connection unless one is open or a retry is already set, never before the retry deadline.
+   * A revival signal that arrived while the stream was paused is answered now, as `reconnect` would have.
+   */
   const open = () => {
+    if (typeof EventSource === "undefined" || source || timer) return;
+    if (revived) { reconnect(); return; }
+    if (Date.now() >= retryAt) { connect(); return; }
+    // Resumed mid-outage: down while it waits, as it would be had it connected and failed again.
+    arm(retryAt, connect);
+    report(false);
+  };
+  const force = () => {
+    forcedNext = Date.now() + FORCED_GAP_MS / 2 + FORCED_GAP_MS / 2 * random();
+    connect();
+  };
+  const reconnect = () => {
     if (typeof EventSource === "undefined") return;
-    if (source && source.readyState !== EventSource.CLOSED && Date.now() - heard < STREAM_SILENCE) return;
-    close();
-    const current = source = new EventSource(`/api${path}`);
-    heard = Date.now();
+    // A hidden page or an offline device holds no stream. The signal waits for the next `open`.
+    if (document.visibilityState === "hidden" || navigator.onLine === false) {
+      suspend();
+      revived = true;
+      return;
+    }
+    revived = false;
+    // A live connection stays. One still waiting to prove itself would be replaced by an equally new one.
+    if (source) return;
+    if (!forcedNext) {
+      failures = 0;
+      retryAt = 0;
+      force();
+      return;
+    }
+    // Later in the same outage: once the gap has passed it connects at once, and before then an attempt
+    // set at least as soon answers it. A suspension cleared the retry's timer, so it is set again first.
+    if (Date.now() >= forcedNext) { force(); return; }
+    open();
+    if (!source && due > forcedNext) arm(forcedNext, force);
+  };
+  const connect = () => {
+    clearTimeout(timer);
+    timer = undefined;
+    let mark: AccountMark;
+    try { mark = accountMark(); } catch { return; }
+    const current = source = new EventSource(`/api${withPing(path)}`);
+    openedAt = since = Date.now();
+    // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
+    pingMs = DEFAULT_PING_MS;
+    recovered = graced = false;
+    report(false);
+    arm(deadline(), check);
+    // Only the stream this one opened last speaks for it: a replaced one's late events change nothing,
+    // and neither do events that arrive after this browser changed accounts.
+    const speaks = () => {
+      if (current !== source) return false;
+      if (accountStill(mark)) return true;
+      drop();
+      return false;
+    };
+    const on = (name: string, handle: (data: string) => void) =>
+      current.addEventListener(name, event => { if (speaks()) handle((event as MessageEvent).data); });
     current.onopen = () => {
-      heard = Date.now();
+      if (!speaks()) return;
+      // A connection that took long to open has not proved itself by the time its greeting arrives.
+      openedAt = since = Date.now();
       onChange();
     };
-    if (onInflight) current.addEventListener("inflight", event => {
-      heard = Date.now();
-      try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
+    // A refusal, which EventSource never retries, or a drop, which it would retry on the server's 3 seconds.
+    current.onerror = () => { if (current === source) fail(); };
+    if (onInflight) on("inflight", data => {
+      alive();
+      try { onInflight(JSON.parse(data) as Inflight); } catch { onChange(); }
     });
     // A growth notice the caller cannot apply means this stream and the caller disagree about the
     // live reply. Reload, and reconnect so the server starts again from a whole `inflight` event.
-    if (onInflightDelta) current.addEventListener("inflight-delta", event => {
-      heard = Date.now();
+    if (onInflightDelta) on("inflight-delta", data => {
+      alive();
       let applied = false;
-      try { applied = onInflightDelta(JSON.parse((event as MessageEvent).data) as InflightDelta); } catch { /* Reloads below. */ }
+      try { applied = onInflightDelta(JSON.parse(data) as InflightDelta); } catch { /* Reloads below. */ }
       if (applied) return;
       onChange();
-      close();
+      drop();
       open();
     });
-    current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
-    for (const [name, handle] of Object.entries(named))
-      current.addEventListener(name, event => { heard = Date.now(); handle((event as MessageEvent).data); });
-    current.addEventListener("ping", () => { heard = Date.now(); });
-    current.onmessage = () => {
-      heard = Date.now();
+    on("roster", () => { alive(); onChange(); });
+    for (const [name, handle] of Object.entries(named)) on(name, data => { alive(); handle(data); });
+    // A ping names its interval in seconds; an older server's says `ping` and keeps the default.
+    on("ping", data => {
+      const seconds = Number(data);
+      pingMs = Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? seconds * 1000 : DEFAULT_PING_MS;
+      alive();
+    });
+    on("message", () => {
+      alive();
       onChange();
-    };
+    });
   };
-  return { open, close };
+  return { open, suspend, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {
   return new Promise<T>((resolve, reject) => {
+    const mark = accountMark();
     const request = new XMLHttpRequest();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stalled = false;
@@ -245,6 +487,8 @@ export function uploadFile<T>(path: string, file: File, { onProgress, signal }: 
     request.setRequestHeader("X-CSRF-Token", csrf);
     request.upload.onprogress = event => { watch(); if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
     request.onload = () => finish(() => {
+      // A file uploaded for an account this browser no longer acts for joins no draft.
+      if (!accountStill(mark)) return reject(new AccountChanged());
       let data: Record<string, any> = {};
       try { data = request.responseText ? JSON.parse(request.responseText) : {}; }
       catch {

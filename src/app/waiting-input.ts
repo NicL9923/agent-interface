@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { AttentionRequest, Conversation } from "../shared/types";
+import { onAccountEnd } from "./account-epoch";
 
 /**
  * Whether a message this person sends closes the request, so the assistant reads it instead.
@@ -30,6 +31,7 @@ const settled = new Map<string, SettledRequest>();
 const listeners = new Set<() => void>();
 let snapshot: SettledRequest[] = [];
 const publish = () => { snapshot = [...settled.values()]; for (const listener of listeners) listener(); };
+onAccountEnd(() => { settled.clear(); publish(); });
 /** How long a receipt stays after it settles, if Hermes already stopped listing the request. */
 export const RECEIPT_MS = 2500;
 

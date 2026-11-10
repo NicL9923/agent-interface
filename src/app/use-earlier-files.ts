@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { request } from "../client-api";
+import { onAccountEnd } from "./account-epoch";
 import type { EarlierFiles } from "../shared/history";
 
 type Entry = { messages?: EarlierFiles["messages"]; failed?: boolean };
@@ -8,6 +9,8 @@ type Entry = { messages?: EarlierFiles["messages"]; failed?: boolean };
 const cache = new Map<string, Entry>();
 const listeners = new Set<() => void>();
 const keep = 8;
+// Keyed by chat and session, which a shared assistant's next account could share.
+onAccountEnd(() => cache.clear());
 const none: EarlierFiles["messages"] = [];
 
 /**
