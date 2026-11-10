@@ -27,6 +27,8 @@ export type Connection = {
   removeListeners?: () => void;
   scope?: Scope.Closeable;
   closeReason?: Error;
+  /** The liveness probe in flight on this socket. At most one runs at a time. */
+  probe?: Promise<Wire>;
 };
 type Pending = {
   connection: Connection;
@@ -354,11 +356,22 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (closed || connecting) return;
       const current = connection;
       if (current?.verified && current.ws.readyState === WebSocket.OPEN) {
-        // The one read whose timeout still drops the socket: a quiet socket that cannot answer it is dead.
-        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void request('agent-interface.capabilities', {}, {share: false, drop: true}).catch(() => {});
+        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) probe(current);
       } else if (hooks.watching() && retryAt <= Date.now()) void connect().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeat.unref?.();
+  }
+  /**
+   * The one read whose timeout still drops the socket: a socket that cannot answer it is dead. The
+   * heartbeat asks for it after ten quiet seconds. A read timeout asks for it at once, because steady
+   * session events keep a socket looking busy even when it answers no request. It is sent on its own,
+   * never joining a shared read, and a second ask while one is in flight waits on the same probe.
+   */
+  function probe(current: Connection): void {
+    if (current.probe || connection !== current || !current.verified) return;
+    const sent = rawRpc(current, 'agent-interface.capabilities', {}, true);
+    current.probe = sent;
+    sent.catch(() => {}).finally(() => { if (current.probe === sent) current.probe = undefined; });
   }
   function receive(current: Connection, data: string): void {
     if (connection !== current) return;
@@ -398,10 +411,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     } catch { disconnect(current, unavailable()); }
   }
   /** share=false never joins an in-flight read, as a read that must see a just-made edit needs. */
-  function rpc(method: string, params: Wire = {}, share = true): Promise<Wire> {
-    return request(method, params, {share});
-  }
-  async function request(method: string, params: Wire, {share, drop}: {share: boolean; drop?: boolean}): Promise<Wire> {
+  async function rpc(method: string, params: Wire = {}, share = true): Promise<Wire> {
     await connect();
     const current = connection;
     if (!current?.verified || current.ws.readyState !== WebSocket.OPEN) {
@@ -412,7 +422,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       ? `${method}:${JSON.stringify(params)}`
       : undefined;
     if (key && reads.has(key)) return reads.get(key)!;
-    const sent = rawRpc(current, method, params, drop);
+    const sent = rawRpc(current, method, params);
     if (key) reads.set(key, sent);
     try { return await sent; }
     finally { if (key && reads.get(key) === sent) reads.delete(key); }
@@ -422,7 +432,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
    * drop every open chat's live state. A request that changes state, the handshake and the
    * heartbeat's liveness probe still drop the socket when they time out: an unanswered mutation
    * leaves its outcome uncertain on that socket, and an unanswered handshake or probe means it is
-   * dead. drop overrides that choice for one request.
+   * dead. drop overrides that choice for one request. A read timeout starts the liveness probe, so a
+   * socket that stopped answering is dropped within one more read timeout.
    */
   function rawRpc(current: Connection, method: string, params: Wire = {}, drop?: boolean): Promise<Wire> {
     if (connection !== current || current.ws.readyState !== WebSocket.OPEN) {
@@ -445,6 +456,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (pending.get(id)?.deferred !== deferred) return;
       pending.delete(id);
       Deferred.doneUnsafe(deferred, Effect.fail(new TransportError('unreachable', `Hermes ${method} timed out. Try again.`)));
+      // The socket stays only while it still answers: an unanswered probe drops it ten seconds from now.
+      probe(current);
     }));
     Effect.runSync(Scope.addFinalizer(scope, Effect.sync(() => timer.interruptUnsafe())));
     pending.set(id, {connection: current, deferred, scope});

@@ -32,3 +32,35 @@ Each line was broken by hand, `tests/hermes-adapter.test.ts` run, and the source
   not depend on that ordering.
 - Not mutated: deleting the timed-out request from the pending map. Without it the late answer still
   settles nothing visible; the only effect is a leaked entry, which no public surface exposes.
+
+## Review round 1
+
+GPT-6.1 Sol reviewed `c0db735` and reproduced one finding: every incoming frame refreshes
+`lastReceivedAt`, so a steady flow of token or status events suppressed the heartbeat probe. It saw
+12 consecutive read timeouts over 120 simulated seconds with no probe and the socket still verified.
+Before this branch a read timeout dropped the socket, so the branch introduced the gap.
+
+The fix: a read timeout now asks for the liveness probe at once, whatever the event traffic. The probe
+is one `agent-interface.capabilities` request per socket, held on the connection, sent with `rawRpc`
+so it never joins a shared read, and its timeout drops the socket. The heartbeat asks for the same
+probe, so a quiet-socket probe and a timeout probe never overlap.
+
+New tests in `tests/hermes-adapter.test.ts` feed a `message.delta` event every second throughout:
+
+- Two reads and a shared capabilities read time out; exactly one probe goes out, separate from the
+  shared read; the socket is still open at 19 seconds and closed at 20, ten seconds after the first
+  read timed out; `hooks.disconnected(true)` runs.
+- An answered probe keeps the socket for 30 more seconds and a later read succeeds on it.
+
+Both new tests failed on `c0db735` for the reviewer's reason (probe count 2 where 3 was expected, and
+1 where 2 was expected): no probe followed the read timeout.
+
+### Mutants, round 1
+
+Each was applied by hand, `tests/hermes-adapter.test.ts` run, and the source restored.
+
+- A read timeout no longer starts the probe: both new tests failed.
+- A second probe may start while one is in flight: the steady-events drop test failed.
+- The probe goes through the shared `rpc` path and joins the in-flight read: 3 tests failed, the new
+  drop test and both existing heartbeat tests.
+- The probe's timeout no longer drops the socket: the same 3 tests failed.

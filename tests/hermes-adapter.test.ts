@@ -1314,6 +1314,62 @@ describe('Hermes transport liveness and diagnostics', () => {
       transport.close();
     });
 
+    // Steady session events keep the socket looking busy, so the heartbeat never probes it. A read
+    // timeout has to ask for the liveness probe itself, or a socket that answers nothing stays verified.
+    const tokens = async (socket: WireSocket, ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+        if (socket.readyState === WireSocket.OPEN) socket.receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'x'}}});
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+    };
+    const probes = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+
+    it('probes at once when a read times out under steady events and drops the socket if the probe goes unanswered', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      deferredMethods.add('agent-interface.capabilities');
+      // A shared capabilities read is in flight when the probe starts. The probe must not join it.
+      const shared = transport.rpc('agent-interface.capabilities').catch(error => error);
+      const first = transport.rpc('profiles.describe', {name: 'one'}).catch(error => error);
+      await tokens(sockets[0], 1_000);
+      const second = transport.rpc('profiles.describe', {name: 'two'}).catch(error => error);
+      await tokens(sockets[0], 9_000);
+      expect(await first).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await shared).toMatchObject({message: 'Hermes agent-interface.capabilities timed out. Try again.'});
+      // Two reads timed out at ten seconds. One probe went out for both, apart from the shared read.
+      expect(probes()).toBe(handshake + 2);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(await second).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 2);
+      // The bound: the unanswered probe drops the socket ten seconds after the first read timed out.
+      await tokens(sockets[0], 8_000);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(await transport.status()).toMatchObject({connected: false, detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      transport.close();
+    });
+
+    it('keeps the socket when the probe after a read timeout is answered, and later reads work', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      await tokens(sockets[0], 10_000);
+      expect(await read).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 1);
+      await tokens(sockets[0], 30_000);
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      deferredMethods.clear();
+      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(transport.connection?.ws).toBe(sockets[0]);
+      transport.close();
+    });
+
     it('drops the socket when the heartbeat liveness probe times out', async () => {
       const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
       deferredMethods.add('agent-interface.capabilities');
