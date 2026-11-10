@@ -333,3 +333,35 @@ admission-row test, and all five mutations. One finding, P2, in the documents an
 - `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
   251 tests passed.
 - Real Hermes, the extension probe, `npm test`, iOS and production: not run.
+
+## Decisions in the fifth round
+
+GPT-6.1 Sol reviewed `064593c..123557b` and found it ready after one fix. It confirmed the pinned-clock case and both
+sides of the one-second boundary, and that for finite numeric times the documents match the code. One finding, P2:
+
+- The restored guard read the row's time differently from `main`. It took only an int or a float and read anything
+  else as now, so a time of `"100"` bound a steer sent at 103 that `main`, which calls `float()` on it, refuses. `true`
+  and `NaN` did the same. A time of `10**400` raised `OverflowError` and broke the open, as it does on `main`, though
+  the fourth round said a malformed time could not.
+- Fix, by the orchestrator: the time is read as `main` reads it, `float()` of the value with a missing or zero one
+  read as now. A value `float()` refuses, one too large for it, `NaN` and infinity bind nothing, and the open answers.
+  So the rule binds only where `main`'s could, and the fourth round's sentence saying so now holds for every value.
+  No reviewer has read this fix.
+
+### Red proof
+
+- Written first, on `123557b`: the text `"100"`, words, `NaN`, infinity and a list each bound row 12 where nothing
+  should bind, and `10**400` raised `OverflowError`.
+- Each part of the reading broken by hand: without `OverflowError` the too-large case errors; without `ValueError`
+  the words case errors; without `TypeError` the list case errors; without the finite check `NaN` and infinity bind;
+  without the fallback to now the missing and zero cases bind nothing; with numeric types only, as in the fourth
+  round, the text `"100"`, words and the list bind.
+
+### Checks
+
+- `npm run test:py`: 43 files passed, 0 failed, Python 3.14.10. `tests/hermes_turn_binding_test.py`: 27 tests passed.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck` passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- Real Hermes, the extension probe, `npm test`, iOS and production: not run.
+
