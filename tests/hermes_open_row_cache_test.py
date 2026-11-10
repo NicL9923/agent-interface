@@ -5,6 +5,7 @@ RowCache keeps what one open learned about rows, by keys that cannot go stale. H
 fake at its edges: the session table, its native history projection and a real SQLite state
 store with the columns the add-on reads. The journal is the add-on's own, in a temp directory.
 """
+import contextlib
 import json
 import sqlite3
 import tempfile
@@ -17,6 +18,7 @@ from unittest.mock import patch
 from hermes_extension_journal_test import FakeHermes, extension, receipt, tool
 
 REPORT = {"path": "/srv/report.pdf", "name": "report.pdf", "mime": "application/pdf"}
+RESTORED = {"path": "/srv/restored.pdf", "name": "restored.pdf", "mime": "application/pdf"}
 
 
 class TranscriptHermes(FakeHermes):
@@ -29,8 +31,9 @@ class TranscriptHermes(FakeHermes):
     def __init__(self):
         super().__init__([])
         self.store_directory = tempfile.TemporaryDirectory()
-        self.store = sqlite3.connect(Path(self.store_directory.name) / "state.db", check_same_thread=False)
-        self.store.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message_uid TEXT)")
+        self.store_path = Path(self.store_directory.name) / "state.db"
+        self.store = state_store(self.store_path, application_id=1)
+        # The JSON row IDs of each lookup the add-on ran against the store.
         self.store_reads = []
         server = self.server
         self.session = {"session_key": "stored", "history": [], "history_lock": threading.Lock(), "running": True}
@@ -47,10 +50,41 @@ class TranscriptHermes(FakeHermes):
         server._history_to_messages = self.project
         server.project_compaction_message_for_display = lambda row: None if row.get("display_kind") == "handoff" else dict(row)
 
+        server._session_db = self.session_db
+
+    @contextlib.contextmanager
+    def session_db(self, session):
+        """Hermes's profile store handle. Its registry reacquires the file by path, so a replaced file is read."""
+        connection = sqlite3.connect(self.store_path)
+
         def read_all(sql, params=()):
-            self.store_reads.append(json.loads(params[1]))
-            return self.store.execute(sql, params).fetchall()
-        server._session_db = lambda session: Yield(types.SimpleNamespace(_read_all=read_all))
+            if "json_each" in sql:
+                self.store_reads.append(json.loads(params[1]))
+            return connection.execute(sql, params).fetchall()
+        try:
+            yield types.SimpleNamespace(db_path=str(self.store_path), _read_all=read_all)
+        finally:
+            connection.close()
+
+    def replace_store(self, uids, application_id):
+        """Another state.db renamed over this one: a new inode with these rows of the same stored session."""
+        replacement = self.store_path.with_name("replacement.db")
+        with contextlib.closing(state_store(replacement, application_id, uids)):
+            pass
+        self.store.close()
+        replacement.replace(self.store_path)
+        self.store = sqlite3.connect(self.store_path, check_same_thread=False)
+
+    def restore_store(self, source):
+        """Hermes's snapshot restore: SQLite's backup API writes the snapshot's pages into the live file."""
+        with contextlib.closing(sqlite3.connect(source)) as snapshot, contextlib.closing(sqlite3.connect(self.store_path)) as live:
+            snapshot.backup(live)
+
+    def snapshot_store(self, name):
+        path = self.store_path.with_name(name)
+        with contextlib.closing(sqlite3.connect(path)) as copy:
+            self.store.backup(copy)
+        return path
 
     def __exit__(self, *exc):
         self.store.close()
@@ -105,15 +139,21 @@ class TranscriptHermes(FakeHermes):
         return value
 
 
-class Yield:
-    def __init__(self, value):
-        self.value = value
+def state_store(path, application_id, uids=()):
+    """A state.db with the columns the add-on reads and Hermes's per-file generation stamp; rows of session ``stored``."""
+    store = sqlite3.connect(path, check_same_thread=False)
+    store.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message_uid TEXT)")
+    store.execute(f"PRAGMA application_id={application_id}")
+    with store:
+        store.executemany("INSERT INTO messages(session_id,message_uid) VALUES('stored',?)", [(uid,) for uid in uids])
+    return store
 
-    def __enter__(self):
-        return self.value
 
-    def __exit__(self, *exc):
-        return False
+def state_store_file(hermes, name, uids, application_id):
+    path = hermes.store_path.with_name(name)
+    with contextlib.closing(state_store(path, application_id, uids)):
+        pass
+    return path
 
 
 def tool_row(hermes, uid, call, content):
@@ -191,12 +231,14 @@ class ReuseTests(unittest.TestCase):
             hermes.store_reads.clear()
             statements = []
             hermes.journal.db.set_trace_callback(statements.append)
-            warm = hermes.answer()
+            # Both the tool row and its journal record hold this text; neither is parsed again.
+            content = hermes.session["history"][2]["content"]
+            with patch.object(extension.json, "loads", wraps=json.loads) as loads:
+                warm = hermes.answer()
             self.assertEqual(hermes.store_reads, [])
             self.assertFalse([sql for sql in statements if "SELECT id,result" in sql])
-            # The very parsed objects of the last open: nothing was parsed again.
-            self.assertIs(warm["messages"][1]["app_tool_result"], cold["messages"][1]["app_tool_result"])
-            self.assertIs(warm["messages"][1]["app_tool_call"], cold["messages"][1]["app_tool_call"])
+            self.assertNotIn(content, [call.args[0] for call in loads.call_args_list if call.args])
+            self.assertEqual(warm, cold)
             statements.clear()
             tool_row(hermes, "t3", "read", json.dumps({"pages": 4}))
             with hermes.journal.db:
@@ -226,6 +268,19 @@ class ReuseTests(unittest.TestCase):
                 # Its one record is another tool's, by name.
                 self.assertNotIn("app_tool_call", value["messages"][2])
 
+    def test_changing_one_response_never_changes_another(self):
+        with TranscriptHermes() as hermes:
+            first_turn(hermes)
+            for _ in range(2):
+                # The first response is the one that filled the cache; the second was read from it.
+                tool_message = hermes.answer()["messages"][1]
+                tool_message["app_tool_result"]["pages"] = -99
+                tool_message["app_artifacts"][0]["path"] = "/srv/other.pdf"
+                tool_message["app_tool_call"]["name"] = "changed"
+                value = hermes.answer()["messages"][1]
+                self.assertEqual((value["app_tool_result"], value.get("app_artifacts"), value.get("app_tool_call", {}).get("name")),
+                                 ({"pages": 3}, [REPORT], "terminal"))
+
     def test_other_native_history_readers_never_fill_the_cache(self):
         with TranscriptHermes() as hermes:
             first_turn(hermes)
@@ -252,6 +307,51 @@ class InvalidationTests(unittest.TestCase):
                 hermes.store.execute("INSERT INTO messages(id,session_id,message_uid) VALUES(99,'stored','u1')")
             value = hermes.answer()
             self.assertEqual((value["messages"][-1]["row_id"], value["messages"][-1]["app_request_id"]), (1, "first"))
+
+    def test_a_replaced_or_restored_state_database_is_read_again(self):
+        # Another file of the same stored session reuses row IDs 1 to 8. Its row 5 copies its own
+        # row 3, and its row 8 keeps this file's last message ID, so each case shows one signal alone.
+        other = ["z1", "z2", "u1", "z4", "u1", "z6", "z7", "a1"]
+        cases = {
+            # A new inode with the same generation stamp: only the file identity changed.
+            "replaced file": lambda hermes, snapshot: hermes.replace_store(other, application_id=1),
+            # Pages written into the same inode: only Hermes's per-file generation stamp changed.
+            "another database restored into the file": lambda hermes, snapshot: hermes.restore_store(
+                state_store_file(hermes, "other.db", other, application_id=2)),
+            # The same file's older snapshot, then new rows under the IDs it had already used.
+            "an older snapshot restored, then written again": lambda hermes, snapshot: (
+                hermes.restore_store(snapshot), [hermes.stored(f"n{index}") for index in range(5, 9)]),
+        }
+        for name, change in cases.items():
+            with self.subTest(name), TranscriptHermes() as hermes:
+                first_turn(hermes)
+                snapshot = hermes.snapshot_store("snapshot.db")
+                hermes.compact(hermes.session["history"])
+                self.assertEqual(hermes.answer()["messages"][0]["app_sender_id"], "nicolas")
+                change(hermes, snapshot)
+                warm = hermes.answer()
+                hermes.bridge.row_caches.clear()
+                self.assertEqual(warm, hermes.answer())
+                # No longer the copy of row 1, so not the old sender's message.
+                self.assertNotEqual(warm["messages"][0]["row_id"], 1)
+                self.assertNotIn("app_sender_id", warm["messages"][0])
+
+    def test_a_restored_journal_is_read_again(self):
+        with TranscriptHermes() as hermes:
+            first_turn(hermes)
+            self.assertEqual(hermes.answer()["messages"][1]["app_artifacts"], [REPORT])
+            # An older journal whose record for the same call names another file, written into the live file.
+            snapshot = Path(hermes.directory.name) / "journal-snapshot.db"
+            with contextlib.closing(sqlite3.connect(snapshot)) as copy:
+                hermes.journal.db.backup(copy)
+                with copy:
+                    copy.execute("UPDATE tools SET artifacts=? WHERE id=1", (json.dumps([RESTORED]),))
+            with contextlib.closing(sqlite3.connect(snapshot)) as source, contextlib.closing(sqlite3.connect(Path(hermes.directory.name) / "agent-interface.db")) as live:
+                source.backup(live)
+            warm = hermes.answer()
+            hermes.bridge.row_caches.clear()
+            self.assertEqual(warm, hermes.answer())
+            self.assertEqual(warm["messages"][1]["app_artifacts"], [RESTORED])
 
     def test_new_content_under_the_same_tool_row_is_parsed_again(self):
         with TranscriptHermes() as hermes:
@@ -312,6 +412,25 @@ class InvalidationTests(unittest.TestCase):
             # Rows evicted while this open filled the tables still answered it.
             self.assertEqual([m["row_id"] for m in value["messages"]], list(range(1, 8)))
             self.assertEqual([m.get("app_tool_result") for m in value["messages"][-3:]], [{"index": 0}, {"index": 1}, {"index": 2}])
+            # A warm open that fills the tables again evicts entries it found there; it still uses them.
+            for _ in range(2):
+                self.assertEqual(hermes.answer(), value)
+            hermes.bridge.row_caches.clear()
+            self.assertEqual(hermes.answer(), value)
+
+    def test_a_transcript_longer_than_the_cap_keeps_each_sender_on_every_open(self):
+        with TranscriptHermes() as hermes, patch.object(extension, "ROW_CACHE_LIMIT", 3):
+            with hermes.journal.db:
+                for index, actor in enumerate(["nicolas", "second-member", "nicolas", "second-member"]):
+                    user = hermes.add("user", f"u{index}", f"Question {index}")
+                    receipt(hermes.journal.db, f"r{index}", user["_row_id"], index, actor=actor)
+                    hermes.add("assistant", f"a{index}", f"Answer {index}")
+            hermes.compact(hermes.session["history"])
+            senders = [("r0", "nicolas"), None, ("r1", "second-member"), None, ("r2", "nicolas"), None, ("r3", "second-member"), None]
+            for _ in range(3):
+                value = hermes.answer()
+                self.assertEqual([m["row_id"] for m in value["messages"]], list(range(1, 9)))
+                self.assertEqual([(m["app_request_id"], m["app_sender_id"]) if "app_request_id" in m else None for m in value["messages"]], senders)
 
 
 class ConcurrencyTests(unittest.TestCase):

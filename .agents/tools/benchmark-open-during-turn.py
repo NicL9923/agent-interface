@@ -2,16 +2,19 @@
 """Time agent-interface.open on a long transcript while a turn runs, with the Python test fakes.
 
 A running turn keeps the decorated-history cache from answering, so every open does the work
-that grows with the transcript. This builds a synthetic canonical session in a temp directory:
-ROWS visible rows after one in-place compaction, a tool call every few rows with a JSON output,
-a receipt per turn and a journal record per call, a SQLite state store with Hermes's message
-index. Native projection, the session table and activation are fakes; nothing contacts Hermes.
+that grows with the transcript. This builds a synthetic canonical session in a temp directory.
+Each turn is five rows: a user message with its receipt, three tool calls with JSON outputs and
+a journal record each, and an assistant reply. One in-place compaction, a tenth of the way in,
+archives every row and stores each again, as Hermes does. The SQLite state store has Hermes's
+own messages table and every index on it, so the add-on's lookups get Hermes's query plans.
+Native projection, the session table and activation are fakes; nothing contacts Hermes.
 
 Each measured open first appends one tool row and its journal record, as a turn does, then
 reads the latest window. ``--repo`` names another checkout, such as an export of origin/main,
-to time its add-on with the same fakes.
+to time its add-on with the same fakes. ``--plan`` prints the query plan of every statement the
+add-on ran against the store.
 
-    python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30]
+    python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30] [--plan]
 """
 import argparse
 import json
@@ -24,27 +27,89 @@ import threading
 import time
 from pathlib import Path
 
-parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
-parser.add_argument("--rows", type=int, default=5000)
-parser.add_argument("--opens", type=int, default=30)
-args = parser.parse_args()
-sys.path.insert(0, str(args.repo.resolve() / "tests"))
-import hermes_extension_journal_test as fakes  # noqa: E402
+# Hermes's messages table and every index on it, verbatim from upstream ed1afb082eb3:
+# hermes_state_common.py SCHEMA_SQL (531-561, 754-763), DEFERRED_INDEX_SQL (797-808, 883-887)
+# and hermes_state_schema.py:977-978. Hermes never runs ANALYZE, so neither does this.
+MESSAGES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    role TEXT NOT NULL,
+    content TEXT,
+    tool_call_id TEXT,
+    tool_calls TEXT,
+    tool_name TEXT,
+    effect_disposition TEXT,
+    timestamp REAL NOT NULL,
+    token_count INTEGER,
+    finish_reason TEXT,
+    reasoning TEXT,
+    reasoning_content TEXT,
+    reasoning_details TEXT,
+    codex_reasoning_items TEXT,
+    codex_message_items TEXT,
+    platform_message_id TEXT,
+    observed INTEGER DEFAULT 0,
+    _compressed_summary INTEGER NOT NULL DEFAULT 0,
+    active INTEGER NOT NULL DEFAULT 1,
+    compacted INTEGER NOT NULL DEFAULT 0,
+    api_content TEXT,
+    display_kind TEXT,
+    display_metadata TEXT,
+    display_identity BLOB,
+    display_order INTEGER,
+    message_uid TEXT,
+    absorbed_message_uids TEXT,
+    tool_call_uids TEXT,
+    tool_call_uid TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_assistant_calls_by_session
+    ON messages(session_id)
+    WHERE role = 'assistant' AND tool_calls IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_platform_msg_id
+    ON messages(session_id, platform_message_id) WHERE platform_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_session_active
+    ON messages(session_id, active, timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_display_page
+    ON messages(session_id, display_order, active DESC, id DESC)
+    WHERE active = 1 OR compacted = 1;
+CREATE INDEX IF NOT EXISTS idx_messages_display_backfill
+    ON messages(session_id) WHERE (display_order IS NULL OR display_identity IS NULL)
+    AND (active = 1 OR compacted = 1);
+CREATE INDEX IF NOT EXISTS idx_messages_display_identity
+    ON messages(session_id, display_identity, display_order)
+    WHERE display_identity IS NOT NULL AND (active = 1 OR compacted = 1);
+CREATE INDEX IF NOT EXISTS idx_messages_active_null
+    ON messages(active) WHERE active IS NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_session_uid
+    ON messages(session_id, message_uid) WHERE active = 1;
+"""
+fakes = None
 
 
 class Store:
-    """Hermes's messages table, reduced to the columns and index the add-on's lookup reads."""
+    """Hermes's state.db for one stored session, with the handle methods the add-on reads."""
 
     def __init__(self, path):
+        self.db_path = str(path)
         self.db = sqlite3.connect(path, check_same_thread=False)
-        self.db.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message_uid TEXT)")
-        self.db.execute("CREATE INDEX idx_messages_session_uid ON messages(session_id, message_uid)")
+        self.db.executescript(MESSAGES_SCHEMA)
+        # Hermes stamps each file's generation into the header (hermes_state.py:1180).
+        self.db.execute("PRAGMA application_id=1234567")
+        # Each statement the add-on ran, with its last parameters, for --plan.
+        self.statements = {}
 
-    def add(self, uid):
-        return self.db.execute("INSERT INTO messages(session_id,message_uid) VALUES('stored',?)", (uid,)).lastrowid
+    def add(self, role, uid, timestamp):
+        return self.db.execute("INSERT INTO messages(session_id,role,timestamp,message_uid) VALUES('stored',?,?,?)", (role, timestamp, uid)).lastrowid
+
+    def archive(self):
+        """Hermes's compaction archive (hermes_state_messages.py:73): every active row, still searchable."""
+        self.db.execute("UPDATE messages SET active = 0, compacted = 1 WHERE session_id = 'stored' AND active = 1")
 
     def _read_all(self, sql, params=()):
+        self.statements[sql] = params
         return self.db.execute(sql, params).fetchall()
 
 
@@ -79,7 +144,7 @@ class Transcript:
 
     def row(self, role, content, **fields):
         self.count += 1
-        row = {"role": role, "content": content, "timestamp": float(self.count), "_row_id": self.store.add(f"uid{self.count}"), **fields}
+        row = {"role": role, "content": content, "timestamp": float(self.count), "_row_id": self.store.add(role, f"uid{self.count}", float(self.count)), **fields}
         self.history.append(row)
         return row
 
@@ -94,16 +159,17 @@ class Transcript:
         fakes.tool(self.hermes.journal.db, self.turn, call, output)
 
     def compact(self):
-        """Hermes's in-place compaction: a handoff, then every kept row stored again under a new ID."""
-        kept = [{**row, "_row_id": self.store.add(self.store._read_all("SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],))[0][0])}
-                for row in self.history]
+        """Hermes's in-place compaction: archive every row, then a handoff and each kept row stored again under a new ID."""
+        uids = dict(self.store.db.execute("SELECT id,message_uid FROM messages WHERE session_id='stored'").fetchall())
+        self.store.archive()
+        kept = [{**row, "_row_id": self.store.add(row["role"], uids[row["_row_id"]], row["timestamp"])} for row in self.history]
         self.history[:] = [{"role": "user", "content": "Summary", "display_kind": "handoff", "timestamp": 0.0}, *kept]
 
 
 def build(hermes, store, rows):
+    """Five-row turns: a user message, three tool calls and a reply, compacted once a tenth of the way in."""
     transcript = Transcript(hermes, store)
     with hermes.journal.db, store.db:
-        # A tenth of the transcript was kept by a compaction; the rest came after it.
         while transcript.count < rows:
             if transcript.count == rows // 10:
                 transcript.compact()
@@ -115,6 +181,16 @@ def build(hermes, store, rows):
 
 
 def main():
+    global fakes
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--rows", type=int, default=5000)
+    parser.add_argument("--opens", type=int, default=30)
+    parser.add_argument("--plan", action="store_true", help="print the query plan of each statement the add-on ran against the store")
+    args = parser.parse_args()
+    sys.path.insert(0, str(args.repo.resolve() / "tests"))
+    import hermes_extension_journal_test
+    fakes = hermes_extension_journal_test
     with tempfile.TemporaryDirectory() as directory:
         store = Store(Path(directory) / "state.db")
         hermes = fakes.FakeHermes([])
@@ -135,6 +211,7 @@ def main():
         with hermes:
             transcript = build(hermes, store, args.rows)
             visible = len(transcript.history)
+            tools = sum(row["role"] == "tool" for row in transcript.history)
             open_ = hermes.methods["agent-interface.open"]
             for _ in range(2):
                 open_("warm", {"profile": "default", "window": {"turns": 20}})
@@ -148,12 +225,18 @@ def main():
                 phases.append(result["app_timing"])
             durations.sort()
             print(f"Repository: {args.repo}")
-            print(f"Python {platform.python_version()} on {platform.system()} {platform.machine()}")
-            print(f"Transcript: {visible} visible rows at the first measured open, a running turn, {args.opens} opens")
+            print(f"Python {platform.python_version()}, SQLite {sqlite3.sqlite_version} on {platform.system()} {platform.machine()}")
+            print(f"Transcript: {visible} visible rows ({tools} tool rows) at the first measured open, a running turn, {args.opens} opens")
             print(f"Open, wall: median {statistics.median(durations):.1f} ms, p90 {durations[int(len(durations) * 0.9) - 1]:.1f} ms, "
                   f"max {durations[-1]:.1f} ms")
             for name in phases[0]:
                 print(f"  {name}: median {statistics.median(phase[name] for phase in phases):.1f} ms")
+            if args.plan:
+                for sql, params in store.statements.items():
+                    print(f"\n{sql}")
+                    for row in store.db.execute("EXPLAIN QUERY PLAN " + sql, params):
+                        print(f"  {row[3]}")
 
 
-main()
+if __name__ == "__main__":
+    main()
