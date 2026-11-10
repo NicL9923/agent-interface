@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
+import { assistants, conversation, deployNextRelease, expect, signIn, slowAdmission, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -171,6 +171,29 @@ test("a new release whose worker cannot install still reaches the person on thei
   // The old worker still serves, and nothing offers a release that never installed.
   expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
+});
+
+test("the assistant shows it is thinking from the moment a message is sent, in the one row its reply's work keeps", async ({ page }) => {
+  await slowAdmission(800);
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Trail Cook/ }).click();
+  await page.getByRole("textbox", { name: "Message Trail Cook" }).fill("Echo: howdy partner");
+  // Every activity row node the page inserts, the status line's words each time they change, and whether the row
+  // showed while the message still read as sending, before Hermes answered.
+  await page.evaluate(() => {
+    const marks = { rows: 0, said: [] as string[], whileSending: false };
+    (window as unknown as { marks: typeof marks }).marks = marks;
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches(".conversation-activity")) marks.rows++;
+      const said = document.querySelector('.conversation-activity [role="status"] .activity-shimmer')?.firstChild?.textContent;
+      if (said && marks.said.at(-1) !== said) marks.said.push(said);
+      if (said && document.querySelector(".message-sending")) marks.whileSending = true;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator('[data-message-id="trail-inflight"] .message-markdown')).toContainText("partner");
+  expect(await page.evaluate(() => (window as unknown as { marks: unknown }).marks))
+    .toEqual({ rows: 1, said: ["Trail Cook is thinking..."], whileSending: true });
 });
 
 test("a reply keeps growing across a tool call, and its saved segment never disappears or doubles", async ({ page }) => {

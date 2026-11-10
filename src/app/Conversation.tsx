@@ -176,7 +176,9 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey }),
     [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey]);
   const frame = useRef<HTMLDivElement>(null);
-  const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || connectionLost || !boot.capabilities.chat.supported,
+  // The row reads as thinking before Hermes reports the new turn (see awaitingTurn), so the failed turn's retry steps aside.
+  const startingTurn = activeStates.includes(state) && !activeStates.includes(canonical?.activity.state ?? "idle");
+  const retry = useTurnRetry({ botId, userId: boot.user.id, canonical, blocked: !!echo || startingTurn || connectionLost || !boot.capabilities.chat.supported,
     resendable: boot.capabilities.idempotency.supported, report: setError });
   // Find in chat takes Cmd/Ctrl+F while a conversation is on screen. Covered by a dialog or the
   // phone's assistant list, the browser's own find stays.

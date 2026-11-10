@@ -11,6 +11,8 @@ const violations = async () => await (await fetch(controlUrl)).json() as unknown
  */
 export const deployNextRelease = ({ installs = true } = {}) =>
   fetch(`http://127.0.0.1:${controlPort}/next-release${installs ? "" : "?install=fail"}`, { method: "POST" });
+/** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */
+export const slowAdmission = (ms: number) => fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
 
 /**
  * A signed-out page probes /api/bootstrap and Chromium logs the 401 as a console error. Nothing else is
