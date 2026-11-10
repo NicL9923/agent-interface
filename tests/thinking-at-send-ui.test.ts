@@ -30,6 +30,8 @@ const bootstrap: Bootstrap = {
 const prompt = { id: "u0", role: "user" as const, text: "Check the fence", sender: { id: "one", name: "One" } };
 const answer = { id: "a0", role: "assistant" as const, text: "The fence is fine." };
 let conversation: Conversation;
+/** Assistants in the roster; a test that switches chats adds a second. */
+let bots: Bootstrap["bots"];
 let readFails = false;
 let root: Root;
 let container: HTMLElement;
@@ -57,8 +59,14 @@ beforeEach(() => {
   sent = undefined;
   lookup = requestId => { throw new Error(`Unexpected receipt check for ${requestId}`); };
   conversation = { botId: "shared", messages: [prompt, answer], approvals: [], files: [], activity: { state: "idle" } };
+  bots = bootstrap.bots;
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
-    if (path === "/bootstrap?roster=lean") return bootstrap as T;
+    if (path === "/bootstrap?roster=lean") return { ...bootstrap, bots } as T;
+    if (bots.some(bot => bot.id === "corral")) {
+      if (path === "/bots/corral/draft") return { text: "", attachments: [], revision: 0 } as T;
+      if (path.startsWith("/bots/corral/conversation?")) return { botId: "corral", messages: [], approvals: [], files: [], activity: { state: "idle" } } as T;
+      if (path === "/bots/corral/routine-runs") return { runs: [], unavailable: [] } as T;
+    }
     if (path === "/bots/shared/draft") return { text: "Feed the horses", attachments: [], revision: 0 } as T;
     if (path.startsWith("/bots/shared/conversation?")) {
       if (readFails) throw new ApiError("Can't reach the app right now.", 503);
@@ -72,7 +80,7 @@ beforeEach(() => {
   });
   vi.mocked(write).mockImplementation(async <T>(path: string, body?: unknown, method = "POST") => {
     // Presence and device activity report on their own schedule.
-    if (method === "PUT" && (path === "/bots/shared/presence" || path === "/devices/activity")) return {} as T;
+    if (method === "PUT" && (/^\/bots\/(shared|corral)\/(presence|read-position)$/.test(path) || path === "/devices/activity")) return {} as T;
     if (path === "/bots/shared/messages") return await new Promise<T>((resolve, reject) => {
       const request = body as { requestId: string; text: string };
       sent = { body: request, resolve: receipt => resolve({ requestId: request.requestId, status: "accepted", runId: "run", ...receipt } as T), reject };
@@ -364,5 +372,73 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await report({ state: "thinking", messages: [answer, prompt, copy()] });
     expect(status()).toBe("Shared is thinking...");
     expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
+  });
+  // A turn can end before the chat ever reads it running. Its own outcome then replaces the early row at once.
+  it.each<[string, "failed" | "interrupted" | "done", (shown: HTMLElement | null) => void]>([
+    ["failed, with its Retry", "failed", shown => {
+      expect(shown?.textContent).toContain("Shared couldn't finish.");
+      expect([...shown!.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(true);
+    }],
+    ["interrupted", "interrupted", shown => expect(shown?.textContent).toContain("Shared's task was interrupted.")],
+    ["finished", "done", shown => expect(shown).toBeNull()],
+  ])("shows the turn %s when Hermes reports it with the copy, instead of thinking", async (_, state, check) => {
+    await open();
+    await send();
+    await act(async () => sent!.resolve({}));
+    expect(status()).toBe("Shared is thinking...");
+    // A settled turn's report carries no run ID, as Hermes reports one.
+    await report({ messages: [prompt, answer, copy()], activity: { state } });
+    check(row());
+  });
+
+  it("keeps thinking through the last turn's failure in the read that brings the copy, and shows this turn's failure from a later read", async () => {
+    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed" }, version: "boot:0:4" };
+    await open();
+    const retry = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry");
+    expect(status()).toBe("Shared couldn't finish.");
+    expect(retry()).toBeDefined();
+    await send();
+    const watch = watchStatusNodes();
+    await act(async () => sent!.resolve({}));
+    // Hermes saved the message but had not opened its run when this read began, so the failure is the last turn's.
+    await report({ messages: [answer, prompt, copy()], version: "boot:0:5" });
+    expect(status()).toBe("Shared is thinking...");
+    expect(retry()).toBeUndefined();
+    await report({ version: "boot:0:6" });
+    expect(row()?.textContent).toContain("Shared couldn't finish.");
+    expect(retry()).toBeDefined();
+    watch.stop();
+    expect(watch.nodes).toHaveLength(1);
+  });
+
+  it("never paints thinking on returning to the chat after the handoff bound passed in another chat", async () => {
+    bots = [...bootstrap.bots, { id: "corral", name: "Corral", shared: true, model: "test", activity: "idle" }];
+    await open();
+    await send();
+    await act(async () => sent!.resolve({}));
+    await report({ messages: [prompt, answer, copy()] });
+    expect(status()).toBe("Shared is thinking...");
+    const choose = (name: string) => act(async () =>
+      [...container.querySelectorAll<HTMLButtonElement>(".bot-row")].find(button => button.textContent?.includes(name))!.click());
+    const current = () => container.querySelector(".bot-row[aria-current='page']")?.textContent;
+    await choose("Corral");
+    await waitForUi(() => expect(current()).toContain("Corral"));
+    await waitForUi(() => expect(vi.mocked(api).mock.calls.some(([path]) => path.startsWith("/bots/corral/conversation?"))).toBe(true));
+    await advance(COPY_HANDOFF_MS + 1000);
+    // Every status line drawn from the moment the person comes back, whether or not it stays.
+    const drawn: string[] = [];
+    const observer = new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        for (const line of [node, ...node.querySelectorAll("*")].filter(item => item.getAttribute("role") === "status")) drawn.push(line.textContent ?? "");
+      }
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    await choose("Shared");
+    await waitForUi(() => expect(current()).toContain("Shared"));
+    await waitForUi(() => expect(echo()).toBeDefined());
+    observer.disconnect();
+    expect(drawn.filter(line => line.includes("thinking"))).toEqual([]);
+    expect(row()).toBeNull();
   });
 });

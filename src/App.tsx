@@ -406,8 +406,9 @@ export function App() {
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
   // A message that starts a turn shows the assistant thinking from the moment it is sent; Hermes's
-  // report takes over the same row. Stop and the message box follow only what Hermes reports.
-  const state: ActivityState = !connectionShown && conversation?.botId === botId && awaitingTurn(echoes, conversation) ? "thinking" : reported;
+  // report takes over the same row. Stop and the message box follow only what Hermes reports. The row's bounds
+  // are read from the clock here, so a render never paints a bound that passed while another chat was open.
+  const state: ActivityState = !connectionShown && conversation?.botId === botId && awaitingTurn(echoes, conversation, Date.now()) ? "thinking" : reported;
   const active = ["thinking", "working", "waiting", "blocked"].includes(reported);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;

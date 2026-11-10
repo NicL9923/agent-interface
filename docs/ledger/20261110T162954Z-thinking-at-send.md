@@ -167,3 +167,79 @@ Checks at this commit: `npm ci` once; `npm run typecheck`, `npm run lint` passed
 all checks passed; `npx vitest run tests/thinking-at-send-ui.test.ts tests/sent-echo.test.ts`: 2 files, 48 tests
 passed; `npm test`: 193 files, 3,232 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4261`):
 21 passed in Chromium. Safari, Firefox, screen-reader speech and a real phone: not run.
+
+## Second review fix round: Grok 4.7's re-review of `b7d347a`
+
+Grok 4.7 found no P1 and every check passing. Its findings and what changed:
+
+1. P2: a finished, failed or interrupted report kept the early row on "thinking" until the 5 s handoff bound, with no
+   Stop and no Retry, when it came with Hermes's copy still the last message. A settled report for the turn now ends
+   the handoff (`settledHere` in `src/app/sent-echo.ts`), so the reported row, with its Retry, is the one on screen.
+   What tells this turn's outcome from the last one's: the add-on takes a message out of `admitting` and records its
+   row in the same journal transaction, before the POST answers (`src/hermes/extension.py:1911` to `1919`), and a
+   read computes the run (`SHOWN_RUN`, which skips admissions still in progress) before it attributes rows. So only a
+   read that began during admission can show the copy with the previous turn's outcome, and that outcome is the one
+   the chat showed when the message was sent. The echo keeps that report (`before`: state and run ID). A settled
+   report counts as this turn's when it differs from `before` in state or run ID, or when it comes from a read whose
+   structural version is newer than the read that first brought the copy (`copiedVersion`, `compareVersions`). A
+   settled activity carries no run ID (`src/server/hermes.ts:521`), except an interruption by restart, so the run ID
+   rarely decides it; the copy's position cannot, since both reads show it last. What stays: the same outcome as
+   `before`, in the very read that first brings the copy, cannot be told from the last turn's. That case keeps
+   thinking until the next read or the 5 s bound. It takes a turn that ends before any read sees it running and ends
+   the same way as the one before: a failure right after a failure, or a finished turn with no reply text.
+2. P3: the handoff clock did not run while another chat was open. `nextEcho` now checks the handoff bound before it
+   checks which chat is open, so the bound's timer drops the echo while the person is elsewhere; and `awaitingTurn`
+   takes `now` and treats `copiedAt` and `sendingSince` plus their bounds as over, so a render never paints a row
+   whose bound passed before a timer stepped the echo. `src/App.tsx` passes `Date.now()`.
+3. P3: the 47 px one-frame move after a 7 s admission is `main`'s too. Measured below; left as is.
+
+### Item 3: the sent message's largest move between two frames
+
+`.agents/tools/measure-thinking-gap.mjs` now samples the sent message's top every animation frame, in
+`requestAnimationFrame`, and again in a task posted from that callback, which runs after the frame paints, until a
+second after the reply's first words. The earlier version stopped at the reply's first words, where the move happens.
+`node .agents/tools/measure-thinking-gap.mjs --runs 5 --delays 7000`, Chromium 1280 x 800. `origin/main` at
+`caeeb7f` (no web client change since this branch's base `c2ee202`) ran from its own checkout with this branch's
+`e2e/server.ts` and `e2e/ports.ts` copied in for the admission delay, uncommitted there.
+
+| Build | Largest step, per frame | Largest step, after paint | When | Row nodes inserted, removed |
+| --- | --- | --- | --- | --- |
+| `origin/main` | 47 px, 165 to 118, 5 of 5 | 47 px, 5 of 5 | 7,322 to 7,327 ms after the send, 290 to 309 ms after the row first appeared | 1, 0 |
+| This branch | 47 px, 165 to 118, 5 of 5 | 51 px, 165 to 114, 5 of 5 | 7,286 to 7,291 ms after the send, 306 to 309 ms after the row returned | 2, 1 |
+
+The move is the arrival that saves the copy and starts the reply, on both builds, at the same place. The after-paint
+sample on this branch read 4 px more in the same step: the run's other 4 px move, which both builds make near the send,
+fell into the same sample. Since `main` moves the message the same way, this branch leaves the anchor as it is.
+
+### Tests and red proof
+
+Written first and seen red for the reviewer's reasons: "ends at once when Hermes reports this turn finished, failed or
+interrupted", "keeps the row through the outcome the chat showed when the message was sent, until a later read or a
+different outcome" and "treats a bound as over by the clock alone…" (`tests/sent-echo.test.ts`); "shows the turn
+failed, with its Retry / interrupted / finished when Hermes reports it with the copy, instead of thinking" (thinking
+was on screen in each), "keeps thinking through the last turn's failure in the read that brings the copy, and shows
+this turn's failure from a later read" (thinking stayed on the later read), and "never paints thinking on returning to
+the chat after the handoff bound passed in another chat" (one thinking status drawn on return)
+(`tests/thinking-at-send-ui.test.ts`). The return test records every status line inserted, so a frame that is
+replaced at once still counts. The settled reports in these tests carry no run ID, as Hermes sends them.
+
+| Break | Red |
+| --- | --- |
+| `settledHere` never true | the unit settled test and stale test, the three UI outcome tests, the UI stale test |
+| No rule for an outcome other than `before` | the unit settled and stale tests, the three UI outcome tests |
+| No rule for a later read | the unit stale test, the UI stale test |
+| Every settled report counts as this turn's | the unit stale test, the UI stale test |
+| Handoff bound checked only in its own chat | "stays while Hermes's copy is in the chat…", "treats a bound as over by the clock alone…", "drops the row a bounded time…" |
+| `awaitingTurn` ignores the handoff clock | "treats a bound as over by the clock alone…" |
+| `awaitingTurn` ignores the sending clock | "treats a bound as over by the clock alone…" |
+| Both handoff clock fixes removed together | "never paints thinking on returning to the chat…" |
+
+The return UI test is held by either clock fix alone, so it went red only with both removed; each fix has its own unit
+case.
+
+### Checks
+
+`npm ci` once; `npm run typecheck`, `npm run lint` passed; `ruff check .` with ruff 0.17.3: all checks passed;
+`npx vitest run tests/thinking-at-send-ui.test.ts tests/sent-echo.test.ts`: 2 files, 56 tests passed; `npm test`:
+193 files, 3,240 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4321`): 21 passed in Chromium.
+Safari, Firefox, screen-reader speech and a real phone: not run.

@@ -4,7 +4,10 @@
 // reports thinking as soon as Hermes admits it, and records with a MutationObserver: when the echo row
 // appears, when the activity row appears, how many activity row nodes were inserted and removed until the
 // reply's first words show, whether the status line's text changed in between, and how far the sent message
-// moved on screen in that time (the send anchor holds it near the top).
+// moved on screen in that time (the send anchor holds it near the top). The sent message's position is also
+// sampled every animation frame, in requestAnimationFrame, and again in a task posted from it, which runs after
+// that frame paints, until a second after the reply's first words; each run reports the largest move between two
+// consecutive frames in both, and when it happened relative to the send and to the activity row's last insertion.
 // Run `npm run build` first. It uses port 4183 and the next one; E2E_PORT picks others.
 //   node .agents/tools/measure-thinking-gap.mjs [--runs 10] [--delays 0,1500]
 import { spawn } from "node:child_process";
@@ -49,7 +52,7 @@ for (const delay of DELAYS) {
       new MutationObserver(records => {
         const now = performance.now();
         for (const record of records) {
-          for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches(".conversation-activity")) marks.inserted++;
+          for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches(".conversation-activity")) { marks.inserted++; marks.rowAt = now; }
           for (const node of record.removedNodes) if (node instanceof HTMLElement && node.matches(".conversation-activity")) marks.removed++;
         }
         const echo = [...document.querySelectorAll(".message-user")].find(item => item.textContent?.includes(sent));
@@ -64,18 +67,41 @@ for (const delay of DELAYS) {
         if (status && marks.statuses.at(-1) !== status) marks.statuses.push(status);
         if (marks.reply === undefined && document.querySelector('[data-message-id="trail-inflight"] .message-markdown')?.textContent?.includes("run")) marks.reply = now;
       }).observe(document.body, { childList: true, subtree: true, characterData: true });
+      // One sample per frame before paint, and one in a task posted from that frame, after it painted.
+      // Sampling runs on past the reply's first words, where the copy is saved and the reply starts.
+      const SETTLE_MS = 1000;
+      const top = () => [...document.querySelectorAll(".message-user")].find(item => item.textContent?.includes(sent))?.getBoundingClientRect().top;
+      const steps = { frame: { last: undefined, max: 0 }, painted: { last: undefined, max: 0 } };
+      const sample = (kind, at) => {
+        const value = top(), step = steps[kind];
+        if (value === undefined || marks.reply !== undefined && at - marks.reply > SETTLE_MS) return;
+        if (step.last !== undefined && Math.abs(value - step.last) > step.max) Object.assign(step, { max: Math.abs(value - step.last), from: step.last, to: value, at, rowAt: marks.rowAt });
+        step.last = value;
+      };
+      const channel = new MessageChannel();
+      channel.port1.onmessage = event => sample("painted", event.data);
+      const frame = at => {
+        sample("frame", at);
+        channel.port2.postMessage(at);
+        if (marks.reply === undefined || at - marks.reply <= SETTLE_MS) requestAnimationFrame(frame); else marks.sampled = true;
+      };
+      requestAnimationFrame(frame);
+      marks.steps = steps;
     }, text);
     await page.getByRole("button", { name: "Send message" }).click();
-    await page.waitForFunction(() => window.__gap.reply !== undefined, null, { timeout: 15_000 });
+    await page.waitForFunction(() => window.__gap.sampled, null, { timeout: 15_000 });
     const marks = await page.evaluate(() => window.__gap);
     runs.push({ echoToRowMs: Math.round(marks.row - marks.echo), echoToReplyMs: Math.round(marks.reply - marks.echo),
-      rowInserted: marks.inserted, rowRemoved: marks.removed, statuses: marks.statuses, echoMovedPx: Math.round(marks.shift) });
+      rowInserted: marks.inserted, rowRemoved: marks.removed, statuses: marks.statuses, echoMovedPx: Math.round(marks.shift),
+      ...Object.fromEntries(Object.entries(marks.steps).map(([kind, step]) => [`${kind}StepPx`, { max: Math.round(step.max),
+        ...step.max ? { from: Math.round(step.from), to: Math.round(step.to), afterSendMs: Math.round(step.at - marks.echo), afterRowMs: step.rowAt === undefined ? null : Math.round(step.at - step.rowAt) } : {} }])) });
     await context.close();
   }
   const gaps = runs.map(run => run.echoToRowMs).sort((a, b) => a - b);
   results[`admissionDelayMs=${delay}`] = {
     echoToRowMs: { median: gaps[Math.floor(gaps.length / 2)], min: gaps[0], max: gaps.at(-1) },
     echoMovedPxMax: Math.max(...runs.map(run => run.echoMovedPx)),
+    frameStepPxMax: Math.max(...runs.map(run => run.frameStepPx.max)), paintedStepPxMax: Math.max(...runs.map(run => run.paintedStepPx.max)),
     rowInsertedMax: Math.max(...runs.map(run => run.rowInserted)), rowRemovedMax: Math.max(...runs.map(run => run.rowRemoved)),
     statuses: [...new Set(runs.map(run => run.statuses.join(" → ")))], runs,
   };

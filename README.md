@@ -682,7 +682,11 @@ the same row without a second announcement, also when Hermes's saved copy of the
 message arrives one read before that report. That early row goes if the send is
 refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
 when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
-copy arrives and no report of the turn follows within 5 seconds. A message sent
+copy arrives and no report of the turn follows within 5 seconds. When Hermes
+reports the turn finished, failed or interrupted, that report replaces the early
+row at once, with its Retry. A read that brings the copy with the very outcome the
+chat showed when the message was sent may still be the last turn's, so that case
+keeps thinking until a later read or the 5 seconds. A message sent
 while the assistant works adds none. Stop appears once Hermes reports the turn.
 One case still shows thinking for the echo's 30 seconds with nothing running:
 Hermes's typed stop phrase, which acts only while Hermes's own voice mode is on

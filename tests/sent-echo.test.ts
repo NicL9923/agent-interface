@@ -147,10 +147,10 @@ describe("sent message echo", () => {
 describe("the assistant thinking before Hermes reports the turn", () => {
   const acceptedEcho = step(sending, { receipt: accepted })!;
   it("shows while a message sent to an idle chat is on its way, and after Hermes accepts it until the turn shows", () => {
-    expect(awaitingTurn([sending], conversation())).toBe(true);
-    expect(awaitingTurn([acceptedEcho], conversation())).toBe(true);
+    expect(awaitingTurn([sending], conversation(), 1000)).toBe(true);
+    expect(awaitingTurn([acceptedEcho], conversation(), 1000)).toBe(true);
     // A finished or failed turn before it does not count as work: the new message starts another.
-    for (const state of ["done", "failed", "interrupted"] as const) expect(awaitingTurn([sending], conversation(undefined, state))).toBe(true);
+    for (const state of ["done", "failed", "interrupted"] as const) expect(awaitingTurn([sending], conversation(undefined, state), 1000)).toBe(true);
   });
 
   // Each case is one reason the row must not be there.
@@ -167,14 +167,14 @@ describe("the assistant thinking before Hermes reports the turn", () => {
       [acceptedEcho], conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }, { id: "b", role: "assistant", text: "Done" }])],
     ["its request has been out longer than the bound", [{ ...sending, slow: true }], conversation()],
   ])("does not show when %s", (_, echoes, shown) => {
-    expect(awaitingTurn(echoes, shown)).toBe(false);
+    expect(awaitingTurn(echoes, shown, 1000)).toBe(false);
   });
 
   const copied = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }]);
   it("stays while Hermes's copy is in the chat before the turn's report, and only for the handoff bound", () => {
     const kept = step(acceptedEcho, { receipt: accepted, conversation: copied, now: 2000 })!;
     expect(kept).toMatchObject({ copiedAt: 2000 });
-    expect(awaitingTurn([kept], copied)).toBe(true);
+    expect(awaitingTurn([kept], copied, 2000)).toBe(true);
     // The copy is Hermes's, so the echo is not drawn a second time.
     expect(withEchoes(copied, [kept])).toBe(copied);
     expect(step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
@@ -194,6 +194,44 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     const unconfirmed = out(slow, 9000, false);
     const retried = out(unconfirmed, 20_000);
     expect(retried).toMatchObject({ status: "sending", slow: false, sendingSince: 20_000 });
-    expect(awaitingTurn([retried], conversation())).toBe(true);
+    expect(awaitingTurn([retried], conversation(), 20_000)).toBe(true);
+  });
+  // What tells this turn's outcome from the last one's: the report the chat showed when the message was sent.
+  const settled = (state: "done" | "failed" | "interrupted", runId?: string, version?: string): SavedConversation =>
+    ({ ...copied, activity: { state, ...runId ? { runId } : {} }, ...version ? { version } : {} });
+  it("ends at once when Hermes reports this turn finished, failed or interrupted", () => {
+    for (const state of ["done", "failed", "interrupted"] as const) {
+      expect(awaitingTurn([acceptedEcho], settled(state), 2000)).toBe(false);
+      expect(step(acceptedEcho, { receipt: accepted, conversation: settled(state), now: 2000 })).toBeNull();
+    }
+  });
+
+  it("keeps the row through the outcome the chat showed when the message was sent, until a later read or a different outcome", () => {
+    const sentAfterFailure = step(step(null, { pending: request, sending: true, conversation: settled("failed", undefined, "b:0:4") }), { receipt: accepted })!;
+    expect(sentAfterFailure.before).toEqual({ state: "failed" });
+    // The copy and the old failure in one read: Hermes had saved the message but not yet opened its run.
+    const kept = step(sentAfterFailure, { receipt: accepted, conversation: settled("failed", undefined, "b:0:5"), now: 2000 })!;
+    expect(kept).toMatchObject({ copiedAt: 2000, copiedVersion: "b:0:5" });
+    expect(awaitingTurn([kept], settled("failed", undefined, "b:0:5"), 2000)).toBe(true);
+    // A read that began after the one that brought the copy reports this turn, so the same words are its own.
+    expect(awaitingTurn([kept], settled("failed", undefined, "b:0:6"), 2100)).toBe(false);
+    expect(step(kept, { receipt: accepted, conversation: settled("failed", undefined, "b:0:6"), now: 2100 })).toBeNull();
+    // A version from another server process orders nothing, so it does not count as later.
+    expect(awaitingTurn([kept], settled("failed", undefined, "c:0:9"), 2100)).toBe(true);
+    // An outcome other than the one shown at the send, or another run's, can only be this turn's.
+    expect(awaitingTurn([kept], settled("done", undefined, "b:0:5"), 2100)).toBe(false);
+    expect(awaitingTurn([kept], settled("failed", "run-2", "b:0:5"), 2100)).toBe(false);
+  });
+
+  // The clock runs while another chat is open, so a return never paints a row whose bound has passed.
+  it("treats a bound as over by the clock alone, even before the echo is stepped or while another chat is open", () => {
+    const kept = step(acceptedEcho, { receipt: accepted, conversation: copied, now: 2000 })!;
+    expect(awaitingTurn([kept], copied, 2000 + COPY_HANDOFF_MS - 1)).toBe(true);
+    expect(awaitingTurn([kept], copied, 2000 + COPY_HANDOFF_MS)).toBe(false);
+    expect(awaitingTurn([sending], conversation(), 1000 + SENDING_ROW_MS - 1)).toBe(true);
+    expect(awaitingTurn([sending], conversation(), 1000 + SENDING_ROW_MS)).toBe(false);
+    const elsewhere = { ...conversation(), botId: "other" };
+    expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
+    expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS })).toBeNull();
   });
 });
