@@ -1,5 +1,5 @@
 import { matchRanges } from "./find-ranges";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
@@ -533,9 +533,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (immediately) measure.current();
     else frame.current = requestAnimationFrame(() => { frame.current = 0; measure.current(); });
   }, []);
-  const history = {
-    earlier: (conversation?.earlier ?? 0) > 0,
-    complete: conversation?.earlier === 0,
+  // One object while nothing in it changes, so the memoized transcript skips a keystroke in the composer.
+  const hasEarlier = (conversation?.earlier ?? 0) > 0;
+  const complete = conversation?.earlier === 0;
+  const history = useMemo(() => ({
+    earlier: hasEarlier,
+    complete,
     ...earlier,
     atLatest,
     atAttention,
@@ -546,6 +549,6 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     sentAs,
     openMessage,
     openAt,
-  };
+  }), [hasEarlier, complete, earlier, atLatest, atAttention, unseen, loadEarlier, jumpToLatest, anchorSend, sentAs, openMessage, openAt]);
   return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
 }

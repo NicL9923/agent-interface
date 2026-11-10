@@ -1,5 +1,5 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnWatcher } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
@@ -29,6 +29,9 @@ const supported = (value: boolean, reason?: string) => ({supported: value,
   ...(!value ? {reason: reason ?? 'The connected Hermes backend does not expose this capability.'} : {})});
 // Frames that only extend a running turn. Anything else changes the conversation's structure.
 const deltaEvents = ['message.delta', 'reasoning.delta', 'thinking.delta', 'tool.generating', 'status.update', 'tool.start'];
+// The frames a send is timed by: its turn's start, streamed text or reasoning, and end.
+const turnEvents = new Map<unknown, 'start' | 'text' | 'end'>([
+  ['message.start', 'start'], ['message.delta', 'text'], ['reasoning.delta', 'text'], ['message.complete', 'end']]);
 const settledStates = ['done', 'failed', 'interrupted'];
 // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
 // It stays short: writers outside this socket, such as another gateway process or the CLI, send it no frame.
@@ -104,6 +107,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
   };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  // An array, not a Set, so calling them on every token allocates no iterator.
+  const turnWatchers: TurnWatcher[] = [];
+  const toTurnWatchers = (call: (watcher: TurnWatcher) => void) => {
+    for (let index = 0; index < turnWatchers.length; index++) {
+      try { call(turnWatchers[index]); } catch { /* A watcher never stops frame processing. */ }
+    }
+  };
   const structuralGenerations = new Map<string, number>();
   const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
@@ -151,6 +161,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const transport = createHermesTransport(options, {
     frame: sessionFrame,
     disconnected(verified) {
+      // Frames may have been missed, so no turn seen so far can be tied to a later frame.
+      toTurnWatchers(watcher => watcher.disconnected());
       live.clear();
       owners.clear();
       descriptions.clear();
@@ -209,6 +221,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Opening a conversation attaches this socket to its session, so its frames arrive here.
     const botId = owners.get(sid);
     const delta = frame.method === "event" && deltaEvents.includes(params.type);
+    // By session: a frame names no run, and the session of a first open has no owner yet.
+    const turn = frame.method === 'event' ? turnEvents.get(params.type) : undefined;
+    if (turn !== undefined) for (let index = 0; index < turnWatchers.length; index++) {
+      try { turnWatchers[index].frame(sid, turn); } catch { /* A watcher never stops frame processing. */ }
+    }
     if (botId !== undefined) {
       if (delta && state.state !== previousActivity) rosterChanged();
       if (!delta) snapshots.delete(botId);
@@ -446,9 +463,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       : 'idle';
     const detail = active ? (runningTool ? `Using ${runningTool.name}` : state?.detail) : undefined;
     const runId = value.app_run_id ?? value.app_interruption?.runId ?? undefined;
+    const fresh = current && generation === structuralGenerationOf(botId);
+    // No turn started or ended here since the read began, so the running turn is reported with the session's
+    // open app run. That is the turn's own run except in the limit stated in send-timing.ts.
+    if (fresh) toTurnWatchers(watcher => watcher.run(sid, botId, typeof value.app_run_id === 'string' ? value.app_run_id : undefined, !!value.info?.running));
     // Live patches need only the last prompt and its persisted assistant segments,
     // never a second retained copy of an older client's full transcript.
-    if (options.history !== false && current && generation === structuralGenerationOf(botId)) {
+    if (options.history !== false && fresh) {
       snapshots.set(botId, {
         value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
           inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
@@ -520,15 +541,20 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       result.chat = result.idempotency;
       result.steering = result.idempotency;
       result.durableEvents = supported(connected && contract.extension, 'The durable lifecycle journal add-on is required.');
-      let image = false;
-      if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; } catch { /* A failed probe never enables generation. */ }
+      let image = false, probeTimedOut = false;
+      if (connected) try { image = (await rpc('image.generate', {probe: true})).available === true; }
+      catch (error) {
+        // A failed probe never enables generation. A timed-out one leaves the socket open, so it is
+        // asked again on the next read instead of being remembered for the whole connection.
+        probeTimedOut = error instanceof TransportError && error.code === 'unreachable';
+      }
       const usable = connected && transport.connection === current && current?.verified === true &&
         current.ws.readyState === WebSocket.OPEN && contract.extension;
       if (!usable) {
         for (const key of keys) result[key] = supported(false, transport.detail ?? 'Hermes is disconnected.');
       } else {
         result.imageGeneration = result.portraitGeneration = supported(image, 'A verified Hermes add-on and a usable image-generation provider are required.');
-        capabilityCache = result;
+        if (!probeTimedOut) capabilityCache = result;
       }
       return result;
     })();
@@ -1091,6 +1117,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         : ["idle", "disconnected"].includes(state.state) ? saved.activity.state
         : state.state;
       return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools};
+    },
+    watchTurns(watcher) {
+      turnWatchers.push(watcher);
+      return () => {
+        const index = turnWatchers.indexOf(watcher);
+        if (index >= 0) turnWatchers.splice(index, 1);
+      };
     },
     watch(botId, listener) {
       const listeners = watchers.get(botId) ?? new Set();
