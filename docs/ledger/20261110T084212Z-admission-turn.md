@@ -119,3 +119,30 @@ the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lan
 | A queued or joined send bound by `main`'s completion hook | `test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row`, both cases |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Merge of the binding rule's second round
+
+`t3/send-lanes` at `aba9af0` is merged in with normal merge commits, carrying `t3/receipt-turn-binding` at
+`579fc08`: read-time image recovery and the read-time check for old bindings are gone, and a steer binds only inside
+its root's finished turn. See
+[20261110T094510Z-receipt-turn-binding.md](20261110T094510Z-receipt-turn-binding.md).
+
+- The merge conflicted only in `tests/hermes_turn_binding_test.py`. It takes the rewritten module and carries
+  `test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row` into it, with a third case: a queued
+  image send, which Hermes queues in either busy mode, reports `turn: "queued"` and is bound to no row. The
+  sentence above that called a queued image send the exception is corrected, and so is the matching sentence in
+  `docs/HermesCapabilityMatrix.md`.
+- Source fingerprint sha256:f93cd55a382aa278a2c2b2e4dd099ea66cd7e2bbb0e313f6c3d9192b3b47f43e (1688 source files); `src/hermes` alone sha256:3ef7c7b74540f930da6c2b0f924ec1d4b7f1223061ca7ad98fc9fdd07b76c4dd (20 source files). Same host and versions.
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (Python 3.14.10). `tests/hermes_turn_binding_test.py`:
+  22 tests.
+- `npm run lint:py` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+| Broken | Red |
+| --- | --- |
+| `ea84953`'s add-on, with image recovery, under the new test | the queued-or-joined test, image case: `alice-1` shown on her queued row |
+| `main`'s completion hook restored | the queued-or-joined test, among others |
+| The 15 mutants of the binding entry's second round | each its own test, on this merged source |
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
