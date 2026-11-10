@@ -174,3 +174,102 @@ Written first: the e2e "a transcript image that fails to load keeps the space it
 `npx vitest run tests/image-dimensions-ui.test.ts tests/app-ui.test.ts`: 104 tests passed; `npm test`: 193 files,
 3,212 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4371`): 21 passed in Chromium. Safari,
 Firefox and a real phone: not run.
+
+## Second review fix round: Grok 4.7's re-review of `a6e8564`
+
+Grok 4.7 found no P1 and every check passing. Its findings and what changed:
+
+4. P2: a reshape waiting for the reader applied only when the IntersectionObserver reported the row out of view, and
+   nothing retried, so in a short thread (66 px of scroll room, last message a 1170 x 2532 image) the frame stayed
+   448 x 336 for as long as the message was on screen. `FileLink` now also re-checks on every scroll of its scroller,
+   so the waiting shape is applied as soon as `readerSees` is false: the row left the view, or the reader is back at
+   the end, where following keeps the latest message still. A row that is in view at both ends the scroller can reach
+   (`neverLeaves` in `src/app/image-sizes.ts`) can never leave, so its shape is applied at once. What a person sees
+   then: the image takes its own shape in view; the reader's place, the first message below the view's top edge, is
+   held as for any growth, so the rows after the image move by the height difference (60 px for the tall screenshot,
+   336 to 396 px), once. That is the one case where something in view moves; the alternative was bars for good.
+5. P3: a tall screenshot kept side bars after its ratio was applied, because the frame was full width and the 400 px
+   height cap cut its height. An image's card (`.file-image`) is now as wide as the frame can be at the cap:
+   `min(100%, max(160px, 400px x --file-ratio))`, with `--file-ratio` set by `FileLink` from the known shape and 4:3
+   by default. The frame fills the card. 160 px keeps the file's name readable, so only an image taller than 1:2.5
+   would show narrow bars.
+6. P3: no painted move to correct. The 64 px reading is taken before the frame's layout and ResizeObserver callbacks.
+   The transcript's ResizeObserver runs after layout and before paint, so its `place()` correction lands in the same
+   frame. Measured below with a sample that reads after it, and a control that delays the correction by one frame.
+   `place()` and the reshape path are unchanged for this item.
+7. `.agents/tools/measure-image-shift.mjs` reports a move larger than the transcript's content height as a
+   measurement fault, with both readings and the height, instead of a number: `moved(start, end, contentHeight)`,
+   used for every move it prints. Run on the tool's own function: `moved(100, 36, 5000)` is -64,
+   `moved(-648000, 136, 4000)` and `moved(0, 4001, 4000)` are faults, `moved(0, 4000, 4000)` is 4,000.
+
+### Frames in Chromium
+
+`node .agents/tools/measure-image-shift.mjs --runs 1 --only open --viewport 1280x800` and `--viewport 390x844`, the
+mixed shapes, natural size in the frame's box:
+
+| Image | 1280 x 800 | 390 x 844 |
+| --- | --- | --- |
+| 1600 x 1200 (4:3) | 448 x 336 | 333 x 250 |
+| 1920 x 1080 (16:9) | 448 x 252 | 333 x 187 |
+| 1170 x 2532 (tall screenshot) | 183 x 396 | 183 x 396 |
+| 1000 x 1000 | 398 x 398 | 333 x 333 |
+| 900 x 1200 (3:4) | 298 x 397 | 298 x 397 |
+| 2520 x 1080 (panorama) | 448 x 192 | 333 x 143 |
+
+Every frame matches its image's ratio within rounding. The e2e test "a transcript image fills a frame of its own ratio
+within the caps" checks the tall screenshot, a panorama and a 3:2 photo at both widths: ratio within 1%, height at most
+400 px, card as wide as the frame. Open CLS on this build: 0.064 at 1280 px, 0.291 at 390 px, from images reshaping in
+follow mode (the latest message stays; rows above a reshaped image move); 390 px was not measured before this round.
+
+### Item 6: what is painted
+
+`node .agents/tools/measure-image-shift.mjs --runs 1 --only reader,send-images`, 1280 x 800. The tool now samples the
+followed message every frame twice: in `requestAnimationFrame`, before that frame's layout, and in a ResizeObserver made
+in that callback, which the browser calls after the app's own observers, just before paint. Largest step between two
+frames, about 185 frames per run:
+
+| Scenario | This branch, before layout | This branch, painted | Control: correction one frame late, painted | `origin/main` `caeeb7f`, painted |
+| --- | --- | --- | --- | --- |
+| Reader, wheel up 300 (photos 1 to 4 above) | -84 px | 0 px | -84 px | 325 px (205 to 530) |
+| Reader, wheel up 900 (photos 1 to 2 above) | -84 px | 0 px | -84 px | 0 px; 955 px for a row in view |
+| Reader, wheel up 1,500 (photo 1 above) | 0 px | 0 px | 0 px | 0 px; 955 px for a row in view |
+| Send while six images above load | 62 px | 0 px | 0 px (that path is not the one delayed) | 0 px (389 px before layout) |
+
+The control build delayed `returnToPlace`'s scroll by one `requestAnimationFrame`, uncommitted, and was rebuilt
+without it after. The painted sample then read the same -84 px as the early one, so it does see a move that reaches the
+screen. The send case runs through the anchored branch of `place()`, which the control did not delay; its 0 px rests on
+the same sampler. On `main` the images reserve no height until they load, so a scrolled-up reader sees rows jump on
+screen; the wheel reaches different rows there, as the first section notes. The 84 px here is the 16:9 image shrinking
+from the 4:3 frame (336 to 252 px), the first reshape above the reader; the reviewer's 64 px was the tall screenshot.
+
+### Tests and red proof
+
+Written first and seen red for the reviewer's reasons (`tests/image-dimensions-ui.test.ts`): "stays while a scroll
+leaves the row in view, and applies once the reader is back at the end", "applies once a scroll takes the row out of
+view, without waiting for the observer" and "applies at once when the row can never leave the view": the frame stayed
+4:3 in each. The two "waits when the row would leave the view at the end / at the top" cases guard `neverLeaves` and
+passed before the change. The first run shared one file ID across these tests and the page's remembered size leaked
+between them; each test now has its own ID. In Chromium, "a transcript image fills a frame of its own ratio within the
+caps, 1280 / 390 px wide" went red before the CSS change: the tall screenshot's frame ratio was 2.42 and 1.80 times
+the image's.
+
+| Break | Red |
+| --- | --- |
+| The wait ignores `neverLeaves` | "applies at once when the row can never leave the view" |
+| No scroll listener | "stays while a scroll leaves the row in view…", "applies once a scroll takes the row out of view…" |
+| No check when the wait starts | "applies at once when the row can never leave the view" |
+| `neverLeaves` always true | the earlier "waits until the image's row leaves the view…", "stays while a scroll…", both "waits when the row would leave the view" cases |
+| `neverLeaves` ignores the top end | "waits when the row would leave the view at the top" |
+| `neverLeaves` ignores the bottom end | "waits until the image's row leaves the view…", "stays while a scroll…", "waits when the row would leave the view at the end" |
+| `.file-image` width rule removed (Chromium) | both "fills a frame of its own ratio" tests, 1.42 and 0.80 off |
+| `--file-ratio` not set (Chromium) | both "fills a frame of its own ratio" tests, the same |
+
+Not run: the reviewer's short-thread reproduction in Chromium. The rule is covered in jsdom with the scroller's sizes
+set by hand.
+
+### Checks
+
+`npm ci` once; `npm run typecheck`, `npm run lint` passed; `ruff check .` with ruff 0.17.3: all checks passed;
+`npx vitest run tests/image-dimensions-ui.test.ts tests/app-ui.test.ts`: 2 files, 109 tests passed; `npm test`:
+193 files, 3,217 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4361`): 23 passed in Chromium.
+Safari, Firefox and a real phone: not run.

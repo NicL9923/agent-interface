@@ -12,9 +12,15 @@
 //           while its image loads, and the CLS meanwhile. send-images does the same while the six images above it load.
 //   failed  the six images, the third answering 404 after its delay; that image's link height before and after.
 //   special an animated GIF and a 8000 x 4500 PNG: their frames after load, whether the GIF's frame changes on screen.
-// --shapes far swaps the six shapes for six far from 4:3. Run `npm run build` first. It uses port 4187 and the next
-// one; E2E_PORT picks others. It can measure another build: run it with that build's checkout as the working directory.
-//   node .agents/tools/measure-image-shift.mjs [--runs 3] [--only open,reader,send,send-images,failed,special] [--shapes mixed|far]
+// --shapes far swaps the six shapes for six far from 4:3. --viewport sets the page's size, 1280x800 by default.
+// The reader and send scenarios also sample the followed message every frame twice: in requestAnimationFrame, before
+// that frame's layout and ResizeObserver callbacks, and in a ResizeObserver made in that callback, which runs after the
+// app's own observers and so reads the position the frame paints. Each reports the largest step between two frames.
+// A move larger than the transcript's content height cannot be real; it is reported as a measurement fault with both
+// readings and that height, never as a number of pixels. The open scenario reports each image frame's box.
+// Run `npm run build` first. It uses port 4187 and the next one; E2E_PORT picks others. It can measure another build:
+// run it with that build's checkout as the working directory.
+//   node .agents/tools/measure-image-shift.mjs [--runs 3] [--only open,reader,send,send-images,failed,special] [--shapes mixed|far] [--viewport 390x844]
 import { spawn } from "node:child_process";
 import { deflateSync } from "node:zlib";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -25,6 +31,7 @@ const flag = (name, fallback) => { const at = args.indexOf(name); return at < 0 
 const RUNS = Number(flag("--runs", 3));
 const ONLY = new Set(flag("--only", "open,reader,send,send-images,failed,special").split(","));
 const SHAPES = flag("--shapes", "mixed");
+const [VIEW_WIDTH, VIEW_HEIGHT] = flag("--viewport", "1280x800").split("x").map(Number);
 const port = Number(process.env.E2E_PORT) || 4187, base = `http://127.0.0.1:${port}`;
 if (await fetch(`${base}/api/auth/config`).then(() => true, () => false)) throw new Error(`Port ${port} is taken; set E2E_PORT.`);
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
@@ -74,7 +81,7 @@ const upload = { id: "up-1", width: 1600, height: 900, body: png(1600, 900, [200
 
 const browser = await chromium.launch();
 async function page({ withImages, special = false, failing }) {
-  const context = await browser.newContext({ baseURL: base, serviceWorkers: "block", viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ baseURL: base, serviceWorkers: "block", viewport: { width: VIEW_WIDTH, height: VIEW_HEIGHT } });
   await context.addInitScript(() => {
     window.__shifts = [];
     new PerformanceObserver(list => { for (const entry of list.getEntries()) window.__shifts.push({ value: entry.value, input: entry.hadRecentInput, at: entry.startTime }); })
@@ -118,6 +125,44 @@ async function page({ withImages, special = false, failing }) {
   await tab.route("**/api/bots/ranch/uploads", route => route.fulfill({ json: { id: upload.id, name: "gate.png", mime: "image/png", size: upload.body.length } }));
   return { tab, context };
 }
+/**
+ * A move between two readings of one element's top, or a fault when it is larger than the scroller's content: no move
+ * inside the transcript can exceed its own height, so such a reading is a measurement fault, not a shift.
+ */
+function moved(start, end, contentHeight) {
+  const value = Math.round(end - start);
+  return Math.abs(value) > contentHeight ? { fault: "move larger than the transcript's content height", start, end, contentHeight } : value;
+}
+const contentHeight = tab => tab.evaluate(() => document.querySelector('[role="region"][aria-label="Conversation"]').scrollHeight);
+/** Starts sampling one message's top every frame, before layout and as painted; the returned function stops it. */
+async function sampleFrames(tab, selector) {
+  await tab.evaluate(selector => {
+    const top = () => document.querySelector(selector)?.getBoundingClientRect().top;
+    const series = window.__frames = { early: [], painted: [], stop: false };
+    const frame = () => {
+      series.early.push(top());
+      // Made now, so it is the last observer the browser calls this frame: after the transcript's own correction.
+      const late = new ResizeObserver(() => { late.disconnect(); series.painted.push(top()); });
+      late.observe(document.body);
+      if (!series.stop) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }, selector);
+  return async () => {
+    const [series, height] = await Promise.all([tab.evaluate(() => { window.__frames.stop = true; return window.__frames; }), contentHeight(tab)]);
+    const largest = values => {
+      let best = { step: 0 };
+      for (let index = 1; index < values.length; index++) {
+        if (values[index] === undefined || values[index - 1] === undefined) continue;
+        const step = moved(values[index - 1], values[index], height);
+        if (typeof step === "object") return step;
+        if (Math.abs(step) > Math.abs(best.step)) best = { step, frame: index, from: Math.round(values[index - 1]), to: Math.round(values[index]) };
+      }
+      return best;
+    };
+    return { frames: series.painted.length, beforeLayoutPx: largest(series.early), paintedPx: largest(series.painted) };
+  };
+}
 const cls = tab => tab.evaluate(() => ({ all: window.__shifts.reduce((sum, item) => sum + item.value, 0), counted: window.__shifts.filter(item => !item.input).reduce((sum, item) => sum + item.value, 0), shifts: window.__shifts.length }));
 // Settled: each image loaded, or failed and gone from the frame (or, before frames, complete with no size).
 const allLoaded = tab => tab.waitForFunction(() => [...document.querySelectorAll(".file-link")].every(link => {
@@ -138,7 +183,11 @@ for (let run = 0; run < RUNS; run++) {
       const view = document.querySelector('[role="region"][aria-label="Conversation"]');
       return Math.round(view.scrollHeight - view.scrollTop - view.clientHeight);
     });
-    results.open.push({ ...await cls(tab), endFromBottomPx: gap });
+    const frames = await tab.evaluate(() => [...document.querySelectorAll(".file-link img")].map(img => {
+      const box = img.parentElement.getBoundingClientRect();
+      return `${img.naturalWidth}x${img.naturalHeight} in ${Math.round(box.width)}x${Math.round(box.height)}`;
+    }));
+    results.open.push({ ...await cls(tab), endFromBottomPx: gap, frames });
     await context.close();
   }
   if (ONLY.has("reader")) for (const up of [300, 900, 1500]) {
@@ -162,12 +211,16 @@ for (let run = 0; run < RUNS; run++) {
       return { id: first?.dataset.messageId, top: first?.getBoundingClientRect().top, visible, where };
     });
     const before = await mark();
+    const frames = await sampleFrames(tab, `[data-message-id="${before.id}"]`);
     await allLoaded(tab);
     await sleep(1000);
+    const perFrame = await frames();
     const after = await tab.evaluate(ids => Object.fromEntries(ids.map(id => [id, document.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top])),
       [...new Set([before.id, ...Object.keys(before.visible)])]);
-    results.reader.push({ wheelUpPx: up, images: before.where, message: before.id, movedPx: Math.round(after[before.id] - before.top),
-      inViewMaxMovedPx: Math.max(...Object.entries(before.visible).map(([id, top]) => Math.round(Math.abs(after[id] - top)))), ...await cls(tab) });
+    const height = await contentHeight(tab);
+    const inView = Object.entries(before.visible).map(([id, top]) => moved(top, after[id], height));
+    results.reader.push({ wheelUpPx: up, images: before.where, message: before.id, movedPx: moved(before.top, after[before.id], height),
+      inViewMaxMovedPx: inView.find(item => typeof item === "object") ?? Math.max(...inView.map(Math.abs)), perFrame, ...await cls(tab) });
     await context.close();
   }
   for (const scenario of ["send", "send-images"]) if (ONLY.has(scenario)) {
@@ -183,12 +236,16 @@ for (let run = 0; run < RUNS; run++) {
     await sent.waitFor();
     await sleep(600);
     const start = await sent.evaluate(element => element.getBoundingClientRect().top);
+    await sent.evaluate(element => { element.dataset.measured = ""; });
+    const frames = await sampleFrames(tab, ".message-user[data-measured]");
     await tab.waitForFunction(() => [...document.querySelectorAll(".message-user .file-link img")].some(img => img.complete && img.naturalWidth), null, { timeout: 30_000 });
     await sleep(800);
     const end = await sent.evaluate(element => element.getBoundingClientRect().top);
     if (scenario === "send-images") await allLoaded(tab);
+    await sleep(800);
     const settled = await sent.evaluate(element => element.getBoundingClientRect().top);
-    results[scenario].push({ ...await cls(tab), sentMessageMovedPx: Math.round(end - start), afterAllImagesPx: Math.round(settled - start) });
+    const height = await contentHeight(tab);
+    results[scenario].push({ ...await cls(tab), sentMessageMovedPx: moved(start, end, height), afterAllImagesPx: moved(start, settled, height), perFrame: await frames() });
     await context.close();
   }
   if (ONLY.has("failed")) {

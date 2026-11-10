@@ -705,6 +705,12 @@ a {
   overflow: hidden;
   font-size: 0.75rem;
 }
+/* An image's card is as wide as its frame can be at the 400 px height cap, so a tall image keeps its own ratio in a
+   narrower card instead of sitting between bars. FileLink sets --file-ratio once the shape is known; the 4:3 frame's
+   ratio is the default. 160 px keeps the file's name readable; only an image taller than 1:2.5 shows narrow bars. */
+.file-image {
+  width: min(100%, max(160px, calc(400px * var(--file-ratio, 4 / 3))));
+}
 /* An image whose size this page does not know yet gets this frame, so nothing moves when it loads, and a failed
    image leaves the same box. FileLink sets the image's own ratio when it is known. */
 .file-frame {

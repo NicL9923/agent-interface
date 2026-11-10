@@ -226,4 +226,54 @@ describe("space reserved for transcript images", () => {
     await waitForUi(() => expect(container.querySelector(".message-user .file-link img")).not.toBeNull());
     expect(reserved(".message-user")).toBe("");
   });
+  // A reshape waiting for the reader is applied as soon as nothing being read would move: the row left the view, the
+  // reader is back at the end, or the row can never leave the view at all.
+  describe("a reshape that waits for the reader", () => {
+    const box = (top: number, bottom: number) => () => ({ top, bottom, left: 0, right: 450, width: 450, height: bottom - top, x: 0, y: top, toJSON() {} }) as DOMRect;
+    /** An image in a row the reader sees while scrolled up, in a view `room` px shorter than its content. */
+    async function waiting(id: string, row: [number, number], { room = 1400, scrollTop = 300 } = {}) {
+      // Each test its own file, since the page remembers a size it learned.
+      const image = await openWithImage(id);
+      const view = container.querySelector<HTMLElement>('[role="region"][aria-label="Conversation"]')!;
+      view.style.overflowY = "auto";
+      Object.assign(view, { getBoundingClientRect: box(0, 600) });
+      Object.defineProperties(view, { scrollHeight: { configurable: true, value: 600 + room }, clientHeight: { configurable: true, value: 600 },
+        scrollTop: { configurable: true, writable: true, value: scrollTop } });
+      const element = container.querySelector<HTMLElement>('[data-message-id="a1"]')!;
+      Object.assign(element, { getBoundingClientRect: box(...row) });
+      await load(image, 1170, 2532);
+      return { view, row: element, scroll: (top: number) => act(async () => { view.scrollTop = top; view.dispatchEvent(new Event("scroll")); }) };
+    }
+
+    it("stays while a scroll leaves the row in view, and applies once the reader is back at the end", async () => {
+      const { scroll } = await waiting("screenshot-back-to-end", [100, 560]);
+      expect(reserved('[data-message-id="a1"]')).toBe("");
+      await scroll(320);
+      expect(reserved('[data-message-id="a1"]')).toBe("");
+      await scroll(1400);
+      expect(reserved('[data-message-id="a1"]')).toBe("1170 / 2532");
+    });
+
+    it("applies once a scroll takes the row out of view, without waiting for the observer", async () => {
+      const { scroll, row } = await waiting("screenshot-scrolled-away", [100, 560]);
+      Object.assign(row, { getBoundingClientRect: box(-560, -100) });
+      await scroll(960);
+      expect(reserved('[data-message-id="a1"]')).toBe("1170 / 2532");
+    });
+
+    // A short thread: 66 px of scroll room, and the image's row in view at the top of it and at its end.
+    it("applies at once when the row can never leave the view", async () => {
+      await waiting("screenshot-short-thread", [100, 560], { room: 66, scrollTop: 0 });
+      expect(reserved('[data-message-id="a1"]')).toBe("1170 / 2532");
+    });
+
+    // 600 px of room in a 600 px view: the row is in view now, and out of it at one end of the scroll.
+    it.each<[string, [number, number], number]>([
+      ["at the end", [100, 560], 0],
+      ["at the top", [200, 500], 500],
+    ])("waits when the row would leave the view %s", async (end, row, scrollTop) => {
+      await waiting(`screenshot-leaves-${end.replace(" ", "-")}`, row, { room: 600, scrollTop });
+      expect(reserved('[data-message-id="a1"]')).toBe("");
+    });
+  });
 });

@@ -54,3 +54,15 @@ export function readerSees(frame: Element) {
   const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
   return !atEnd && box.bottom > view.top && box.top < view.bottom;
 }
+/**
+ * Whether the frame's row is in view at both ends the scroller can reach, so no scroll ever takes it out of view, as
+ * in a short thread. A reshape waiting for the row to leave would then never be applied.
+ */
+export function neverLeaves(frame: Element) {
+  const scroller = scrollerOf(frame);
+  if (!scroller) return false;
+  const view = scroller.getBoundingClientRect(), box = rowOf(frame).getBoundingClientRect();
+  // The row's place in the scroller's content, against the view at the top and at the end.
+  const top = box.top - view.top + scroller.scrollTop, bottom = box.bottom - view.top + scroller.scrollTop;
+  return top < scroller.clientHeight && bottom > scroller.scrollHeight - scroller.clientHeight;
+}
