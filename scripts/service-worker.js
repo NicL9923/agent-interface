@@ -121,8 +121,16 @@ self.addEventListener('message', (event) => {
 const ACCOUNT_CACHE = 'wildbots-account';
 const ACCOUNT_KEY = '/account';
 let account;
-const readAccount = () => account ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
+const loadAccount = () => account ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
   .then((saved) => saved ? saved.json() : null).catch(() => null);
+// The latest word: a read that a page's ACCOUNT message overtakes while it waits follows that message's.
+async function readAccount() {
+  for (;;) {
+    const reading = loadAccount();
+    const state = await reading;
+    if (reading === account) return state;
+  }
+}
 
 async function accountMarker(user) {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('wildbots-account:' + user));
@@ -137,9 +145,11 @@ function mayShow(state, named) {
   return typeof named !== 'string' || named === state.marker;
 }
 
-// A push that arrives meanwhile waits for the new account, so it is judged by the latest word.
+// A push that reads the account from now on, or is still waiting on an earlier read, waits for this
+// word. One already being shown is checked again once it is on screen (see the push handler), since
+// getNotifications below does not list it yet.
 function setAccount(user) {
-  const before = readAccount();
+  const before = loadAccount();
   const next = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
     // A browser that cannot hash keeps today's rule rather than dropping every notification.
     .catch(() => null);
@@ -257,17 +267,26 @@ self.addEventListener('push', (event) => {
   const url = conversationUrl(data.url);
   const declineToken = data.kind === 'approval' && typeof data.declineToken === 'string' && canAct() ? data.declineToken : undefined;
   const named = typeof data.account === 'string' ? data.account : undefined;
-  event.waitUntil(readAccount().then((state) => mayShow(state, named) && Promise.all([
-    self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
-      body: String(data.body || 'Your assistant has an update.').slice(0, 240),
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: typeof data.tag === 'string' ? data.tag : undefined,
-      data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
-      ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
-    }),
-    showBadge(data.badge),
-  ])));
+  event.waitUntil((async () => {
+    if (!mayShow(await readAccount(), named)) return;
+    await Promise.all([
+      self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
+        body: String(data.body || 'Your assistant has an update.').slice(0, 240),
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: typeof data.tag === 'string' ? data.tag : undefined,
+        data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
+        ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
+      }),
+      showBadge(data.badge),
+    ]);
+    // The account may have changed while the notification was on its way to the screen, after
+    // setAccount closed what was listed. It goes now, with the badge this push set.
+    const state = await readAccount();
+    if (mayShow(state, named)) return;
+    for (const shown of await self.registration.getNotifications()) if (!mayShow(state, shown.data?.account)) shown.close();
+    if (Number.isInteger(data.badge)) await self.navigator?.clearAppBadge?.().catch(() => {});
+  })());
 });
 
 // How long an open window has to say it switched to the chat. A live page answers within a few

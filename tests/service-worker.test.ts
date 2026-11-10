@@ -43,12 +43,18 @@ type Stores = Map<string, Map<string, unknown>>;
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
  * run left, as when the browser stops an idle worker and starts it again for the next event.
  */
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores } = {}) {
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean } = {}) {
+  const options_ = options;
   const handlers: Record<string, (event: any) => void> = {};
   const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
   // Notifications on screen, as getNotifications lists them. Showing one with a tag replaces the last.
+  // A browser lists a notification only once it is on screen, when showNotification resolves; with
+  // `holdShows`, each stays on its way until the test calls releaseShows.
   const shown: Shown[] = [];
+  const onTheirWay: (() => void)[] = [];
+  const releaseShows = () => { for (const release of onTheirWay.splice(0)) release(); };
   const showNotification = vi.fn(async (title: string, options: any = {}) => {
+    await new Promise<void>(resolve => { if (options_.holdShows) onTheirWay.push(resolve); else resolve(); });
     const notification: Shown = { title, tag: options.tag, data: options.data, close: vi.fn(() => { shown.splice(shown.indexOf(notification), 1); }) };
     if (options.tag) shown.splice(0, shown.length, ...shown.filter(other => other.tag !== options.tag));
     shown.push(notification);
@@ -117,7 +123,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
-  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, shown, openWindow, setAppBadge, clearAppBadge, update, unregister, signedIn };
+  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, shown, openWindow, setAppBadge, clearAppBadge, update, unregister, signedIn };
 }
 
 describe('service worker privacy and return path', () => {
@@ -1029,6 +1035,47 @@ describe('service worker pushes for the account signed in here', () => {
     await sw.signedIn('two');
     await push(sw, { ...forOne, account: undefined });
     expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+  });
+
+  it('closes a notification that reached the screen only after its account signed out, and clears the badge its push set', async () => {
+    // The reviewer's order: the push is inside showNotification, not yet listed, when the page says no one is signed in.
+    const sw = worker({ holdShows: true });
+    await sw.signedIn('one');
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ body: 'Gate code is 4471' })));
+    await sw.signedIn(null);
+    expect(sw.setAppBadge).toHaveBeenCalledWith(1);
+    sw.releaseShows();
+    await done;
+    expect(sw.shown).toEqual([]);
+    expect(sw.clearAppBadge).toHaveBeenCalled();
+  });
+
+  it('keeps a notification that reached the screen while the same account stayed signed in, and its badge', async () => {
+    const sw = worker({ holdShows: true });
+    await sw.signedIn('one');
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
+    await sw.signedIn('one');
+    sw.releaseShows();
+    await done;
+    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('judges a push still reading the saved account by the sign-out a page sent meanwhile', async () => {
+    const first = worker();
+    await first.signedIn('one');
+    // A restarted worker reads the saved account from cache storage; the page's word lands during that read.
+    const sw = worker({ stores: first.stores });
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    const out = sw.signedIn(null);
+    await Promise.all([done, out]);
+    expect(sw.showNotification).not.toHaveBeenCalled();
+    expect(sw.setAppBadge).not.toHaveBeenCalled();
   });
 
   it('shows nothing once signed out, whoever the push names', async () => {
