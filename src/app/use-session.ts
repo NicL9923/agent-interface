@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
 import { ApiError, changeStream, clearResponseCache, request as apiRequest, setCsrf } from "../client-api";
 import { preferenceQueue } from "./preference-queue";
+import { forgetSignIn, prefetchLinkedChat, rememberChats, rememberSignIn, settleLinkedChat } from "./linked-chat";
 type SessionEvents = {
   onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
@@ -61,6 +62,8 @@ export function useSession(events: SessionEvents) {
       try {
         const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
         if (epoch !== identityEpoch.current) return null;
+        // A chat read beside this bootstrap counts only if it was made for the account signed in now.
+        settleLinkedChat(next.user.id);
         // A bootstrap that found Hermes down, like a failed one, is no reason to hold back the next look.
         lastSuccess.current = next.connection.connected ? Date.now() : 0;
         if (bootRef.current && bootRef.current.user.id !== next.user.id) {
@@ -72,6 +75,7 @@ export function useSession(events: SessionEvents) {
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
+        if (next.connection.connected) rememberChats(next.user.id, next.bots.map(bot => bot.id));
         // A save that overlapped this read may be newer than its preferences; keep the saved copy.
         const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
@@ -98,6 +102,7 @@ export function useSession(events: SessionEvents) {
         if (epoch !== identityEpoch.current) return null;
         if (e instanceof ApiError && e.status === 401) {
           nextIdentity();
+          forgetSignIn();
           handlers.current.onIdentityChange();
           setAuth(true); setBoot(null); setCsrf("");
         } else {
@@ -128,6 +133,8 @@ export function useSession(events: SessionEvents) {
     }
   }, [checkingConnection, refresh]);
   useEffect(() => {
+    // A link that names a chat reads it while bootstrap runs, not after.
+    prefetchLinkedChat();
     void refresh();
     const id = setInterval(() => {
       if (!authRef.current && document.visibilityState !== "hidden" && navigator.onLine !== false) void refresh();
@@ -193,11 +200,13 @@ export function useSession(events: SessionEvents) {
   const editPreferences = (edit: (value: Preferences) => Preferences) =>
     preferences.current!.edit(edit, bootRef.current?.preferences);
   const signedIn = () => {
+    rememberSignIn();
     nextIdentity();
     bootstrapRequest.current = null;
     void refresh();
   };
   const signedOut = () => {
+    forgetSignIn();
     nextIdentity();
     bootstrapRequest.current = null;
     setCsrf("");

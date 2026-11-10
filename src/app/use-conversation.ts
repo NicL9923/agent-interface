@@ -155,8 +155,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
         : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
-        // A prefetch of the latest page still on its way is that read; if it fails, read again.
-        const joined = query === firstQuery ? prefetchedFirstPage(botId) : undefined;
+        // Every load asks, even for another window, so the first one uses up a link's startup read.
+        // Only the latest page can take what it answers; if that read fails, read again.
+        const prefetched = prefetchedFirstPage(botId);
+        const joined = query === firstQuery ? prefetched : undefined;
         const result = await joined?.catch(() => undefined)
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
