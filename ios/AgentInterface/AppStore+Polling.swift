@@ -170,7 +170,7 @@ extension AppStore {
         if resync {
           refused += 1
           // Timer: the first reconnect after a refused notice is immediate; repeats back off.
-          if refused > 1 { try? await Task.sleep(for: .seconds(min(30, 3 * (refused - 1)))) }
+          if refused > 1 { try? await self.resyncPause(.seconds(min(30, 3 * (refused - 1)))) }
           continue
         }
         failures += 1

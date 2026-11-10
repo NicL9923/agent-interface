@@ -145,6 +145,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func sendLive(_ event: String, _ data: [String: Any]) {
         conversationStreams.last?.send("event: \(event)\ndata: \(String(decoding: Self.json(data), as: UTF8.self))\n\n")
     }
+    /// Writes one named event on the newest conversation stream with this exact data line, readable or not.
+    func sendLive(_ event: String, raw data: String) { conversationStreams.last?.send("event: \(event)\ndata: \(data)\n\n") }
     func notifyRoster() { notifyHousehold("roster") }
     /// A named notice on the household stream, such as `roster`, `groups` or one this app does not know.
     func notifyHousehold(_ name: String) { for stream in householdStreams() { stream.send("event: \(name)\ndata: \(name)\n\n") } }
@@ -1410,6 +1412,122 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { server.conversationStreams.count == 2 }
         XCTAssertNil(live(value), "Growth of a dropped reply is not applied")
     }
+
+    func testAnUnreadableNoticeOrAWholeReplyForAnotherAssistantDropsTheHeldReplyAndReconnectsOnce() async throws {
+        // Growth whose base still matches the held "Howdy". After a whole reply that failed to drop
+        // "Howdy", this would be applied to the wrong reply instead of refused.
+        let stale = growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"])
+        let cases: [(name: String, send: (NativeMockServer) -> Void)] = [
+            ("an unreadable growth notice", { $0.sendLive("inflight-delta", raw: #"{"botId":"bot","baseTextLength":"#) }),
+            ("an unreadable whole reply", {
+                $0.sendLive("inflight", raw: #"{"botId":"bot","message":"#)
+                $0.sendLive("inflight-delta", stale)
+            }),
+            ("a whole reply for another assistant", {
+                $0.sendLive("inflight", self.wholeReply("Hola").merging(["botId": "family"]) { _, change in change })
+                $0.sendLive("inflight-delta", stale)
+            }),
+        ]
+        for refusal in cases {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            try await openLiveStream(server, value)
+            server.sendLive("inflight", wholeReply("Howdy"))
+            try await until { live(value)?.text == "Howdy" }
+            let reads = server.conversationQueries.count
+            refusal.send(server)
+            try await until {
+                server.conversationStreams.count == 2 && server.conversationStreams.first?.stopped == true
+                    && server.conversationQueries.count == reads + 1 && value.conversationReadsInFlight == 0
+            }
+            XCTAssertNil(live(value), "\(refusal.name): the held reply is dropped and the read replaces it")
+            // Absence check: no second reload or reconnect follows the first.
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertEqual(server.conversationQueries.count, reads + 1, "\(refusal.name): one reload")
+            XCTAssertEqual(server.conversationStreams.count, 2, "\(refusal.name): one reconnect")
+            server.sendLive("inflight", wholeReply("Howdy"))
+            server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+            try await until { live(value)?.text == "Howdy partner" }
+        }
+    }
+
+    /// Stands in for the refusal backoff's timer. It records each wait, then ends it at once, or
+    /// with `hold` waits until the stream's task is cancelled.
+    @MainActor private final class ResyncPauses {
+        var hold = false
+        private(set) var waits: [Duration] = []
+        private(set) var waiting = false
+        private(set) var cancelled = false
+        func pause(_ duration: Duration) async throws {
+            waits.append(duration)
+            guard hold else { return }
+            waiting = true
+            defer { waiting = false }
+            do {
+                // Timer: held far past any test, so only cancellation ends it, as in production.
+                try await Task.sleep(for: .seconds(3600))
+            } catch {
+                cancelled = error is CancellationError
+                throw error
+            }
+        }
+    }
+    /// Sends growth the stream cannot apply, since nothing on a fresh stream holds "Howdy", and
+    /// waits for the reconnect it causes.
+    private func refuseGrowth(_ server: NativeMockServer) async throws {
+        let streams = server.conversationStreams.count
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+        try await until { server.conversationStreams.count == streams + 1 }
+    }
+
+    func testRepeatedRefusalsWaitThreeSecondsMoreEachTimeUpToThirtyAndAnAppliedNoticeResetsThem() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let pauses = ResyncPauses()
+        value.resyncPause = { try await pauses.pause($0) }
+        try await openLiveStream(server, value)
+        try await refuseGrowth(server)
+        XCTAssertEqual(pauses.waits, [], "The first refusal reconnects at once")
+        for _ in 2...12 { try await refuseGrowth(server) }
+        XCTAssertEqual(pauses.waits, [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 30].map { Duration.seconds($0) },
+                       "Each repeat waits 3 seconds longer, and never more than 30")
+        // A notice that applies proves the stream and the app agree again.
+        server.sendLive("inflight", wholeReply("Howdy"))
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+        try await until { live(value)?.text == "Howdy partner" }
+        let waits = pauses.waits.count
+        try await refuseGrowth(server)
+        XCTAssertEqual(pauses.waits.count, waits, "The first refusal after an applied notice reconnects at once again")
+        try await refuseGrowth(server)
+        XCTAssertEqual(pauses.waits.dropFirst(waits), [.seconds(3)], "and the next starts the backoff over")
+    }
+
+    func testPollingReadsTheConversationDuringTheBackoffAndSwitchingChatsEndsItWithoutReconnecting() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let pauses = ResyncPauses()
+        pauses.hold = true
+        value.resyncPause = { try await pauses.pause($0) }
+        try await openLiveStream(server, value)
+        try await refuseGrowth(server)
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+        try await until { pauses.waiting && server.conversationStreams.last?.stopped == true && value.conversationReadsInFlight == 0 }
+        XCTAssertEqual(pauses.waits, [.seconds(3)])
+        let reads = server.conversationQueries.count
+        _ = await value.pollOnce()
+        XCTAssertEqual(server.conversationQueries.count, reads + 1, "With no stream open, each poll reads the conversation")
+        XCTAssertEqual(server.conversationStreams.count, 2, "The poll leaves the waiting stream to its backoff")
+        let loop = try XCTUnwrap(value.eventTask)
+        let ended = Flag()
+        Task { await loop.value; ended.raised = true }
+        // Another chat opens, as `followChanged` does while polling runs.
+        value.conversationShown("bot", false)
+        value.selectedBotId = "family"; value.conversationShown("family", true)
+        value.watchConversation()
+        try await until { pauses.cancelled && !pauses.waiting && ended.raised }
+        // Absence check: a reconnect would reach the server within this window.
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.conversationStreams.count, 2, "The chat that was left does not reconnect")
+        XCTAssertEqual(server.requestCount("/api/bots/family/events"), 1, "The chat now open has its own stream")
+    }
+    @MainActor private final class Flag { var raised = false }
 
     func testAGroupsNoticeRereadsTheGroupCatalogAndUnknownNoticesChangeNothing() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
