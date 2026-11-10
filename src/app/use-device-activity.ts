@@ -9,11 +9,12 @@ type Report = { state: "active" | "inactive"; idleMs?: number };
 // One report in flight at a time, and at most one waiting behind it: the latest. A waiting report is
 // worked out only as it goes, so a slow server never receives an old "active" after the window was
 // left, and the idle time it carries is the time at sending, which the server stamps.
-// A report waiting when the browser changes accounts belongs to the account that left, so it never goes.
+// A report made for an account generation that has ended, including the "inactive" its unmounting
+// sends, never goes: the next account may be signed in by the time it would.
 let sending = false;
 let next: { current: () => Report; generation: number } | undefined;
-function report(current: () => Report) {
-  next = { current, generation: accountGeneration() };
+function report(current: () => Report, generation: number) {
+  next = { current, generation };
   if (sending) return;
   sending = true;
   void (async () => {
@@ -32,11 +33,13 @@ function report(current: () => Report) {
 /**
  * Tells the server this browser is the device its person is using, on any screen, while it is
  * focused and touched in the last five minutes. Notifications then go only to the devices in use.
- * Signing out or switching accounts reports the old account's device as no longer in use.
+ * A sign-out or another account sends nothing for the account that left, whose session may be gone or
+ * replaced by then; the server stops counting the device as in use once its reports stop.
  */
 export function useDeviceActivity(userId: string | undefined) {
   useEffect(() => {
     if (!userId) return;
+    const generation = accountGeneration();
     let using = false, lastInput = Date.now(), mounted = true;
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
     const inUse = () => mounted && attended() && Date.now() - lastInput < deviceIdleMs;
@@ -44,7 +47,7 @@ export function useDeviceActivity(userId: string | undefined) {
     const current = (): Report => inUse() ? { state: "active", idleMs: Date.now() - lastInput } : { state: "inactive" };
     const update = () => {
       const now = inUse();
-      if (now || using) report(current);
+      if (now || using) report(current, generation);
       using = now;
     };
     const input = () => {
@@ -64,7 +67,7 @@ export function useDeviceActivity(userId: string | undefined) {
       window.removeEventListener("blur", update);
       document.removeEventListener("visibilitychange", update);
       mounted = false;
-      if (using) report(() => ({ state: "inactive" }));
+      if (using) report(() => ({ state: "inactive" }), generation);
     };
   }, [userId]);
 }

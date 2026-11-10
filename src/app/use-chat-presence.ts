@@ -9,11 +9,11 @@ export const IDLE_MS = 5 * 60_000;
 // lack randomUUID, and this module loads with the app shell.
 const client = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
-// One report at a time, so leaving one chat can never land after arriving in the next. A report still
-// waiting when the browser changes accounts belongs to the account that left, so it never goes.
+// One report at a time, so leaving one chat can never land after arriving in the next. A report made
+// for an account generation that has ended, including the "left" its unmounting sends, never goes:
+// the next account may be signed in by the time it would.
 let reports = Promise.resolve();
-function report(botId: string, state: "active" | "left" | "idle") {
-  const generation = accountGeneration();
+function report(botId: string, state: "active" | "left" | "idle", generation: number) {
   reports = reports.then(() => generation === accountGeneration()
     ? request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state } }) : undefined).then(() => {}, () => {});
 }
@@ -35,15 +35,16 @@ async function closeNotifications(botId: string) {
 export function useChatPresence(botId: string | undefined, userId: string | undefined) {
   useEffect(() => {
     if (!botId || !userId) return;
+    const generation = accountGeneration();
     let reading = false, lastInput = Date.now();
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
     const update = () => {
       const now = attended() && Date.now() - lastInput < IDLE_MS;
       if (now) {
         if (!reading) void closeNotifications(botId).catch(() => {});
-        report(botId, "active");
+        report(botId, "active", generation);
       // Leaving after reading marks the chat read until now. Walking away from it does not.
-      } else if (reading) report(botId, attended() ? "idle" : "left");
+      } else if (reading) report(botId, attended() ? "idle" : "left", generation);
       reading = now;
     };
     const input = () => {
@@ -62,7 +63,7 @@ export function useChatPresence(botId: string | undefined, userId: string | unde
       window.removeEventListener("focus", update);
       window.removeEventListener("blur", update);
       document.removeEventListener("visibilitychange", update);
-      if (reading) report(botId, "left");
+      if (reading) report(botId, "left", generation);
     };
   }, [botId, userId]);
 }

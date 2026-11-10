@@ -58,10 +58,20 @@ import { signOutOf } from "./app/account-change";
  */
 export function App() {
   const [changes, setChanges] = useState(0);
+  const [shown, setShown] = useState(() => ({ changes: 0, start: accountStart(), generation: accountGeneration() }));
   useEffect(() => watchAccount(() => setChanges(value => value + 1)), []);
-  // Read once per change: it also makes the stored record the one this tab acts under, and ends the
-  // generation first if the record changed unheard, as when storage was cleared.
-  const { start, generation } = useMemo(() => ({ start: accountStart(), generation: accountGeneration() }), [changes]);
+  // A change first unmounts the generation shown, in a commit of its own, so the cleanups it runs
+  // still act under the old record and every request they make is refused. Only then does this
+  // tab take the stored record as its own and draw the next generation.
+  const pending = changes !== shown.changes;
+  useEffect(() => {
+    if (!pending) return;
+    const start = accountStart();
+    // An address that named the last account's chat or panel opens nothing of it for the next.
+    if ("start" in start && start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+    setShown({ changes, start, generation: accountGeneration() });
+  }, [pending, changes]);
+  const { start, generation } = shown;
   const wait = "wait" in start ? start.wait : undefined;
   useEffect(() => {
     if (wait === undefined) return;
@@ -74,10 +84,8 @@ export function App() {
     if (until === undefined) return;
     const timer = setTimeout(checkHintExpiry, Math.max(0, until - Date.now()));
     return () => clearTimeout(timer);
-  }, [changes, generation]);
-  if ("wait" in start) return <Connecting />;
-  // An address that named the last account's chat or panel opens nothing of it for the next.
-  if (start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+  }, [generation]);
+  if (pending || "wait" in start) return <Connecting />;
   return <AccountApp key={generation} start={start.start} />;
 }
 

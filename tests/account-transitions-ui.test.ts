@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authEpochKey, draftKey, signInHintKey } from "../src/app/storage";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, waitForUi } from "./ui-harness";
+import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 // Two tabs of one browser, each the whole app with its own copy of every module, as two tabs have.
 // They share what tabs share: one localStorage, which tells the other tab about a write only through
@@ -334,6 +334,20 @@ describe("what a tab holds when the account changes", () => {
     await advance(5_000);
     expect(tab.text()).not.toContain("Words for whoever");
     showsNothingOf(tab, [...ONE, "One's home chat"]);
+    expect(tab.text()).toContain("Enter local workspace");
+  });
+
+  it("never sends a draft typed after another tab signed out, before this tab heard of it", async () => {
+    signedInAs("one");
+    const tab = await openTab("/?bot=home");
+    const box = tab.container.querySelector("textarea")!;
+    data.set(authEpochKey, JSON.stringify({ id: "elsewhere", at: NOW, signedOut: true, user: "one" }));
+    cookie = null;
+    const changeAt = calls.length;
+    await typeInto(box, "Buy salt licks for the north pasture");
+    await advance(1_000);
+    expect(usedOne(changeAt)).toEqual([]);
+    expect(calls.slice(changeAt).filter(call => call.call.startsWith("PUT"))).toEqual([]);
     expect(tab.text()).toContain("Enter local workspace");
   });
 });
