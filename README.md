@@ -207,26 +207,24 @@ unhashed files are always fetched fresh. The worker's hashed-name rule must matc
 `src/server/static-cache.ts`; a test compares them.
 
 The worker opens the app shell (`/` and `/index.html`) from its own release's cache, without
-waiting on the network. Install fills that cache all or nothing, so the shell and the code it
-loads first always come from one release. Only when the cache has no shell, as after storage
-is cleared, does the network answer. After each such open the worker fetches the server's
-shell in the background:
+waiting on the network, while it has no sign that the cached shell is out of date. Install
+fills that cache all or nothing, so the shell and the code it loads first come from one
+release. After each such open the worker fetches the server's `index.html` in the background
+and compares the text. The server sends the file as it is on disk, so the text differs only
+when a release changed it.
 
-- A different shell means a new release, so it runs the update check at once. The browser
-  also checks `sw.js` on each navigation, and the page every 30 minutes, when it is shown
-  again and when it comes back online.
-- A redirect, 401 or 403 means something in front of the app now asks for a sign-in, which a
-  cached shell would hide for good, since `sw.js` is refused too. The worker unregisters itself
-  and reloads its windows from the network.
-- A server error or no network changes nothing; the app opens from the cache and says it
-  cannot reach the server.
+- A different shell means a new release. The worker notes that in its own cache, which
+  survives the worker being stopped, and runs the update check at once. From the next load
+  on it opens the network's shell, with the cached one as the offline fallback, as it did
+  before this change. A person sees the old shell at most once after a deploy, even if the
+  new worker cannot install. The new release's worker starts with a new cache and no note.
+- A redirect, 401, 403, server error or no network changes nothing. No window reloads and
+  the worker stays, so one bad answer never costs a person their work.
+- With no cached shell, as on a first visit or after storage is cleared, the network answers.
 
-A release that finishes installing while the app is open is offered with **Refresh**. A page
-load that finds a release already waiting moves to it at once: it tells that worker to take
-over and reloads. So a person who never taps Refresh reaches the new release on their next
-load after it installed, such as a reload, a relaunch, or a notification that opens a window.
-Other open windows then show **Refresh**, as when another tab updates. The shell is not
-fetched with navigation preload, since the cached copy answers first.
+A release that finishes installing is offered with **Refresh**, as before; the worker never
+switches releases under an open page. The shell is not fetched with navigation preload,
+since the cached copy usually answers first.
 
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
@@ -468,6 +466,12 @@ your draft. A failed turn can be retried once, by anyone, from any device: a sec
 tap, tab or phone gets the first retry's result instead of starting another turn.
 
 After you send, your message moves near the top and the reply grows below it.
+While it grows, a short stretch of bold, italics, strikethrough, inline code or a link waits at
+the end and appears whole once its closing marker arrives, instead of flashing as raw Markdown.
+One longer than about a short sentence shows as typed until it closes. A table header waits
+while its line is typed, shows as typed while the delimiter row, the `| --- |` line under it,
+arrives, and becomes a table once that row is recognized. Code blocks show every character as
+it arrives, and a code block still arriving keeps your text selection.
 Scrolling up stops the view from following; it follows again once you return to
 the end. Each finished turn folds its tool calls and delegated work into one row,
 such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
@@ -584,8 +588,9 @@ first, and `npx playwright install chromium` once per Playwright version. `e2e/s
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
 with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
 network. It covers sign-in, sending a message and receiving the reply over the live event
-stream, the service worker opening the app offline and recovering, an open tab finding a
-new release and its next load moving to it, and no page errors,
+stream, the service worker opening the app offline and recovering, a deploy whose new shell
+reaches the next load and whose release is offered until taken, a deploy whose worker cannot
+install still reaching the next load, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.

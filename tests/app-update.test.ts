@@ -49,26 +49,10 @@ describe("app update notice", () => {
     expect(active.postMessage).not.toHaveBeenCalled();
   });
 
-  it("moves a load to a build that was already waiting, switching workers before it reloads", async () => {
+  it("shows a build already waiting and switches to it before reloading", async () => {
     registration.waiting = { postMessage: vi.fn() };
     await render();
-    expect(registration.waiting.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "SKIP_WAITING" });
-    expect(button()).toBeNull();
-    expect(reload).not.toHaveBeenCalled();
-    await act(async () => worker.dispatchEvent(new Event("controllerchange")));
-    expect(reload).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers a build that finishes installing during the visit, and switches to it when asked", async () => {
-    await render();
-    const installing = Object.assign(new Target(), { state: "installing" });
-    registration.installing = installing;
-    registration.dispatchEvent(new Event("updatefound"));
-    registration.waiting = { postMessage: vi.fn() };
-    installing.state = "installed";
-    await act(async () => installing.dispatchEvent(new Event("statechange")));
-    // Nothing moves until the person asks.
-    expect(registration.waiting.postMessage).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Update available");
     await act(async () => button()!.click());
     expect(registration.waiting.postMessage).toHaveBeenCalledWith({ type: "SKIP_WAITING" });
     expect(button()!.disabled).toBe(true);

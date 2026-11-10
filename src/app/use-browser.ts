@@ -55,14 +55,13 @@ export function useAppInstall() {
       if (cancelled) return;
       setUpdate({ applying: false, apply: () => { setUpdate(current => current && { ...current, applying: true }); apply(); } });
     };
-    const apply = () => {
+    const waiting = () => ready(() => {
       const worker = registration?.waiting;
       // Nothing left waiting means another tab already switched; this page only needs the new files.
       if (!worker) return reload();
       navigator.serviceWorker.addEventListener("controllerchange", reload, { once: true });
       worker.postMessage({ type: "SKIP_WAITING" });
-    };
-    const waiting = () => ready(apply);
+    });
     // Another tab applied the update, so this page still runs the previous build.
     const switched = () => {
       if (controlled) ready(reload);
@@ -84,10 +83,7 @@ export function useAppInstall() {
         if (cancelled) return;
         registration = value;
         cancelWarm = warmOfflineWhenIdle(navigator.serviceWorker);
-        // The worker opens the app from its own cache, so a release that finished installing before
-        // this load would otherwise wait for every window to close. This load has only just started,
-        // and drafts are saved on every edit, so it moves to that release now instead of offering it.
-        if (value.waiting) apply();
+        if (value.waiting) waiting();
         value.addEventListener("updatefound", () => {
           const worker = value.installing;
           worker?.addEventListener("statechange", () => {
