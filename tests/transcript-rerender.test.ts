@@ -13,7 +13,7 @@ const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(ke
 vi.mock("../src/components/MessageMarkdown", async () => {
   const { createElement } = await import("react");
   const part = (props: { text: string; messageId: string }) => { bump(renders.markdown, props.messageId); return createElement("p", null, props.text); };
-  return { MessageMarkdown: part, StreamingMarkdown: part };
+  return { MessageMarkdown: part, ReplyMarkdown: part };
 });
 // The animated avatar needs SVG geometry jsdom lacks, and has nothing to do with the transcript rows.
 vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));

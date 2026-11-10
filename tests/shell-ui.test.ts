@@ -24,7 +24,7 @@ vi.mock("../src/components/Avatar", async (original) => ({
 }));
 vi.mock("../src/components/MessageMarkdown", () => {
   const markdown = (props: { text: string }) => createElement("div", { className: "message-markdown" }, props.text);
-  return { MessageMarkdown: markdown, StreamingMarkdown: markdown };
+  return { MessageMarkdown: markdown, ReplyMarkdown: markdown };
 });
 
 const capabilities = Object.fromEntries([
