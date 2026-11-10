@@ -215,7 +215,8 @@ export type StreamOptions = {
  * (which EventSource would retry itself every 3 seconds) and a stream silent past `streamSilence` all
  * close the stream and wait `retryDelay` before the next attempt, and `open` never starts one sooner,
  * however often its owner calls it. The count of failures resets only once a connection has stayed
- * healthy for longer than its greeting: data a whole ping interval after it opened. A server that
+ * healthy for longer than its greeting: data at least half a ping interval after it opened, which only a
+ * ping after the greeting can be, allowing for delivery jitter. A server that
  * greets and then stalls keeps backing off. `close` ends the episode, so a page shown again connects at
  * once, and `reconnect` drops the backoff for a sign the failures are stale, such as the network
  * returning or a manual retry that reached the server.
@@ -228,7 +229,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
   const random = options.random ?? Math.random;
   let source: EventSource | undefined;
-  // When this connection opened, the moment its silence counts from, and the interval its pings name.
+  // When this connection opened (was created, until its headers arrive), the moment its silence counts
+  // from, and the interval its pings name.
   let openedAt = 0, since = 0, pingMs = DEFAULT_PING_MS;
   // Whether this connection has proved itself, and whether its watchdog already forgave one late timer.
   let recovered = false, graced = false;
@@ -248,7 +250,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   const alive = () => {
     since = Date.now();
     graced = false;
-    if (!recovered && since - openedAt >= pingMs) {
+    if (!recovered && since - openedAt >= pingMs / 2) {
       recovered = true;
       failures = 0;
     }
@@ -321,7 +323,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       current.addEventListener(name, event => { if (current === source) handle((event as MessageEvent).data); });
     current.onopen = () => {
       if (current !== source) return;
-      since = Date.now();
+      // A connection that took long to open has not proved itself by the time its greeting arrives.
+      openedAt = since = Date.now();
       onChange();
     };
     // A refusal, which EventSource never retries, or a drop, which it would retry on the server's 3 seconds.

@@ -202,7 +202,44 @@ describe("the stream watchdog", () => {
       .toEqual([26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5]);
   });
 
-  it("counts a connection as recovered only once it is heard a whole ping interval after it opened", () => {
+  it("does not count the greeting of a connection that took long to open as recovery", () => {
+    start();
+    live().fail();
+    vi.advanceTimersByTime(1_500);
+    // The headers arrive 20 seconds after the request, then the greeting, then nothing.
+    vi.advanceTimersByTime(20_000);
+    live().connect();
+    live().emit("ping", "10");
+    live().fail();
+    // The second failure in a row: 3 seconds, not a first failure's 1.5.
+    vi.advanceTimersByTime(2_999);
+    expect(opened()).toBe(2);
+    vi.advanceTimersByTime(1);
+    expect(opened()).toBe(3);
+  });
+
+  it("counts a ping half an interval after opening as recovery, allowing for delivery jitter, and not one sooner", () => {
+    start();
+    live().fail();
+    vi.advanceTimersByTime(1_500);
+    live().connect();
+    live().emit("ping", "10");
+    vi.advanceTimersByTime(4_999);
+    live().emit("ping", "10");
+    live().fail();
+    vi.advanceTimersByTime(2_999);
+    expect(opened(), "4.999 seconds is not recovery").toBe(2);
+    vi.advanceTimersByTime(1);
+    live().connect();
+    live().emit("ping", "10");
+    vi.advanceTimersByTime(5_000);
+    live().emit("ping", "10");
+    live().fail();
+    vi.advanceTimersByTime(1_500);
+    expect(opened(), "5 seconds is").toBe(4);
+  });
+
+  it("counts a connection as recovered only once it is heard a ping interval after it opened", () => {
     start();
     live().fail();
     vi.advanceTimersByTime(1_500);

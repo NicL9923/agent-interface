@@ -37,9 +37,12 @@ EventSource's own `retry: 3000`. Now every new connection after a failure waits 
   ceiling of 2 seconds doubling to 5 minutes, of which a random half or more is waited ("equal jitter",
   AWS Architecture Blog, "Exponential Backoff And Jitter"). The first retry waits 1 to 2 seconds.
 - `open` never starts an attempt before that deadline, so the owners' timers add none.
-- The count resets only when a connection is heard a whole ping interval after it opened. A greeting
+- The count resets only when a connection is heard at least half a ping interval after its headers
+  arrived, which only a ping after the greeting can be; the half allows for delivery jitter. A greeting
   and the household `groups` notice arrive at open and prove nothing, so a server that greets and then
-  stalls keeps backing off instead of retrying every 25 seconds.
+  stalls keeps backing off instead of retrying every 25 seconds. The clock starts at the headers, not
+  the request: found while fixing the idle polling branch, a replacement whose headers took 28 seconds
+  counted its greeting as recovery.
 - Decision: the browser's own reconnects come under the policy. A drop closes the stream and retries in
   1 to 2 seconds, faster than the 3 seconds before, so a brief blip costs nothing. A server that stays
   down sees the same backoff as one that refuses.
@@ -116,7 +119,7 @@ passed.
 After the review fixes, on the commit that adds this section:
 
 - `npm run typecheck`, `npm run lint`: passed.
-- Touched test files: `stream-watchdog` (30), `event-stream-ping` (new, 13, real Fastify app over a
+- Touched test files: `stream-watchdog` (32 after the recovery fix), `event-stream-ping` (new, 13, real Fastify app over a
   socket), `group-watch` (13), `connection-ui` (34), `session-preferences-ui`, `app-ui`,
   `collaboration-ui`, `home-groups-ui` and `draft-sync-ui` passed.
 - `npm test`: 184 files, 3,077 tests passed. The known flaky transcript test did not fail.
@@ -144,6 +147,10 @@ leftover timer had fired harmlessly. The test now checks right after closing.
   an event never bringing the timer closer; replacing while hidden; a replaced stream's events
   counting; any number taken as an interval; the interval kept across connections; `open` replacing a
   fresh stream; a refused stream never retried; `close` leaving the timer; no `ping=10` in the URL.
+
+A later commit measured recovery from the headers with half an interval of slack and ran 4 more:
+recovery measured from the request (1 red), a whole interval required (1), exactly half refused (1),
+the greeting counted (5). All went red.
 
 After the review fixes, the same script ran 23 mutations against `stream-watchdog` and
 `event-stream-ping`. All 23 went red. One stayed green on the first run: `close` keeping the retry
