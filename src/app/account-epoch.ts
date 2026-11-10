@@ -25,6 +25,8 @@ export type AuthEpoch = {
   at: number;
   /** A sign-in or sign-out request is on its way in the tab that wrote this. */
   changing?: true;
+  /** On a changing mark: no account was signed in when it began, as the record said signed out or there was none. */
+  fromSignedOut?: true;
   /** Settled with no session. */
   signedOut?: true;
   /** The account the last answer named, kept through a sign-out so the next sign-in can tell another account from the same one. */
@@ -93,8 +95,13 @@ let guarding = false;
  * undefined before this tab's first start, when the address is the one the page opened with.
  */
 let addressFor: { user?: string } | null | undefined;
-/** The account a settled record says this browser has, `{}` when it does not name it, or null signed out. */
-const accountOf = (record: AuthEpoch | null) => !record || record.signedOut ? null : { ...record.user ? { user: record.user } : {} };
+/**
+ * The account a record says this browser has, as `addressFor` names it. A changing mark names the one
+ * signed in when it began: none if it began signed out, though it keeps the last account's name for
+ * the next sign-in to compare, and otherwise the account the record named, `{}` when it named none.
+ */
+const accountOf = (record: AuthEpoch | null) =>
+  !record || record.signedOut || record.changing && record.fromSignedOut ? null : { ...record.user ? { user: record.user } : {} };
 const listeners = new Set<() => void>();
 const endHooks = new Set<() => void>();
 
@@ -306,7 +313,11 @@ export const beginAccountChange = ({ ownTree = false } = {}) => exclusive(() => 
     if (stored() !== held) throw new AccountChanged();
   }
   const before = stored(), previous = parseEpoch(before);
-  const mark = store(JSON.stringify({ id: newId(), at: Date.now(), changing: true, ...previous?.user ? { user: previous.user } : {} } satisfies AuthEpoch));
+  // A record this code cannot read says nothing of who is signed in, so it does not count as signed out.
+  const fromSignedOut = !before || !!previous?.signedOut;
+  const mark = store(JSON.stringify({
+    id: newId(), at: Date.now(), changing: true, ...fromSignedOut ? { fromSignedOut: true } : {}, ...previous?.user ? { user: previous.user } : {},
+  } satisfies AuthEpoch));
   owned = held = seen = mark;
   era++;
   // Until it settles, the cookie may belong to either account, so no push is shown for either.
