@@ -36,11 +36,14 @@ export type SavedRoster = {
 /** What home draws, from bootstrap or from the saved copy. */
 export type HomeSource = Pick<Bootstrap, "user" | "bots" | "preferences">;
 
-// Every bound is the server's own for the same field (src/server/schemas.ts), or above it, so a copy
-// that bootstrap could have produced always passes and anything else is not this release's.
+// Every bound is the server's own for the same field where it has one, so a copy bootstrap could have
+// produced passes and anything else is not this release's: an assistant's name as botInput takes it, a
+// section's as preferences do (src/server/schemas.ts), and a group's as the group route does
+// (src/server/collaboration.ts). The server sets none for the account's name, from the sign-in
+// provider, nor for a group member's, from Hermes, so those keep a generous one.
 /** The stored text, at most; a larger value is not read at all. */
 export const MAX_SAVED_CHARS = 200_000;
-export const LIMITS = { id: 200, name: 255, url: 2048, bots: 300, rooms: 100, members: 50, sections: 30, sectionBots: 100, favorites: 100 } as const;
+export const LIMITS = { id: 200, botName: 100, sectionName: 100, roomName: 100, name: 255, url: 2048, bots: 300, rooms: 100, members: 50, sections: 30, sectionBots: 100, favorites: 100 } as const;
 const text = (value: unknown, max: number): value is string => typeof value === "string" && value.length <= max;
 const id = (value: unknown): value is string => text(value, LIMITS.id) && value.length > 0;
 const ids = (value: unknown, max: number): value is string[] => Array.isArray(value) && value.length <= max && value.every(id);
@@ -58,12 +61,12 @@ const savedAvatar = (value: unknown) => value === undefined || record(value) && 
   : value.mode === "mascot" ? oneOf(mascotFamilies)(value.family) && face(value)
   : value.mode === "portrait" && text(value.src, LIMITS.url) && value.src.startsWith("/api/files/") && oneOf(["uploaded", "generated"])(value.origin));
 const savedBot = (value: unknown): value is SavedBot =>
-  record(value) && id(value.id) && text(value.name, LIMITS.name) && typeof value.shared === "boolean" && savedAvatar(value.avatar);
+  record(value) && id(value.id) && text(value.name, LIMITS.botName) && value.name.length > 0 && typeof value.shared === "boolean" && savedAvatar(value.avatar);
 const savedMember = (value: unknown): value is SavedMember => record(value) && id(value.member_id) && id(value.profile) && id(value.handle)
   && (value.display_name === undefined || text(value.display_name, LIMITS.name));
 const savedRoom = (value: unknown): value is SavedRoom =>
-  record(value) && id(value.room_id) && text(value.name, LIMITS.name) && list(value.members, LIMITS.members, savedMember);
-const savedSection = (value: unknown) => record(value) && id(value.id) && text(value.name, LIMITS.name) && ids(value.botIds, LIMITS.sectionBots);
+  record(value) && id(value.room_id) && text(value.name, LIMITS.roomName) && value.name.trim().length > 0 && list(value.members, LIMITS.members, savedMember);
+const savedSection = (value: unknown) => record(value) && id(value.id) && text(value.name, LIMITS.sectionName) && ids(value.botIds, LIMITS.sectionBots);
 const savedOrder = (value: unknown): value is Order => record(value) && ids(value.favorites, LIMITS.favorites)
   && list(value.sections, LIMITS.sections, savedSection)
   && (value.mainBotId === undefined || id(value.mainBotId))

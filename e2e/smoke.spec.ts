@@ -39,7 +39,7 @@ test("the app opens offline from the service worker, then recovers when the netw
   // browser's error page.
   await page.reload();
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
-  await expect(page.locator(".bot-rail .home-sync")).toHaveText("Offline");
+  await expect(railStatus(page)).toHaveText("Offline");
   await expect(page.getByText("Fence check is done.")).toHaveCount(0);
   await expect(page.getByText("Can't reach the app right now")).toBeVisible();
   // The app's one connection live region says it too, once.
@@ -86,6 +86,10 @@ test("a link to a chat shows sign-in when signed out, then reads the chat beside
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   expect(heldUntil[0]).toBe(true);
 });
+
+/** What home's rail says of its connection, read as a person reads it beside the account button. */
+const railStatus = (page: Page) => page.getByRole("complementary", { name: "Assistants" })
+  .getByText(/^(Connecting|Reconnecting|Can't connect|Offline)$/);
 
 test.describe("a returning member's load", () => {
   // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
@@ -187,7 +191,7 @@ test.describe("a returning member's home", () => {
         await page.route("**/api/bootstrap?*", async route => { await answered; await route.continue(); });
         // Home itself, so a phone shows the list rather than the Today the last address named.
         await page.goto("/");
-        await expect(page.locator(".bot-rail .home-sync")).toHaveText("Connecting");
+        await expect(railStatus(page)).toHaveText("Connecting");
         await expect(assistants(page)).toBeVisible();
         await page.evaluate(() => {
           const shifts: number[] = [];
@@ -196,7 +200,7 @@ test.describe("a returning member's home", () => {
             .observe({ type: "layout-shift" });
         });
         release();
-        await expect(page.locator(".bot-rail .home-sync")).toHaveCount(0);
+        await expect(railStatus(page)).toHaveCount(0);
         await expect(assistants(page).getByRole("button", { name: /Trail Cook/ })).toBeVisible();
         await page.waitForTimeout(500);
         const shifts = await page.evaluate(() => (window as unknown as { shifts: number[] }).shifts);
@@ -217,7 +221,7 @@ test.describe("a returning member's home", () => {
     await page.reload();
     const ranch = assistants(page).getByRole("button", { name: /Ranch Hand/ });
     await expect(ranch).toBeVisible();
-    await expect(page.locator(".bot-rail .home-sync")).toHaveText("Connecting");
+    await expect(railStatus(page)).toHaveText("Connecting");
     await expect(page.getByText("Fence check is done.")).toHaveCount(0);
     await ranch.focus();
     // The page's own layout-shift entries, from the swap that follows.
@@ -228,7 +232,7 @@ test.describe("a returning member's home", () => {
     });
     release();
     await expect(ranch.getByText("Fence check is done.")).toBeVisible();
-    await expect(page.locator(".bot-rail .home-sync")).toHaveCount(0);
+    await expect(railStatus(page)).toHaveCount(0);
     await expect(ranch).toBeFocused();
     expect(await page.evaluate(() => (window as unknown as { shifted: number }).shifted)).toBeLessThan(0.01);
   });

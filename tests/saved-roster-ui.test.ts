@@ -93,6 +93,7 @@ beforeEach(() => {
       "GET /auth/config": { localDevAuth: true },
       "GET /usage/accounts": { accounts: [], unavailableBots: [] },
       "GET /mac/devices": { available: false, reason: "Not in this test.", devices: [] },
+      "GET /today": { generatedAt: "2026-11-10T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-10T00:00:00Z", items: [], events: [], unavailableBots: [] },
     };
     if (call in empty) return respond(200, empty[call]);
     if (/^GET \/bots\/[^/]+\/(draft|routine-runs)$/.test(call)) return respond(200, call.endsWith("draft") ? null : { runs: [], unavailable: [] });
@@ -117,6 +118,8 @@ const rail = () => container.querySelector<HTMLElement>(".bot-rail");
 const railText = () => rail()?.textContent ?? "";
 const row = (name: string) => [...rail()!.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
 const welcome = () => container.querySelector(".welcome");
+/** The main landmark, the pane beside home, where the saved home says what it waits for. */
+const mainLandmark = () => container.querySelector('main, [role="main"]');
 /**
  * What the rows say that only the server can know, as a person sees it or a screen reader reads it:
  * an unread mark, an activity, a date.
@@ -324,12 +327,27 @@ describe("using the saved home before bootstrap answers", () => {
     await open();
     await act(async () => row("Ranch Hand").click());
     expect(reads("GET /bots/")).toEqual(["GET /bots/ranch/conversation?turns=20"]);
-    expect(container.querySelector(".saved-home-wait")?.textContent).toContain("Connecting to your household");
+    expect(mainLandmark()?.textContent).toContain("Connecting to your household");
     // The person's start page is Today; the chat they chose wins.
     await answer("GET /bootstrap?roster=lean", 200, { ...one, preferences: { ...one.preferences, startPage: "today" } });
     expect(container.querySelector(".transcript")?.textContent).toContain("ranch says morning.");
     expect(reads("GET /bots/ranch/conversation")).toHaveLength(1);
     expect(new URLSearchParams(location.search).get("bot")).toBe("ranch");
+  });
+
+  // Today needs the server, but asks it nothing until bootstrap has said whose session this is, so it
+  // stays offered, as a chat does.
+  it("opens Today chosen there once bootstrap answers, and reads nothing for it before", async () => {
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open();
+    await act(async () => button("Today", rail()!).click());
+    expect(calls).toEqual(["GET /bootstrap?roster=lean"]);
+    expect(mainLandmark()?.textContent).toContain("Connecting to your household");
+    // The person opens on their default assistant; Today, chosen there, wins.
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    expect(calls.indexOf("GET /today")).toBeGreaterThan(calls.indexOf("GET /bootstrap?roster=lean"));
+    expect(new URLSearchParams(location.search).get("view")).toBe("today");
   });
 
   it("says plainly that it cannot connect when bootstrap fails, and keeps trying", async () => {
@@ -339,7 +357,7 @@ describe("using the saved home before bootstrap answers", () => {
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
     expect(railText()).toContain("Can't connect");
     expect(announced()).toContain("Reconnecting to the app");
-    expect(container.querySelector(".saved-home-wait")?.textContent).toContain("Can't reach the app right now");
+    expect(mainLandmark()?.textContent).toContain("Can't reach the app right now");
     await act(async () => button("Try again").click());
     await answer("GET /bootstrap?roster=lean", 200, one);
     expect(row("Ranch Hand").textContent).toContain("Fence check is done.");
@@ -512,7 +530,8 @@ describe("what a saved copy may hold", () => {
     ["a mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
     ["a portrait's unknown origin", bot({ ...portrait, origin: "found" })],
     ["a portrait's address past its bound", bot({ ...portrait, src: `/api/files/${long(LIMITS.url)}` })],
-    ["an assistant's name past its bound", { ...savedOne, bots: [{ id: "home", name: long(LIMITS.name + 1), shared: true }] }],
+    ["an assistant's name past the server's bound", { ...savedOne, bots: [{ id: "home", name: long(LIMITS.botName + 1), shared: true }] }],
+    ["an assistant's empty name, which the server refuses", { ...savedOne, bots: [{ id: "home", name: "", shared: true }] }],
     ["an assistant's empty ID", { ...savedOne, bots: [{ id: "", name: "Home", shared: true }] }],
     ["an assistant's ID past its bound", { ...savedOne, bots: [{ id: long(LIMITS.id + 1), name: "Home", shared: true }] }],
     ["more assistants than its bound", { ...savedOne, bots: many(LIMITS.bots + 1, index => ({ id: `b${index}`, name: "B", shared: true })) }],
@@ -520,9 +539,11 @@ describe("what a saved copy may hold", () => {
     ["the account's picture from a plain address", { ...savedOne, me: { name: "Sam", picture: "http://lh3.googleusercontent.com/sam" } }],
     ["the account's picture past its bound", { ...savedOne, me: { name: "Sam", picture: `https://${long(LIMITS.url)}` } }],
     ["more rooms than their bound", { ...savedOne, rooms: many(LIMITS.rooms + 1, index => ({ room_id: `r${index}`, name: "R", members: [] })) }],
-    ["a room's name past its bound", { ...savedOne, rooms: [{ room_id: "supper", name: long(LIMITS.name + 1), members: [] }] }],
+    ["a room's name past the server's bound", { ...savedOne, rooms: [{ room_id: "supper", name: long(LIMITS.roomName + 1), members: [] }] }],
+    ["a room's blank name, which the server refuses", { ...savedOne, rooms: [{ room_id: "supper", name: "  ", members: [] }] }],
     ["more room members than their bound", room(many(LIMITS.members + 1, () => member))],
     ["a room member's name past its bound", room([{ ...member, display_name: long(LIMITS.name + 1) }])],
+    ["a section's name past the server's bound", { ...savedOne, order: { ...savedOne.order, sections: [{ id: "s", name: long(LIMITS.sectionName + 1), botIds: [] }] } }],
     ["more sections than their bound", { ...savedOne, order: { ...savedOne.order, sections: many(LIMITS.sections + 1, index => ({ id: `s${index}`, name: "S", botIds: [] })) } }],
     ["a section with more assistants than its bound", { ...savedOne, order: { ...savedOne.order, sections: [{ id: "s", name: "S", botIds: many(LIMITS.sectionBots + 1, index => `b${index}`) }] } }],
     ["more pinned assistants than their bound", { ...savedOne, order: { ...savedOne.order, favorites: many(LIMITS.favorites + 1, index => `b${index}`) } }],
@@ -538,11 +559,12 @@ describe("what a saved copy may hold", () => {
   it("is drawn at every bound's limit, so a copy bootstrap could produce always shows", async () => {
     signedInAsOne();
     store(savedRosterKey, { ...savedOne, me: { name: long(LIMITS.name), picture: `https://${long(LIMITS.url - 8)}` },
-      bots: [{ id: long(LIMITS.id), name: long(LIMITS.name), shared: true, avatar: { ...geometric, eyeWidth: 1.5, eyeHeight: 0.6 } },
-        ...savedOne.bots, { id: "fox", name: "Fox", shared: false, avatar: mascot }, { id: "pic", name: "Pic", shared: false, avatar: portrait }] });
+      bots: [{ id: long(LIMITS.id), name: "b".repeat(LIMITS.botName), shared: true, avatar: { ...geometric, eyeWidth: 1.5, eyeHeight: 0.6 } },
+        ...savedOne.bots, { id: "fox", name: "Fox", shared: false, avatar: mascot }, { id: "pic", name: "Pic", shared: false, avatar: portrait }],
+      order: { ...savedOne.order, sections: [{ id: "work", name: "s".repeat(LIMITS.sectionName), botIds: ["ranch"] }] },
+      rooms: [{ ...savedOne.rooms[0], name: "r".repeat(LIMITS.roomName) }] });
     await open();
-    expect(railText()).toContain(long(LIMITS.name));
-    expect(railText()).toContain("Fox");
+    for (const name of ["b".repeat(LIMITS.botName), "s".repeat(LIMITS.sectionName), "r".repeat(LIMITS.roomName), "Fox"]) expect(railText()).toContain(name);
   });
 });
 
