@@ -398,7 +398,19 @@ link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
 
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Manual reconnect checks immediately. One failed conversation read
+online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
+and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
+cut it without closing it. A refused, dropped or silent stream waits before its next attempt: 1 to 2
+seconds after the first failure, doubling to at most 5 minutes, each wait a random half or more of its
+ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
+The count starts over once a stream stays healthy past its opening ping, so a server that greets and
+then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
+one more deadline instead of replacing it. A hidden tab holds no stream but keeps its place in the
+backoff: showing it connects at once if the stream never failed or its next attempt fell due while
+hidden, and otherwise when that attempt falls due. The network returning or a manual reconnect connects
+at once the first time in an outage, or when the tab is shown if it arrived while hidden; repeats start
+the next attempt 2 to 4 seconds after the last one they forced, or sooner if the ordinary retry is due
+first, until a stream proves itself. One failed conversation read
 is not an outage: a chat shows it is disconnected after a second failure in a row, or
 3 seconds without a successful read, and at once when the browser is offline or the
 server answers that Hermes is unavailable. The next successful read clears it. From the

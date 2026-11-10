@@ -338,7 +338,7 @@ describe('setup and recovery interface',()=>{
 
     it('still reads for a roster change the server announces, however recent the last read',async()=>{
       await renderApp();await advance(0);const initial=reads();
-      await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==='/api/events')stream.emit('roster','roster');});
+      await act(async()=>{for(const stream of FakeEventSource.streams)if(stream.url==='/api/events?ping=10')stream.emit('roster','roster');});
       expect(reads()).toBe(initial+1);
     });
   });
@@ -520,7 +520,7 @@ describe('pushed conversation updates',()=>{
   const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
   const opened=async()=>{
     await renderApp();await advance(20);
-    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=3&drafts=1']);
+    expect(FakeEventSource.created).toEqual(['/api/events?ping=10','/api/bots/shared/events?inflight=3&drafts=1&ping=10']);
     const stream=[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.
     const before=reads();
@@ -543,22 +543,27 @@ describe('pushed conversation updates',()=>{
     await advance(1_000);
     expect(reads()).toBe(first+2);
   });
-  it('reloads after a dropped stream reconnects and replaces a refused or silent one at the next poll',async()=>{
+  it('reloads after each reconnect, retries a refused stream within 2 seconds, and replaces a silent one within 25 seconds and its retry',async()=>{
     const stream=await opened();
     const first=reads();
-    // EventSource reconnects a drop by itself. Notices sent meanwhile are lost, so it reloads.
+    // A reconnect means notices sent meanwhile were lost, so it reloads.
     await act(async()=>stream.connect());await advance(20);
     expect(reads()).toBe(first+1);
-    // A refusal is never retried by EventSource itself.
+    // A refusal is never retried by EventSource itself. The stream's retry is 1 to 2 seconds, not the next poll.
     await act(async()=>stream.fail());
-    await advance(30_000);
+    await advance(2_000);
     expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
     const replacement=[...FakeEventSource.streams].find(stream=>stream.url.includes("/bots/"))!;
     const replaced=reads();
     await act(async()=>replacement.connect());await advance(0);
     expect(reads()).toBe(replaced+1);
-    // A minute without a ping looks like a dead connection; the next poll after that replaces it.
-    await advance(59_000);expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);await advance(31_000);
+    // A `?ping=10` server pings at once and every 10 seconds. 25 seconds without an event is a dead
+    // connection, which the stream's own watchdog replaces without waiting for a poll.
+    await act(async()=>replacement.emit('ping','10'));
+    await advance(24_999);expect(replacement.readyState).toBe(FakeEventSource.OPEN);await advance(2);
+    expect(replacement.readyState).toBe(FakeEventSource.CLOSED);
+    // The replacement greeted but never proved itself, so this is the second failure in a row: 2 to 4 seconds.
+    await advance(4_000);
     expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(3);
     expect(FakeEventSource.streams.size).toBe(2);
   });

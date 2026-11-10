@@ -1,5 +1,20 @@
 import type { FastifyReply } from "fastify";
 
+/** How often a stream pings: the iOS app and older web bundles expect `data: ping` this often. */
+export const PING_MS = 25_000;
+/**
+ * How often a stream opened with `?ping=10` pings, from the moment it opens, with `data: 10` naming the
+ * interval. The web client opts in so it can tell a silently dead stream within 25 seconds, and reads
+ * the interval from each ping, so a server that ignores the parameter is never taken for a dead one.
+ */
+export const FAST_PING_MS = 10_000;
+/** The ping a stream sends, and how often: fast only for exactly `?ping=10`. */
+export function pingFor(query: unknown): { every: number; text: string; atOpen: boolean } {
+  return (query as Record<string, unknown> | undefined)?.ping === "10"
+    ? { every: FAST_PING_MS, text: "event: ping\ndata: 10\n\n", atOpen: true }
+    : { every: PING_MS, text: "event: ping\ndata: ping\n\n", atOpen: false };
+}
+
 /** An open server-sent event stream. */
 /** send reports whether the text was written: false once the stream ended or the viewer lost access. */
 export type EventStream = { send: (text: string) => boolean; end: () => void };
@@ -37,7 +52,7 @@ export function eventStreamConnection(reply: FastifyReply) {
       };
       try {
         options.reserve?.();
-        return openEventStream(reply, streams, { allowed: options.allowed, teardown }, closed);
+        return openEventStream(reply, streams, { allowed: options.allowed, teardown, ping: pingFor(reply.request.query) }, closed);
       } catch (error) {
         teardown();
         throw error;
@@ -52,7 +67,7 @@ export function eventStreamConnection(reply: FastifyReply) {
  * holds each open stream's end so shutdown can close them.
  */
 function openEventStream(reply: FastifyReply, streams: Set<() => void>,
-  options: { allowed: () => boolean; teardown: () => void }, closed: boolean): EventStream {
+  options: { allowed: () => boolean; teardown: () => void; ping: ReturnType<typeof pingFor> }, closed: boolean): EventStream {
   reply.hijack();
   const response = reply.raw;
   let ended = false;
@@ -86,10 +101,11 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
     "Connection": "close",
   });
   // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
-  heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
+  heartbeat = setInterval(() => send(options.ping.text), options.ping.every);
   streams.add(end);
   response.on("close", end);
-  // Clients refetch on open; an initial notice would duplicate that read.
-  response.write("retry: 3000\n\n");
+  // Clients refetch on open; an initial notice would duplicate that read. A fast-ping stream pings at
+  // once, so its client learns the interval before it could mistake silence for a dead stream.
+  response.write(`retry: 3000\n\n${options.ping.atOpen ? options.ping.text : ""}`);
   return { send, end };
 }

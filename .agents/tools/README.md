@@ -87,6 +87,8 @@ The `capture-settings-ios.sh` TriggerSecret mode creates a synthetic event throu
 
 The `capture-settings-ios.sh` Updates and Connection modes capture synthetic update recovery and the native sign-in view without invoking provider sign-in or a real update.
 
+- `node .agents/tools/count-stream-requests.mjs [--idle-ms 600000] [--only cold,wake,idle]` counts the web app's `/api` requests in real Chromium against `e2e/server.ts`, by path: a cold load of a chat, a tab shown after 70 seconds hidden, and an idle stretch on a chat and on home. Service workers are blocked so each request counts once. Run `npm run build` first.
+- `node .agents/tools/measure-dead-stream.mjs` times how long the web app takes to replace event streams a network cut silently: a TCP proxy on port 4180 stops forwarding every open connection without closing it, and the tool reports seconds until each stream reopens. Run `npm run build` first.
 - `capture-connection.js`: Capture fixture sign-in, setup, lost connection and update-recovery flows at desktop and phone widths without contacting providers.
 
 - `capture-notifications.js` captures fixture notification onboarding, device settings, quiet hours and the Apple handoff card at desktop and phone widths. It uses a fake browser push system, never a real permission prompt or delivery.
