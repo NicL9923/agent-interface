@@ -280,6 +280,7 @@ describe("streaming Markdown", () => {
     ["an HTML block holds a fence-shaped line", "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test"],
     ["a definition label spans two lines", "See [docs][a b].\n\n[a\nb]: https://example.test"],
     ["a definition label holds an escaped bracket", "See [docs][a\\]b].\n\n[a\\]b]: https://example.test"],
+    ["a list item's fence sits four spaces in and the item ends at a quote", "- Code:\n\n    ```\n    x\n\n> Next"],
   ])("renders the same as the saved reply when %s", async (_case, text) => {
     expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
     expect(streamingBlocks(text)).toBeNull();
@@ -289,7 +290,7 @@ describe("streaming Markdown", () => {
   // definitions, multi-line labels, HTML blocks and tables. Live and saved must render alike.
   it("renders seeded random replies the same live and saved", async () => {
     const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "[a", "b]: https://example.test/b",
-      "- ```", "  ```", "```", "~~~", "   ```", "\t```", "> ```", "  code", "code", "    indented", "> text", ">", "- item", "1. item",
+      "- ```", "  ```", "```", "~~~", "   ```", "    ```", "\t```", "> ```", "  code", "code", "    indented", "> text", ">", "- item", "1. item",
       "  - nested", "- [ ] task", "<div>", "</div>", "<!--", "-->", "| a | b |", "| - | - |", "Text **bold**", "Title", "===", "* * *", "", ""];
     let seed = 7;
     const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
@@ -302,8 +303,41 @@ describe("streaming Markdown", () => {
     expect(diverged).toEqual([]);
   }, 60_000);
 
+  // Three code-heavy replies of the kind assistants write. No prefix ending at a line break may fall
+  // back to a whole parse; a later broadening of the fallbacks that costs ordinary replies their
+  // blocks fails here.
+  it.each([
+    ["a tutorial with fenced code between paragraphs", [
+      "## Set up the worker", "", "Install the queue client first:", "", "```bash", "npm install bullmq ioredis", "```", "",
+      "Then create `worker.ts`:", "", "```ts", "import { Worker } from \"bullmq\";", "", "// One connection per process.",
+      "const connection = { host: \"localhost\", port: 6379 };", "", "export const worker = new Worker(\"email\", async job => {",
+      "  const { to, subject } = job.data;", "", "  await send(to, subject);", "}, { connection });", "```", "",
+      "A few notes:", "", "- `concurrency` defaults to **1**.", "- Failed jobs retry with `attempts` and `backoff`.", "",
+      "| Option | Default |", "| --- | --- |", "| `attempts` | 1 |", "| `backoff` | none |", "", "That is the whole worker.",
+    ]],
+    ["numbered steps with code in each item", [
+      "Here is how to rotate the key:", "", "1. Create the new key:", "", "   ```sh", "   az keyvault key create --name app-key", "",
+      "   az keyvault key show --name app-key", "   ```", "", "2. Update the app setting:", "", "   ```json", "   {", "     \"KeyName\": \"app-key\"",
+      "   }", "   ```", "", "   - Restart the app after saving.", "   - Watch the logs for `KeyNotFound`.", "",
+      "3. Delete the old key once traffic is clean.", "", "> **Note:** keep the old key for 24 hours in case you roll back.", "", "Done.",
+    ]],
+    ["a fix with a diff, Python and a Markdown sample", [
+      "The error comes from the decorator:", "", "> TypeError: wrapper() got an unexpected keyword argument 'retry'", "",
+      "Pass the keyword arguments through:", "", "```diff", "-def wrapper(*args):", "-    return fn(*args)", "+def wrapper(*args, **kwargs):",
+      "+    return fn(*args, **kwargs)", "```", "", "The full decorator:", "", "```python", "def logged(fn):", "    @wraps(fn)",
+      "    def wrapper(*args, **kwargs):", "        log.info(\"calling %s\", fn.__name__)", "", "        return fn(*args, **kwargs)", "",
+      "    return wrapper", "```", "", "If the docs use reference links, keep the definitions at the bottom:", "", "```md",
+      "See [the guide][g].", "", "[g]: https://example.test/guide", "<!-- end -->", "```", "", "That should clear it.",
+    ]],
+  ])("keeps blocks at every line of %s", (_reply, lines) => {
+    const prefixes = lines.map((_line, index) => lines.slice(0, index + 1).join("\n"));
+    expect(prefixes.filter(prefix => streamingBlocks(prefix) === null)).toEqual([]);
+  });
+
   it("keeps blocks for a fence in a list item whose lines stay indented", () => {
     const item = "1. Install:\n\n   ```sh\n   npm i\n\n   npm test\n   ```";
     expect(streamingBlocks(`${item}\n\nDone`)).toEqual([item, "Done"]);
+    // With no list above it, a fence indented four spaces is indented code and splits as usual.
+    expect(streamingBlocks("Example:\n\n    ```\n    code\n\nDone")).toEqual(["Example:\n\n    ```\n    code", "Done"]);
   });
 });

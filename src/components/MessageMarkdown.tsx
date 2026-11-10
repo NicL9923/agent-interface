@@ -184,6 +184,9 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+// A list marker at any depth, and a fence indented past where the tracker below can see one.
+const anyListItem = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+const anyFence = /^[ \t]*(?:`{3,}|~{3,})/;
 // A quote or list marker ahead of a line's content.
 const containerMarker = String.raw`[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))`;
 /**
@@ -212,16 +215,20 @@ const indent = (line: string) => {
  * which may continue a loose list above it. Returns null when a rule spans the whole reply
  * (`wholeReply` anywhere, `spansReply` outside fences) or when a fence may close where the
  * tracker cannot see: a fence indented by up to three spaces may sit in a list item, which ends,
- * closing the fence, at a line indented less than the item's content. Inside a fence the other
- * lines are code, so a code-heavy reply keeps its blocks.
+ * closing the fence, at a line indented less than the item's content. A fence indented four or
+ * more after a list has started may open inside an item, where the tracker cannot follow it, so
+ * that parses whole too. Inside a fence the other lines are code, so a code-heavy reply keeps
+ * its blocks.
  */
 export function streamingBlocks(text: string): string[] | null {
   if (wholeReply.test(text)) return null;
   const lines = text.split("\n"), blocks: string[] = [];
-  let start = 0, open: string | undefined, openIndent = 0;
+  let start = 0, open: string | undefined, openIndent = 0, listed = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (open && line.trim() && indent(line) < openIndent) return null;
+    listed ||= anyListItem.test(line);
+    if (!open && listed && indent(line) > 3 && anyFence.test(line)) return null;
     const marker = fence.exec(line)?.[1];
     if (marker) {
       if (!open) [open, openIndent] = [marker, indent(line)];

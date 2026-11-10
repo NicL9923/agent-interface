@@ -69,3 +69,39 @@ broken by hand and restored:
   the seeded property failed.
 - Dropping the never-closed label from `spansReply`: the two-line label case failed.
 - Dropping escapes from the label: the escaped bracket case failed.
+
+## Review round 2
+
+GPT-6.1 Sol reviewed `7aa08d8` and found one more divergence: in "- Code:\n\n    ```\n    x\n\n> Next"
+the live code block held "x\n" and the saved one "x\n\n". The fence sits four spaces in, inside
+the list item, where the tracker reads it as indented code, so the splitter cut before the quote
+that ends the item and dropped a blank line from the open fence.
+
+- A fence indented four or more spaces, or by a tab, now parses the whole reply once a list
+  marker has appeared earlier in it. With no list above it, such a line is indented code and
+  splits as before.
+- The reviewer measured that the fallbacks do not fire on ordinary code-heavy replies (0 of 64,
+  0 of 102 and 0 of 92 prefixes on three realistic replies). A new test writes three replies of
+  those shapes, a tutorial with fenced code between paragraphs, numbered steps with code in each
+  item, and a fix with a diff, Python and a Markdown sample holding a definition, and requires
+  that no prefix ending at a line break returns null.
+- The seeded property's line set gains a four-space fence.
+
+Checks on the fixed tree: `npm run typecheck` and `npm run lint` passed;
+`npx vitest run tests/message-markdown.test.ts`: 36 passed; `npm test`: 169 files, 2505 tests
+passed; `npm run build` passed; `npm run test:e2e`: 3 passed in Chromium.
+
+### Red proof, round 2
+
+- The new render case failed on `7aa08d8` before the fix: the live HTML lacked the code block's
+  second newline.
+- Removing the four-space fence rule: the new render case failed.
+- Dropping the "list seen" condition: the case where a four-space fence with no list above it
+  keeps its blocks failed.
+- Lowering the threshold to three spaces: the numbered-steps reply returned null at its fences,
+  and the three-space list fence case failed.
+- Raising it to five spaces: the new render case failed.
+- The seeded property did not catch the missing rule at seed 7. A scratch fuzz with a different
+  generator (xorshift32) over list markers, indented fences, quotes and definitions passed
+  10,000 cases each at seeds 11, 23 and 99 on the fix, and found divergences at all three seeds
+  within 3,000 cases with the rule removed. It was not committed.
