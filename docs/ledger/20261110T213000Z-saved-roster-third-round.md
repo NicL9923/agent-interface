@@ -156,3 +156,39 @@ the names alone, which a row's text mixes with its description.
 - A session the server refuses leaves the subscription with the server and the browser, as before
   this change. Ending it there would turn notifications off at every lapsed session, since nothing
   subscribes again without the person; that is a follow-up, not this stack's.
+
+## Fourth round: the account transitions' fourth review, merged from `t3/early-bootstrap`
+
+`t3/early-bootstrap` at `147087c` merged in as `448d1f2`, bringing `t3/account-transitions` at
+`ad3b65b` and `origin/main` at `145104f` (merged on `t3/account-transitions` as
+`4375e9569a30d602d504c2d1b5fd449c8de34b67`). Two conflicts, both resolved by hand:
+
+- `src/app/account-epoch.ts`: the base's new `accountOf`, which reads `fromSignedOut` on a
+  changing mark, kept beside this branch's `drawnHere`.
+- `README.md`, the address paragraph: this branch's sentences on the saved home kept, with the
+  base's sentence on a page opened during another tab's sign-in from signed out.
+
+The changes, the worker's ordering discipline, the enumeration test and the page-side table are in
+`20261110T191900Z-account-transitions.md`, fourth round. The worker's account code and its tests
+are the same here as on the base.
+
+This branch adds one record to the page-side table, the offline sign-out's
+`{ signedOut, logout, user }`:
+
+| This tab | Record | Address | Test |
+| --- | --- | --- | --- |
+| The tab that signs out offline | its own `logout` record | dropped | saved-roster-ui: "leaves nothing of member one's for the next member: no address, fragment or push subscription" |
+| Showing member one in another tab | `logout` record | dropped: it is a sign-out to `accountOf` | same branch as the logout-record rows of the base table |
+| Opening during a sign-in that began from a `logout` record | the mark carries `fromSignedOut` | kept for the next sign-in, as after any sign-out | the writer's sign-out row in account-epoch.test.ts: `previous.signedOut` is the branch for both |
+
+### Red runs on this branch
+
+- The new tests against this branch's files at `9268927` (`scripts/service-worker.js` and
+  `src/app/account-epoch.ts`): 13 failed, for the same reasons as on `t3/account-transitions`; the
+  enumeration broke 2274 of 4000 orders with the same counts per invariant.
+- Every mutation in the account-transitions table, run again here: the same result for each.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 200 files, 3460
+tests. `npm run build`: pass. `npm run test:e2e`: 38 passed.
