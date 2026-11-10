@@ -1,7 +1,8 @@
 /*
  * Runs from index.html's <head>, before the app's bundle has downloaded. It does two things the bundle
  * would otherwise do only once it has run:
- * - applies the theme this device last showed the signed-in person, so a dark theme never opens light;
+ * - applies the theme this device last showed the signed-in person, so a dark theme never opens light,
+ *   unless another tab's sign-in or sign-out is under way;
  * - starts the app's first read, its bootstrap, and leaves it on window for src/startup-read.ts to take,
  *   with the account record (src/app/account-epoch.ts) it started under. The app takes it only while
  *   that record is unchanged, and no read starts while another tab's sign-in or sign-out is under way.
@@ -22,8 +23,15 @@
     if (typeof hint.user !== 'string' || hint.until <= Date.now()) return null;
     return hint.user;
   }
+  // Another tab's sign-in or sign-out is on its way, so the cookie may already be another account's. A
+  // mark older than account-epoch.ts's CHANGE_STALE_MS belongs to a closed tab.
+  function changing() {
+    var record = read('agent-interface:auth-epoch');
+    return !!record && typeof record === 'object' && record.changing === true && typeof record.at === 'number' && Date.now() - record.at < 65000;
+  }
   try {
-    var user = hintedUser();
+    // While a change is on its way the app's first draw shows the system's theme too (src/App.tsx).
+    var user = !changing() && hintedUser();
     var saved = user && read('agent-interface:theme');
     if (saved && saved.v === 1 && saved.user === user && (saved.theme === 'light' || saved.theme === 'dark' || saved.theme === 'system'))
       document.documentElement.setAttribute('data-theme', saved.theme);
@@ -33,10 +41,8 @@
     // The account record as text, compared whole by the app; none, or blocked storage, is ''.
     var epoch = '';
     try { epoch = localStorage.getItem('agent-interface:auth-epoch') || ''; } catch (error) { /* As the app reads it. */ }
-    var record = read('agent-interface:auth-epoch');
-    // Another tab's sign-in or sign-out is on its way, so the cookie this read would carry may be the
-    // last account's. A mark older than account-epoch.ts's CHANGE_STALE_MS belongs to a closed tab.
-    if (record && typeof record === 'object' && record.changing === true && typeof record.at === 'number' && Date.now() - record.at < 65000) return;
+    // The cookie this read would carry may be the last account's.
+    if (changing()) return;
     var path = '/bootstrap?roster=lean';
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     // The same request the app's api() makes for its first GET: no validator, no CSRF token, the cookie.

@@ -68,13 +68,18 @@ export function App() {
   useEffect(() => {
     if (!pending) return;
     const start = accountStart();
-    // The last account's theme goes with it; the saved one stays while the hint still names its account
-    // and no other tab's sign-in or sign-out is under way, which may bring another account.
-    document.documentElement.dataset.theme = "wait" in start ? "system" : savedTheme() ?? "system";
     // An address that named the last account's chat, panel, room or message opens nothing of it for the next.
     if ("start" in start && start.leftAccount && (location.search || location.hash || location.pathname !== "/")) history.replaceState(null, "", "/");
     setShown({ changes, start, generation: accountGeneration() });
   }, [pending, changes]);
+  // Each generation's first draw, before it paints, shows the theme this device saved only while the
+  // sign-in hint still names that theme's account and no other tab's sign-in or sign-out is under way,
+  // which may bring another account; otherwise the system's. public/boot.js applied it by the same rule,
+  // but a change can finish after boot.js ran and before this first draw, as after it in another tab.
+  // Bootstrap's own answer replaces it in AccountApp.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = "wait" in shown.start ? "system" : savedTheme() ?? "system";
+  }, [shown]);
   // A page covered for the back-forward cache shows again once nothing of an ended generation is drawn.
   useLayoutEffect(uncoverEnded, [pending, shown]);
   const { start, generation } = shown;

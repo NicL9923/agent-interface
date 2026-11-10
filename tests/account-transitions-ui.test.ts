@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { act, createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authEpochKey, draftKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, draftKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
@@ -451,6 +451,43 @@ describe("the theme this device keeps", () => {
   });
 });
 
+// The reviewer's case: boot.js applied member one's saved dark theme, correctly at that moment, then
+// another tab's change finished before this page's bundle drew anything.
+describe("the theme boot.js applied before the bundle", () => {
+  it.each([
+    ["member two's sign-in", { id: "two-settled", at: NOW, user: "two" }, "two"],
+    ["a sign-out", { id: "one-gone", at: NOW, signedOut: true, user: "one" }, null],
+  ] as const)("is gone from the first draw when %s finished meanwhile, and stays gone if bootstrap fails", async (_name, settled, now) => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    // What the other tab's change leaves: a sign-in writes a hint that names no account yet, a sign-out none; neither keeps the theme.
+    data.delete(savedThemeKey);
+    if (now) data.set(signInHintKey, JSON.stringify({ until: NOW + 3_600_000, bots: [] }));
+    else data.delete(signInHintKey);
+    data.set(authEpochKey, JSON.stringify(settled));
+    cookie = now;
+    const tab = await openTab();
+    expect(tab.text()).toContain("Connecting to your household");
+    expect(document.documentElement.dataset.theme).toBe("system");
+    // A bootstrap that fails names no one, so nothing else would ever replace the theme.
+    await answerHeld("GET /bootstrap", { status: 503, body: { error: "Down for a moment" } });
+    expect(document.documentElement.dataset.theme).toBe("system");
+  });
+
+  it("stays on the first draw while the hint still names its account and nothing changed", async () => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    const tab = await openTab();
+    expect(tab.text()).toContain("Connecting to your household");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+});
+
 describe("the read boot.js starts before the bundle", () => {
   it("is not shown when another tab signed member two in while the bundle loaded", async () => {
     // The reviewer's case: member one's early bootstrap is on its way when another tab signs two in.
@@ -573,6 +610,58 @@ describe("a page in the back-forward cache", () => {
     expect(covered()).toBe(false);
     showsNothingOf(tab);
     expect(tab.text()).toContain("Enter local workspace");
+  });
+});
+
+// The theme boot.js applied from this device, which the cover takes away and gives back. A restored page
+// never runs boot.js again; only the cover and the app decide its theme.
+describe("a page in the back-forward cache, in the theme boot.js applied", () => {
+  it("comes back in member one's saved theme when it left before bootstrap answered, with the account unchanged", async () => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    const tab = await openTab();
+    expect([tab.text().includes("Connecting to your household"), root.dataset.theme]).toEqual([true, "dark"]);
+    await pageTransition("pagehide");
+    expect(root.dataset.theme).toBe("system");
+    await pageTransition("pageshow");
+    expect([covered(), root.dataset.theme]).toEqual([false, "dark"]);
+  });
+
+  it("shows none of member one's saved theme once restored after another tab signed member two in", async () => {
+    await withOne(oneWithNews, async () => {
+      signedInAs("one");
+      const tab = await openTab("/?bot=ranch");
+      expect(root.dataset.theme).toBe("dark");
+      expect(JSON.parse(data.get(savedThemeKey)!)).toMatchObject({ user: "one", theme: "dark" });
+      await pageTransition("pagehide");
+      // Another tab signs member two in while this page is frozen, and its storage events never reach it.
+      data.set(authEpochKey, JSON.stringify({ id: "two-changing", at: NOW, changing: true, user: "one" }));
+      data.delete(savedThemeKey);
+      data.set(signInHintKey, JSON.stringify({ until: NOW + 3_600_000, bots: [] }));
+      cookie = "two";
+      data.set(authEpochKey, JSON.stringify({ id: "two-settled", at: NOW, user: "two" }));
+      queued = [];
+      holding = ["GET /bootstrap"];
+      // Every theme the page takes from the moment it shows again, including one a later commit replaces:
+      // each record carries the value before its change, and the last value follows them.
+      const changes: (string | null)[] = [];
+      const observer = new MutationObserver(records => { for (const change of records) changes.push(change.oldValue); });
+      const themes = () => [...changes, ...observer.takeRecords().map(change => change.oldValue), root.dataset.theme];
+      window.addEventListener("pageshow", () => {
+        observer.observe(root, { attributeFilter: ["data-theme"], attributeOldValue: true });
+      }, { once: true, capture: true });
+      await pageTransition("pageshow");
+      await advance(0);
+      expect([tab.text().includes("Connecting to your household"), covered(), root.dataset.theme]).toEqual([true, false, "system"]);
+      await answerHeld("GET /bootstrap");
+      expect(tab.text()).toContain("Barn Cat");
+      const seen = themes();
+      observer.disconnect();
+      expect(seen[0]).toBe("system");
+      expect(seen).not.toContain("dark");
+    });
   });
 });
 

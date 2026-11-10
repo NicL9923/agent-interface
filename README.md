@@ -131,8 +131,11 @@ The script starts no read while another tab's sign-in or sign-out is under way. 
 is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
 before. The same script applies the theme this device last showed the signed-in person, so a
 dark theme never opens light. The browser keeps that theme with the account it belongs to, in
-`agent-interface:theme`, and uses it only while the sign-in record below names that account.
-See `src/startup-read.ts` and `src/app/saved-theme.ts`.
+`agent-interface:theme`, and uses it only while the sign-in record below names that account and
+no other tab's sign-in or sign-out is under way. The app's first draw of each account applies
+the same rule again before it paints, so a change another tab finishes after the script ran,
+before the app's code arrived, leaves none of the last member's theme on screen. See
+`src/startup-read.ts` and `src/app/saved-theme.ts`.
 
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
@@ -182,8 +185,10 @@ tell other tabs. See `src/app/account-epoch.ts`.
 A page in the back-forward cache hears nothing while it is frozen, and a browser can show it
 again before its script runs. So as a page leaves, the account's screens are hidden in place,
 with the plain title and theme; nothing is unmounted. Coming back with the same account, they
-show again at once with their scroll, drafts and open panels. After a change they stay hidden
-until the next screen replaces them. Chromium restores this app from the cache, signed in, with
+show again at once with their scroll, drafts and open panels, and in their theme. After a
+change they stay hidden, in the plain theme, until the next screen replaces them. A restored page
+does not run `boot.js` again, so its theme until then is the cover's; a fresh load runs it, and
+has no cover. Chromium restores this app from the cache, signed in, with
 its live connections and service worker; `e2e/back-forward-cache.spec.ts` checks both cases.
 
 When another account signs in over one that never signed out here, that account's

@@ -204,6 +204,18 @@ describe("the theme boot.js applies before the bundle", () => {
     expect(calls).toHaveLength(1);
   });
 
+  // The app's first draw shows the system's theme while another tab's change may bring another account (App.tsx).
+  it.each([
+    ["not while another tab's sign-in or sign-out is under way", NOW - 64_999, "system"],
+    ["once that tab's mark is too old to be on its way", NOW - 65_000, "dark"],
+  ])("is applied %s, as the app's first draw decides", (_name, at, expected) => {
+    store(signInHintKey, hint());
+    store(savedThemeKey, theme());
+    store("agent-interface:auth-epoch", { id: "elsewhere", at, changing: true, user: "one" });
+    runBoot();
+    expect(shown()).toBe(expected);
+  });
+
   it("leaves the default, and still starts the read, when storage is blocked", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("Blocked", "SecurityError"); });
     runBoot();

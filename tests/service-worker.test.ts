@@ -1064,6 +1064,21 @@ describe('service worker pushes for the account signed in here', () => {
     expect(sw.setAppBadge).not.toHaveBeenCalled();
   });
 
+  it('keeps whose notifications may show when a new release takes over, which removes only release caches', async () => {
+    const old = worker();
+    await old.install();
+    await old.signedIn('two');
+    // The next release's worker installs beside it in the same storage, then takes over.
+    old.stores.set('agent-interface-previous', old.stores.get('agent-interface-test')!);
+    old.stores.delete('agent-interface-test');
+    const next = worker({ stores: old.stores });
+    await next.install();
+    await next.activate();
+    expect([...next.stores.keys()].sort()).toEqual(['agent-interface-test', 'wildbots-account']);
+    await push(next, forOne);
+    expect(next.showNotification).not.toHaveBeenCalled();
+  });
+
   it('shows a push that names no account, as from a server before this field, while someone is signed in', async () => {
     const sw = worker();
     await sw.signedIn('two');
