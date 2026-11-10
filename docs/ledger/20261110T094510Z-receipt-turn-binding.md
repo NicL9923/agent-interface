@@ -296,3 +296,40 @@ Hermes's answer named. The fake always adopted the staged row. The second round 
 Not run, in any round: real Hermes, the extension probe (`scripts/spike/extension_probe.py`, which checks an image
 sent alone against real Hermes), `npm test`, iOS and production. The inline guidance check `app_prompt` still matches by text;
 it changes no stored data and is unchanged.
+
+## Decisions in the fourth round
+
+GPT-6.1 Sol reviewed `579fc08..064593c` and found it ready after one fix. It cleared the fake's joined and handed-on
+steers, the changed same-words test, `turn_extent()` at the write and the read for every shape it tried, the
+admission-row test, and all five mutations. One finding, P2, in the documents and behind them in the rule:
+
+- The third round's claim that the steering rule "is stricter than `main`'s on every path" was false. `main` refuses a
+  row saved more than a second before the steer's receipt was written; the rule had dropped that guard. With a pinned
+  clock, a native "Avoid flights" row saved at time 100 and Kim's same words sent at time 103 and run in the next
+  turn, the branch bound Kim's receipt to the native row and `main` did not. The orchestrator made that claim and
+  told the third round to add no conditions, on the strength of it.
+- Fix, by the orchestrator: `bind_steers` applies `main`'s guard to the one candidate row. A steer binds only if that
+  row was not saved more than a second before the steer was sent. A row with no usable time counts as saved now, as
+  on `main`, and a malformed time does not break the open. The rule still requires exactly one row with the words in
+  the root's turn, so it binds only where `main`'s rule could. No reviewer has read this fix.
+- The known limit above is narrower for it. Sequences 1 and 2, where the native row lands before the steer is sent,
+  now bind wrongly only when the two are within a second of each other. Sequence 3, where the native row lands after,
+  is unchanged, and so is a compaction that keeps the later of two same-word rows.
+
+### Red proof
+
+- Written first: "the row saved more than a second before the steer was sent" failed on `064593c` with `12 != None`,
+  the reviewer's result.
+- The guard removed: the same case fails with `12 != None`.
+- The second of slack removed: "the row saved a second before the steer was sent" fails with `None != 12`.
+- The time read with a bare `float()`: the string case of "a row with no usable time is judged by the other rules and
+  the open answers" errors with `ValueError`.
+
+
+### Checks
+
+- `npm run test:py`: 43 files passed, 0 failed, Python 3.14.10. `tests/hermes_turn_binding_test.py`: 27 tests passed.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck` passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- Real Hermes, the extension probe, `npm test`, iOS and production: not run.
