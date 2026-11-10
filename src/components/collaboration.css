@@ -13,10 +13,12 @@
  * scrolls inside its box before Send leaves the screen: the message box is capped at the content box's height
  * (100cqh) less that margin and the composer's other rows (`--group-chrome`: border and padding, the 46px row with
  * Send, and the 74px "Replying in thread" banner when it shows), and keeps one line. The panel keeps room for that
- * floor, so in a frame too short for it, the header is cut from the top instead.
+ * floor, so in a frame too short for it, the header is cut from the top instead. An error or note above the
+ * conversation (`--group-notes`, its measured height) counts in both: the draft gives up that height, and the
+ * panel keeps room for it, so the composer does not lie over the explanation of a send that failed.
  */
 .group-panel { padding: 24px clamp(16px, 4vw, 48px); overflow: auto; flex: 1;
-  container-type: size; --group-chrome: 76px; min-height: calc(44px + var(--group-chrome) + 48px); }
+  container-type: size; --group-chrome: 76px; min-height: calc(44px + var(--group-chrome) + 48px + var(--group-notes, 0px)); }
 .group-panel:has(.group-composer > .group-thread) { --group-chrome: 150px; }
 .composer.group-composer textarea { max-height: min(200px, 30vh, max(44px, calc(100cqh - var(--group-chrome) - var(--group-notes, 0px)))); }
 /* Holds its children's margins, so its height is the room the notes take. GroupChats.tsx reports it as --group-notes. */
