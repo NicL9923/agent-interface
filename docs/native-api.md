@@ -109,7 +109,8 @@ A send answered from its recorded receipt never reaches Hermes and carries only
 Streamed text arrives after the response, so the server logs it instead. For each
 send Hermes accepts, including a spoken Talk request, it writes exactly one `info`
 line. Its `sendTiming` field holds `route` (`messages`, `steer` or `talk`), `botId`,
-`requestId`, `steered`, `ended`, and moments counted from the request's arrival:
+`requestId`, `steered`, `turn` (the receipt's, when it has one), `ended`, and moments
+counted from the request's arrival:
 `prepareMs` (the admission call began), `admissionMs` (Hermes answered),
 `firstFrameMs` (the first `message.delta` or `reasoning.delta` of the send's run
 after it arrived, which can come before `admissionMs`) and `firstLiveMs` (the first
@@ -129,29 +130,29 @@ starts. A steer is measured by its run's next growth after it arrived, across tu
 of that run, because Hermes's native steering answers the same way when it queues
 the text for the next turn.
 
-One sequence breaks that identity, and the server does not detect it. A new
-message preempts an idle compaction, an unrelated native turn starts on the
-session before the add-on reads its state, and the add-on queues the message as a
-new task behind that turn. A read during the native turn names the new task's run,
-so that turn's text and live events are recorded as the message's, and the line
-can end `measured` with `steered: false` and moments that are too early. Hermes's
-answer is the same as for a message that started its own turn, so nothing in this
-server tells the two apart. In that sequence `measured` is not a guarantee. An add-on
-that reports `admission_turn` names the sequence in its admission answer, with `turn`
-set to `queued` or `joined` (put into that turn). `queued` is Hermes's busy-queue
-disposition, not a promise of a separate later turn: Hermes may merge the text into
-a prompt already queued, or drop it as a copy of the running prompt, and answer
-`queued` either way. `turn` is `none` for a typed stop phrase that ended a voice chat
-and admitted nothing, and `unknown` for an answer the add-on does not know; only a
-missing `turn` on an accepted new task means the turn started. See
-[the integration evidence](HermesCapabilityMatrix.md). This server does not read it yet.
+One sequence breaks that identity. A new message preempts an idle compaction, an
+unrelated native turn starts on the session before the add-on reads its state, and
+Hermes queues the message as a new task behind that turn or puts it into that turn.
+A read during the native turn names the new task's run, so that turn's text and
+live events would be recorded as the message's. The receipt's `turn` (below) says
+so: a message Hermes put into the running turn (`joined`) is measured as a steer,
+with `steered: true`, and one whose turn did not start (`queued`, `none` or
+`unknown`) is logged at Hermes's answer with `ended: "not-started"` and no moments
+after it. `queued` promises no separate later turn, so no later text is the
+message's own either. With an add-on that does not report `admission_turn`, Hermes's
+answer for this sequence is the same as for a message that started its own turn, so
+the line can still end `measured` with `steered: false` and moments that are too
+early. See [the integration evidence](HermesCapabilityMatrix.md).
 
 `ended` says why the line was written. Only `measured` carries both moments; any
 other value leaves out what could not be tied to the send's run:
 
 - `measured`: both `firstFrameMs` and `firstLiveMs` were recorded. A tool or
-  status event written first does not end it; the line waits for text. The
-  preempted-compaction sequence above can produce a wrong `measured` line.
+  status event written first does not end it; the line waits for text. With an
+  add-on that does not report `admission_turn`, the preempted-compaction sequence
+  above can produce a wrong `measured` line.
+- `not-started`: Hermes's answer says the message's turn did not start, with `turn`
+  `queued`, `none` or `unknown`. It carries `prepareMs` and `admissionMs` only.
 - `uncorrelated`: Hermes's answer named no run; or an earlier turn of the run's
   session streamed text after the send arrived and ended before any read
   identified it, so the run's later text may not be its first; or more turns or
@@ -699,6 +700,36 @@ carries `steered`: whether the add-on admitted the message into the task that wa
 already running, decided under its submission lock. A user `Message` it admitted that
 way carries `steered: true`, in every history read and on every device. Show "Added to
 the current task" under it. Absent means unknown, so show nothing.
+
+**Admission turn.** An accepted receipt for a new task carries `turn`, what Hermes
+did with the message's turn, when the add-on reports `admission_turn`:
+
+| `turn` | Hermes | Show |
+| --- | --- | --- |
+| `started` | started the message's turn | the assistant thinking until Hermes reports the turn |
+| `queued` | put it in its busy queue behind running work; it may merge it into a queued prompt or drop it as a copy of the running one | as for a message that starts a turn |
+| `joined` | put it into the running turn | nothing more, as for `steered: true`; Hermes's copy does not carry `steered` |
+| `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message and show the receipt's `message` |
+| `unknown` | answered in a way neither the add-on nor this server knows | as for a message that starts a turn; never take it for `started` |
+
+The server sends `started` only when the add-on reports `admission_turn` and its
+answer has no `turn`, because that add-on leaves the field out exactly when the turn
+started. Absent `turn` means nobody can say: an add-on too old to report it, a
+receipt recovered by a lookup after its answer was lost, a steer (it carries
+`steered: true` instead) or a receipt that is not `accepted`. Any other value from
+Hermes becomes `unknown`. `GET /api/submissions/:id` and a repeated request answer
+the recorded receipt's `turn` while it is `accepted`.
+
+The same receipt carries `admittedVersion`, the assistant's structural version, as
+`Conversation.version` spells it, when Hermes's admission answer reached the server.
+While Hermes admits a message, a conversation read can already show the message
+and still report the turn before it as `done`, `failed` or `interrupted`. A read
+whose `version` is newer than `admittedVersion` (`compareVersions` greater than zero)
+was asked after admission finished, so with `turn: "started"` its settled activity
+is this message's turn. A read at the same version or older may have been asked
+before, however late it arrives. Versions from another server process never
+compare; fall back to treating a settled report as this turn's only from a read
+newer than the one that first showed the message.
 
 **Progress lines.** An assistant `Message` with `interim: true` is a progress line: one
 short sentence the assistant wrote before using tools, such as "I'll check the forecast

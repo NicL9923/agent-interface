@@ -300,6 +300,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   if (receipt?.status === "rejected") notices.push({ id: "send-rejected", kind: "send", node: <div className="notice attention" role="alert">
     {receipt.message || "Hermes did not accept this message. Your draft is saved."}
   </div> });
+  // A typed stop phrase ended Hermes's voice chat. Hermes saved nothing, so the sent message leaves the chat and this says why.
+  if (receipt?.status === "accepted" && receipt.turn === "none") notices.push({ id: "send-not-admitted", kind: "send", node: <div className="notice" role="status">
+    {receipt.message || "Hermes ended its voice chat. Nothing was sent to the assistant."}
+  </div> });
   if (receipt?.status === "interrupted") notices.push({ id: "send-interrupted", kind: "send", node: <div className="notice attention">
     This submission was interrupted. Review its last actions before trying again.
   </div> });
