@@ -543,15 +543,15 @@ describe('pushed conversation updates',()=>{
     await advance(1_000);
     expect(reads()).toBe(first+2);
   });
-  it('reloads after a dropped stream reconnects, replaces a refused one at the next poll, and a silent one within 25 seconds',async()=>{
+  it('reloads after each reconnect, retries a refused stream within 2 seconds, and replaces a silent one within 25 seconds and its retry',async()=>{
     const stream=await opened();
     const first=reads();
-    // EventSource reconnects a drop by itself. Notices sent meanwhile are lost, so it reloads.
+    // A reconnect means notices sent meanwhile were lost, so it reloads.
     await act(async()=>stream.connect());await advance(20);
     expect(reads()).toBe(first+1);
-    // A refusal is never retried by EventSource itself.
+    // A refusal is never retried by EventSource itself. The stream's retry is 1 to 2 seconds, not the next poll.
     await act(async()=>stream.fail());
-    await advance(30_000);
+    await advance(2_000);
     expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
     const replacement=[...FakeEventSource.streams].find(stream=>stream.url.includes("/bots/"))!;
     const replaced=reads();
@@ -560,7 +560,10 @@ describe('pushed conversation updates',()=>{
     // A `?ping=10` server pings at once and every 10 seconds. 25 seconds without an event is a dead
     // connection, which the stream's own watchdog replaces without waiting for a poll.
     await act(async()=>replacement.emit('ping','10'));
-    await advance(24_999);expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);await advance(1);
+    await advance(24_999);expect(replacement.readyState).toBe(FakeEventSource.OPEN);await advance(2);
+    expect(replacement.readyState).toBe(FakeEventSource.CLOSED);
+    // The replacement greeted but never proved itself, so this is the second failure in a row: 2 to 4 seconds.
+    await advance(4_000);
     expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(3);
     expect(FakeEventSource.streams.size).toBe(2);
   });

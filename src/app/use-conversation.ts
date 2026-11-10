@@ -335,12 +335,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       stream.open();
       void load();
     };
+    // The network returning, or a manual retry that reached the server, makes the stream's earlier failures stale.
+    const revive = () => {
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      stream.reconnect();
+      void load();
+    };
     // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
     const stopPolling = pollWhileVisible(wake, 30_000);
     // A hidden page holds no stream; showing it again reloads and reopens one.
     const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
-    window.addEventListener("online", wake);
-    window.addEventListener("agent-interface:reconnect", wake);
+    window.addEventListener("online", revive);
+    window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
@@ -348,8 +354,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       requestStart.current = () => {};
       stopPolling();
       stream.close();
-      window.removeEventListener("online", wake);
-      window.removeEventListener("agent-interface:reconnect", wake);
+      window.removeEventListener("online", revive);
+      window.removeEventListener("agent-interface:reconnect", revive);
       document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);

@@ -171,91 +171,161 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
 }
 /** The ping interval of a server that does not name one: 25 seconds, as before `?ping=10`. */
 const DEFAULT_PING_MS = 25_000;
-/** The longest a silent stream waits before its next replacement, however often it was replaced. */
-export const MAX_STREAM_SILENCE = 5 * 60_000;
 /**
  * How long a stream may stay silent before it counts as dead: two pings and five seconds more, so one
  * lost or late ping never replaces a live stream. A server that pings every 10 seconds, as one opened
  * with `?ping=10` does, is found dead within 25 seconds of its last event; one that names no interval,
- * within 55. Each replacement that hears nothing doubles it, up to MAX_STREAM_SILENCE, and any event
- * resets it.
+ * or has not pinged yet, within 55. This is the health deadline only: when the next attempt may start
+ * is `retryDelay`'s business.
  */
-export function streamSilence(pingMs: number, misses: number) {
-  return Math.min((2 * pingMs + 5_000) * 2 ** misses, MAX_STREAM_SILENCE);
+export function streamSilence(pingMs: number) {
+  return 2 * pingMs + 5_000;
 }
+/** The first retry after a failure waits between 1 and 2 seconds, faster than EventSource's own 3. */
+export const RETRY_BASE_MS = 2_000;
+/** No retry waits longer than this, however many failed before it. */
+export const MAX_RETRY_MS = 5 * 60_000;
+/**
+ * How long to wait after a stream's `failures`th failure in a row before the next attempt: a ceiling
+ * that doubles from RETRY_BASE_MS to MAX_RETRY_MS, of which a random half or more is waited ("equal
+ * jitter"). The floor keeps a first retry from landing at once; the spread keeps a household's tabs from
+ * reconnecting in step after a restart. `random` returns a number in [0, 1), as Math.random does.
+ */
+export function retryDelay(failures: number, random: () => number) {
+  const ceiling = Math.min(RETRY_BASE_MS * 2 ** (failures - 1), MAX_RETRY_MS);
+  return ceiling / 2 + ceiling / 2 * random();
+}
+/**
+ * A watchdog timer this late was held by a sleeping device or a page frozen far longer than a busy main
+ * thread holds one, so the silence it measured says nothing about the stream.
+ */
+export const LATE_TIMER_MS = 10_000;
 /** Adds `ping=10`, which asks the server to ping every 10 seconds and say so. */
 const withPing = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ping=10`;
+export type StreamOptions = {
+  /** The jitter's random source, in [0, 1). Tests pin it; the app uses Math.random. */
+  random?: () => number;
+};
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
- * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, and a connection a proxy or a sleeping device cut can stay open
- * and silent. A watchdog replaces a stream silent past `streamSilence`, and `open` replaces a
- * closed or silent one at once. A hidden page's late timers replace nothing: showing the page
- * calls `open`, which checks then. `named` handles other named events by their data, such as
- * group chat notices.
+ * connects, since notices sent before the subscription are lost. `named` handles other named events
+ * by their data, such as group chat notices.
+ *
+ * One retry deadline governs every new connection after a failure. A refusal, a dropped connection
+ * (which EventSource would retry itself every 3 seconds) and a stream silent past `streamSilence` all
+ * close the stream and wait `retryDelay` before the next attempt, and `open` never starts one sooner,
+ * however often its owner calls it. The count of failures resets only once a connection has stayed
+ * healthy for longer than its greeting: data a whole ping interval after it opened. A server that
+ * greets and then stalls keeps backing off. `close` ends the episode, so a page shown again connects at
+ * once, and `reconnect` drops the backoff for a sign the failures are stale, such as the network
+ * returning or a manual retry that reached the server.
+ *
+ * The watchdog judges silence only after the stream's queued events have run, and a timer that fires
+ * far later than it was set for, as on waking from sleep, restarts the deadline once instead of
+ * replacing the stream. A hidden page's watchdog replaces nothing; its owners close the stream anyway.
  */
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
-  onInflightDelta?: (value: InflightDelta) => boolean) {
-  let source: EventSource | undefined, heard = 0, pingMs = DEFAULT_PING_MS, misses = 0;
-  let watchdog: ReturnType<typeof setTimeout> | undefined, due = 0;
-  const silence = () => streamSilence(pingMs, misses);
-  const silent = () => Date.now() - heard >= silence();
+  onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
+  const random = options.random ?? Math.random;
+  let source: EventSource | undefined;
+  // When this connection opened, the moment its silence counts from, and the interval its pings name.
+  let openedAt = 0, since = 0, pingMs = DEFAULT_PING_MS;
+  // Whether this connection has proved itself, and whether its watchdog already forgave one late timer.
+  let recovered = false, graced = false;
+  let failures = 0, retryAt = 0;
+  // One timer per stream: the watchdog while a stream is open, the retry while none is.
+  let timer: ReturnType<typeof setTimeout> | undefined, due = 0;
+  const deadline = () => since + streamSilence(pingMs);
+  const arm = (at: number, run: () => void) => {
+    clearTimeout(timer);
+    due = Math.max(at, Date.now());
+    timer = setTimeout(run, due - Date.now());
+  };
   /**
-   * Any event proves the connection, so the next silence is measured from the base again. The timer
-   * moves only when that brings the deadline closer, so a stream of growth events sets no timers.
+   * Any event proves the connection. The timer moves only when that brings the deadline closer, so a
+   * stream of growth events sets no timers.
    */
   const alive = () => {
-    heard = Date.now();
-    misses = 0;
-    if (source && heard + silence() < due) watch();
-  };
-  // One timer per stream, set for when silence would begin. A device waking from sleep fires it once, late.
-  const watch = (delay = Math.max(0, heard + silence() - Date.now())) => {
-    clearTimeout(watchdog);
-    due = Date.now() + delay;
-    watchdog = setTimeout(check, delay);
+    since = Date.now();
+    graced = false;
+    if (!recovered && since - openedAt >= pingMs) {
+      recovered = true;
+      failures = 0;
+    }
+    if (deadline() < due) arm(deadline(), check);
   };
   const check = () => {
-    watchdog = undefined;
+    timer = undefined;
     if (!source) return;
-    // Hidden, it looks again a whole silence later; showing the page calls `open` sooner.
-    if (document.visibilityState === "hidden") watch(silence());
-    else if (source.readyState === EventSource.CLOSED || silent()) replace();
-    else watch();
+    if (document.visibilityState === "hidden") { arm(Date.now() + streamSilence(pingMs), check); return; }
+    if (!graced && Date.now() - due > LATE_TIMER_MS) {
+      graced = true;
+      since = Date.now();
+      arm(deadline(), check);
+      return;
+    }
+    // A busy page, or a proxy that delivers pings in a burst, can queue a ping behind this timer.
+    timer = setTimeout(judge, 0);
   };
-  const close = () => {
-    clearTimeout(watchdog);
-    watchdog = undefined;
+  // Silent unless an event moved the deadline past the moment this check was set for.
+  const judge = () => {
+    timer = undefined;
+    if (!source) return;
+    if (deadline() <= due) fail();
+    else arm(deadline(), check);
+  };
+  const drop = () => {
+    clearTimeout(timer);
+    timer = undefined;
     source?.close();
     source = undefined;
-    misses = 0;
   };
-  const replace = () => {
-    // A stream that failed or went silent counts against the next one's patience.
-    const failed = source ? misses + 1 : 0;
-    close();
-    misses = failed;
+  const fail = () => {
+    drop();
+    failures++;
+    retryAt = Date.now() + retryDelay(failures, random);
+    arm(retryAt, connect);
+  };
+  const close = () => {
+    drop();
+    failures = 0;
+    retryAt = 0;
+  };
+  /** Starts a connection unless one is open or a retry is already set, never before the retry deadline. */
+  const open = () => {
+    if (typeof EventSource === "undefined" || source || timer) return;
+    if (Date.now() >= retryAt) connect();
+    else arm(retryAt, connect);
+  };
+  const reconnect = () => {
+    if (typeof EventSource === "undefined") return;
+    // A live connection stays. One still waiting to prove itself would be replaced by an equally new one.
+    if (source) return;
+    failures = 0;
+    retryAt = 0;
+    clearTimeout(timer);
+    timer = undefined;
     connect();
   };
-  const open = () => {
-    if (typeof EventSource === "undefined") return;
-    if (source && source.readyState !== EventSource.CLOSED && !silent()) return;
-    replace();
-  };
   const connect = () => {
+    clearTimeout(timer);
+    timer = undefined;
     const current = source = new EventSource(`/api${withPing(path)}`);
-    heard = Date.now();
+    openedAt = since = Date.now();
     // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
     pingMs = DEFAULT_PING_MS;
-    watch();
+    recovered = graced = false;
+    arm(deadline(), check);
     // Only the stream this one opened last speaks for it: a replaced one's late events change nothing.
     const on = (name: string, handle: (data: string) => void) =>
       current.addEventListener(name, event => { if (current === source) handle((event as MessageEvent).data); });
     current.onopen = () => {
       if (current !== source) return;
-      heard = Date.now();
+      since = Date.now();
       onChange();
     };
+    // A refusal, which EventSource never retries, or a drop, which it would retry on the server's 3 seconds.
+    current.onerror = () => { if (current === source) fail(); };
     if (onInflight) on("inflight", data => {
       alive();
       try { onInflight(JSON.parse(data) as Inflight); } catch { onChange(); }
@@ -268,7 +338,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       try { applied = onInflightDelta(JSON.parse(data) as InflightDelta); } catch { /* Reloads below. */ }
       if (applied) return;
       onChange();
-      close();
+      drop();
       open();
     });
     on("roster", () => { alive(); onChange(); });
@@ -284,7 +354,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       onChange();
     });
   };
-  return { open, close };
+  return { open, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {

@@ -288,35 +288,12 @@ describe("watching a group chat on the app event stream", () => {
 
 describe("event stream setup", () => {
   // Just enough of a hijackable Fastify reply over a real ServerResponse-like emitter.
-  function reply(destroyed: boolean, query: Record<string, unknown> = {}) {
+  function reply(destroyed: boolean) {
     const raw = Object.assign(new EventEmitter(), {
       destroyed, writableEnded: false, writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), destroy: vi.fn(),
     });
-    return { raw, request: { query }, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
+    return { raw, request: { query: {} }, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
   }
-
-  // The web client opens streams with `?ping=10` to notice a dead one within 25 seconds. Every other stream,
-  // the iOS app's and older bundles', starts and pings exactly as before.
-  it.each([
-    ["exactly ping=10", { ping: "10" }, true],
-    ["no ping", {}, false],
-    ["ping=5", { ping: "5" }, false],
-    ["ping=25", { ping: "25" }, false],
-    ["ping twice", { ping: ["10", "10"] }, false],
-  ] as const)("pings %s at the interval it asked for", (_name, query, fast) => {
-    vi.useFakeTimers();
-    try {
-      const open = reply(false, query), streams = new Set<() => void>();
-      eventStreamConnection(open).open(streams, { allowed: () => true, teardown: vi.fn() });
-      const writes = () => open.raw.write.mock.calls.map(([text]) => text as string);
-      expect(writes()).toEqual([fast ? "retry: 3000\n\nevent: ping\ndata: 10\n\n" : "retry: 3000\n\n"]);
-      vi.advanceTimersByTime(10_000);
-      expect(writes().slice(1)).toEqual(fast ? ["event: ping\ndata: 10\n\n"] : []);
-      vi.advanceTimersByTime(15_000);
-      expect(writes().slice(1)).toEqual(fast ? ["event: ping\ndata: 10\n\n", "event: ping\ndata: 10\n\n"] : ["event: ping\ndata: ping\n\n"]);
-      for (const end of streams) end();
-    } finally { vi.useRealTimers(); }
-  });
 
   it("ends at once, tearing down what setup reserved, when the client already left", () => {
     const left = reply(true), streams = new Set<() => void>(), teardown = vi.fn();

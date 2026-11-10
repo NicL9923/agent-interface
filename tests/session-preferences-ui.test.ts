@@ -9,7 +9,7 @@ import { mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
-  changeStream: () => ({ open() {}, close() {} }),
+  changeStream: () => ({ open() {}, close() {}, reconnect() {} }),
 }))(original)));
 let root: Root, session: ReturnType<typeof useSession>;
 function Harness() {

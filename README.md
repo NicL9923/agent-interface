@@ -400,8 +400,13 @@ During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
 online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
 and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
-cut it without closing it. Replacements that stay silent wait longer each time, up to 5 minutes, and
-start over once one hears anything. A hidden tab replaces nothing; showing it checks at once. Manual reconnect checks immediately. The transport bounds
+cut it without closing it. A refused, dropped or silent stream waits before its next attempt: 1 to 2
+seconds after the first failure, doubling to at most 5 minutes, each wait a random half or more of its
+ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
+The count starts over once a stream stays healthy past its opening ping, so a server that greets and
+then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
+one more deadline instead of replacing it. A hidden tab replaces nothing, and showing it, the network
+returning or a manual reconnect connects at once. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
