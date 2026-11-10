@@ -118,6 +118,7 @@ kbd {
 /* Keyboard shortcuts and confirmations reuse the settings sheet. */
 .shortcuts-dialog .sheet-body { padding-bottom: 20px; }
 .shortcut-heading { margin: 4px 16px 8px; font-size: 0.8125rem; font-weight: 500; color: var(--muted); }
+.shortcut-note { margin: 0 16px 10px; font-size: 0.8125rem; line-height: 1.45; color: var(--muted); }
 .shortcut-list { margin: 0 0 20px; background: var(--raised); border-radius: 18px; overflow: hidden; }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 46px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
 .shortcut-row:last-child { border-bottom: 0; }
