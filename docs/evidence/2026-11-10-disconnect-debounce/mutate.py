@@ -55,7 +55,7 @@ for name, rel, old, new in mutations:
     assert source.count(old) == 1, (name, source.count(old))
     path.write_text(source.replace(old, new))
     try:
-        run = subprocess.run(["npx", "vitest", "run", "tests/connection-grace-ui.test.ts"], cwd=root, capture_output=True, text=True)
+        run = subprocess.run(["npx", "vitest", "run", "tests/connection-grace-ui.test.ts"], check=False, cwd=root, capture_output=True, text=True)
         out = run.stdout + run.stderr
         failed = [re.sub(r"\s+\d+ms$", "", line.strip()[2:]) for line in out.splitlines() if line.strip().startswith("×")]
         summary = next((line.strip() for line in out.splitlines() if line.strip().startswith("Tests ")), "?")
