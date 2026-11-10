@@ -83,6 +83,12 @@ against `?inflight=3` turn events (below). `GET /api/bots/:id/events` is a serve
 event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
+Every event stream, this one and `GET /api/events` with or without `?group=`, takes
+`?ping=10`: it then sends `event: ping` with `data: 10` as it opens and every 10
+seconds after, naming the interval in seconds. The web client opts in and treats 25
+seconds without any event as a dead connection. Without the parameter, or with any
+other value, pings are `data: ping` every 25 seconds, as before, so the iOS app and
+older clients see the same stream.
 Conversation reads carry a `Server-Timing` header that splits the time between the
 Hermes read, the add-on's phases and this server. It is diagnostic only and never part
 of the body or its ETag.
@@ -357,9 +363,12 @@ with `data: roster` means refresh bootstrap. It carries no assistant IDs or
 previews. The server evaluates the cheap roster at most once per second and
 notifies each viewer only when their visible roster changes. Private activity
 does not notify other household members. Clients fetch on open; there is no
-initial roster notice. The stream pings every 25 seconds and ends on sign-out. Refresh on
-reconnect and foreground as well. A 45-second bootstrap poll covers missed
-notices and changes made outside this app. The server shares one read of the
+initial roster notice. The stream pings every 25 seconds, or 10 with `?ping=10`, and ends on sign-out. Refresh on
+reconnect and foreground as well. A bootstrap poll covers missed notices and
+changes no stream announces, such as preferences saved on another device. The iOS
+app reads bootstrap every 45 seconds. The web client reads it every 45 seconds
+while its household stream is down, and every 5 minutes while the stream is live,
+since that stream announces roster changes and Hermes outages. The server shares one read of the
 assistant list, capabilities and connection status among bootstraps for 1.5
 seconds, so many devices answering one notice cost one Hermes round trip. It drops
 that read when this app writes an assistant, a routine, an integration, a Hermes

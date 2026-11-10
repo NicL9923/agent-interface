@@ -175,6 +175,43 @@ def failing_spawn(count=1):
     return patch.object(threading.Thread, "start", spawn)
 
 
+def pause_at_fence(hermes, kind, when):
+    """Hold the first fence call of ``kind`` for which ``when()`` is true: just after an ``acquire`` returns, or just
+    before a ``release`` runs, as the add-on's caller sees the native fence. Returns (paused, resume) events."""
+    paused, resume, original = threading.Event(), threading.Event(), getattr(hermes.retirement, kind)
+    def hold():
+        if not paused.is_set() and when():
+            paused.set()
+            if not resume.wait(10):
+                raise RuntimeError("The test never resumed the fence")
+    def acquire():
+        taken = original()
+        if taken:
+            hold()
+        return taken
+    def release():
+        hold()
+        original()
+    setattr(hermes.retirement, kind, acquire if kind == "acquire" else release)
+    return paused, resume
+
+
+def hold_send_jobs(hermes):
+    """Each send-lane job waits on the returned Event before it starts, as when every send worker thread is busy.
+
+    The job is already queued in its lane, so its send stays ``queued`` until the test sets the Event.
+    """
+    gate, submit = threading.Event(), hermes.bridge.sends.pool.submit
+    def held(job, *args):
+        def run():
+            if not gate.wait(10):
+                raise RuntimeError("The test never let the send's job start")
+            return job(*args)
+        return submit(run)
+    hermes.bridge.sends.pool.submit = held
+    return gate
+
+
 def tool_frames(hermes, sid, tool_id):
     for kind, payload in (("tool.start", {"tool_id": tool_id, "name": "terminal", "args": {"command": "ls"}}),
                           ("tool.complete", {"tool_id": tool_id, "name": "terminal", "result": {"exit_code": 0}})):
@@ -354,7 +391,114 @@ class SendLaneTests(unittest.TestCase):
                 hermes.retiring = True
                 self.assertEqual(hermes.send("retiring", "slow", replies)["error"]["code"], 5035)
                 self.assertIsNone(hermes.journal.receipt("retiring"))
+                # It holds nothing and is not listed.
+                hermes.retiring = False
+                self.assertEqual((hermes.active[0], maintenance("status")["result"]["busy"]), (0, []))
                 self.assertEqual([call[2] for call in hermes.calls], ["Message running", "Message waiting"])
+
+    def test_maintenance_status_lists_sends_that_hold_or_wait_for_a_lane_as_acquire_counts_them(self):
+        photo = {"attachments": [{"path": "/photo.png", "mime": "image/png"}]}
+        # (case, each send to "slow" as (the Hermes call it is held in, or None to wait behind the ones before it, its
+        # parameters), what status lists). Neither held send has marked the session running.
+        cases = (
+            ("idle", [], []),
+            ("staging", [("image.attach", photo)], [("sid-slow", "slow", "admitting")]),
+            ("in Hermes's admission call", [("prompt.submit", {})], [("sid-slow", "slow", "admitting")]),
+            ("staging, with another waiting on its lane", [("image.attach", photo), (None, {})],
+             [("sid-slow", "slow", "admitting"), ("sid-slow", "slow", "queued")]),
+        )
+        for name, sends, listed in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                lease = Path(directory) / "maintenance.json"
+                with LaneHermes({"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
+                    replies, server = Replies(), hermes.server
+                    def maintenance(action, server=server, replies=replies):
+                        return server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
+                            "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
+                    gates = []
+                    for index, (held, params) in enumerate(sends):
+                        if held:
+                            gates.append(hermes.hold(held, "slow"))
+                        hermes.send(f"send-{index}", "slow", replies, **params)
+                        if held:
+                            self.assertTrue(hermes.reached(held, "slow"))
+                    status = maintenance("status")["result"]
+                    self.assertEqual(sorted((each["sessionId"], each["profile"], each["state"]) for each in status["busy"]), listed)
+                    self.assertFalse(status["active"])
+                    # Acquire agrees: it refuses exactly when status lists work, and takes no lease then.
+                    acquired = maintenance("acquire")
+                    if listed:
+                        self.assertEqual((acquired["error"]["code"], lease.exists()), (409, False))
+                        self.assertIn("active work", acquired["error"]["message"])
+                    else:
+                        self.assertEqual(acquired["result"], {"active": True, "operationId": "operation-1", "busy": []})
+                        self.assertFalse(maintenance("release")["result"]["active"])
+                    for gate in gates:
+                        gate.set()
+                    self.assertTrue(replies.wait(*(f"send-{index}" for index in range(len(sends)))))
+                    self.assertEqual(hermes.settled(), 0)
+                    # Answered sends leave the list; their turn ends, and both agree the gateway is idle.
+                    server._sessions["sid-slow"]["running"] = False
+                    self.assertEqual(maintenance("status")["result"]["busy"], [])
+                    self.assertEqual(maintenance("acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
+
+    def test_maintenance_sees_a_send_listed_whenever_its_reservation_is_held(self):
+        # Paused just after the send's reservation is taken, and just before it is released, after its answer.
+        for boundary in ("acquire", "release"):
+            with self.subTest(boundary), tempfile.TemporaryDirectory() as directory:
+                lease = Path(directory) / "maintenance.json"
+                with LaneHermes({"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
+                    replies, server, observed = Replies(), hermes.server, []
+                    def maintenance(action, server=server, replies=replies):
+                        return server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
+                            "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
+                    def observe(maintenance=maintenance, observed=observed):
+                        status, acquired = maintenance("status")["result"], maintenance("acquire")
+                        observed.append(([(each["profile"], each["state"]) for each in status["busy"]], "error" not in acquired))
+                        if "error" not in acquired:
+                            maintenance("release")
+                    reader = threading.Thread(target=lambda hermes=hermes, replies=replies: hermes.send("send", "slow", replies), daemon=True)
+                    if boundary == "acquire":
+                        paused, resume = pause_at_fence(hermes, "acquire", lambda reader=reader: threading.current_thread() is reader)
+                        # The send's job starts only after maintenance has looked, so the send is still waiting on
+                        # its lane, as it was at the pause, whenever maintenance gets in.
+                        started = hold_send_jobs(hermes)
+                        self.addCleanup(started.set)
+                    else:
+                        paused, resume = pause_at_fence(hermes, "release", lambda replies=replies: "send" in replies.answers
+                                                        and threading.current_thread().name.startswith("agent-interface-send"))
+                    self.addCleanup(resume.set)
+                    reader.start()
+                    self.assertTrue(paused.wait(5))
+                    if boundary == "release":
+                        # Its turn has ended, so only the reservation is left.
+                        server._sessions["sid-slow"]["running"] = False
+                    # While the fence counts the send, it is listed.
+                    self.assertEqual([(each["profile"], each["state"]) for each in hermes.bridge.busy_sessions()],
+                                     [("slow", "queued" if boundary == "acquire" else "admitting")])
+                    probe = hermes.bridge.maintenance_lock.acquire(blocking=False)
+                    if probe:
+                        # Nothing keeps maintenance out of this moment, so it looks now.
+                        hermes.bridge.maintenance_lock.release()
+                        observe()
+                        resume.set()
+                    else:
+                        # Maintenance waits until the send is both reserved and listed, or neither.
+                        observer = threading.Thread(target=observe, daemon=True)
+                        observer.start()
+                        resume.set()
+                        observer.join(5)
+                        self.assertFalse(observer.is_alive())
+                    if boundary == "acquire":
+                        started.set()
+                    reader.join(5)
+                    self.assertTrue(replies.wait("send"))
+                    [(busy, acquired)] = observed
+                    # Status lists work exactly when acquire refuses.
+                    self.assertEqual(busy == [], acquired, observed)
+                    self.assertEqual(busy, [("slow", "queued")] if boundary == "acquire" else [])
+                    server._sessions["sid-slow"]["running"] = False
+                    self.assertEqual(hermes.settled(), 0)
 
     def test_a_failure_in_a_queued_send_answers_its_caller_and_leaves_no_lock_held(self):
         with LaneHermes() as hermes:
@@ -404,10 +548,23 @@ class LaneSchedulingTests(unittest.TestCase):
                 self.assertNotIn("first", replies.answers)
                 self.assertEqual(hermes.active[0], 0)
 
+    def test_a_send_the_executor_refuses_leaves_maintenance_free(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lease = Path(directory) / "maintenance.json"
+            with LaneHermes({"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
+                replies = Replies()
+                maintenance = lambda action: hermes.server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
+                    "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
+                with failing_spawn(), self.assertRaisesRegex(RuntimeError, "can't start new thread"):
+                    hermes.send("refused", "slow", replies)
+                self.assertEqual(hermes.active[0], 0)
+                self.assertEqual(maintenance("status")["result"]["busy"], [])
+                self.assertEqual(maintenance("acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
+
     def test_a_reservation_released_twice_frees_one_admission_and_says_so(self):
         with LaneHermes() as hermes:
             self.assertTrue(hermes.retirement.acquire())
-            reservation = extension.Reservation(hermes.retirement)
+            reservation = extension.Reservation(hermes.retirement, threading.RLock())
             reservation.release()
             with self.assertLogs(level=logging.ERROR) as logs:
                 reservation.release()

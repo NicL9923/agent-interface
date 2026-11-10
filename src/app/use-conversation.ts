@@ -5,10 +5,12 @@ import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import { applyInflightDelta, compareVersions, versionBoot, withTurn } from "../shared/inflight";
 import type { Inflight, Message, TurnEvent } from "../shared/types";
+import type { ErrorCode } from "../shared/errors";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
-import { DRAFT_EVENT } from "./use-draft";
+import { DRAFT_EVENT, type DraftNotice } from "./use-draft";
+import { chatStream, LIVE_POLL_MS, reportStream, streamUp } from "./stream-health";
 import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -41,17 +43,55 @@ const placeElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>(placeRows)].find(item => placeId(item) === id);
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+/**
+ * After a failed read that may be one unlucky request, how long the chat waits for a read to succeed
+ * before it shows it is disconnected. A second failure in a row shows it sooner. The failure asks for no
+ * read of its own: the next read comes from a change notice, a wake or the poll, as on any other read.
+ */
+export const DISCONNECT_GRACE_MS = 3_000;
+/**
+ * Why an action that needs the connection is refused. During the grace period the chat still looks
+ * connected, so the refused control says it here; once the chat shows it is down, the connection
+ * notice says more and the control only names what it waits for.
+ */
+export const CHECKING_CONNECTION = "Checking the connection. Try again in a moment.";
+export const WAITING_FOR_CONNECTION = "Waiting for the connection. Your draft is kept.";
+/** The composer's status line after a send it refused during the grace period. */
+export const NOT_SENT_CHECKING = `Not sent. ${CHECKING_CONNECTION}`;
+// What the server answers when Hermes itself is down: its connection diagnosis, a refused credential or maintenance.
+const hermesDown = new Set<ErrorCode>(["not_configured", "invalid_config", "connecting", "unreachable", "unauthorized", "addon_missing",
+  "incompatible", "reconnecting", "closed", "hermes_unauthorized", "hermes_maintenance"]);
+/**
+ * A failed read that shows the connection is down: the browser is offline, or the server answered that
+ * Hermes is unavailable. Any other failure, such as a request that never reached the app, a timeout or an
+ * unreadable answer, may be a blip.
+ */
+export const provesDisconnected = (error: unknown) => navigator.onLine === false
+  || error instanceof ApiError && error.code !== undefined && hermesDown.has(error.code);
 // A progress line arrives mid-task and is not something to catch up on, so it never counts.
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && message.interim !== true && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
 /** onMissing hears that this person may no longer see the assistant, so polling stops. */
-export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void) {
+/** How often the open chat is read while its stream is down, as `main` always did. */
+export const CHAT_POLL_MS = 30_000;
+/**
+ * `sessionId` is the open assistant's canonical session as bootstrap names it. Hermes announces a new
+ * one on the household roster only, so a change reloads the chat and reconnects its stream.
+ */
+export function useConversation(botId: string, userId?: string, onMissing?: (botId: string) => void, sessionId?: string) {
   const missing = useRef(onMissing);
   missing.current = onMissing;
   const [conversation, setConversation] = useState<SavedConversation | null>(
     null,
   );
-  const [disconnected, setDisconnected] = useState(false);
+  // The chat whose latest read failed: a fact at once, so actions that need the connection are refused.
+  // The chat that shows it is disconnected: see DISCONNECT_GRACE_MS. Each belongs to the chat it was
+  // read for, so a failure gates nothing once its chat closes or leaves the roster, where no read
+  // would ever clear it.
+  const [readFailedFor, setReadFailedFor] = useState("");
+  const [disconnectedFor, setDisconnectedFor] = useState("");
+  const readFailed = !!botId && readFailedFor === botId;
+  const disconnected = !!botId && disconnectedFor === botId;
   const [reviewed, setReviewed] = useState(false);
   useEffect(() => setReviewed(false), [conversation?.activity.state, conversation?.activity.runId]);
   const [atLatest, setAtLatest] = useState(true);
@@ -96,6 +136,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   current.current = conversation;
   const requestEarlier = useRef<() => void>(() => {});
   const requestStart = useRef<(messageId: string) => void>(() => {});
+  const rebind = useRef<() => void>(() => {});
   const botIdRef = useRef(botId);
   botIdRef.current = botId;
   useEffect(() => {
@@ -122,7 +163,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // A conversation opened before shows at once while it is checked again, unless it opens at a message.
     const cached = opening ? undefined : cachedResponse<SavedConversation>(firstPage(botId));
     setConversation(cached?.botId === botId ? cached : null);
-    setDisconnected(false);
+    setReadFailedFor("");
+    setDisconnectedFor("");
     setReviewed(false);
     // The window starts at its oldest loaded message so new turns never push it along.
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
@@ -172,7 +214,26 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       else heldTurn = undefined;
       return patch(shown, latestInflight);
     };
-    let loading = false, again = false, more = false, gone = false;
+    // Failed reads in a row, and the grace a first one that may be a blip starts.
+    let failures = 0, grace: ReturnType<typeof setTimeout> | undefined;
+    const stopWaiting = () => { clearTimeout(grace); grace = undefined; };
+    const readOk = () => {
+      failures = 0;
+      stopWaiting();
+      setReadFailedFor("");
+      setDisconnectedFor("");
+    };
+    const readFailedWith = (error: unknown) => {
+      failures++;
+      setReadFailedFor(botId);
+      if (failures > 1 || provesDisconnected(error)) {
+        stopWaiting();
+        setDisconnectedFor(botId);
+        return;
+      }
+      grace = setTimeout(() => { grace = undefined; if (live) setDisconnectedFor(botId); }, DISCONNECT_GRACE_MS);
+    };
+    let loading = false, again = false, more = false, gone = false, lastRead = 0;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
@@ -245,14 +306,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
         }
         setConversation(compose(result));
-        setDisconnected(false);
+        lastRead = Date.now();
+        // Every read carries this person's draft. A reconnect's read is how a draft changed while the
+        // stream was down shows at once; the draft hook applies it only if it is newer than its copy.
+        if ("draft" in result) window.dispatchEvent(new CustomEvent<DraftNotice>(DRAFT_EVENT, { detail: { botId, revision: result.draft?.revision ?? 0, draft: result.draft } }));
+        readOk();
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
         if (live && error instanceof ApiError && error.code === "assistant_not_found") {
           gone = true;
           missing.current?.(botId);
         } else if (live) {
-          setDisconnected(true);
+          readFailedWith(error);
           if (earlierPage) setEarlier({ loading: false, failed: true });
         }
       } finally {
@@ -328,31 +393,59 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
       showInflight(value);
       return true;
-    });
+    }, { onHealth: up => reportStream(chatStream(botId), up) });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
       if (navigator.onLine === false || document.visibilityState === "hidden") return;
       stream.open();
       void load();
     };
-    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
-    const stopPolling = pollWhileVisible(wake, 30_000);
-    // A hidden page holds no stream; showing it again reloads and reopens one.
-    const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
-    window.addEventListener("online", wake);
-    window.addEventListener("agent-interface:reconnect", wake);
+    // The network returning, or a manual retry that reached the server, makes the stream's earlier failures
+    // stale. The stream holds a signal that arrives while the page is hidden until it is shown.
+    const revive = () => {
+      stream.reconnect();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
+      void load();
+    };
+    // Change notices drive updates, and this poll is their safety net: every 30 seconds while the stream is
+    // down, as from a cut until its watchdog reconnects it, and every LIVE_POLL_MS while it is live. Showing
+    // the page reads too: a hidden page suspended the stream, so it is not up then.
+    const stopPolling = pollWhileVisible(() => {
+      if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
+    }, CHAT_POLL_MS);
+    // A new canonical session: the server's stream state for this chat followed the old one. The stream is
+    // suspended, not closed, so it keeps its retry budget: the bootstrap read that named the session says
+    // nothing about whether this stream's endpoint recovered. A stream that never failed reopens at once.
+    rebind.current = () => {
+      stream.suspend();
+      if (document.visibilityState !== "hidden") stream.open();
+      void load();
+    };
+    // A hidden page holds no stream; showing it again reloads and reopens one when its retry budget allows.
+    const hide = () => { if (document.visibilityState === "hidden") stream.suspend(); };
+    window.addEventListener("online", revive);
+    window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
+      stopWaiting();
       requestEarlier.current = () => {};
       requestStart.current = () => {};
+      rebind.current = () => {};
       stopPolling();
       stream.close();
-      window.removeEventListener("online", wake);
-      window.removeEventListener("agent-interface:reconnect", wake);
+      window.removeEventListener("online", revive);
+      window.removeEventListener("agent-interface:reconnect", revive);
       document.removeEventListener("visibilitychange", hide);
     };
   }, [botId, userId]);
+  // Only a change from one known session to another rebinds: a first value, or none, is not a new session.
+  const bound = useRef<{ botId: string; sessionId?: string }>(undefined);
+  useEffect(() => {
+    const previous = bound.current;
+    bound.current = { botId, sessionId };
+    if (previous?.botId === botId && previous.sessionId && sessionId && previous.sessionId !== sessionId) rebind.current();
+  }, [botId, sessionId]);
   // Only messages with something to read count as seen, so a reply that was still
   // reasoning when the reader looked away is new once its text arrives.
   const markSeen = (messages: Message[]) => {
@@ -645,5 +738,5 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     openMessage,
     openAt,
   }), [hasEarlier, complete, earlier, atLatest, atAttention, unseen, loadEarlier, jumpToLatest, anchorSend, sentAs, openMessage, openAt]);
-  return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
+  return { conversation, setConversation, disconnected, readFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
 }

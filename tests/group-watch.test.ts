@@ -292,7 +292,7 @@ describe("event stream setup", () => {
     const raw = Object.assign(new EventEmitter(), {
       destroyed, writableEnded: false, writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), destroy: vi.fn(),
     });
-    return { raw, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
+    return { raw, request: { query: {} }, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
   }
 
   it("ends at once, tearing down what setup reserved, when the client already left", () => {
