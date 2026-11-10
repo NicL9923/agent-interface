@@ -6,8 +6,6 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <!-- Before anything else: applies the saved theme and starts the first read. See public/boot.js. -->
-    <script src="/boot.js"></script>
     <meta name="theme-color" content="#24705c" />
     <meta name="apple-mobile-web-app-title" content="WildBots" />
     <meta
@@ -19,6 +17,8 @@
     <link rel="icon" type="image/svg+xml" sizes="any" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <title>WildBots</title>
+    <!-- Before the app's code and styles: applies the saved theme and starts the first read. See public/boot.js. -->
+    <script src="/boot.js"></script>
   </head>
   <body>
     <div id="root"></div>

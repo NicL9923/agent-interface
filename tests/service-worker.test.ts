@@ -622,20 +622,20 @@ describe('service worker app shell', () => {
       expect(await boot(sw)).toBe('this release');
     });
 
-    it('comes from the network, as the shell does, once the shell is noted as out of date', async () => {
+    it('comes from this release\'s cache without asking the network, even once the shell is noted as out of date', async () => {
       const sw = withBoot();
       fromNetwork(sw);
       await sw.navigate();
       expect(outdated(sw)).toBe(true);
-      expect(await boot(sw)).toBe('next release');
+      // A download that never finishes would block the page's <head>; the network is not asked.
+      sw.fetch.mockImplementation(() => new Promise(() => {}));
+      expect(await boot(sw)).toBe('this release');
     });
 
-    it('falls back to this release\'s copy offline, as the shell does', async () => {
-      const sw = withBoot();
+    it('comes from the network only when this release holds no copy', async () => {
+      const sw = installed();
       fromNetwork(sw);
-      await sw.navigate();
-      sw.fetch.mockRejectedValue(new Error('offline'));
-      expect(await boot(sw)).toBe('this release');
+      expect(await boot(sw)).toBe('next release');
     });
   });
 

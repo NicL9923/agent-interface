@@ -125,7 +125,9 @@ The web app's first read, its sign-in check (`/api/bootstrap`), starts before th
 has downloaded. `index.html` loads `public/boot.js` first, a small script served as written,
 which starts that read and leaves it for the app, so a load reads bootstrap once and a
 returning visit no longer waits for the code before asking. The app takes the read only if it
-is the one the app would make, and judges its answer exactly as its own. If the read fails or
+is the one the app would make and the account record below is the one the script saw, and
+judges its answer exactly as its own, discarding it if the record changes before it arrives.
+The script starts no read while another tab's sign-in or sign-out is under way. If the read fails or
 is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
 before. The same script applies the theme this device last showed the signed-in person, so a
 dark theme never opens light. The browser keeps that theme with the account it belongs to, in
@@ -374,11 +376,15 @@ when a release changed it.
   the worker stays, so one bad answer never costs a person their work.
 - With no cached shell, as on a first visit or after storage is cleared, the network answers.
 
-`/boot.js` follows the shell: the worker installs it with the shell and serves this release's
-copy while the cached shell opens, and the server's once the shell is noted as out of date. The
-server sends it with `no-cache`, as it does the shell, and answers a missing one with a 404, not
-the shell. A `boot.js` and an app from different releases still work: the app takes the read only
-when it is the read the app would make, so the worst case is one extra bootstrap read.
+`/boot.js` blocks the page's `<head>` before any of the app's code runs, so no deadline of the
+app's covers it: a download that stalls leaves a blank page, with no title, until the browser
+gives up on it. The worker installs it with the shell and always answers this release's copy at
+once, even after the shell is noted as out of date, so an installed app never waits on the
+network for it. A first visit, or a browser without the worker, fetches it, and a stall there
+looks as a stalled shell or bundle did before. The server sends it with `no-cache`, as it does
+the shell, and answers a missing one with a 404, not the shell. A `boot.js` and an app from
+different releases still work: the app takes the read only when it is the read the app would
+make, so the worst case is one extra bootstrap read.
 
 A release that finishes installing is offered with **Refresh**, as before; the worker never
 switches releases under an open page. The shell is not fetched with navigation preload,
