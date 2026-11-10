@@ -273,3 +273,22 @@ set by hand.
 `npx vitest run tests/image-dimensions-ui.test.ts tests/app-ui.test.ts`: 2 files, 109 tests passed; `npm test`:
 193 files, 3,217 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4361`): 23 passed in Chromium.
 Safari, Firefox and a real phone: not run.
+
+## Third review: Grok 4.7 on `b90481e`
+
+Ready, no findings. Runtime-exercised in Chromium by the reviewer:
+
+- A six-note chat with a 1170 x 2532 image last, reader 48 px off the end: the frame went from the 4:3 box to
+  183 x 396 on load and the row's top stepped 0 px in three samples, one of them after paint.
+- A chat where the row can leave: the ratio stayed unset while the image was in view, applied once the row left or
+  the reader returned to the end, and the added scroll listener was removed each time.
+- Layout shift on opening the six-image chat, 2 runs each: at 390 x 844 this branch 0.291 and `main` 0.935; at
+  1280 x 800 this branch 0.064 and `main` 0.464.
+- A control that delays the transcript's own observer one frame stepped 84 px in all three samples, so the paint
+  sampler would see a late correction.
+
+Its four breaks of the image tests went red as expected, except that removing the scroll listener left the
+never-leaves test green, which is that test's design.
+
+After merging `main` at `4426862`: `npm run typecheck`, `npm run lint`, `ruff check .` passed; `npm test`: 194 files,
+3,229 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4273`): 23 passed in Chromium.
