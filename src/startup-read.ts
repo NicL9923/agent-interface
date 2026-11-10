@@ -1,3 +1,4 @@
+import { accountRecordIs } from "./app/account-epoch";
 /**
  * The read public/boot.js starts from the page's <head>, before this bundle has downloaded: the app's
  * first bootstrap. boot.js leaves it on window; the first api() read of the same path takes it, once,
@@ -8,8 +9,9 @@
  * so can hand over parsed data. A read started before the bundle can only hand over its Response,
  * which then goes through every check api() makes of its own.
  */
-export const STARTUP_READ_VERSION = 1;
-type StartupRead = { version: number; path: string; response: PromiseLike<Response>; abort(): void };
+export const STARTUP_READ_VERSION = 2;
+/** `epoch` is the account record's text when boot.js started the read, '' for none. */
+type StartupRead = { version: number; path: string; epoch: string; response: PromiseLike<Response>; abort(): void };
 declare global {
   interface Window { __wildbotsStartup?: unknown }
 }
@@ -17,6 +19,7 @@ declare global {
 function parse(value: unknown): StartupRead | null {
   if (!value || typeof value !== "object") return null;
   const read = value as Partial<StartupRead>;
+  // An `epoch` that is not text never equals the stored record, so the claim below drops it.
   if (read.version !== STARTUP_READ_VERSION || typeof read.path !== "string" || typeof read.abort !== "function") return null;
   return typeof read.response?.then === "function" ? read as StartupRead : null;
 }
@@ -42,10 +45,16 @@ export function takeStartupRead(path: string, signal: AbortSignal, fallback: () 
     return undefined;
   }
   if (read.path !== path) return undefined;
+  // Made under another account record: the cookie it carried may be another account's. The app asks for itself.
+  if (!accountRecordIs(read.epoch)) {
+    dropStartupRead();
+    return undefined;
+  }
   window.__wildbotsStartup = undefined;
   const abort = () => read.abort();
   if (signal.aborted) abort();
   else signal.addEventListener("abort", abort, { once: true });
+  // An answer that arrives after the record changed is discarded by api(), as any answer is.
   return Promise.resolve(read.response)
     .then(response => response, error => signal.aborted ? Promise.reject(error) : fallback())
     .finally(() => signal.removeEventListener("abort", abort));

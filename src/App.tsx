@@ -45,7 +45,7 @@ import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPan
 import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
-import { rememberTheme } from "./app/saved-theme";
+import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
 import { signOutOf } from "./app/account-change";
@@ -68,6 +68,8 @@ export function App() {
   useEffect(() => {
     if (!pending) return;
     const start = accountStart();
+    // The last account's theme goes with it; the saved one stays while the hint still names its account.
+    document.documentElement.dataset.theme = savedTheme() ?? "system";
     // An address that named the last account's chat or panel opens nothing of it for the next.
     if ("start" in start && start.leftAccount && location.search) history.replaceState(history.state, "", "/");
     setShown({ changes, start, generation: accountGeneration() });

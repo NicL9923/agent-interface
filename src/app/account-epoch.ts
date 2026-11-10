@@ -122,6 +122,14 @@ export function accountMark(): AccountMark {
   }
   return { generation, era };
 }
+/**
+ * Whether the stored record is `text` and this tab acts under it, as for a read public/boot.js made
+ * before the app loaded. With no app drawing, only the stored record is compared.
+ */
+export function accountRecordIs(text: string) {
+  checkAccount();
+  return stored() === text && (!guarding || held === text);
+}
 /** Whether an answer to a request marked `mark` may still be used. */
 export function accountStill(mark: AccountMark) {
   if (!guarding) return mark.generation === generation;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
 import { act, createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authEpochKey, draftKey, signInHintKey } from "../src/app/storage";
@@ -119,6 +120,21 @@ async function answerHeld(match: string, override?: { status: number; body: unkn
   await advance(0);
 }
 
+/** Answers the one held request that went out with `carried` as its cookie. */
+async function answerSentAs(match: string, carried: Member | null, override?: { status: number; body: unknown }) {
+  const found = held.filter(item => item.call.call.startsWith(match) && item.call.cookie === carried);
+  expect(found, `one held ${match} sent as ${carried}`).toHaveLength(1);
+  held = held.filter(item => item !== found[0]);
+  await act(async () => found[0].answer(override));
+  await advance(0);
+}
+// public/boot.js as the shell runs it, before the bundle: the browser's fetch, storage and window.
+const runBoot = () => window.eval(readFileSync("public/boot.js", "utf8"));
+const accountMenu = async (tab: Tab) => {
+  await act(async () => tab.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  return tab.container.querySelector('[role="menu"][aria-label="Account"]')?.textContent ?? "";
+};
+
 // --- Tabs ---
 type Tab = { container: HTMLDivElement; text(): string };
 async function openTab(url = "/"): Promise<Tab> {
@@ -173,6 +189,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   data.clear();
+  window.__wildbotsStartup = undefined;
   queued = [];
   onWrite = undefined;
   cookie = null;
@@ -393,3 +410,75 @@ describe("the account record's guards", () => {
     expect(tab.text()).not.toContain("Enter local workspace");
   });
 });
+
+describe("the theme this device keeps", () => {
+  it("goes with member one when another tab signs member two in, while the tab waits for two's bootstrap", async () => {
+    const one = accounts.one;
+    accounts.one = { ...one, preferences: { ...one.preferences, theme: "dark" } };
+    try {
+      const signInTab = await openTab();
+      signedInAs("one");
+      const oneTab = await openTab("/?bot=ranch");
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      holding = ["GET /bootstrap"];
+      await signInAs(signInTab, "two");
+      await deliver();
+      expect(oneTab.text()).toContain("Connecting to your household");
+      expect(document.documentElement.dataset.theme).toBe("system");
+      expect(data.has("agent-interface:theme")).toBe(false);
+    } finally {
+      accounts.one = one;
+    }
+  });
+});
+
+describe("the read boot.js starts before the bundle", () => {
+  it("is not shown when another tab signed member two in while the bundle loaded", async () => {
+    // The reviewer's case: member one's early bootstrap is on its way when another tab signs two in.
+    const signInTab = await openTab();
+    signedInAs("one");
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(held.map(item => [item.call.call, item.call.cookie])).toEqual([["GET /bootstrap?roster=lean", "one"]]);
+    // The read is on the first page's window, which the test's one window stands in for; the other tab never sees it.
+    const early = window.__wildbotsStartup;
+    window.__wildbotsStartup = undefined;
+    await signInAs(signInTab, "two");
+    await answerSentAs("GET /bootstrap", "two");
+    expect(signInTab.text()).toContain("Barn Cat");
+    // The first page's bundle arrives now, then member one's early answer.
+    window.__wildbotsStartup = early;
+    const firstTab = await openTab();
+    await answerSentAs("GET /bootstrap", "two");
+    await answerSentAs("GET /bootstrap", "one");
+    expect(firstTab.text()).toContain("Barn Cat");
+    showsNothingOf(firstTab);
+    expect(await accountMenu(firstTab)).toContain("bo@example.test");
+    showsNothingOf(firstTab);
+  });
+
+  it("is discarded when another tab starts a sign-in after the app took it, before it answered", async () => {
+    signedInAs("one");
+    holding = ["GET /bootstrap", "POST /auth/local"];
+    runBoot();
+    const firstTab = await openTab();
+    // The app took the early read instead of asking: one bootstrap so far.
+    expect(calls.filter(call => call.call.startsWith("GET /bootstrap"))).toHaveLength(1);
+    data.set(authEpochKey, JSON.stringify({ id: "elsewhere", at: NOW, changing: true, user: "one" }));
+    await answerSentAs("GET /bootstrap", "one");
+    showsNothingOf(firstTab);
+    expect(firstTab.text()).toContain("Connecting to your household");
+  });
+
+  it.each([
+    ["is not started while another tab's sign-in is on its way", NOW - 64_000, 0],
+    ["is started when the mark is older than any request could take", NOW - 65_000, 1],
+  ])("%s", (_name, at, reads) => {
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "elsewhere", at, changing: true, user: "one" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(held).toHaveLength(reads);
+  });
+});
+
