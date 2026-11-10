@@ -2,10 +2,9 @@ import { useRef, useState } from "react";
 import type { Message, SubmissionReceipt } from "../shared/types";
 import type { MessageRequest } from "../shared/api";
 import { retryRequestId } from "../shared/retry-id";
-import { ApiError } from "../client-api";
+import { ApiError, request as apiRequest } from "../client-api";
 import type { SavedConversation } from "./storage";
 import { retryTarget } from "./transcript-logic";
-import { sendMessage } from "./conversation-page";
 import { useReceiptCheck } from "./use-receipt-check";
 
 /** What this view knows about the retry of one failed turn. */
@@ -80,7 +79,7 @@ export function useTurnRetry({ botId, userId, canonical, blocked, resendable, re
       // `retryOf` names the message, and a retry never carries a draft revision.
       const body: MessageRequest = { requestId, text: original.text, attachments: original.files ?? [], retryOf: original.id,
         ...(again ? { reviewedUncertain: true } : {}) };
-      settle(forTurn, await sendMessage(botId, body));
+      settle(forTurn, await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body }));
     } catch (cause) {
       const shown = turnRef.current === forTurn;
       // Only a first attempt the server refused outright never reached Hermes. Anything else may

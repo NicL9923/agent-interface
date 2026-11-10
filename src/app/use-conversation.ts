@@ -9,7 +9,7 @@ import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 import { DRAFT_EVENT } from "./use-draft";
-import { firstPage, firstQuery, prefetchedFirstPage, supersedePrefetch, type PageQuery } from "./conversation-page";
+import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
@@ -139,9 +139,6 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
-    // Only the chat's first load may take a prefetched page. Every later load is a stream notice, a
-    // reconnect or a poll, which exists to see what changed since, so it always asks the server.
-    let opened = false;
     let watch: ReplyWatch = {};
     let announced = 0;
     let secureRequestIds = new Set<string>();
@@ -158,15 +155,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
         : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
-        // A prefetch of the latest page, on its way or just finished, is the first load; if it fails, read again.
-        const joined = !opened && query === firstQuery ? prefetchedFirstPage(botId) : undefined;
-        opened = true;
-        let result = await joined?.catch(() => undefined);
-        if (!result) {
-          result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
-          // This read is newer than any prefetch of the chat, so none may answer a later first load.
-          supersedePrefetch(botId);
-        }
+        // Every load asks, even for another window, so the first one uses up a link's startup read.
+        // Only the latest page can take what it answers; if that read fails, read again.
+        const prefetched = prefetchedFirstPage(botId);
+        const joined = query === firstQuery ? prefetched : undefined;
+        const result = await joined?.catch(() => undefined)
+          ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {

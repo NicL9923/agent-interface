@@ -5,7 +5,6 @@ import "./vault.css";
 import { FormMessage } from "./ui/form-message";
 import { attentionAnchor } from "../app/transcript-logic";
 import { rememberSettled } from "../app/waiting-input";
-import { supersedePrefetch } from "../app/conversation-page";
 import { Icon } from "./Icon";
 
 // The accepted card reads for this long, then folds to its one-line receipt.
@@ -98,7 +97,6 @@ export function SecureRequestCard({ request, requestId, botId, ownerId, title, d
     const started = scope; setBusy(true);
     try {
       const conversation = await apiRequest("GET /bots/:id/conversation", { params: { id: botId } });
-      supersedePrefetch(botId);
       if (!active(started)) return;
       const pending = conversation.attention?.some(item => item.id === requestId && JSON.stringify(item.secure) === JSON.stringify(request));
       if (!pending) { uncertainRequests.delete(started); setSettled(true); setNotice("Hermes is no longer waiting for this request."); setError(""); }

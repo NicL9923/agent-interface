@@ -1,6 +1,6 @@
 import { clearResponseCache } from "../client-api";
 import { SESSION_MAX_AGE_MS } from "../shared/session";
-import { prefetchFirstPage } from "./conversation-page";
+import { prefetchLinkedPage } from "./conversation-page";
 import { localRead, localRemove, localSave, signInHintKey } from "./storage";
 import { initialMessage, initialView } from "./view";
 
@@ -86,8 +86,9 @@ export function settleLinkedChat(user: string) {
 
 /**
  * Starts reading the chat the first address names, such as a notification link, beside bootstrap
- * instead of after it. The chat joins this read when it opens (see prefetchedFirstPage), and the
- * read is dropped if bootstrap finds another account or none.
+ * instead of after it. The chat's first load after the page loaded opens from this read, on its
+ * way or finished, and no later load does (see prefetchedFirstPage). The read is dropped if
+ * bootstrap finds another account or none.
  *
  * It reads only what this browser's last sign-in could open, so a signed-out person or a chat they
  * may not see usually costs no refused request. A session the server ended early, or a chat made
@@ -103,5 +104,5 @@ export function prefetchLinkedChat() {
   settled();
   speculative = hint.user;
   window.addEventListener("storage", changed);
-  prefetchFirstPage(botId);
+  prefetchLinkedPage(botId);
 }

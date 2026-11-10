@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, request } from "../client-api";
 import { STOP_SPEECH } from "../shared/voice";
-import { supersedePrefetch } from "./conversation-page";
 import { setTalkLive } from "./talk-live";
 import { TalkLoop, type TalkCaptions, type TalkPhase } from "./talk-loop";
 
@@ -93,11 +92,7 @@ export function useTalk(botId: string, name: string): Talk {
       const channel = current.channel = pc.createDataChannel("oai-events");
       const loop = current.loop = new TalkLoop({
         send: event => { if (channel.readyState === "open") channel.send(JSON.stringify(event)); },
-        // A spoken request is sent to the chat like a typed one, so it retires an earlier prefetch too.
-        ask: (requestId, text, signal, heard) => {
-          supersedePrefetch(botId);
-          return request("POST /bots/:id/talk/ask", { params: { id: botId }, body: { requestId, request: text, ...(heard.length ? { heard: [...heard] } : {}) }, signal });
-        },
+        ask: (requestId, text, signal, heard) => request("POST /bots/:id/talk/ask", { params: { id: botId }, body: { requestId, request: text, ...(heard.length ? { heard: [...heard] } : {}) }, signal }),
         phase: phase => { if (!stale()) setStatus(phase); },
         captions: next => { if (!stale()) setCaptions(next); },
         activity: () => { current.heard = Date.now(); },

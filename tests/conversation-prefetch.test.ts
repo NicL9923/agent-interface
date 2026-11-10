@@ -9,6 +9,7 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { mountRoot } from "./ui-harness";
 import type { ComponentProps } from "react";
+import type { Root } from "react-dom/client";
 
 vi.mock("../src/components/Avatar", async original => ({
   ...await original<typeof import("../src/components/Avatar")>(),
@@ -35,14 +36,7 @@ beforeEach(() => {
   paths = [];
   held = [];
   respond = path => json(path.includes("/conversation") ? page(path.split("/")[3]) : {});
-  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit = {}) => {
-    paths.push(url);
-    // As a browser's fetch does, a read stopped on its way rejects.
-    return new Promise<Response>((resolve, reject) => {
-      init.signal?.addEventListener("abort", () => reject(new DOMException("The read was stopped.", "AbortError")), { once: true });
-      respond(url).then(resolve, reject);
-    });
-  }));
+  vi.stubGlobal("fetch", vi.fn((url: string) => { paths.push(url); return respond(url); }));
   vi.stubGlobal("EventSource", FakeEventSource);
   FakeEventSource.reset();
 });
@@ -128,26 +122,33 @@ describe("home rows prefetch the chat they open", () => {
 
 describe("opening a chat after a prefetch", () => {
   let latest: ReturnType<typeof useConversation>;
-  const Chat = () => {
-    latest = useConversation("barn", "one");
+  const Chat = ({ botId }: { botId: string }) => {
+    latest = useConversation(botId, "one");
     return createElement("p", null, latest.conversation?.messages.map(message => message.text).join(","));
   };
-  const open = async () => {
+  const roots = new Map<HTMLDivElement, Root>();
+  const open = async (botId = "barn") => {
     const { container, root } = mountRoot();
-    await act(async () => root.render(createElement(Chat)));
+    roots.set(container, root);
+    await act(async () => root.render(createElement(Chat, { botId })));
     return container;
   };
+  const leave = (container: HTMLDivElement) => act(async () => roots.get(container)!.unmount());
 
-  // The chat's change stream reads again as it connects, so a read this fresh needs no repeat.
-  it.each([[4_999, 1], [5_000, 2]])("opened %ims after a prefetch finished, reads the chat %i time(s) to show it", async (gap, reads) => {
+  // A hover read that finished is only a cached page to show at once. Reusing it as the load would
+  // show a page from before anything the person did since, so the chat always reads again.
+  it("shows a finished prefetch at once from the cache and still reads the chat", async () => {
     const { prefetchFirstPage } = await import("../src/app/conversation-page");
     prefetchFirstPage("barn");
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    vi.setSystemTime(Date.now() + gap);
+    vi.setSystemTime(Date.now() + 1);
+    respond = path => path.includes("/conversation") ? hold() : json({});
     const container = await open();
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(container.textContent).toBe("Hello");
-    expect(conversationReads()).toHaveLength(reads);
+    expect(conversationReads()).toHaveLength(2);
+    held[0](new Response(JSON.stringify(page("barn", "Read on open")), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toBe("Read on open");
   });
 
   it("uses the read already on its way as the first load", async () => {
@@ -180,66 +181,96 @@ describe("opening a chat after a prefetch", () => {
     expect(conversationReads()).toHaveLength(3);
   });
 
-  // A finished prefetch answers the chat's first load only. An empty chat has no window to start
-  // from, so every later load asks for the same first page and must not be handed the old read.
-  it("reads fresh for the stream's connection and each notice after an empty prefetch", async () => {
+  // Only the first load may take the link's read. An empty chat has no window to start from, so every
+  // later load asks for the same first page and must not be handed the old read. This case opens the
+  // change stream, whose connection is the first of those later loads.
+  it("reads fresh for the stream's connection and each notice after opening from an empty startup read", async () => {
     let reads = 0;
     const empty = { ...page("barn"), messages: [] };
     respond = path => path.includes("/conversation") ? json(++reads === 1 ? empty : page("barn", "First reply")) : json({});
-    const { prefetchFirstPage } = await import("../src/app/conversation-page");
-    prefetchFirstPage("barn");
+    const { prefetchLinkedPage } = await import("../src/app/conversation-page");
+    prefetchLinkedPage("barn");
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     const container = await open();
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(container.textContent).toBe("");
     expect(conversationReads()).toHaveLength(1);
-    // Inside the five seconds a finished prefetch stays joinable.
     await act(async () => { [...FakeEventSource.streams][0].connect(); await vi.advanceTimersByTimeAsync(1_000); });
     expect(conversationReads()).toHaveLength(2);
     expect(container.textContent).toBe("First reply");
     await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
-    // The notice reads the window from its first message, a newer transcript read than the prefetch.
     expect(conversationReads().at(-1)).toBe("/api/bots/barn/conversation?start=barn-1");
   });
 
-  // The open chat reads for itself while an older prefetch of it is still out. Its read is newer, so
-  // the prefetch may neither answer the chat's next first load nor land in the cache over it.
-  it("drops a prefetch still on its way when a newer read of the chat completes", async () => {
+  // A notice that arrives while the first load waits on a hover read is about something newer than
+  // that read. An empty chat has no window to start from, so the load the notice queues asks for the
+  // same first page, and must not be handed the read it was queued behind.
+  it("reads fresh for a notice that arrived while an empty chat's first load waited on a prefetch", async () => {
     respond = path => path.includes("/conversation") ? hold() : json({});
-    const { prefetchFirstPage, prefetchedFirstPage } = await import("../src/app/conversation-page");
-    const container = await open();
-    held[0](new Response(JSON.stringify(page("barn", "Opened")), { status: 200 }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const { prefetchFirstPage } = await import("../src/app/conversation-page");
     prefetchFirstPage("barn");
-    expect(prefetchedFirstPage("barn")).toBeDefined();
+    const container = await open();
     await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
-    // The notice reads the window from its first message, a newer transcript read than the prefetch.
-    expect(conversationReads().at(-1)).toBe("/api/bots/barn/conversation?start=barn-1");
-    held[2](new Response(JSON.stringify(page("barn", "Newer")), { status: 200 }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(container.textContent).toBe("Newer");
-    expect(prefetchedFirstPage("barn")).toBeUndefined();
-    held[1](new Response(JSON.stringify(page("barn", "Older")), { status: 200 }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    expect(prefetchedFirstPage("barn")).toBeUndefined();
-    // The first page's cache keeps the chat's own read, not the stopped prefetch's older one.
-    expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Opened");
+    expect(conversationReads()).toHaveLength(1);
+    await act(async () => { held[0](new Response(JSON.stringify({ ...page("barn"), messages: [] }), { status: 200 })); await vi.advanceTimersByTimeAsync(0); });
+    expect(conversationReads()).toEqual(["/api/bots/barn/conversation?turns=20", "/api/bots/barn/conversation?turns=20"]);
+    await act(async () => { held[1](new Response(JSON.stringify(page("barn", "First reply")), { status: 200 })); await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toBe("First reply");
   });
 
-  // The prefetch's abort comes too late once both bodies are being read: the newer read's body ends,
-  // then the older one's in the same turn, and both land before the newer read's caller can retire
-  // the prefetch. The cache must still keep the newer page, which a reopened chat shows first.
+  // The read a link starts as the page loads may answer the first chat load once, finished or not.
+  // Nothing the person does can come before that load; everything after it can, so a second open
+  // of the chat, however soon, reads again. These cases never open the change stream.
+  it.each([["finished", true], ["still on its way", false]])("answers the first load from the link's read %s, and reads again on the next open", async (_name, finished) => {
+    respond = path => path.includes("/conversation") ? hold() : json({});
+    const { prefetchLinkedPage } = await import("../src/app/conversation-page");
+    prefetchLinkedPage("barn");
+    const end = () => act(async () => { held[0](new Response(JSON.stringify(page("barn", "Linked")), { status: 200 })); await vi.advanceTimersByTimeAsync(0); });
+    if (finished) await end();
+    const first = await open();
+    if (!finished) await end();
+    expect(first.textContent).toBe("Linked");
+    expect(conversationReads()).toHaveLength(1);
+    await leave(first);
+    const second = await open();
+    expect(second.textContent).toBe("Linked");
+    expect(conversationReads()).toHaveLength(2);
+    await act(async () => { held[1](new Response(JSON.stringify(page("barn", "Read again")), { status: 200 })); await vi.advanceTimersByTimeAsync(0); });
+    expect(second.textContent).toBe("Read again");
+  });
+
+  // The first chat load after the page loaded uses the link's read up, whichever chat or window it
+  // reads, so the read can never answer a later open.
+  it.each([
+    ["another chat", "ranch", "/"],
+    ["a message window in the same chat", "barn", "/?bot=barn&message=barn-1"],
+  ])("never answers a later open once the first load was for %s", async (_name, firstChat, url) => {
+    history.replaceState(null, "", url);
+    try {
+      const { prefetchLinkedPage } = await import("../src/app/conversation-page");
+      prefetchLinkedPage("barn");
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      const first = await open(firstChat);
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      await leave(first);
+      history.replaceState(null, "", "/");
+      const reads = conversationReads().filter(path => path.startsWith("/api/bots/barn/conversation?turns=")).length;
+      await open("barn");
+      expect(conversationReads().filter(path => path.startsWith("/api/bots/barn/conversation?turns="))).toHaveLength(reads + 1);
+    } finally { history.replaceState(null, "", "/"); }
+  });
+
+  // An older read's body that ends just after a newer one's must not replace it in the cache, which
+  // a reopened chat shows first.
   it("keeps the newer read's page cached when an older prefetch's body ends just after it", async () => {
     const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
     respond = path => Promise.resolve(path.includes("/conversation")
       ? new Response(new ReadableStream<Uint8Array>({ start: controller => { bodies.push(controller); } }), { status: 200 })
       : new Response("{}", { status: 200 }));
-    const { firstQuery, prefetchFirstPage, prefetchedFirstPage, supersedePrefetch } = await import("../src/app/conversation-page");
+    const { firstQuery, prefetchFirstPage } = await import("../src/app/conversation-page");
     const { request } = await import("../src/client-api");
     prefetchFirstPage("barn");
-    const newer = request("GET /bots/:id/conversation", { params: { id: "barn" }, query: firstQuery })
-      .then(read => { supersedePrefetch("barn"); return read; });
+    const newer = request("GET /bots/:id/conversation", { params: { id: "barn" }, query: firstQuery });
     await vi.advanceTimersByTimeAsync(0);
     expect(bodies).toHaveLength(2);
     const end = (body: ReadableStreamDefaultController<Uint8Array>, text: string) => {
@@ -251,8 +282,6 @@ describe("opening a chat after a prefetch", () => {
     expect((await newer).messages[0].text).toBe("Newer");
     await vi.advanceTimersByTimeAsync(0);
     expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Newer");
-    // Nor may the older read become the chat's next first load.
-    expect(prefetchedFirstPage("barn")).toBeUndefined();
   });
 
   it("reads again itself when the prefetch fails", async () => {

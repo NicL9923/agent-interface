@@ -94,6 +94,7 @@ beforeEach(() => {
     // A send Hermes takes, and the draft saves around it.
     if (/^POST \/bots\/[^/]+\/messages$/.test(call))
       return respond({ status: 200, body: { requestId: JSON.parse(String(init.body)).requestId, status: "accepted" } });
+    if (/^POST \/bots\/[^/]+\/requests\/[^/]+$/.test(call)) return respond({ status: 200, body: { ok: true } });
     if (/^PUT \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: { revision: 1 } });
     if (/^GET \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: null });
     if (/^GET \/bots\/[^/]+\/routine-runs$/.test(call)) return respond({ status: 200, body: { runs: [], unavailable: [] } });
@@ -297,40 +298,74 @@ describe("what this browser remembers about its sign-in", () => {
   });
 });
 
+// None of these tests opens the chat's change stream, so every read they count is a load the chat
+// made for itself, except the one case that connects it on purpose.
 describe("returning to a chat", () => {
   const row = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
+  const ranchReads = () => conversationReads().filter(read => read.startsWith("GET /bots/ranch/"));
   const empty: Conversation = { ...page("ranch", ""), messages: [] };
-
   const sent: Conversation = { ...empty, messages: [{ id: "ranch-2", role: "user", text: "Shut the north gate" }] };
-
-  // An empty chat is read early and opened from that read, then sent to. Back within the five
-  // seconds a finished prefetch is joinable, the chat must not take that read again: neither after
-  // a fresh read showed the message, nor when the person left before any read landed.
-  it.each([
-    ["after the chat read the transcript that holds it", true],
-    ["when the person left before any read landed", false],
-  ])("shows the person's message on return, never a page read before they sent it, %s", async (_name, readFirst) => {
-    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
-    await open("/?bot=ranch");
-    await answerChat("ranch", empty);
-    await answerBootstrap(bootstrap);
-    expect(conversationReads()).toHaveLength(1);
+  const asking: Conversation = { ...empty, activity: { state: "waiting" },
+    attention: [{ id: "ask", kind: "clarify", title: "Which gate?", detail: "", questions: [{ id: "gate", prompt: "Which gate should I shut?" }] }] };
+  const answered: Conversation = { ...empty, messages: [{ id: "ranch-2", role: "assistant", text: "Shutting the north gate." }] };
+  const typedSend = async () => {
     await typeInto(container.querySelector("textarea")!, "Shut the north gate");
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
     await advance(0);
     expect(calls).toContain("POST /bots/ranch/messages");
-    if (readFirst) {
+  };
+
+  // The chat opens from the read the link started, then the person acts in it, leaves, and comes back
+  // well inside five seconds. The page the link read is from before the action, so the return must
+  // ask the server. No action has to do anything for that: a finished read answers only the first
+  // load after the page loaded.
+  it.each<[string, Conversation, () => Promise<void>, Conversation, string]>([
+    ["nothing", page("ranch", "The north gate is latched."), async () => {}, page("ranch", "The north gate is latched, still."), "latched, still"],
+    ["a typed send", empty, typedSend, sent, "Shut the north gate"],
+    ["a typed send whose reply was read before leaving", empty, async () => {
+      await typedSend();
       await act(async () => FakeEventSource.notifyAll());
       await answerChat("ranch", sent);
       expect(transcript()).toContain("Shut the north gate");
-    }
+    }, sent, "Shut the north gate"],
+    ["a clarification answer", asking, async () => {
+      await typeInto(container.querySelector<HTMLTextAreaElement>('.attention-card textarea')!, "The north one");
+      await act(async () => container.querySelector<HTMLButtonElement>('.attention-card button[type="submit"]')!.click());
+      await advance(0);
+      expect(calls).toContain("POST /bots/ranch/requests/ask");
+    }, answered, "Shutting the north gate."],
+  ])("reads the chat again after %s, never showing the page the link read", async (_name, first, act_, latest, expected) => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
+    await open("/?bot=ranch");
+    await answerChat("ranch", first);
+    await answerBootstrap(bootstrap);
+    expect(ranchReads()).toHaveLength(1);
+    await act_();
+    const before = ranchReads().length;
     await act(async () => row("Home").click());
     await answerChat("home", page("home", "Morning."));
     await act(async () => row("Ranch Hand").click());
     await advance(0);
-    // The returning chat asks the server rather than taking the prefetch.
-    expect(conversationReads().filter(read => read.startsWith("GET /bots/ranch/"))).toHaveLength(readFirst ? 3 : 2);
-    if (!readFirst) await answerChat("ranch", sent);
-    expect(transcript()).toContain("Shut the north gate");
+    expect(Date.now() - NOW).toBeLessThan(5_000);
+    expect(ranchReads()).toHaveLength(before + 1);
+    await answerChat("ranch", latest);
+    expect(transcript()).toContain(expected);
+  });
+
+  // The chat's change stream reads as it connects, so a page that changed between the link's read
+  // and the chat opening shows anyway.
+  it("reads fresh when the chat's change stream connects after opening from the link's read", async () => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
+    await open("/?bot=ranch");
+    await answerChat("ranch", page("ranch", "Read as the page loaded."));
+    await answerBootstrap(bootstrap);
+    expect(ranchReads()).toHaveLength(1);
+    const stream = [...FakeEventSource.streams].find(item => item.url.includes("/bots/ranch/"));
+    expect(stream, "the chat's change stream").toBeDefined();
+    await act(async () => stream!.connect());
+    await advance(0);
+    expect(ranchReads()).toHaveLength(2);
+    await answerChat("ranch", page("ranch", "Another device's reply."));
+    expect(transcript()).toContain("Another device's reply.");
   });
 });
