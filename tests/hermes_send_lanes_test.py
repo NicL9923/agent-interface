@@ -18,6 +18,9 @@ from hermes_compaction_test import DELAY, Agent, Native
 from hermes_extension_journal_test import PooledHermes, Replies, saved
 
 ADMISSION = ("image.attach", "prompt.submit", "session.steer")
+# Every native method these tests let the add-on call: admission, and the roster and activation an open makes.
+# The add-on's own agent-interface methods are registered on the fake and run as themselves.
+NATIVE = (*ADMISSION, "profiles.list", "session.activate", "session.resume")
 
 
 class LaneHermes(PooledHermes):
@@ -26,7 +29,9 @@ class LaneHermes(PooledHermes):
     Each native handle_request call holds a retirement reservation while it runs, as native's does, so
     maintenance sees every request in flight. ``hold(method, profile)`` returns an Event the next such
     call waits on; ``fail[(method, profile)]`` makes them raise. Each call records the transport bound
-    while it ran. prompt.submit marks the session running, as native admission does.
+    while it ran. prompt.submit marks the session running, as native admission does. A native method outside
+    ``NATIVE`` raises, and is recorded so the test fails at exit even where the add-on turns the error into an
+    answer, so an unexpected call never passes as a success.
     """
     def __init__(self, environment=None):
         super().__init__(environment)
@@ -35,7 +40,7 @@ class LaneHermes(PooledHermes):
         counting = self.retirement.acquire
         self.retirement.acquire = lambda: not self.retiring and counting()
         self.retirement.active_count = lambda: self.active[0]
-        self.gates, self.fail, self.calls, self.changed = {}, {}, [], threading.Condition()
+        self.gates, self.fail, self.calls, self.changed, self.unexpected = {}, {}, [], threading.Condition(), []
         server = self.server
         pooled = server.handle_request
 
@@ -61,6 +66,9 @@ class LaneHermes(PooledHermes):
             return server._ok(request["id"], {"status": "streaming"})
 
         def handle(request):
+            if request["method"] not in NATIVE and request["method"] not in self.registered:
+                self.unexpected.append(request["method"])
+                raise AssertionError("Hermes method not configured for this test: " + request["method"])
             if not self.retirement.acquire():
                 return server._err(request.get("id"), 5035, "backend is retiring; reconnect to continue")
             try:
@@ -80,7 +88,10 @@ class LaneHermes(PooledHermes):
         for gates in self.gates.values():
             for gate in gates:
                 gate.set()
-        return super().__exit__(*exc)
+        result = super().__exit__(*exc)
+        if self.unexpected and exc[0] is None:
+            raise AssertionError("Hermes methods not configured for this test were called: " + ", ".join(self.unexpected))
+        return result
 
     def hold(self, method, profile):
         gate = threading.Event()
@@ -357,6 +368,56 @@ class SendLaneTests(unittest.TestCase):
             self.assertTrue(replies.wait("next"))
             self.assertEqual(replies.answers["next"]["result"]["status"], "accepted")
             self.assertEqual(hermes.settled(), 0)
+
+
+def complete(hermes, sid, status, row_id=None):
+    """A native turn's message.complete, written from a thread of its own as another client's turn would be."""
+    payload = {"status": status, "text": "", **({"persisted_turn": {"user_row_id": row_id}} if row_id is not None else {})}
+    within(lambda: hermes.server.write_json({"method": "event", "params": {"type": "message.complete", "session_id": sid, "payload": payload}}))
+
+
+class AdmissionVisibilityTests(unittest.TestCase):
+    def test_a_turn_completing_while_an_image_send_stages_binds_nothing_to_it(self):
+        with LaneHermes() as hermes:
+            replies = Replies()
+            staging = hermes.hold("image.attach", "slow")
+            hermes.fail[("image.attach", "slow")] = RuntimeError("Synthetic image failure")
+            hermes.send("photo", "slow", replies, attachments=[{"path": "/alice/photo.png", "mime": "image/png"}])
+            self.assertTrue(hermes.reached("image.attach", "slow"))
+            # Alice's intent is written and unbound, and the journal is free, when the desktop's turn completes.
+            self.assertEqual(hermes.journal.db.execute("SELECT status,terminal,row_id FROM receipts WHERE request_id='photo'").fetchone(), ("uncertain", 0, None))
+            complete(hermes, "sid-slow", "complete", row_id=41)
+            staging.set()
+            self.assertTrue(replies.wait("photo"))
+            self.assertEqual(replies.answers["photo"]["result"]["status"], "rejected")
+            self.assertEqual(hermes.journal.db.execute("SELECT status,terminal,row_id FROM receipts WHERE request_id='photo'").fetchone(), ("rejected", 1, None))
+
+    def test_an_open_during_an_admission_names_no_run_until_hermes_answers(self):
+        # Staging and Hermes's own call each hold the admission open.
+        for held, attachments in (("image.attach", [{"path": "/alice/photo.png", "mime": "image/png"}]), ("prompt.submit", [])):
+            with self.subTest(held=held), LaneHermes() as hermes:
+                replies, session = Replies(), hermes.server._sessions["sid-slow"]
+                opened = lambda: hermes.server.handle_request({"id": "open", "method": "agent-interface.open", "params": {"profile": "slow"}})["result"]
+                shown = lambda value: (value["app_run_id"], value["app_task_state"])
+                # The previous task failed; Hermes keeps its partial reply in inflight.
+                hermes.send("first", "slow", replies)
+                self.assertTrue(replies.wait("first"))
+                complete(hermes, "sid-slow", "error")
+                session["running"] = False
+                hermes.server._run_post_turn_followups("first", "sid-slow", session, {"error": "Provider failed"}, None)
+                before = shown(opened())
+                self.assertEqual(before, (None, "failed"))
+                gate = hermes.hold(held, "slow")
+                hermes.send("second", "slow", replies, attachments=attachments)
+                self.assertTrue(hermes.reached(held, "slow", 2 if held == "prompt.submit" else 1))
+                # The open does not wait for the admission, and reports what it did before it.
+                self.assertEqual(shown(within(opened)), before)
+                lookup = within(lambda: hermes.server.handle_request({"id": "lookup", "method": "agent-interface.receipt", "params": {"request_id": "second"}}))
+                self.assertEqual(lookup["result"]["receipt"]["status"], "uncertain")
+                gate.set()
+                self.assertTrue(replies.wait("second"))
+                self.assertEqual(replies.answers["second"]["result"]["status"], "accepted")
+                self.assertEqual(shown(opened()), ("second", None))
 
 
 if __name__ == "__main__":

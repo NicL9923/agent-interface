@@ -492,6 +492,8 @@ def approval_id(row):
 
 # The run a session's newest unsettled receipt belongs to.
 OPEN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1"
+# The run an open names: OPEN_RUN without receipts whose admission Hermes has not answered yet.
+SHOWN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 AND request_id NOT IN (SELECT value FROM json_each(?)) ORDER BY created DESC LIMIT 1"
 LATEST_TERMINAL = "SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
 LATEST_ROOT = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1"
 RUN_TERMINAL = "SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
@@ -599,6 +601,9 @@ class Bridge:
         # The receipt whose prompt this thread's native turn runs, or None. Set around Hermes's
         # _run_prompt_submit, whose turn thread runs with a copy of the caller's context.
         self.turn_claim = contextvars.ContextVar("agent_interface_turn_claim", default=None)
+        # Request IDs whose intent is written but whose admission Hermes has not answered yet. An open
+        # names no run for them, so it shows what it showed before the admission began. journal.lock.
+        self.admitting = set()
         self.maintenance_lock = threading.RLock()
         self.maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
         self.keepers = {}
@@ -1276,7 +1281,9 @@ class Bridge:
         # Other profiles' opens share this connection. Never hold the journal across native calls.
         with self.journal.lock:
             interruption = db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
-            current = db.execute(OPEN_RUN, (sid,)).fetchone()
+            # An admission still waiting on staging or on Hermes's answer is not a run yet: Hermes
+            # may still refuse or queue it, and its turn may not have started.
+            current = db.execute(SHOWN_RUN, (sid, json.dumps(sorted(self.admitting)))).fetchone()
             # Cold resume has a new runtime SID; use the canonical journal owner.
             terminal = self.journal.last_terminal(profile, sid, value["canonical_stored_session_id"])
         value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
@@ -1757,7 +1764,26 @@ class Bridge:
             # committed before any frame of its turn can look for it.
             with journal.db:
                 journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, run_id, text, json.dumps(attachments), steering, "uncertain", time.time()))
+            self.admitting.add(request_id)
         timed("journal", mark)
+        try:
+            return self.admit_native(rid, params, sid, steering, interrupted, stored, phases)
+        finally:
+            with journal.lock:
+                self.admitting.discard(request_id)
+
+    def admit_native(self, rid, params, sid, steering, interrupted, stored, phases):
+        """Image staging and Hermes's admission call for an intent admit just wrote, and the answer.
+
+        Each final journal transaction also ends the admission for readers, so an open sees the
+        intent hidden or the answered receipt, never a receipt Hermes answered still hidden.
+        """
+        journal = self.journal
+        request_id, actor, text = params.get("request_id"), params.get("sender_id"), params.get("text", "")
+        profile = params.get("profile", "default")
+        attachments = params.get("attachments") or []
+        def timed(phase, mark):
+            phases[phase] = phases.get(phase, 0.0) + time.perf_counter() - mark
         staged = []
         mark = time.perf_counter()
         try:
@@ -1771,6 +1797,7 @@ class Bridge:
             with journal.lock, journal.db:
                 journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
                 response = self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
+                self.admitting.discard(request_id)
             timed("journal", mark)
             return response
         timed("staging", mark)
@@ -1796,9 +1823,11 @@ class Bridge:
                 with journal.lock, journal.db:
                     journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
                     response = self.admitted(rid, request_id, exc.refusal_message)
+                    self.admitting.discard(request_id)
             else:
                 with journal.lock, journal.db:
                     response = self.admitted(rid, request_id, str(exc)[:500])
+                    self.admitting.discard(request_id)
             timed("journal", mark)
             return response
         timed("native", mark)
@@ -1813,6 +1842,7 @@ class Bridge:
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
             response = self.admitted(rid, request_id)
+            self.admitting.discard(request_id)
         timed("journal", mark)
         return response
 
