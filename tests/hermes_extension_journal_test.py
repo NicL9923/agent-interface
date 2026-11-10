@@ -1036,8 +1036,10 @@ class CanonicalOpenTests(unittest.TestCase):
             db = hermes.journal.db
             with db:
                 receipt(db, "first", 10, 1, text="Summarize\n@file:\"/srv/report.pdf\"", attachments=[report], actor="kimberly")
+                # The root's turn finished and reported its committed rows, the correction's among them.
+                db.execute("UPDATE receipts SET turn_rows='[10, 11, 12, 13, 14]' WHERE request_id='first'")
                 receipt(db, "steer", None, 2, run_id="first", text="Shorter please", steering=1)
-                receipt(db, "photo", None, 3, attachments=[photo])
+                receipt(db, "photo", 20, 3, attachments=[photo])
                 # Another profile's row IDs belong to its own state database.
                 receipt(db, "elsewhere", 30, 4, profile="patch", text="Not this chat")
                 tool(db, "first", "read", {"pages": 3}, name="read_file", arguments=json.dumps({"path": "report.pdf"}), artifacts=[report])

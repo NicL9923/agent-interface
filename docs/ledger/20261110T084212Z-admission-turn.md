@@ -93,8 +93,9 @@ the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lan
   disposition, not a promise of a separate later turn, and so does the code comment.
 - With the binding rule, a queued or joined new task is bound to no prompt row: no turn claims it, because a drain runs
   under the finished turn's request ID and a correction runs in another turn. Its words show as Hermes saved them,
-  unattributed, and the app's sent echo matches them by text. A queued image send is the exception: an open's image
-  recovery binds the row holding exactly its text and its own uploads.
+  unattributed, and the app's sent echo matches them by text. A queued image send is no exception since the binding
+  rule's second round removed image recovery (see the last section). Two queued prompts Hermes merged into one row
+  hold neither send's exact words, so neither sent echo clears on that row until the activity settles.
 
 ## Review checks
 
