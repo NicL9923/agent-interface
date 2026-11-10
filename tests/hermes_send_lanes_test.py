@@ -271,6 +271,8 @@ class SendLaneTests(unittest.TestCase):
             # The compaction was the only work, so the send starts its own task.
             self.assertEqual((slow["status"], slow["steering"], slow["runId"]), ("accepted", False, "slow-send"))
             self.assertGreaterEqual(slow["app_timing"]["preempt"], 150)
+            # Both are what the test's clock was advanced by: this tells compaction time from lock wait, and
+            # does not measure real time, so a real stall inside the lock wait would not fail it.
             self.assertLess(slow["app_timing"]["wait"], 100)
             self.assertTrue(any("background compaction to stop" in line and "slow" in line for line in logs.output), logs.output)
             self.assertEqual(hermes.settled(), 0)

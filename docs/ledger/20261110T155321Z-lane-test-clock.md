@@ -151,3 +151,23 @@ as `main`'s, since only tests changed.
 - The four timing mutants above, rerun on `c2ee202`: each red with the same message.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Review
+
+GPT-6.1 Sol had reached its usage limit, so xAI's Grok 4.7 at high effort reviewed `859f8bd`: ready, no P1 or P2.
+It confirmed the clock replaces only `perf_counter` and forwards every other name to the real `time` module, that
+each test file runs in its own process so the clock leaks nowhere, and that closing the journal under `journal.lock`
+takes the lock after the pool has shut down. It ran the lane file in 100 fresh processes on `origin/main` and on this
+branch, four at a time and beside another suite: 100 passed on each, so its run did not reproduce `main`'s failure.
+
+Its mutations: moving the compaction interval from `preempt` to `wait` failed two tests, and adding it to both
+failed the clocked test with `200.0 not less than 100`. A real `time.sleep(0.3)` inside the lock wait left all 16
+tests green. That is its one P3: the `wait < 100` bound counts what the test's clock was advanced by, so it tells
+compaction time from lock wait and does not see a real stall. A comment at the assertion now says so. The test that
+the fast send is accepted while the slow one is held does not depend on the clock.
+
+On the teardown crash, it read that production never closes the journal's database: `Journal` has no `close`, and
+the keeper's `close` only sets a flag. So the crash is the test fake's, not a defect a production shutdown can hit.
+It did not reproduce a crash and did not run a production shutdown.
+
+After the comment: `tests/hermes_send_lanes_test.py` passed, and `ruff check .` passed.
