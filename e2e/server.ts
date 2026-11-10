@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
@@ -87,11 +87,32 @@ const { app } = await createApp(
     try { const entry = JSON.parse(line); if (entry.csp) violations.push(entry.csp); } catch { /* Not a JSON log line. */ }
   } } },
 );
+// After POST /next-release on the control port, the server answers as the next build would: sw.js
+// names another cache, and the shell carries a release mark, so the two releases' shells differ.
+// Everything the worker installs is this build's files, so the release it stands for is complete.
+// With ?install=fail its worker cannot install, as when a deploy is missing a file.
+let nextRelease: "none" | "ready" | "broken" = "none";
+const NEXT_MARK = '<meta name="release" content="next">';
+app.addHook("onRequest", async (req, reply) => {
+  if (nextRelease === "none") return;
+  const path = new URL(req.url, "http://localhost").pathname;
+  if (path === "/sw.js") {
+    let source = readFileSync("dist/client/sw.js", "utf8").replace("const CACHE = 'agent-interface-", "const CACHE = 'agent-interface-next-");
+    // A file the release lists but the server lacks: the server answers it with the shell, which install refuses.
+    if (nextRelease === "broken") source = source.replace("const INSTALL_FILES = [", 'const INSTALL_FILES = ["/assets/missing-AAAAAAAA.js",');
+    return reply.header("Cache-Control", "no-cache").type("text/javascript").send(source);
+  }
+  if (req.method === "GET" && (path === "/" || path === "/index.html")) {
+    const shell = readFileSync("dist/client/index.html", "utf8").replace("<head>", `<head>${NEXT_MARK}`);
+    return reply.header("Cache-Control", "no-cache").type("text/html").send(shell);
+  }
+});
 await app.listen({ host: "127.0.0.1", port });
 
-// GET reads the violations. DELETE starts the next test from a clean slate.
+// GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); }
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); nextRelease = "none"; }
+  if (req.method === "POST" && req.url?.startsWith("/next-release")) nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));
 });

@@ -112,6 +112,46 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
 });
 
+// A note in this release's cache that the server now has another shell. It lives and dies with the
+// cache, so a stopped and restarted worker still sees it, and the next release starts without one.
+// No request is ever answered from it: the fetch handler serves only the files listed above.
+const OUTDATED = '/.shell-outdated';
+
+// Today's rule, and the rule once the cached shell is known to be out of date: the server's shell,
+// or this release's copy when the network fails.
+async function networkShell(request, cache) {
+  try { return await fetch(request); } catch { return (await cache.match('/index.html')) || Response.error(); }
+}
+
+// Compares the server's shell with this release's copy after the copy has answered. The server sends
+// index.html as the file on disk, with nothing added per request, so the same release always sends
+// the same text. Bodies are compared rather than ETags, which change whenever the file is copied.
+// A different text notes it and runs the update check now. Anything but a 200, such as a redirect
+// (not followed, so it is not ok), a refusal, a server error or no network, says nothing about the
+// release and changes nothing: no window reloads and the worker stays.
+async function revalidate(cache, copy) {
+  try {
+    const response = await fetch('/index.html', { cache: 'no-store', redirect: 'manual' });
+    if (!response.ok) return;
+    if (await response.text() === await copy.text()) return;
+    await cache.put(OUTDATED, new Response(''));
+  } catch { return; }
+  await self.registration.update().catch(() => {});
+}
+
+// The app shell opens from this release's cache, which install fills all or nothing, so the page and
+// every file it loads first come from one release, and a slow network never delays opening. Once the
+// worker has seen a newer shell on the server, it opens the network's instead, so a person sees an
+// old release at most once after a deploy, even when the new worker never manages to install.
+async function openShell(event) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match('/index.html');
+  if (!cached || await cache.match(OUTDATED)) return networkShell(event.request, cache);
+  // Copied before the page reads the body, which can only be read once.
+  event.waitUntil(revalidate(cache, cached.clone()));
+  return cached;
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -119,10 +159,7 @@ self.addEventListener('fetch', (event) => {
   // Never intercept authenticated endpoints, including streams and downloads.
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    event.respondWith(fetch(request).catch(async () => {
-      const shell = await (await caches.open(CACHE)).match('/index.html');
-      return shell || Response.error();
-    }));
+    event.respondWith(openShell(event));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {

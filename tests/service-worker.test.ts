@@ -16,16 +16,24 @@ const html = () => new Response('<!doctype html>', { headers: { 'content-type': 
 // A healthy server: pages are HTML and everything else is code or an image.
 const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
 
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>> } = {}) {
+type Window = { url: string; navigate: ReturnType<typeof vi.fn> };
+type Stores = Map<string, Map<string, unknown>>;
+/**
+ * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
+ * run left, as when the browser stops an idle worker and starts it again for the next event.
+ */
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
   const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
   const showNotification = vi.fn().mockResolvedValue(undefined);
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
+  const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
+  const matchAll = vi.fn(async () => options.windows ?? []);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
   // Installing needs the network; tests of later steps keep the default of being offline.
   // Cache storage by name. The current release's cache starts with its app shell, as after an install.
-  const stores = new Map<string, Map<string, unknown>>([['agent-interface-test', new Map([['/index.html', 'static shell']])]]);
+  const stores: Stores = options.stores ?? new Map([['agent-interface-test', new Map<string, unknown>([['/index.html', new Response('static shell', { headers: { 'content-type': 'text/html' } })]])]]);
   for (const [name, entries] of Object.entries(options.older ?? {})) stores.set(name, new Map(Object.entries(entries)));
   const match = vi.fn();
   const put = vi.fn();
@@ -33,7 +41,8 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     if (!stores.has(name)) stores.set(name, new Map());
     const store = stores.get(name)!;
     return {
-      match: async (key: string) => { if (name === 'agent-interface-test') match(key); return store.get(key); },
+      // Like the Cache API, each match is a new response whose body can be read on its own.
+      match: async (key: string) => { if (name === 'agent-interface-test') match(key); const value = store.get(key); return value instanceof Response ? value.clone() : value; },
       put: async (key: string, value: unknown) => { put(key, value); store.set(key, value); },
     };
   };
@@ -41,8 +50,8 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     self: {
       location: { origin: 'https://app.example' },
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
-      registration: { showNotification },
-      clients: { matchAll: async () => [], openWindow, claim },
+      registration: { showNotification, update, unregister },
+      clients: { matchAll, openWindow, claim },
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
@@ -62,7 +71,16 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     return waited;
   };
   const install = () => { fetch.mockImplementation(healthy); return run('install'); };
-  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, showNotification, openWindow, setAppBadge, clearAppBadge };
+  // A navigation to the app. Returns its answer and whatever the worker left running after it.
+  const navigate = async (url = 'https://app.example/') => {
+    let response: Promise<unknown> | undefined;
+    const background: Promise<unknown>[] = [];
+    handlers.fetch({ request: { url, method: 'GET', mode: 'navigate' }, respondWith: (value: Promise<unknown>) => { response = value; }, waitUntil: (value: Promise<unknown>) => background.push(value) });
+    const answer = await response;
+    await Promise.all(background);
+    return answer as Response;
+  };
+  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, openWindow, setAppBadge, clearAppBadge, update, unregister };
 }
 
 describe('service worker privacy and return path', () => {
@@ -105,9 +123,7 @@ describe('service worker privacy and return path', () => {
     sw.fetch.mockImplementation((path: string) => path === '/index.html' ? Promise.reject(new Error('offline')) : healthy(path));
     await expect(sw.tryInstall()).rejects.toThrow();
     sw.fetch.mockRejectedValue(new Error('offline'));
-    let response: Promise<unknown> | undefined;
-    sw.handlers.fetch({ request: { method: 'GET', mode: 'navigate', url: 'https://app.example/' }, respondWith: (value: Promise<unknown>) => { response = value; } });
-    expect(await response).toBe('static shell');
+    expect(await (await sw.navigate()).text()).toBe('static shell');
   });
 
   it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
@@ -186,14 +202,8 @@ describe('service worker privacy and return path', () => {
   });
 
   it('uses only the static shell for offline conversation navigation', async () => {
-    const { handlers, fetch, match } = worker();
-    let response: Promise<unknown> | undefined;
-    handlers.fetch({
-      request: { url: 'https://app.example/?bot=shared', method: 'GET', mode: 'navigate' },
-      respondWith: (value: Promise<unknown>) => { response = value; },
-    });
-    expect(await response).toBe('static shell');
-    expect(fetch).toHaveBeenCalledOnce();
+    const { navigate, match } = worker();
+    expect(await (await navigate('https://app.example/?bot=shared')).text()).toBe('static shell');
     expect(match).toHaveBeenCalledWith('/index.html');
   });
 
@@ -295,11 +305,10 @@ describe('service worker release updates', () => {
   const fetched = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.map(([path]) => path).sort();
 
   it('copies a hashed file the last release already holds instead of fetching it', async () => {
-    const kept = js('old body');
-    const sw = worker(older({ '/assets/app-a1234567.js': kept, '/assets/panel-b1234567.js': js() }));
+    const sw = worker(older({ '/assets/app-a1234567.js': js('old body'), '/assets/panel-b1234567.js': js() }));
     await sw.install();
     expect(fetched(sw)).toEqual(['/assets/vendor.js', '/icon-192.png', '/index.html']);
-    expect(current(sw).get('/assets/app-a1234567.js')).toBe(kept);
+    expect(await (current(sw).get('/assets/app-a1234567.js') as Response).text()).toBe('old body');
     // Lazy files carry over too, since copying costs nothing, but nothing absent is invented.
     expect(current(sw).has('/assets/panel-b1234567.js')).toBe(true);
     expect(current(sw).has('/assets/panel-c1234567.css')).toBe(false);
@@ -450,5 +459,130 @@ describe('service worker release updates', () => {
       'assets/index-D7HmB6A.js', 'assets/index-D7HmB6AIx.js', 'assets/sub/index-D7HmB6AI.js', 'assets/vendor.js',
       'index.html', 'icon-192.png', 'manifest.webmanifest', 'native-computer.html', 'index-D7HmB6AI.js',
     ]) expect(hashed('/' + name), name).toBe(isHashedAsset(root, `${root}/${name}`));
+  });
+});
+
+describe('service worker app shell', () => {
+  const shell = (body = '<!doctype html><script src="/assets/app-a1234567.js">') => new Response(body, { headers: { 'content-type': 'text/html' } });
+  const NEXT = '<!doctype html><script src="/assets/app-z7654321.js">';
+  // Where the worker notes that its cached shell is out of date. The tests only ask whether it is there.
+  const MARKER = '/.shell-outdated';
+  // This release's cache holds a real shell, as after an install.
+  const installed = (options: Parameters<typeof worker>[0] = {}) => {
+    const sw = worker(options);
+    sw.stores.get('agent-interface-test')!.set('/index.html', shell());
+    return sw;
+  };
+  const outdated = (sw: ReturnType<typeof worker>, name = 'agent-interface-test') => sw.stores.get(name)?.has(MARKER) ?? false;
+  const window = (url = 'https://app.example/?bot=ranch'): Window => ({ url, navigate: vi.fn().mockResolvedValue(undefined) });
+  // The worker's own background check asks for /index.html by path; a navigation passes its request.
+  const navigations = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.filter(([request]) => typeof request !== 'string');
+
+  it('opens from this release\'s cache without waiting on the network', async () => {
+    const sw = installed();
+    let check!: () => void;
+    // The network answers only after the shell has opened.
+    sw.fetch.mockImplementation(() => new Promise(resolve => { check = () => resolve(shell()); }));
+    let answer: unknown;
+    sw.handlers.fetch({ request: { url: 'https://app.example/', method: 'GET', mode: 'navigate' }, respondWith: async (value: Promise<unknown>) => { answer = await value; }, waitUntil: () => {} });
+    await vi.waitFor(() => expect(answer).toBeInstanceOf(Response));
+    expect(await (answer as Response).text()).toContain('/assets/app-a1234567.js');
+    expect(navigations(sw)).toEqual([]);
+    check();
+  });
+
+  it('opens a first visit, with no cache at all, from the network', async () => {
+    const sw = worker({ stores: new Map() });
+    sw.fetch.mockImplementation(async () => shell('from the network'));
+    expect(await (await sw.navigate()).text()).toBe('from the network');
+    // The navigation itself, and nothing in the background.
+    expect(sw.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('opens from the network when this release holds no shell, never from an older release', async () => {
+    const sw = worker({ older: { 'agent-interface-previous': { '/index.html': shell('older release') } } });
+    sw.stores.get('agent-interface-test')!.delete('/index.html');
+    sw.fetch.mockImplementation(async () => shell('from the network'));
+    expect(await (await sw.navigate()).text()).toBe('from the network');
+    expect(sw.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('checks the server\'s shell after opening and changes nothing when it is the same', async () => {
+    const sw = installed();
+    sw.fetch.mockImplementation(async () => shell());
+    await sw.navigate();
+    await sw.navigate();
+    expect(sw.fetch.mock.calls).toEqual([['/index.html', { cache: 'no-store', redirect: 'manual' }], ['/index.html', { cache: 'no-store', redirect: 'manual' }]]);
+    expect(outdated(sw)).toBe(false);
+    expect(sw.update).not.toHaveBeenCalled();
+  });
+
+  it('notes a changed shell, checks for the release at once, and opens from the network from then on', async () => {
+    const sw = installed();
+    sw.fetch.mockImplementation(async () => shell(NEXT));
+    // The load that finds the change still opens the copy it has.
+    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    expect(outdated(sw)).toBe(true);
+    expect(sw.update).toHaveBeenCalledOnce();
+    sw.fetch.mockClear();
+    sw.fetch.mockImplementation(async () => shell(NEXT));
+    expect(await (await sw.navigate()).text()).toBe(NEXT);
+    // The navigation, with no second check behind it.
+    expect(navigations(sw)).toHaveLength(1);
+    expect(sw.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the note when the browser stops the worker and starts it again', async () => {
+    const first = installed();
+    first.fetch.mockImplementation(async () => shell(NEXT));
+    await first.navigate();
+    const restarted = worker({ stores: first.stores });
+    restarted.fetch.mockImplementation(async () => shell(NEXT));
+    expect(await (await restarted.navigate()).text()).toBe(NEXT);
+    expect(navigations(restarted)).toHaveLength(1);
+  });
+
+  it('opens the cached shell offline once the note is set', async () => {
+    const sw = installed();
+    sw.fetch.mockImplementation(async () => shell(NEXT));
+    await sw.navigate();
+    sw.fetch.mockRejectedValue(new Error('offline'));
+    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+  });
+
+  // One bad answer must never cost a person their work: no window reloads, and the worker stays.
+  it.each([
+    ['a redirect', () => Promise.resolve({ type: 'opaqueredirect', status: 0, ok: false })],
+    ['a sign-in', () => Promise.resolve(new Response('Sign in', { status: 401 }))],
+    ['a refusal', () => Promise.resolve(new Response('No', { status: 403 }))],
+    ['a server error', () => Promise.resolve(new Response('down', { status: 500 }))],
+    ['no network', () => Promise.reject(new Error('offline'))],
+    ['a body that breaks off', () => Promise.resolve({ type: 'basic', status: 200, ok: true, text: () => Promise.reject(new TypeError('network error')) })],
+  ])('changes nothing when the check gets %s', async (_name, answer) => {
+    const open = [window(), window('https://app.example/?view=today')];
+    const sw = installed({ windows: open });
+    sw.fetch.mockImplementation(answer);
+    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    expect(outdated(sw)).toBe(false);
+    expect(sw.update).not.toHaveBeenCalled();
+    expect(sw.unregister).not.toHaveBeenCalled();
+    for (const client of open) expect(client.navigate).not.toHaveBeenCalled();
+  });
+
+  it('starts a new release with no note, whatever the last release noted', async () => {
+    const old = installed();
+    old.fetch.mockImplementation(async () => shell(NEXT));
+    await old.navigate();
+    // The next release's worker installs beside it in the same storage, then takes over.
+    old.stores.set('agent-interface-previous', old.stores.get('agent-interface-test')!);
+    old.stores.delete('agent-interface-test');
+    const next = worker({ stores: old.stores });
+    await next.install();
+    await next.activate();
+    expect(outdated(next)).toBe(false);
+    next.fetch.mockClear();
+    next.fetch.mockImplementation(async () => html());
+    await next.navigate();
+    expect(navigations(next)).toEqual([]);
   });
 });
