@@ -1,4 +1,5 @@
-import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import type { Page } from "@playwright/test";
+import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -94,4 +95,60 @@ test.describe("after a deploy retires a lazy screen's file", () => {
     await openUsage();
     await expect(page.getByText("2 banked resets")).toBeVisible();
   });
+});
+
+// The worker opens the shell from its cache, then checks the server's. After a deploy a person sees the
+// old shell at most once: from the next load on, the old worker opens the network's shell, as it would
+// with no cached copy, until the new release takes over.
+const releaseMark = (page: Page) => page.locator('meta[name="release"]');
+const shellNoted = (page: Page) => page.evaluate(async () => {
+  for (const key of await caches.keys()) if (await (await caches.open(key)).match("/.shell-outdated")) return key;
+  return null;
+});
+
+test("after a deploy, the next load opens the new shell, and the new release is offered until it is taken", async ({ page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  const caches = () => page.evaluate(() => globalThis.caches.keys());
+  const [current] = await caches();
+  expect(current).toMatch(/^agent-interface-[0-9a-f]{16}$/);
+
+  await deployNextRelease();
+  // This load opens the cached shell, and the check behind it finds the new one.
+  await page.reload();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(releaseMark(page)).toHaveCount(0);
+  await expect.poll(() => shellNoted(page)).toBe(current);
+  // The update check it ran installed the release, which waits for the person, as on main.
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toBeVisible();
+
+  await page.reload();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(releaseMark(page)).toHaveCount(1);
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toBeVisible();
+
+  // Taking it moves to the new worker, whose cache starts with no note. The page reloads meanwhile.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => caches().catch(() => null)).toEqual([current.replace("agent-interface-", "agent-interface-next-")]);
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
+  expect(await shellNoted(page)).toBeNull();
+});
+
+test("a new release whose worker cannot install still reaches the person on their next load", async ({ page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  const [current] = await page.evaluate(() => globalThis.caches.keys());
+
+  await deployNextRelease({ installs: false });
+  await page.reload();
+  await expect.poll(() => shellNoted(page)).toBe(current);
+  await page.reload();
+  await expect(releaseMark(page)).toHaveCount(1);
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  // The old worker still serves, and nothing offers a release that never installed.
+  expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
