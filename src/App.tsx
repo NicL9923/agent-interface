@@ -43,7 +43,7 @@ import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
-import type { CloseRequest } from "./app/close-request";
+import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -296,14 +296,13 @@ export function App() {
     if (destination.routineId) setPanel({ kind: "routine", botId: destination.botId, routineId: destination.routineId });
   };
   // The open sheet's own close, when it is one that can hold unsaved work. See close-request.ts.
-  const panelClose = useRef<CloseRequest | null>(null);
-  // Where a tapped notification goes once that sheet has closed.
-  const leaving = useRef<Destination | null>(null);
-  /** A sheet with its own close closed; a notification waiting on it opens now. */
+  const panelClose = useRef<SheetClose | null>(null);
+  // Where a tapped notification goes once that sheet has closed, for the account it came to.
+  const [leaving] = useState(waitingOnClose<Destination>);
+  /** A sheet with its own close closed; a notification waiting on that sheet opens now. */
   const sheetClosed = (kind: Panel["kind"]) => {
+    const next = leaving.take(panelClose.current?.sheet, userId);
     closePanels(kind);
-    const next = leaving.current;
-    leaving.current = null;
     if (next) goTo(next);
   };
   // A notification tapped while this window is open switches it in place, as a click here would.
@@ -312,13 +311,12 @@ export function App() {
   // only once the sheet has closed: not at all if the person keeps editing.
   const openFromWorker = useStableCallback((destination: Destination) => {
     setOverlay(null);
-    const close = panelClose.current;
-    if (!close) {
+    const offered = panelClose.current;
+    if (!offered) {
       setPanel(null);
       return goTo(destination);
     }
-    leaving.current = destination;
-    close(() => { if (leaving.current === destination) leaving.current = null; });
+    offered.close(leaving.wait(destination, offered.sheet, userId));
   });
   useWorkerOpens(openFromWorker);
   const { stopping, stop } = useStopResponse(botId, setError);

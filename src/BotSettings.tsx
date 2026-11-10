@@ -5,7 +5,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
-import { useCloseRequest, type CloseRequest } from "./app/close-request";
+import { useCloseRequest, type SheetClose } from "./app/close-request";
 import type {
   Avatar as AvatarConfig,
   Bootstrap,
@@ -92,7 +92,7 @@ function LoadedBotSettings({
 }: {
   loading?: { error: string; retry(): void };
   /** Where this sheet offers its own close to the app. See close-request.ts. */
-  closer?: RefObject<CloseRequest | null>;
+  closer?: RefObject<SheetClose | null>;
   bot: Bot | "new";
   bootstrap: Bootstrap;
   onClose: () => void;

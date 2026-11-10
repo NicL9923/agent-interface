@@ -28,6 +28,8 @@ const page = (botId: string): Conversation => ({
 });
 
 let root: Root, container: HTMLDivElement, calls: string[], unexpected: string[], bodies: Record<string, unknown[]>;
+// Who the server says is signed in. Another tab can sign in as someone else.
+let signedIn: Bootstrap;
 // This page's controlling worker, and the container the page hears it on.
 const controller = { scriptURL: "http://localhost:3000/sw.js" };
 const workers = Object.assign(new EventTarget(), { controller: controller as object | null, getRegistration: async () => undefined, ready: new Promise(() => {}) });
@@ -52,6 +54,7 @@ beforeEach(async () => {
   calls = [];
   unexpected = [];
   bodies = {};
+  signedIn = bootstrap;
   vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input, location.origin);
     const call = `${init.method ?? "GET"} ${url.pathname.replace(/^\/api/, "")}${url.search}`;
@@ -59,9 +62,12 @@ beforeEach(async () => {
     if (typeof init.body === "string") (bodies[call] ??= []).push(JSON.parse(init.body));
     const chat = /^GET \/bots\/([^/]+)\/conversation\?/.exec(call)?.[1];
     if (chat) return json(page(chat));
+    const bot = /^GET \/bots\/([^/]+)$/.exec(call)?.[1];
+    // An assistant's full settings, as its sheet reads them.
+    if (bot) return json({ ...signedIn.bots.find(each => each.id === bot), instructions: "" });
     // What else the open app reads, empty: these tests look at what opens.
     const empty: Record<string, unknown> = {
-      "GET /bootstrap?roster=lean": bootstrap,
+      "GET /bootstrap?roster=lean": signedIn,
       "GET /groups": { supported: false, canSend: false, rooms: [], reason: "Not in this test." },
       "GET /routines": [],
       "GET /today": { generatedAt: "2026-11-09T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-08T15:00:00Z", items: [], events: [], unavailableBots: [] },
@@ -209,10 +215,59 @@ describe("a notification tapped over unsaved work", () => {
     expect(transcript()).toContain("ranch says howdy");
   });
 
-  async function renameSection(name: string) {
+  async function openSettings() {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith("Settings"))!.click());
     await settled();
+  }
+
+  // The chat waits on the discard question when another tab signs in as someone else. The sheet
+  // goes with the old account, and so does the chat it held: closing a later sheet opens nothing.
+  it("drops a waiting chat when its sheet closes with the account it was raised for", async () => {
+    await editNewAssistant();
+    await hear({ type: "OPEN_CHAT", url: "/?bot=ranch" });
+    expect(settingsDialog()?.textContent).toContain("Discard your unsaved changes?");
+    signedIn = { ...bootstrap, user: { id: "two", name: "Two", email: "two@example.test" } };
+    await act(async () => window.dispatchEvent(new Event("online")));
+    await advance(0);
+    expect(settingsDialog()).toBeNull();
+    await openSettings();
+    expect(document.querySelector(".settings-sheet")).not.toBeNull();
+    await act(async () => document.querySelector<HTMLButtonElement>('.settings-sheet [aria-label="Close settings"]')!.click());
+    await advance(0);
+    expect(document.querySelector(".settings-sheet")).toBeNull();
+    expect(transcript()).toContain("home says howdy");
+    expect(calls.filter(call => call.includes("/bots/ranch/"))).toEqual([]);
+  });
+
+  // The open assistant, being edited, leaves this same account's roster, so its sheet goes without
+  // closing. Today, which the notification named, waited on that sheet and goes with it.
+  it("drops a waiting destination when its sheet goes without closing, for the same account", async () => {
+    const row = [...container.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes("Ranch Hand"))!;
+    await act(async () => row.click());
+    await advance(0);
+    await act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 5, clientY: 5 })); });
+    await settled();
+    await act(async () => [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(entry => entry.textContent?.includes("Assistant settings"))!.click());
+    await settled();
+    await typeInto(settingsDialog()!.querySelector<HTMLInputElement>("#assistant-name")!, "Fence Rider");
+    await hear({ type: "OPEN_CHAT", url: "/?view=today" });
+    expect(settingsDialog()?.textContent).toContain("Discard your unsaved changes?");
+    signedIn = { ...bootstrap, bots: [bootstrap.bots[0]] };
+    await act(async () => window.dispatchEvent(new Event("online")));
+    await advance(0);
+    expect(settingsDialog()).toBeNull();
+    await openSettings();
+    await act(async () => document.querySelector<HTMLButtonElement>('.settings-sheet [aria-label="Close settings"]')!.click());
+    await advance(0);
+    expect(document.querySelector(".settings-sheet")).toBeNull();
+    expect(new URLSearchParams(location.search).get("view")).toBeNull();
+    expect(transcript()).toContain("home says howdy");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("That assistant is no longer available to you.");
+  });
+
+  async function renameSection(name: string) {
+    await openSettings();
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>(".settings-sheet button")].find(item => item.textContent?.includes("Barn"))!.click());
     await typeInto(document.querySelector<HTMLInputElement>('[aria-label="Section name"]')!, name);
   }

@@ -4,7 +4,7 @@ import { Input } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import { useCloseRequest, type CloseRequest } from "./close-request";
+import { useCloseRequest, type SheetClose } from "./close-request";
 import type { Bootstrap, Bot, Preferences } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
@@ -42,7 +42,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   onUpgrade(): void;
   onShortcuts(): void;
   /** Where this sheet offers its own close to the app. See close-request.ts. */
-  closer?: RefObject<CloseRequest | null>;
+  closer?: RefObject<SheetClose | null>;
 }) {
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const finePointer = useFinePointer();

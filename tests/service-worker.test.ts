@@ -16,18 +16,27 @@ const html = () => new Response('<!doctype html>', { headers: { 'content-type': 
 // A healthy server: pages are HTML and everything else is code or an image.
 const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
 
+// A MessageChannel as the worker sees one: a message reaches the other port in a later task, and
+// none arrives once the receiving port is closed.
+class FakeMessageChannel {
+  readonly port1 = { onmessage: null as ((event: { data: unknown }) => void) | null, closed: false, close() { this.closed = true; } };
+  readonly port2 = { postMessage: (data: unknown) => { queueMicrotask(() => { if (!this.port1.closed) this.port1.onmessage?.({ data }); }); } };
+}
+type Port = FakeMessageChannel['port2'];
 // An open window of the app. `controlled` says whether this worker controls it; `answers` whether its page
-// says it opened what it was asked to.
-type Window = { url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; postMessage: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> };
+// says it opened what it was asked to at once. A page that does not can still answer later on `ports`.
+type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> };
+let windowIds = 0;
 const openWindowOf = ({ url = 'https://app.example/?bot=home', controlled = true, answers = true, focused = false } = {}): Window => {
   const client: Window = {
-    url, controlled, answers, focused, visibilityState: 'hidden',
-    postMessage: vi.fn((_data: unknown, [port]: MessagePort[]) => { if (client.answers) port.postMessage({ opened: true }); }),
+    id: `window-${++windowIds}`, url, controlled, answers, focused, visibilityState: 'hidden', ports: [],
+    postMessage: vi.fn((_data: unknown, [port]: Port[]) => { client.ports.push(port); if (client.answers) port.postMessage({ opened: true }); }),
     focus: vi.fn(async () => client),
     navigate: vi.fn(async () => client),
   };
   return client;
 };
+type Shown = { title: string; tag?: string; data?: Record<string, unknown>; close: ReturnType<typeof vi.fn> };
 type Stores = Map<string, Map<string, unknown>>;
 /**
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
@@ -36,7 +45,14 @@ type Stores = Map<string, Map<string, unknown>>;
 function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
   const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
-  const showNotification = vi.fn().mockResolvedValue(undefined);
+  // Notifications on screen, as getNotifications lists them. Showing one with a tag replaces the last.
+  const shown: Shown[] = [];
+  const showNotification = vi.fn(async (title: string, options: any = {}) => {
+    const notification: Shown = { title, tag: options.tag, data: options.data, close: vi.fn(() => { shown.splice(shown.indexOf(notification), 1); }) };
+    if (options.tag) shown.splice(0, shown.length, ...shown.filter(other => other.tag !== options.tag));
+    shown.push(notification);
+  });
+  const getNotifications = vi.fn(async ({ tag }: { tag?: string } = {}) => shown.filter(each => tag === undefined || each.tag === tag));
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
   const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
@@ -60,13 +76,13 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     self: {
       location: { origin: 'https://app.example' },
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
-      registration: { showNotification, update, unregister },
+      registration: { showNotification, getNotifications, update, unregister },
       clients: { matchAll: async (query: { includeUncontrolled?: boolean } = {}) => (options.windows ?? []).filter(client => client.controlled || query.includeUncontrolled), openWindow, claim },
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
     caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
-    URL, Response, fetch, MessageChannel,
+    URL, Response, fetch, MessageChannel: FakeMessageChannel,
     // Read at call time, so a test's fake timers apply inside the worker too.
     setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
@@ -93,7 +109,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     await Promise.all(background);
     return answer as Response;
   };
-  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, openWindow, setAppBadge, clearAppBadge, update, unregister };
+  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, shown, openWindow, setAppBadge, clearAppBadge, update, unregister };
 }
 
 describe('service worker privacy and return path', () => {
@@ -609,6 +625,12 @@ describe('service worker notification taps with the app open', () => {
     return done!;
   }
 
+  /** The notification the worker brought back, as a tap on it delivers it. */
+  const broughtBack = (sw: ReturnType<typeof worker>) => {
+    const [title, options] = sw.showNotification.mock.calls[0];
+    return { title, ...options, data: options.data ?? {} };
+  };
+
   it('asks the window to open the chat in place and focuses it, without reloading it', async () => {
     const window = openWindowOf();
     const sw = worker({ windows: [window] });
@@ -626,36 +648,152 @@ describe('service worker notification taps with the app open', () => {
     expect(other.postMessage).not.toHaveBeenCalled();
   });
 
-  it('loads the chat into a window that does not answer in time', async () => {
+  // The page is busy, as with an edited settings form, and has not answered when the wait ends.
+  // Loading the chat into it would replace that form, so a first tap never does.
+  it('leaves a window that does not answer in time as it is, focused, and brings the notification back', async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
       const sw = worker({ windows: [window] });
-      const done = tap(sw);
-      // A live page answers in a few milliseconds; the wait ends well inside the second Firefox
-      // gives a tap to open a window, so the fallbacks below still run inside it.
+      let finished = false;
+      void tap(sw).then(() => { finished = true; });
       await vi.advanceTimersByTimeAsync(249);
-      expect(window.navigate).not.toHaveBeenCalled();
+      expect(sw.showNotification).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      await done;
-      expect(window.navigate).toHaveBeenCalledExactlyOnceWith(url);
+      expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', expect.objectContaining({ silent: true, data: { url: '/?bot=ranch', reshown: true } }));
       expect(window.focus).toHaveBeenCalled();
+      expect(window.navigate).not.toHaveBeenCalled();
       expect(sw.openWindow).not.toHaveBeenCalled();
+      // It listens a while longer for a late answer, then lets the notification stand.
+      await vi.advanceTimersByTimeAsync(9_749);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(finished).toBe(true);
+      expect(sw.shown).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
 
-  it('opens a new window when loading the chat into the silent one fails', async () => {
+  // A window still running a release from before pages answered never answers. The second tap is the
+  // person asking again, so it loads the chat there the way taps always did.
+  it('loads the chat into a window that still does not answer when the brought-back notification is tapped', async () => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      const sw = worker({ windows: [window] });
+      void tap(sw);
+      await vi.advanceTimersByTimeAsync(250);
+      const second = tap(sw, broughtBack(sw));
+      await vi.advanceTimersByTimeAsync(249);
+      expect(window.navigate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await second;
+      expect(window.postMessage).toHaveBeenCalledTimes(2);
+      expect(window.navigate).toHaveBeenCalledExactlyOnceWith(url);
+      expect(sw.openWindow).not.toHaveBeenCalled();
+      // Never a third time.
+      expect(sw.showNotification).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('opens a new window on the second tap when loading the chat into the silent one fails', async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
       window.navigate.mockRejectedValue(new TypeError('not controlled'));
       const sw = worker({ windows: [window] });
-      const done = tap(sw);
+      const done = tap(sw, { data: { url: '/?bot=ranch', reshown: true } });
       await vi.advanceTimersByTimeAsync(250);
       // Opened a quarter second after the tap, well inside Firefox's second.
       expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
       await done;
     } finally { vi.useRealTimers(); }
+  });
+
+  // The page was busy past the wait, then opened the chat itself. The notification brought back for
+  // a second tap goes, whether the answer lands before it is on screen or after.
+  it.each([
+    ['after the notification is back on screen', false],
+    ['while the notification is still being shown', true],
+  ])('closes the brought-back notification when the page answers late, %s, and opens nothing itself', async (_name, beforeShown) => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      const sw = worker({ windows: [window] });
+      let showing!: () => void;
+      if (beforeShown) sw.showNotification.mockImplementationOnce(function (this: unknown, ...args) {
+        const show = sw.showNotification.getMockImplementation()!;
+        return new Promise<void>(resolve => { showing = () => resolve(show.apply(this, args)); });
+      });
+      const done = tap(sw);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(sw.showNotification).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(350);
+      window.ports[0].postMessage({ opened: true });
+      await vi.advanceTimersByTimeAsync(0);
+      if (beforeShown) showing();
+      await done;
+      expect(sw.shown).toEqual([]);
+      expect(window.navigate).not.toHaveBeenCalled();
+      expect(sw.openWindow).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Untagged notifications are all listed together, so the late answer picks out the one it brought
+  // back: not another chat's brought-back notification, nor a newer one about this chat.
+  it('closes only the notification it brought back when the page answers late', async () => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      const sw = worker({ windows: [window] });
+      await sw.showNotification('Barn', { data: { url: 'https://app.example/?bot=barn', reshown: true } });
+      const done = tap(sw, { tag: undefined, data: { url: url } });
+      await vi.advanceTimersByTimeAsync(250);
+      await sw.showNotification('Ranch Hand', { body: 'A newer reply.', data: { url } });
+      window.ports[0].postMessage({ opened: true });
+      await vi.advanceTimersByTimeAsync(0);
+      await done;
+      expect(sw.shown.map(each => [each.title, each.data])).toEqual([
+        ['Barn', { url: 'https://app.example/?bot=barn', reshown: true }],
+        ['Ranch Hand', { url }],
+      ]);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // The page answers the first tap late, while the second tap waits for its own answer. It already
+  // opened the chat, so loading the chat over it would open it twice.
+  it('does not load the chat on a second tap once the page has answered the first one late', async () => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      const sw = worker({ windows: [window] });
+      void tap(sw);
+      await vi.advanceTimersByTimeAsync(250);
+      const second = tap(sw, broughtBack(sw));
+      await vi.advanceTimersByTimeAsync(100);
+      window.ports[0].postMessage({ opened: true });
+      await vi.advanceTimersByTimeAsync(150);
+      await second;
+      expect(window.navigate).not.toHaveBeenCalled();
+      expect(sw.openWindow).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // A hidden window switched to the chat but cannot come forward, so the person would see nothing.
+  // A visible one already shows the chat, and a second window would show it twice.
+  it.each([
+    ['a hidden one opens the chat in a new window', 'hidden', false, [url], false],
+    ['a hidden one shows the notification again when no window can open either', 'hidden', true, [url], true],
+    ['a visible one opens nothing more', 'visible', false, [], false],
+  ])('when a window answers but cannot be focused, %s', async (_name, visibilityState, refused, opened, reshown) => {
+    const window = Object.assign(openWindowOf(), { visibilityState });
+    window.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
+    const sw = worker({ windows: [window] });
+    if (refused) sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    await tap(sw);
+    expect(window.postMessage).toHaveBeenCalledOnce();
+    expect(sw.openWindow.mock.calls).toEqual(opened.map(each => [each]));
+    expect(sw.showNotification.mock.calls).toEqual(reshown ? [['Ranch Hand', expect.objectContaining({ data: { url: '/?bot=ranch', reshown: true } })]] : []);
+    expect(window.navigate).not.toHaveBeenCalled();
   });
 
   it('shows the notification again, quietly, when no way of opening the chat works', async () => {

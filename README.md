@@ -79,17 +79,29 @@ device gets it as before. Security alerts always reach every device. See
 
 Tapping a web notification while the app is open in a window switches that window to the
 chat, as choosing it there would, and brings the window forward without reloading it. The
-worker asks the page with an `OPEN_CHAT` message and loads the chat's address into the
-window only if the page has not answered within 250 ms. A window the worker does not
-control, or one that cannot be loaded, gets a new window instead. All of that ends well
-inside the one second Firefox allows a worker to open a window after a tap. If every way
-fails, the notification comes back quietly to be tapped again, once.
+worker asks the page with an `OPEN_CHAT` message and waits 250 ms for its answer. A page
+that answers from a hidden window that cannot come forward gets the chat in a new window.
+
+A page that does not answer in time may be busy with something a reload would lose, such
+as an edited settings form, so the first tap never reloads it. The window stays as it is,
+brought forward, and the notification comes back quietly. If the page opens the chat late
+after all, within ten seconds, the worker closes that notification. Tapping the notification
+that came back is asking a second time: the worker asks the page again, and only if it still
+does not answer in 250 ms loads the chat's address into the window, or opens a new window
+when that fails. A window running a release from before pages answered behaves this way:
+the first tap brings it forward and the notification back, and the second opens the chat
+as taps always did. A window the worker does not control gets a new window at once. Each
+fallback ends well inside the one second Firefox allows a worker to open a window after a
+tap. If no way works, the notification comes back, and one that came back is never shown
+again.
 
 An open assistant settings sheet or Settings closes the way its close button does before the
 chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
 if the person discards them. A section name being typed in Settings is saved, or, if it
 cannot be, Settings stays open with the reason. The page answers the worker either way, so
-the worker never reloads the window over the form.
+the worker never reloads the window over the form. A chat waiting on a sheet belongs to that
+sheet and account: if the sheet goes without closing, as when another tab signs in as someone
+else, the chat never opens.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web

@@ -127,7 +127,7 @@ test("a notification tapped while the app is open switches its chat without relo
 
   // The worker's own tap handler, minus the notification: Playwright cannot click one.
   const [worker] = context.serviceWorkers();
-  await worker.evaluate(() => (self as unknown as { openChat(url: string): Promise<void> }).openChat(`${location.origin}/?bot=trail`));
+  await worker.evaluate(() => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: "/?bot=trail" } }));
   await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
   expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
