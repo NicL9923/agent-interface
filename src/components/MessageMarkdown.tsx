@@ -1,4 +1,4 @@
-import { Children, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -9,6 +9,7 @@ import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import { streamingHoldBack } from "./streaming-hold-back";
+import { graphemeCut, useRevealed } from "./streaming-reveal";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -265,3 +266,174 @@ export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageM
   if (!blocks) return <MessageMarkdown {...props} text={whole} />;
   return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });
+
+/**
+ * A reply still arriving, as the transcript's live row shows it. Its text is revealed at a steady
+ * pace (see streaming-reveal.ts), then split and held back as StreamingMarkdown does. Revealing
+ * comes first so the hold-back judges the end a person actually sees: a cut the reveal makes
+ * inside `**bold**` is held back like one the stream made. Both keep a prefix, so the result is a
+ * prefix of what arrived. A caret follows the last character until the row is saved.
+ */
+export const LiveMarkdown = memo(function LiveMarkdown(props: MessageMarkdownProps) {
+  const text = useRevealed(props.text);
+  return <>
+    <StreamingMarkdown {...props} text={text} />
+    <StreamingCaret text={text} />
+  </>;
+});
+
+// Text a person reads in the reply, not a control's label or a status line.
+const notReplyText = "button, [role=status], [aria-hidden=true], .markdown-code-header";
+
+type Box = { left: number; right: number; top: number; bottom: number };
+/** Digits run left to right even inside right-to-left text. */
+const digit = /^\p{Nd}/u;
+/** Letters of the scripts written right to left. */
+const rightToLeft = /^[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]/u;
+const letter = /^\p{L}/u;
+/**
+ * Which edge of the reply's last grapheme is the text's logical end: its trailing edge in the
+ * direction it runs. A letter's direction is its script's, wherever it sits, and a digit runs left
+ * to right. Punctuation, spaces and symbols take their direction from the text around them, so
+ * the browser's own layout decides: if the grapheme before it on the same line lies to its right,
+ * the text runs right to left there. With nothing before it on the line, the paragraph's direction
+ * decides, as it does for the browser.
+ */
+export function logicalEndSide(grapheme: string, last: Box, previous: Box | undefined, direction: string): "left" | "right" {
+  if (digit.test(grapheme)) return "right";
+  if (rightToLeft.test(grapheme)) return "left";
+  if (letter.test(grapheme)) return "right";
+  if (previous && previous.top < last.bottom && previous.bottom > last.top)
+    return previous.left + previous.right > last.left + last.right ? "left" : "right";
+  return direction === "rtl" ? "left" : "right";
+}
+
+/**
+ * Where the caret goes once its gap and width, `reach`, are known: past the text's logical end, the
+ * `side` of its `last` grapheme, unless another glyph on the line takes that room, as where Latin
+ * meets Arabic with no space between, or Arabic meets a number. Then it goes past the end of the line
+ * in the paragraph's direction, beyond every glyph on it, which is also where the next word goes when
+ * it runs in that direction. `line` holds the boxes of the line's other glyphs; a space is not one, so
+ * the caret may sit in it.
+ */
+export function clearEnd(last: Box, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+  const x = side === "left" ? last.left : last.right;
+  const from = side === "left" ? x - reach : x, to = side === "left" ? x : x + reach;
+  if (!line.some(glyph => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
+  // The final grapheme counts whole: in "helloم" it is the line's end itself.
+  if (direction === "rtl") return { x: Math.min(last.left, ...line.map(glyph => glyph.left)), side: "left" };
+  return { x: Math.max(last.right, ...line.map(glyph => glyph.right)), side: "right" };
+}
+
+const space = /\s/;
+/**
+ * The boxes of the words on the last grapheme's line, other than that grapheme, read back from `before`
+ * in `node` through the reply's earlier text until a word lies on a line above. Words are measured
+ * whole, without the spaces between them.
+ */
+function lineGlyphs(walker: TreeWalker, node: Text, before: number, last: Box): Box[] {
+  const glyphs: Box[] = [];
+  for (let text: Text | null = node, end = before; text; text = walker.previousNode() as Text | null, end = text?.data.length ?? 0) {
+    for (let start = end; end > 0; end = start) {
+      while (end > 0 && space.test(text.data[end - 1])) end--;
+      for (start = end; start > 0 && !space.test(text.data[start - 1]);) start--;
+      if (start === end) break;
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      let above = false;
+      for (const rect of range.getClientRects?.() ?? []) {
+        const middle = (rect.top + rect.bottom) / 2;
+        if (middle < last.top) above = true;
+        else if (middle <= last.bottom) glyphs.push(rect);
+      }
+      if (above) return glyphs;
+    }
+  }
+  return glyphs;
+}
+
+const measure = (node: Text, start: number, end: number) => {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const rects = range.getClientRects?.();
+  return rects?.length ? rects[rects.length - 1] : undefined;
+};
+/**
+ * Where the reply's last visible character ends, skipping trailing space and the labels of copy
+ * controls: the x of its logical end, or of its line's end when another glyph takes the caret's
+ * room there (see clearEnd), its line's top and height, and the text node it is in. It
+ * measures the last grapheme and the one before it, not a collapsed range, since browsers differ
+ * on a collapsed range's rectangle and on which side of a bidirectional boundary it lies.
+ */
+function textEnd(box: Element, reach: number): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+  });
+  const node = walker.lastChild() as Text | null;
+  if (!node) return undefined;
+  const end = node.data.search(/\S\s*$/) + 1;
+  const start = graphemeCut(node.data, end - 1);
+  const last = measure(node, start, end);
+  if (!last) return undefined;
+  const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
+  const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
+  const logical = logicalEndSide(node.data.slice(start, end), last, previous, direction);
+  const { x, side } = clearEnd(last, logical, lineGlyphs(walker, node, start, last), direction, reach);
+  return { x, side, top: last.top, height: last.height, node };
+}
+/** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
+function visibleArea(from: Node, box: Element): Box {
+  const area = box.getBoundingClientRect();
+  for (let element = from.parentElement; element && element !== box; element = element.parentElement) {
+    if (!/auto|scroll|hidden/.test(getComputedStyle(element).overflowX)) continue;
+    const clip = element.getBoundingClientRect();
+    return { left: Math.max(area.left, clip.left), right: Math.min(area.right, clip.right), top: clip.top, bottom: clip.bottom };
+  }
+  return area;
+}
+/** The space between the last character and the caret. */
+const CARET_GAP = 2;
+/**
+ * Puts the caret at the logical end of the reply's text: after its last character in the direction
+ * that text runs, so right of Latin text and left of Arabic or Hebrew, or past the line's end when a
+ * glyph of the other direction touches that edge. It is absolutely positioned
+ * against its containing block, so it never moves the text, and it has no text of its own to
+ * select or read. It stays inside the visible part of a code block or table that scrolls sideways.
+ */
+function placeCaret(caret: HTMLElement) {
+  const box = caret.previousElementSibling, parent = caret.offsetParent;
+  if (!box || !(parent instanceof HTMLElement)) return;
+  const width = caret.offsetWidth, base = parent.getBoundingClientRect(), end = textEnd(box, CARET_GAP + width);
+  const area = visibleArea(end?.node ?? box, box);
+  const side = end?.side ?? "right", at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
+  // Text flush with an edge, such as Arabic in a left-to-right paragraph, puts the caret just outside it.
+  const least = area.left - (side === "left" ? CARET_GAP + width : 0), most = area.right + (side === "right" ? CARET_GAP : -width);
+  const x = Math.max(least, Math.min(at, most)) - base.left - parent.clientLeft + parent.scrollLeft;
+  const y = (end ? end.top : area.top) - base.top - parent.clientTop + parent.scrollTop;
+  caret.style.transform = `translate(${x}px, ${y}px)`;
+  caret.style.height = end ? `${end.height}px` : "";
+}
+function StreamingCaret({ text }: { text: string }) {
+  const caret = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => { if (caret.current) placeCaret(caret.current); }, [text]);
+  useEffect(() => {
+    const element = caret.current, box = element?.previousElementSibling;
+    if (!element || !box) return;
+    // Scrolling a code block or table sideways moves the text under the caret. Scroll events do not
+    // bubble, so the reply hears its own blocks' in the capture phase, and places the caret once a frame.
+    let frame = 0;
+    const scrolled = () => { frame ||= requestAnimationFrame(() => { frame = 0; placeCaret(element); }); };
+    box.addEventListener("scroll", scrolled, { capture: true, passive: true });
+    // A narrower window or a late image moves the text without changing it.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => placeCaret(element));
+    observer?.observe(box);
+    return () => {
+      box.removeEventListener("scroll", scrolled, { capture: true });
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, []);
+  return <span ref={caret} className="streaming-caret" aria-hidden="true" />;
+}

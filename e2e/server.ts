@@ -48,20 +48,25 @@ function structural(botId: string) {
     for (const follower of [...followers]) follower();
   }, TURN_READ_MS);
 }
-function streamReply(thread: Message[], runId: string) {
+function streamReply(thread: Message[], runId: string, prompt: string) {
   const turn: Running = running = { thread, prompt: thread.length - 1, runId, tail: "", tools: [], done: false };
   structural(STREAMING);
   const steps: (() => void)[] = [];
   const words = (text: string) => { for (const word of text.split(/(?<= )/)) steps.push(() => { turn.tail += word; notify(STREAMING, "inflight"); }); };
   const save = () => { thread.push({ id: randomUUID(), runId, role: "assistant", text: turn.tail.trim(), createdAt: new Date().toISOString() }); turn.tail = ""; };
-  words("Looking at the north fence.");
-  // The tool starts and ends within a second, so the change notice for its end waits out the stream's
-  // one-a-second throttle, and the chat reads again only after several more words. Only a turn read brings
-  // the first of them.
-  steps.push(() => { save(); turn.tools = [{ id: "t1", name: "terminal", status: "running" }]; structural(STREAMING); });
-  steps.push(() => { turn.tools = [{ id: "t1", name: "terminal", status: "completed" }]; structural(STREAMING); });
-  words("Post two is loose, so I tightened the wire and checked the gate.");
-  steps.push(() => { save(); turn.done = true; structural(STREAMING); });
+  // "Echo: …" streams the rest back and leaves the turn running, so a test can measure the live row as it stands.
+  const echo = /^Echo: ([\s\S]*)$/.exec(prompt)?.[1];
+  if (echo !== undefined) words(echo);
+  else {
+    words("Looking at the north fence.");
+    // The tool starts and ends within a second, so the change notice for its end waits out the stream's
+    // one-a-second throttle, and the chat reads again only after several more words. Only a turn read brings
+    // the first of them.
+    steps.push(() => { save(); turn.tools = [{ id: "t1", name: "terminal", status: "running" }]; structural(STREAMING); });
+    steps.push(() => { turn.tools = [{ id: "t1", name: "terminal", status: "completed" }]; structural(STREAMING); });
+    words("Post two is loose, so I tightened the wire and checked the gate.");
+    steps.push(() => { save(); turn.done = true; structural(STREAMING); });
+  }
   let step = 0;
   const next = () => {
     if (running !== turn) return;
@@ -115,7 +120,7 @@ const runtime: Runtime = {
   submit: async input => {
     const thread = messages.get(input.botId)!, runId = randomUUID();
     thread.push({ id: randomUUID(), runId, role: "user", text: input.text, createdAt: new Date().toISOString(), sender: { id: input.senderId, name: input.senderId } });
-    if (input.botId === STREAMING) { streamReply(thread, runId); return { requestId: input.requestId, status: "accepted", runId }; }
+    if (input.botId === STREAMING) { streamReply(thread, runId, input.text); return { requestId: input.requestId, status: "accepted", runId }; }
     notify(input.botId);
     setTimeout(() => {
       thread.push({ id: randomUUID(), runId, role: "assistant", text: `Howdy, partner. You said: ${input.text}`, createdAt: new Date().toISOString() });
