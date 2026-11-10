@@ -135,6 +135,52 @@ test.describe("a returning member's home", () => {
   // Routes see only what the page itself fetches.
   test.use({ serviceWorkers: "block" });
 
+  // The saved copy is edited to what an earlier visit would have left, so bootstrap's answer differs.
+  type SavedCopy = { bots: { id: string; name: string; shared: boolean }[] };
+  const changes: [string, (saved: SavedCopy) => SavedCopy][] = [
+    // At the top of the list, where a row that comes or goes moves every row below it.
+    ["an assistant bootstrap no longer lists", saved => ({ ...saved, bots: [{ id: "old", name: "Old Hand", shared: true }, ...saved.bots] })],
+    ["an assistant new since the last visit", saved => ({ ...saved, bots: saved.bots.slice(1) })],
+    ["assistants in another order", saved => ({ ...saved, bots: [...saved.bots].reverse() })],
+    ["an assistant renamed since", saved => ({ ...saved, bots: saved.bots.map(bot => bot.id === "ranch" ? { ...bot, name: "Ranch Helper" } : bot) })],
+  ];
+  for (const [width, height, label] of [[1280, 720, "desktop"], [390, 844, "phone"]] as const) {
+    for (const [name, change] of changes) {
+      test(`swaps to bootstrap's roster with ${name}, at ${label} width, without a shift a person would notice`, async ({ page }) => {
+        await page.setViewportSize({ width, height });
+        await signIn(page);
+        await expect.poll(() => page.evaluate(() => localStorage.getItem("agent-interface:roster"))).not.toBeNull();
+        await page.evaluate(source => {
+          const edit = new Function("saved", `return (${source})(saved)`) as (saved: unknown) => unknown;
+          localStorage.setItem("agent-interface:roster", JSON.stringify(edit(JSON.parse(localStorage.getItem("agent-interface:roster")!))));
+        }, change.toString());
+        let release!: () => void;
+        const answered = new Promise<void>(resolve => { release = resolve; });
+        await page.route("**/api/bootstrap?*", async route => { await answered; await route.continue(); });
+        // Home itself, so a phone shows the list rather than the Today the last address named.
+        await page.goto("/");
+        await expect(page.locator(".bot-rail .home-sync")).toHaveText("Connecting");
+        await expect(assistants(page)).toBeVisible();
+        await page.evaluate(() => {
+          const shifts: number[] = [];
+          (window as unknown as { shifts: number[] }).shifts = shifts;
+          new PerformanceObserver(list => { for (const entry of list.getEntries()) shifts.push((entry as unknown as { value: number }).value); })
+            .observe({ type: "layout-shift" });
+        });
+        release();
+        await expect(page.locator(".bot-rail .home-sync")).toHaveCount(0);
+        await expect(assistants(page).getByRole("button", { name: /Trail Cook/ })).toBeVisible();
+        await page.waitForTimeout(500);
+        const shifts = await page.evaluate(() => (window as unknown as { shifts: number[] }).shifts);
+        const total = Math.round(shifts.reduce((sum, value) => sum + value, 0) * 10_000) / 10_000;
+        test.info().annotations.push({ type: "layout shift", description: `${label}, ${name}: ${total}` });
+        console.log(`layout shift, ${label}, ${name}: ${total}`);
+        // Web Vitals call a page's whole cumulative layout shift good below 0.1.
+        expect(total).toBeLessThan(0.1);
+      });
+    }
+  }
+
   test("is drawn from this device before bootstrap answers, without its messages, then brought up to date in place", async ({ page }) => {
     await signIn(page);
     let release!: () => void;
