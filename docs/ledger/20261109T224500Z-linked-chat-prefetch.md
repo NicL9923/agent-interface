@@ -60,3 +60,74 @@ non-string entry never equals a chat ID, so the check was dead. It was removed w
   record until the next 401. That load logs one refused chat read. A chat made private since the
   last bootstrap logs one 404 the same way; the app shows its existing notice and opens the main
   assistant.
+
+## November 9 review round
+
+GPT-6.1 Sol reviewed the branch at `bd6def6`. This round merged `origin/main` at `da00a26`
+(merge commit `9e3f851`) and changed the code at `d7d2bcd`. Checks ran on
+NicolasLaptop (Fedora, Linux x64, Node 24.22.2).
+
+### Findings and changes
+
+- P1, a prefetch made as another account. The record now holds the account ID, written by the
+  first connected bootstrap after sign-in; a record without one starts no read. The read is
+  tagged with that account. `settleLinkedChat()` runs on every bootstrap before anything else in
+  `refresh()`, so before the chat can open: a different account drops the read and clears the
+  response cache, and the chat reads again. A `storage` event that removes the record or names
+  another account drops the read the same way. A bootstrap that names another account than the
+  record also drops the record.
+- P2, an empty prefetched chat. `use-conversation.ts` lets only the chat's first load join a
+  prefetch. The stream's connection read, every notice, reconnect and poll ask the server.
+- README: names the two cases that still cost one refused read.
+- `tests/linked-chat-ui.test.ts` no longer mocks presence, device activity or `Avatar`. It runs
+  the real client API against a fetch fake that records and refuses any request the test did
+  not configure, and fails the test on one. jsdom's missing SVG geometry and
+  `IntersectionObserver` are stubbed as other suites do.
+
+### Red before the fix
+
+On `bd6def6` plus the new tests, before each fix:
+
+- `npx vitest run tests/conversation-prefetch.test.ts -t "empty prefetch"`: failed, "expected
+  [ Array(1) ] to have a length of 2 but got 1" at the stream's connection read.
+- `npx vitest run tests/linked-chat-ui.test.ts`: 8 failed. Both "never shows a read made as
+  another account" cases failed with "expected 'One's private draft' not to contain 'One's
+  private draft'"; both "drops its read when another tab…" cases failed the same way with "Read
+  before the switch"; the two new record guards and the two record-content tests failed on the
+  missing account field.
+
+### Mutants
+
+Each line was broken by hand, the two focused files run, and the source restored.
+
+| Mutation | Result |
+| --- | --- |
+| `settleLinkedChat()` call removed from `refresh()` | failed: both "never shows a read made as another account" |
+| A mismatched account settles without dropping | failed: the same two |
+| `storage` listener not added | failed: both "drops its read when another tab…" |
+| Any record change drops the read | failed: "keeps its read when another tab changes the same account's chat list" |
+| Storage key filter removed | failed: "keeps its read when another tab changes something other than the sign-in" |
+| A record without an account prefetches | failed: "waits for bootstrap with a sign-in whose account no bootstrap has named yet" |
+| Account type check removed | failed: "waits for bootstrap with an account that is not an ID" |
+| Another account's record kept | failed: "is forgotten when bootstrap names an account other than the one it recorded" |
+| Account not recorded | failed: "starts at sign-in, learns the account and chats…" |
+| A drop does not clear the response cache | failed: 4 drop cases |
+| Every load may join the prefetch | failed: "reads fresh for the stream's connection and each notice after an empty prefetch" |
+| No load may join the prefetch | failed: 6 cases |
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/linked-chat-ui.test.ts tests/conversation-prefetch.test.ts`: 2 files, 35
+  tests passed.
+- `npm test`: 171 files, 2,599 tests passed.
+- `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
+
+### Not exercised
+
+- Two real browser tabs switching accounts. The interleaving runs in jsdom with the real client
+  API and a fake server.
+- Safari, Firefox and an installed iOS web app: not run.
+- A false match needs the cookie to change from A to B, then back, between this page reading the
+  record and bootstrap leaving, with no storage event in between. Not tested; it needs two
+  sign-ins inside one round trip.
