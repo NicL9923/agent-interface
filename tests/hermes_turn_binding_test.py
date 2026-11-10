@@ -8,14 +8,19 @@ envelope (``:147-176``), writes the queued row at accept and again at drain (``:
 the queued prompt under the request ID of the turn that just finished (``prompt_turn.py:441-460``), as a goal
 continuation does (``:424-439``). ``_run_prompt_submit`` runs the turn on a thread that copies the caller's
 contextvars (``session_lifecycle.py:24-46``, ``agent/memory_provider.py:21-33``); the turn adopts the staged
-row only when it holds the turn's text (``session_workdir.py:807-814``) and reports its prompt row and every
+row only when it holds the turn's text (``session_workdir.py:807-814``), writes a row of its own when it
+could not rewrite the staged row after image or ``@`` expansion (``:815-835``), and reports its prompt row and every
 committed row of the turn in ``message.complete`` (``prompt_turn.py:902-942``, ``agent/persisted_turn_receipt.py:20-65``).
-``session.steer`` answers with no row (``methods_session_interrupt.py:114-130``); the turn writes each steer
-it takes as a user row with the steer's words (``agent/agent_runtime_helpers.py:3668-3703``). Any other
-native method raises. The bridge, the journal and every add-on wrapper are the real code.
+``session.steer`` answers with no row (``methods_session_interrupt.py:114-130``). At each tool batch the turn
+drains every waiting steer and writes them as one user row of their newline-joined words
+(``agent/interrupt_control.py:90-102``, ``agent/agent_runtime_helpers.py:3668-3703``, ``agent/prompt_builder.py:586-592``),
+so a turn can deliver earlier guidance and hand later guidance back as the next prompt (``agent/turn_finalizer.py:844-849``,
+``tui_gateway/prompt_turn.py:441-451``). Any other native method raises. The bridge, the journal and every add-on
+wrapper are the real code.
 """
 import contextvars
 import copy
+import json
 import threading
 import time
 import unittest
@@ -42,8 +47,10 @@ class Turn:
         self.started, self.release, self.done = threading.Event(), threading.Event(), threading.Event()
         self.consume_steers, self.goal, self.row, self.report_row, self.report_rows = True, None, None, True, True
         # fails: the turn ends without message.complete. early: (session, persisted_turn or None) completions
-        # this turn's thread writes before its own.
-        self.fails, self.early = False, []
+        # this turn's thread writes before its own. adopt: False when the turn could not rewrite its staged row
+        # and wrote its own. row_ids: what the completion reports as the turn's rows, in place of the real ones.
+        # delivered: rows of steers its earlier tool batches drained.
+        self.fails, self.early, self.adopt, self.row_ids, self.delivered = False, [], True, None, []
 
 
 class TurnHermes(FakeHermes):
@@ -211,6 +218,14 @@ class TurnHermes(FakeHermes):
         self.server.write_json({"jsonrpc": "2.0", "method": "event", "params": {"session_id": sid, "type": "message.complete", "payload": {
             "text": "Answer", "status": "complete", **({"persisted_turn": persisted} if persisted else {})}}})
 
+    def tool_batch(self, turn):
+        """The running turn ends a tool batch: every waiting steer becomes one user row of their joined words."""
+        session = self.session
+        with session["history_lock"]:
+            corrections, session["corrections"] = session.get("corrections", []), []
+        if corrections:
+            turn.delivered.append(self.write_row("\n".join(corrections))["row_id"])
+
     def run_turn(self, session, turn):
         staged = session.pop("_submit_user_row", None)
         if not isinstance(staged, dict) or staged["content"] != turn.text:
@@ -218,6 +233,8 @@ class TurnHermes(FakeHermes):
         turn.started.set()
         if not turn.release.wait(5):
             raise AssertionError("The test never released the turn for " + repr(turn.text))
+        if not turn.adopt:
+            staged = None
         leftover = []
         if not turn.fails:
             if staged:
@@ -226,20 +243,19 @@ class TurnHermes(FakeHermes):
                     self.row(turn.row)["text"] = image_text(turn.text, turn.images)
             else:
                 turn.row = self.write_row(image_text(turn.text, turn.images), display_kind=turn.display_kind)["row_id"]
-            committed = [turn.row]
-            with session["history_lock"]:
-                # Corrections steered or redirected into the running turn; the turn persists those it took.
-                corrections, session["corrections"] = session.get("corrections", []), []
-            for steer in corrections:
-                if turn.consume_steers:
-                    committed.append(self.write_row(steer)["row_id"])
-                else:
-                    leftover.append(steer)
-            committed.append(self.write_row("Answer to " + turn.text, role="assistant")["row_id"])
+            # Corrections steered or redirected into the running turn: a last tool batch delivers whatever
+            # is waiting, or the turn ends with none and hands it back as the next prompt.
+            if turn.consume_steers:
+                self.tool_batch(turn)
+            else:
+                with session["history_lock"]:
+                    leftover, session["corrections"] = session.get("corrections", []), []
+            committed = [turn.row, *turn.delivered, self.write_row("Answer to " + turn.text, role="assistant")["row_id"]]
             for sid, persisted in turn.early:
                 self.complete(sid, persisted)
+            row_ids = committed if turn.row_ids is None else turn.row_ids
             # A runtime that returns no messages has no turn suffix to address (_persisted_turn_receipt).
-            self.complete(turn.sid, {"user_row_id": turn.row, **({"row_ids": committed} if turn.report_rows else {})} if turn.report_row else None)
+            self.complete(turn.sid, {"user_row_id": turn.row, **({"row_ids": row_ids} if turn.report_rows else {})} if turn.report_row else None)
         with session["history_lock"]:
             session["running"] = False
         result = {"final_response": "Answer to " + turn.text, **({"pending_steer": "\n".join(leftover)} if leftover else {})}
@@ -347,6 +363,44 @@ class TurnBindingTests(unittest.TestCase):
             self.assertEqual(hermes.bound("alice-1"), turn.row)
             self.assertEqual(hermes.shown(), [(turn.row, "What's for dinner?", "alice-1", "alice")])
 
+    def test_a_row_hermes_named_at_admission_is_kept_when_its_turn_reports_another(self):
+        with TurnHermes() as hermes:
+            named = hermes.send("alice-1", "Summarize @notes.md")["userRowId"]
+            turn = hermes.turn("Summarize @notes.md")
+            # Hermes expanded @notes.md, could not rewrite the staged row, and wrote the turn's own row instead.
+            turn.adopt = False
+            hermes.finish("Summarize @notes.md")
+            self.assertNotEqual(turn.row, named)
+            self.assertEqual(hermes.bound("alice-1"), named)
+            stored = hermes.journal.db.execute("SELECT turn_rows FROM receipts WHERE request_id='alice-1'").fetchone()[0]
+            self.assertEqual(json.loads(stored)[0], turn.row)
+            self.assertEqual(hermes.shown(), [(named, "Summarize @notes.md", "alice-1", "alice"), (turn.row, "Summarize @notes.md", None, None)])
+
+    def test_a_completion_with_malformed_row_ids_saves_no_turn_and_later_opens_still_answer(self):
+        # (case, the bad value placed in the reported rows, or "whole" for one row ID in place of the list). The first is well formed
+        # and binds the steer, so each other case is unbound for its own reason alone.
+        cases = [
+            ("well formed", None),
+            ("a dict element", {}),
+            ("a string element", "12"),
+            ("a boolean element", True),
+            ("a zero element", 0),
+            ("not a list", "whole"),
+        ]
+        for name, bad in cases:
+            with self.subTest(name), TurnHermes() as hermes:
+                named = hermes.send("alice-1", "Plan the trip")["userRowId"]
+                turn = hermes.turn("Plan the trip")
+                hermes.send("kim-1", "Avoid flights", sender="kim")
+                hermes.tool_batch(turn)
+                kim = hermes.row_of("Avoid flights")
+                rows = [named, kim]
+                turn.row_ids = rows if bad is None else kim if bad == "whole" else [*rows, bad]
+                hermes.finish("Plan the trip")
+                stored = hermes.journal.db.execute("SELECT row_id,turn_rows FROM receipts WHERE request_id='alice-1'").fetchone()
+                self.assertEqual(stored, (named, json.dumps(rows) if bad is None else None))
+                self.assertEqual(hermes.shown()[1], (kim, "Avoid flights", "kim-1", "kim") if bad is None else (kim, "Avoid flights", None, None))
+
     def test_an_image_send_is_bound_to_the_row_its_own_turn_reports_never_an_older_one(self):
         with TurnHermes() as hermes:
             # The desktop sent the same image alone a moment ago; file identifiers belong to the assistant.
@@ -404,12 +458,42 @@ class TurnBindingTests(unittest.TestCase):
             self.assertIsNone(hermes.bound("kim-1"))
             self.assertEqual(hermes.shown()[-1], (hermes.row_of("Avoid flights"), "Avoid flights", None, None))
 
+    def test_two_members_steers_hermes_joined_into_one_row_bind_to_neither(self):
+        with TurnHermes() as hermes:
+            hermes.send("alice-1", "Plan the trip")
+            turn = hermes.turn("Plan the trip")
+            self.assertTrue(hermes.send("kim-1", "Avoid flights", sender="kim")["steering"])
+            self.assertTrue(hermes.send("bob-1", "Use trains", sender="bob")["steering"])
+            hermes.finish("Plan the trip")
+            joined = hermes.row_of("Avoid flights\nUse trains")
+            self.assertEqual(hermes.shown(), [(turn.row, "Plan the trip", "alice-1", "alice"), (joined, "Avoid flights\nUse trains", None, None)])
+            self.assertEqual((hermes.bound("kim-1"), hermes.bound("bob-1")), (None, None))
+
+    def test_a_turn_binds_the_steer_it_delivered_alone_and_not_the_one_it_handed_to_the_next_turn(self):
+        with TurnHermes() as hermes:
+            hermes.send("alice-1", "Plan the trip")
+            turn = hermes.turn("Plan the trip")
+            hermes.send("kim-1", "Use trains", sender="kim")
+            hermes.tool_batch(turn)
+            # Bob's steer arrives after the turn's last tool batch; Hermes runs it as the next prompt.
+            turn.consume_steers = False
+            hermes.send("bob-1", "Avoid flights", sender="bob")
+            hermes.finish("Plan the trip")
+            followup = hermes.finish("Avoid flights")
+            self.assertEqual(followup.rid, turn.rid)
+            kim = hermes.row_of("Use trains")
+            self.assertEqual(hermes.shown(), [(turn.row, "Plan the trip", "alice-1", "alice"), (kim, "Use trains", "kim-1", "kim"),
+                                              (followup.row, "Avoid flights", None, None)])
+            self.assertEqual((hermes.bound("kim-1"), hermes.bound("bob-1")), (kim, None))
+
     def test_a_steer_beside_another_clients_correction_with_the_same_words_stays_unbound(self):
         with TurnHermes(busy="redirected") as hermes:
             hermes.send("alice-1", "Plan the trip")
             turn = hermes.turn("Plan the trip")
-            # A native client redirects "Same words" into Alice's turn, then Kim steers the same words from the app.
+            # A native client redirects "Same words" into Alice's turn and a tool batch delivers it; then Kim
+            # steers the same words from the app, and the turn's last batch delivers hers as a row of its own.
             self.assertEqual(hermes.other_client("Same words")["result"]["status"], "redirected")
+            hermes.tool_batch(turn)
             self.assertTrue(hermes.send("kim-1", "Same words", sender="kim")["steering"])
             hermes.finish("Plan the trip")
             native, kim = hermes.rows_of("Same words")
@@ -609,6 +693,29 @@ class SteeringRuleTests(unittest.TestCase):
                 shown = {row["row_id"]: row.get("app_request_id") for row in hermes.open()["messages"] if row["role"] == "user"}
                 self.assertEqual(hermes.bound("kim-1"), expected)
                 self.assertEqual(shown[12] == "kim-1", expected == 12)
+
+
+class StoredTurnRowsTests(unittest.TestCase):
+    def test_a_damaged_stored_turn_leaves_the_steer_unbound_and_the_open_answers(self):
+        # The first value is well formed and binds the steer, so each other case is unbound for its own reason.
+        cases = [
+            ("well formed", "[10, 11, 12, 13]", 12),
+            ("a dict element", "[10, 11, 12, {}]", None),
+            ("a string element", '[10, 11, 12, "13"]', None),
+            ("a boolean element", "[10, 11, 12, true]", None),
+            ("a zero element", "[10, 11, 12, 0]", None),
+            ("not a list", "12", None),
+            ("not JSON", "[10, 11, 12", None),
+        ]
+        for name, extent, expected in cases:
+            with self.subTest(name), StoredRows(copy.deepcopy(SteeringRuleTests.MESSAGES)) as hermes:
+                db = hermes.journal.db
+                with db:
+                    receipt(db, "alice-1", 10, 1, text="Plan the trip", actor="alice")
+                    db.execute("UPDATE receipts SET turn_rows=? WHERE request_id='alice-1'", (extent,))
+                    receipt(db, "kim-1", None, 2, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
+                shown = {row["row_id"]: row.get("app_request_id") for row in hermes.open()["messages"] if row["role"] == "user"}
+                self.assertEqual((hermes.bound("kim-1"), shown[12]), (expected, "kim-1" if expected else None))
 
 
 class StoredBindingTests(unittest.TestCase):
