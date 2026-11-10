@@ -708,6 +708,9 @@ a {
 .file-link img {
   width: 100%;
   height: auto;
+  /* An image whose size this page does not know yet gets this frame, so nothing moves when it loads. FileLink sets
+     the image's own ratio when it is known. */
+  aspect-ratio: 4 / 3;
   max-height: 400px;
   object-fit: contain;
   background: var(--raised);

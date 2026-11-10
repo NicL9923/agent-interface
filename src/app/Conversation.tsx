@@ -48,6 +48,7 @@ import { continueDraftRevisions } from "../shared/draft-diff";
 import { unknownEarlierFiles, type Artifact } from "../shared/artifacts";
 import { continueChips, continueTurns, settleChips, settleRevisions, settleTurns, useSettledWindow, type Turn } from "./transcript-window";
 import { useEarlierFiles } from "./use-earlier-files";
+import { imageSize, rememberImageSize } from "./image-sizes";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
@@ -606,10 +607,10 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }
-// Natural sizes of images already shown, so one that scrolls back into the transcript reserves its space before it reloads.
-const imageSizes = new Map<string, { width: number; height: number }>();
 function FileLink({ file }: { file: FileRef }) {
-  const size = imageSizes.get(file.id);
+  // The frame is fixed for as long as the image is mounted: its natural ratio when this page knows it, else the
+  // bounded frame in styles.css. Taking a size learned on load would resize the frame, the shift this prevents.
+  const [size] = useState(() => imageSize(file.id));
   return (
     <a
       className="file-link"
@@ -623,9 +624,10 @@ function FileLink({ file }: { file: FileRef }) {
           alt={file.name}
           width={size?.width}
           height={size?.height}
+          style={size && { aspectRatio: `${size.width} / ${size.height}` }}
           loading="lazy"
           decoding="async"
-          onLoad={event => imageSizes.set(file.id, { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+          onLoad={event => rememberImageSize(file.id, event.currentTarget)}
         />
       )}
       <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
