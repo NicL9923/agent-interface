@@ -66,11 +66,13 @@ export const formReplyKey = (user: string, bot: string, message: string, card: s
 export const signInHintKey = "agent-interface:sign-in-hint";
 /** The theme this device last showed the account the sign-in hint names, for public/boot.js. */
 export const savedThemeKey = "agent-interface:theme";
+/** The home this device last showed that account, to draw before bootstrap answers. See saved-roster.ts. */
+export const savedRosterKey = "agent-interface:roster";
 /**
  * Copies that belong to the account the sign-in hint names. They go with the hint, at sign-out, at a
  * refused session and at a new sign-in, and are shown only while the hint names their account.
  */
-export const accountKeys = [savedThemeKey];
+export const accountKeys = [savedThemeKey, savedRosterKey];
 export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
 export function localRead<T>(key: string): T | null {
   try {

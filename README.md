@@ -132,6 +132,24 @@ dark theme never opens light. The browser keeps that theme with the account it b
 `agent-interface:theme`, and uses it only while the sign-in record below names that account.
 See `src/startup-read.ts` and `src/app/saved-theme.ts`.
 
+A returning visit draws home at once from the last roster this device showed, instead of waiting
+for bootstrap. The browser keeps, in `agent-interface:roster`, only what home draws: the person's
+name and picture address for the account button, each assistant's ID, name, avatar and whether it
+is shared, the pinned assistants, sections, main assistant and whether the person put off choosing
+one, and each group chat's ID, name and members. It keeps no message, preview, time, unread mark,
+activity, draft, token or email, and lists only the assistants bootstrap gave that person. Until
+bootstrap answers, home says "Connecting" (or "Offline", or "Can't connect" once a check failed),
+each row says "Shared assistant" or "Personal assistant" in place of its latest message, a group
+chat names its members, and no row is marked unread or busy. Account, Search, New, row menus and
+the main assistant suggestion wait for bootstrap. A tap on an assistant opens its chat once
+bootstrap answers, and starts reading it at the tap as a linked chat does; Today and group chats
+open once bootstrap answers. Bootstrap's answer redraws the same rows in place, so scroll and
+focus stay, and the saved group chats stay until the group list answers. The copy belongs to one
+account: it is drawn only while the sign-in record names that account, removed with that record,
+and a sign-in shows the sign-in screen until its own bootstrap answers, so a second member never
+sees the first's home. A copy this release cannot read, or storage that fails, falls back to the
+welcome screen. See `src/app/saved-roster.ts`.
+
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
 within the session's seven days and that sign-in's last check named the account and listed
@@ -149,7 +167,7 @@ is joined only while it is still on its way; once finished it only fills the res
 which the chat shows while it reads again. The response cache keeps the body of the
 latest-started read of each path, so a slower, older read that finishes last never replaces
 it. The browser keeps only the lapse time, the account ID and the chat IDs, in
-`agent-interface:sign-in-hint`, and drops them, and the saved theme with them, at sign-out,
+`agent-interface:sign-in-hint`, and drops them, and the saved theme and home with them, at sign-out,
 a refused session, a new sign-in, or a check that finds another account. A link to a message, Today or a group chat waits for the check
 as before. See `src/app/linked-chat.ts`.
 

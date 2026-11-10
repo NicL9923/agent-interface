@@ -34,10 +34,13 @@ test("the app opens offline from the service worker, then recovers when the netw
   await expect(page.getByRole("heading", { name: "You're offline" })).toBeVisible();
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
 
-  // The app never stores API data, so a cold open offline cannot show the conversation. It must still open
-  // the shell from the worker's cache and explain itself, not hand over the browser's error page.
+  // The device keeps home's roster but no message, so a cold open offline draws home and cannot show the
+  // conversation. It must open the shell from the worker's cache and explain itself, not hand over the
+  // browser's error page.
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Your assistants, in one familiar place." })).toBeVisible();
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await expect(page.locator(".bot-rail").getByRole("status")).toHaveText("Offline");
+  await expect(page.getByText("Fence check is done.")).toHaveCount(0);
   await expect(page.getByRole("status").filter({ hasText: "Can't reach the app right now" })).toBeVisible();
 
   await context.setOffline(false);
@@ -125,6 +128,35 @@ test.describe("a returning member's load", () => {
     // Before the event stream connects (which reads bootstrap again by design), one read, sent before the bundle arrived.
     expect(order.slice(0, order.indexOf("/api/events"))).toEqual(["/api/bootstrap", "bundle"]);
     expect(await page.evaluate(() => (window as unknown as { themeAtBody?: string }).themeAtBody)).toBe("dark");
+  });
+});
+
+test.describe("a returning member's home", () => {
+  // Routes see only what the page itself fetches.
+  test.use({ serviceWorkers: "block" });
+
+  test("is drawn from this device before bootstrap answers, without its messages, then brought up to date in place", async ({ page }) => {
+    await signIn(page);
+    let release!: () => void;
+    const answered = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/api/bootstrap?*", async route => { await answered; await route.continue(); });
+    await page.reload();
+    const ranch = assistants(page).getByRole("button", { name: /Ranch Hand/ });
+    await expect(ranch).toBeVisible();
+    await expect(page.locator(".bot-rail").getByRole("status")).toHaveText("Connecting");
+    await expect(page.getByText("Fence check is done.")).toHaveCount(0);
+    await ranch.focus();
+    // The page's own layout-shift entries, from the swap that follows.
+    await page.evaluate(() => {
+      (window as unknown as { shifted: number }).shifted = 0;
+      new PerformanceObserver(list => { for (const entry of list.getEntries()) (window as unknown as { shifted: number }).shifted += (entry as unknown as { value: number }).value; })
+        .observe({ type: "layout-shift" });
+    });
+    release();
+    await expect(ranch.getByText("Fence check is done.")).toBeVisible();
+    await expect(page.locator(".bot-rail").getByRole("status")).toHaveCount(0);
+    await expect(ranch).toBeFocused();
+    expect(await page.evaluate(() => (window as unknown as { shifted: number }).shifted)).toBeLessThan(0.01);
   });
 });
 

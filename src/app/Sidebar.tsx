@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button } from "../components/ui/button";
-import type { ActivityState, Bootstrap, Bot } from "../shared/types";
+import type { ActivityState, Bot } from "../shared/types";
 import type { GroupRoom } from "../shared/collaboration";
 import { Avatar, stateLabels } from "../components/Avatar";
 import { Icon } from "../components/Icon";
@@ -19,6 +19,7 @@ import { homeSeason } from "./season";
 import { SeasonalAmbience } from "./SeasonalAmbience";
 import { AccountMenu, initials } from "./AccountMenu";
 import { mainBot } from "../shared/main-assistant";
+import type { HomeSource } from "./saved-roster";
 import "./home.css";
 
 /** Group chats on home: the rooms in order, what is open, and how to make or finish one. */
@@ -32,6 +33,8 @@ export type HomeGroups = {
   hint?: string;
   /** A saved creation whose outcome is unknown. */
   pending: PendingGroup | null;
+  /** The rooms are this device's saved copy, from before the group catalog loaded: no latest message is known. */
+  saved?: boolean;
   onSelect(id: string): void;
   onCreate(): void;
 };
@@ -44,8 +47,14 @@ export const noGroups: HomeGroups = { rooms: [], roomId: "", canCreate: false, p
  * Home: pinned assistants up top, then everyone else with their latest message.
  * Memoized so typing and streamed replies do not redraw every row and live avatar.
  */
-export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onUsage, onSignOut, onPin, onBotSettings, onMoveToSection, onNewSection, onChooseMain, onDismissMainSuggestion }: {
-  boot: Bootstrap;
+export const Sidebar = memo(function Sidebar({ boot, saved = false, botId, shownBotId, readThrough, groups = noGroups, view, state, connectionLost, offline, mobile, open, update, onSelectBot, onView, onNewBot, onSettings, onUsage, onSignOut, onPin, onBotSettings, onMoveToSection, onNewSection, onChooseMain, onDismissMainSuggestion }: {
+  boot: HomeSource;
+  /**
+   * `boot` is this device's saved copy of home, drawn before bootstrap answers (see saved-roster.ts),
+   * which carries no unread mark, activity or latest message. Rows open chats, which wait for
+   * bootstrap; nothing that needs the server can be used.
+   */
+  saved?: boolean;
   botId: string;
   /** The chat on screen now, which is never marked unread. */
   shownBotId?: string;
@@ -110,14 +119,15 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
   const season = homeSeason(today, pinned);
   // Pointing at, pressing or focusing a row reads its chat before the click opens it.
   const intent = (bot: Bot) => {
-    const prefetch = () => { if (!current(bot)) prefetchFirstPage(bot.id); };
+    // Before bootstrap no read may start here: the account it would be made for is not yet known.
+    const prefetch = () => { if (!saved && !current(bot)) prefetchFirstPage(bot.id); };
     return { onPointerEnter: prefetch, onPointerDown: prefetch, onFocus: prefetch };
   };
   const row = (bot: Bot) => {
     const botState = activity(bot);
     const working = !connectionLost && botState !== "idle" && botState !== "done";
     return <li key={bot.id}>
-      <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
+      <BotMenu bot={bot} preferences={prefs} disabled={saved} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
         onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
         <Button className={`bot-item bot-row${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
           {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
@@ -144,8 +154,10 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
         <RoomFaces room={room} bots={boot.bots} cluster={mobile ? 52 : 44} />
         <span className="bot-row-text">
           <span className="bot-row-top"><span className="bot-row-name"><strong>{room.name}</strong></span>
-            {room.latest?.at && <span className="bot-row-meta"><ListDate value={room.latest.at} /></span>}</span>
-          <small><span className="sr-only">Group chat with {memberNames(room)}. </span>{roomPreview(room)}</small>
+            {!groups.saved && room.latest?.at && <span className="bot-row-meta"><ListDate value={room.latest.at} /></span>}</span>
+          {groups.saved
+            ? <small>Group chat with {memberNames(room)}</small>
+            : <small><span className="sr-only">Group chat with {memberNames(room)}. </span>{roomPreview(room)}</small>}
         </span>
       </Button>
     </li>;
@@ -161,28 +173,30 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
     </Button>
   </li>;
   const chatRows = rest.length > 0 || groups.rooms.length > 0 || !!finishRow;
-  const status = connectionLost ? offline ? "offline" : "reconnecting" : "connected";
+  const status = saved || connectionLost ? offline ? "offline" : "reconnecting" : "connected";
   return (
     <aside id="assistant-navigation" className={`bot-rail home${open ? " open" : ""}`} aria-label="Assistants" inert={mobile && !open} data-season={season ?? undefined}>
       {season && <SeasonalAmbience season={season} />}
       <header className="home-bar">
-        <AccountMenu user={boot.user} status={status} onUsage={onUsage} onSettings={onSettings} onSignOut={onSignOut} />
-        {connectionLost && <span className="home-sync" role="status">
-          <Icon name="spinner" size={16} className={offline ? undefined : "spin"} />{offline ? "Offline" : "Reconnecting"}</span>}
+        <AccountMenu user={boot.user} status={status} disabled={saved} onUsage={onUsage} onSettings={onSettings} onSignOut={onSignOut} />
+        {(saved || connectionLost) && <span className="home-sync" role="status">
+          {/* The saved home says it is not live yet, and says so plainly when the first bootstrap failed. */}
+          <Icon name="spinner" size={16} className={offline || saved && connectionLost ? undefined : "spin"} />
+          {offline ? "Offline" : !saved ? "Reconnecting" : connectionLost ? "Can't connect" : "Connecting"}</span>}
         <span className="home-bar-actions">
-          <Button className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} onClick={() => onView("find")}>
+          <Button className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} disabled={saved} onClick={() => onView("find")}>
             <Icon name="search" />
           </Button>
-          <NewMenu canGroup={groups.canCreate} groupHint={groups.hint} onNewBot={onNewBot} onNewGroup={groups.onCreate} />
+          <NewMenu canGroup={groups.canCreate} groupHint={groups.hint} disabled={saved} onNewBot={onNewBot} onNewGroup={groups.onCreate} />
         </span>
       </header>
-      <UpdateNotice update={update} />
+      {!saved && <UpdateNotice update={update} />}
       <div className="home-scroll">
         {main && (() => {
           const botState = activity(main);
           const working = !connectionLost && botState !== "idle" && botState !== "done";
           return <div className="home-main" role="group" aria-label="Main assistant">
-            <BotMenu bot={main} preferences={prefs} onPin={() => onPin(main)} onSettings={() => onBotSettings(main)}
+            <BotMenu bot={main} preferences={prefs} disabled={saved} onPin={() => onPin(main)} onSettings={() => onBotSettings(main)}
               onMove={sectionId => onMoveToSection(main, sectionId)} onNewSection={() => onNewSection(main)}>
               <Button className={`bot-item main-bot${current(main) ? " selected" : ""}${unread(main) ? " unread" : ""}`} aria-current={current(main) ? "page" : undefined}
                 {...intent(main)} onClick={() => onSelectBot(main.id)}>
@@ -205,8 +219,8 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
         {suggestMain && <section className="home-main-suggestion" aria-label="Main assistant">
           <p><strong>Choose a main assistant:</strong> it checks in on what's coming up and hands work to your other assistants.</p>
           <span className="home-main-suggestion-actions">
-            <Button className="primary" onClick={onChooseMain}>Choose</Button>
-            <Button onClick={onDismissMainSuggestion}>Not now</Button>
+            <Button className="primary" disabled={saved} onClick={onChooseMain}>Choose</Button>
+            <Button disabled={saved} onClick={onDismissMainSuggestion}>Not now</Button>
           </span>
         </section>}
         {pinned.length > 0 && <ul className="home-pinned" aria-label="Pinned assistants">
@@ -214,7 +228,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
             const botState = activity(bot);
             const showActivity = botState !== "idle" && botState !== "done";
             return <li key={bot.id}>
-              <BotMenu bot={bot} preferences={prefs} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
+              <BotMenu bot={bot} preferences={prefs} disabled={saved} onPin={() => onPin(bot)} onSettings={() => onBotSettings(bot)}
                 onMove={sectionId => onMoveToSection(bot, sectionId)} onNewSection={() => onNewSection(bot)}>
                 <Button className={`bot-item pinned-bot${current(bot) ? " selected" : ""}${unread(bot) ? " unread" : ""}`} aria-current={current(bot) ? "page" : undefined}
                   {...intent(bot)} onClick={() => onSelectBot(bot.id)}>
@@ -246,7 +260,7 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
           {sections.length > 0 && <h2>More {chatsName}</h2>}
           <ul className="home-list">{finishRow}{rest.map(row)}{groups.rooms.map(roomRow)}</ul>
         </section>}
-        {!boot.bots.length && <div className="home-empty">
+        {!saved && !boot.bots.length && <div className="home-empty">
           <h2>No assistants yet</h2>
           <p className="muted">Create one to help your household plan, remember and get things done.</p>
           <Button className="primary" onClick={onNewBot}>Create an assistant</Button>

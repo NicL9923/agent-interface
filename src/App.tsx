@@ -45,6 +45,9 @@ import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/Statu
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { rememberTheme } from "./app/saved-theme";
+import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
+import { prefetchLinkedChat } from "./app/linked-chat";
+import { savedRosterKey, signInHintKey } from "./app/storage";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -58,6 +61,17 @@ export function App() {
   // Phones open on the home list unless a link names a destination.
   const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
   const mobile = useMobile();
+  // The home this device last showed, drawn until bootstrap answers. Read again when another tab signs in or out.
+  const [saved, setSaved] = useState(readSavedRoster);
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (event.key === null || event.key === signInHintKey || event.key === savedRosterKey) setSaved(readSavedRoster());
+    };
+    window.addEventListener("storage", changed);
+    return () => window.removeEventListener("storage", changed);
+  }, []);
+  /** Set once the person picks a chat or view on the saved home, so the start page does not replace it. */
+  const chosenEarly = useRef(false);
   // An assistant this person just deleted leaves quietly; any other one explains itself.
   const deleted = useRef("");
   const gone = (id: string) => {
@@ -72,7 +86,8 @@ export function App() {
       closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage", "computer"); setError("");
       setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
     },
-    onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
+    // A place chosen on the saved home before bootstrap answered stays chosen.
+    onFirstBootstrap: next => { if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
     onBotGone: gone,
   });
@@ -98,7 +113,9 @@ export function App() {
   });
   // Another account's rooms never show while this one's load.
   const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
-  const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
+  // Until the catalog answers, home keeps this account's saved rooms in place (see saved-roster.ts).
+  const roomsSaved = !catalog && !groupLoad.error && !!saved && (!userId || saved.user === userId);
+  const rooms = useMemo(() => roomsSaved && saved ? savedRooms(saved) : orderRooms(catalog?.rooms ?? []), [catalog, roomsSaved, saved]);
   const reloadGroups = useStableCallback(() => void groupLoad.reload());
   useEffect(() => {
     if (!userId) return;
@@ -272,12 +289,12 @@ export function App() {
     // Making a group needs Hermes to host them and two assistants to put in one.
     const choosable = boot?.bots.filter(bot => !["all", "everyone"].includes(bot.id.toLowerCase())).length ?? 0;
     return {
-      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup,
+      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup, saved: roomsSaved,
       canCreate: !!pendingCreate || catalog?.supported === true && choosable >= 2,
       hint: pendingCreate ? undefined : !catalog?.canSend ? catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat."
         : boot && !boot.connection.connected ? "Reconnect to Hermes to make a group chat." : undefined,
     };
-  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot]);
+  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot, roomsSaved]);
   const [overlay, setOverlay] = useState<"palette" | "shortcuts" | "stop" | null>(null);
   const closeOverlay = useCallback(() => setOverlay(null), []);
   // Search from the palette opens Search & saved with the words already searched.
@@ -377,7 +394,41 @@ export function App() {
     undo: () => toast.undo(),
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
+  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
+  const connected = !!boot?.connection.connected;
+  useEffect(() => {
+    if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
+  }, [boot, connected, catalog, rooms]);
+  // Read for the account the sign-in hint names (see readSavedRoster), and again when another tab
+  // changes it. A sign-in or sign-out on this page shows the sign-in screen until a bootstrap answers.
+  const early = !boot && saved ? saved : null;
+  const earlyHome = useMemo(() => early && savedHome(early), [early]);
+  const chooseEarly = useStableCallback((id: string) => {
+    chosenEarly.current = true;
+    // The chat starts reading now, as a linked chat does, and opens once bootstrap names this account.
+    prefetchLinkedChat(id);
+    selectFromHome(id);
+  });
+  const showEarly = useStableCallback((next: View) => { chosenEarly.current = true; showView(next); });
+  const pickRoomEarly = useStableCallback((id: string) => { chosenEarly.current = true; selectRoom(id); });
+  const earlyGroups = useMemo(() => ({ ...homeGroups, onSelect: pickRoomEarly }), [homeGroups, pickRoomEarly]);
   if (session.auth) return <SignIn onSuccess={session.signedIn} />;
+  const connecting = <>
+    <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+    {appUnavailable && <button onClick={() => void session.refresh()}>Try again</button>}
+  </>;
+  // The same tree as the full app below, so bootstrap's answer redraws home in place: rows, scroll and focus stay.
+  if (!boot && earlyHome)
+    return (
+      <div className="app-shell">
+        <Sidebar boot={earlyHome} saved botId={botId} readThrough={readThrough} groups={earlyGroups} view={view} state="idle"
+          connectionLost={appUnavailable || offline} offline={offline} mobile={mobile} open={railOpen} update={null}
+          onSelectBot={chooseEarly} onView={showEarly} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
+          onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection}
+          onChooseMain={chooseMainFromHome} onDismissMainSuggestion={dismissMainSuggestion} />
+        <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>{connecting}</main>
+      </div>
+    );
   if (!boot)
     return (
       <main className="welcome">
@@ -388,8 +439,7 @@ export function App() {
           <br />
           in one familiar place.
         </h1>
-        <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
-        {appUnavailable && <button onClick={() => void session.refresh()}>Try again</button>}
+        {connecting}
       </main>
     );
   const selected = boot.bots.find((bot) => bot.id === botId);
