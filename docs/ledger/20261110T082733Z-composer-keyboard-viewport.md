@@ -74,3 +74,69 @@ events, the pan offset (`pageTop`) path, Android's `resizes-content` and its saf
 under the keyboard, an installed web app on either platform, keeping the keyboard up through a tapped
 Send on WebKit, VoiceOver, TalkBack and Voice Control activating Send, and a hardware-keyboard
 iPad's shortcut bar.
+
+## Review round 2
+
+After merging `origin/main` (`3bfd79d`) into the branch as `992a8c2`. Findings came from an independent
+GPT-6.1 Sol review of `812cae4`.
+
+### What changed
+
+- P1, Send hidden by a long draft in landscape: `src/styles.css` now states the order in which a short
+  conversation gives up space. The transcript goes first, then the notices, the Talk panel, the attachment tray and
+  the message box, which scroll inside their own boxes. The message box keeps one line and the composer keeps its
+  row of buttons. The header goes last, cut from the top, because `.conversation-panel` packs its content to the
+  bottom. The floors are explicit (`--composer-floor`, 54px inline or 98px stacked, plus 10px for a notice dock and
+  28px for a Talk panel) because Chromium sizes a box's automatic minimum height to all of its content. The
+  message box stretches to the grid row the form leaves it, so the draft scrolls inside it. Send can only be cut
+  when the visible frame is shorter than the composer area's floor, 112px with a stacked draft.
+- P2, a view resize settled the send reserve: `reserveEnd` in `src/app/use-conversation.ts` marks the anchor
+  filled only when the content outside the reserve grew since the last measurement. A view that shrinks recomputes
+  the reserve, and it comes back when the view grows.
+- P3: the README and `keyboard-viewport.ts` name iOS 27.2 as the last version that ignores
+  `interactive-widget=resizes-content`, cite WebKit bug 259770's fix in the iOS 27.3 beta and its report that the
+  field still ends up behind the keyboard there, and call the app's behavior on that beta unverified. The pinch-zoom
+  wording now says a scale within 0.01 of 1 counts as unzoomed. The README describes the space order.
+
+### Red proof
+
+- P2: "gives the reserved space back when a view that shrank grows again" (`tests/transcript-ui.test.ts`) was
+  written first and failed on the branch head at the expand step, `expected '' to be '176px'`. It passes with the fix.
+- P1: the e2e test "a long draft scrolls inside the message box and Send stays on screen to tap" failed against the
+  branch head's `styles.css` with `Send at 190 to 234`, the reviewer's numbers. With the fix it passes. Breaking single
+  lines of the fix:
+  - `justify-content: flex-end` changed to `flex-start` failed at the 140px step, `Send at 145 to 189 of 140`. At
+    190px alone the composer's bottom padding absorbed the overflow, so the test checks both heights.
+  - Removing `align-self: stretch` from the message box failed on `inForm: false`.
+  - Setting the form's floor to 0 passed: with no notice or Talk panel nothing competes with the form inside the
+    composer area. The matrix below covers those cases.
+  - `.composer-area > * { flex-shrink: 0; }` was removed after its removal passed: every child sets its own.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/transcript-ui.test.ts tests/keyboard-viewport.test.ts tests/shell-ui.test.ts`: 3 files,
+  141 tests passed.
+- `npm test`: 180 files, 2925 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 10 passed.
+
+### Chromium phone matrix
+
+A script in the session scratchpad loaded the e2e server's build with Playwright's touch and mobile settings and a
+faked visual viewport. It covered 375 by 667, 430 by 932, 667 by 375, 844 by 390, 932 by 430 and 1280 by 800, with no
+keyboard and with visible frames of 363, 548, 120, 190 and 150px. Drafts were empty, one line, eight lines, eight lines
+with four attachments, and eight lines with a notice dock or a Talk panel. The notice and Talk panel were inserted into
+the DOM with the app's classes, so they check layout only.
+[The report](../evidence/composer-keyboard-20261110/send-visibility-round2.json) holds both runs:
+
+- Before, Send was outside the visible frame in 20 of 36 keyboard cases. After, it was inside and a tap at its centre
+  reached it in all 36. An empty draft shows Send in the same slot Stop uses.
+- All 36 no-keyboard cases have the same Send, form, message box, tray and header boxes before and after.
+- [Landscape at 190px](../evidence/composer-keyboard-20261110/landscape-190-round2.png), before and after.
+
+### Not run on a device
+
+The earlier list still stands. This round added no device runs. A browser without `field-sizing`, such as Safari
+before 26.2, sizes the message box from script with an explicit height, which the stretch does not override. There a
+long draft may draw above its row when space is short, though Send keeps its place. The group chat composer was not
+checked with a keyboard: the e2e server has no group.

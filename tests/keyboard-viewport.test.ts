@@ -52,7 +52,7 @@ describe("following an on-screen keyboard", () => {
     expect(shell()).toEqual(full);
   });
 
-  it("never resizes the shell for a pinch zoom", () => {
+  it("leaves the shell alone through a pinch zoom past normal scale", () => {
     const viewport = new FakeViewport();
     follow(viewport);
     viewport.set({ scale: 2, height: 400, pageTop: 200 });
