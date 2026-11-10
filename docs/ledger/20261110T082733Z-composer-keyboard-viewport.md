@@ -160,7 +160,7 @@ composers. [Report](../evidence/composer-keyboard-20261110/send-visible-preview.
 
 - With `812cae4`'s CSS, 38 of 70 kept the button whole and tappable. With `a8a161c`, 49 of 70, all the misses in the
   group chat. Now 70 of 70.
-- Breaking each group line by hand turned the tool red. Undoing the two-class sticky failed 21 cases. Removing the
+- Breaking each group line by hand turned the tool red. Undoing the two-class sticky failed the long and threaded group drafts on the small phone, with and without a keyboard. Removing the
   message box cap failed the portrait keyboard case with a thread and a long draft. Removing the floor failed the
   120px and 150px frames. Using the plain 76px for the banner failed the threaded portrait keyboard case.
 - `npm run lint`, `npm run typecheck`, `npm run build` and `npm run test:e2e` (10 passed) passed again. `npm test` was
