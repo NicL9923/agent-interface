@@ -13,6 +13,9 @@
  * - Code is never cut. A block with any fence-shaped line, or whose last line is indented as
  *   code, comes back whole.
  * - Only a construct recognized as unfinished is held; anything else comes back whole.
+ * - A hold that would hide a whole line is dropped once that line reads as a finished sentence:
+ *   `_private is the field.` was never an opener, and a pause would leave the reply blank.
+ * - The cut falls on a grapheme boundary, or nothing is held, so no character is shown in part.
  * - It never throws.
  *
  * Held while unfinished, each only when it starts within HOLD_LIMIT of the end:
@@ -43,6 +46,10 @@ const markerLine = /^[ \t]*[-=*_+#|:~>][-=*_+#|:~> \t]*$/;
 const spaceOrOpening = /[\s([{"'\u2018\u201c]/;
 const letterOrDigit = /[\p{L}\p{N}]/u;
 const opensAfter = { "*": /[\p{L}\p{N}`[("'\u2018\u201c]/u, "_": letterOrDigit, "~": /[\p{L}\p{N}`[("'\u2018\u201c]/u };
+// A line that ends a sentence, with any closing quote or bracket after its full stop.
+const sentenceEnd = /[.!?\u3002\uff01\uff1f]["')\]\u2019\u201d]*[ \t]*$/;
+// Without a segmenter a cut cannot be proved to fall between characters, so nothing is held.
+const graphemes = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function" ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : undefined;
 
 export function streamingHoldBack(text: string): string {
   try {
@@ -52,7 +59,12 @@ export function streamingHoldBack(text: string): string {
     if (/[\t]| {4}/.test(containerPrefix.exec(line)![0])) return text;
     const earliest = text.length - HOLD_LIMIT - lineStart;
     const cut = markerLine.test(line) || /^ {0,3}\|/.test(line) && !/^ {0,3}\|/.test(previousLine(text, lineStart)) ? 0 : inlineCut(line, earliest);
-    return cut === undefined || cut < earliest ? text : text.slice(0, lineStart + cut);
+    if (cut === undefined || cut < earliest) return text;
+    // Only quote and list markers stay before the cut, so the hold hides everything the line says.
+    if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
+    const at = lineStart + cut;
+    if (at > 0 && graphemes?.segment(text).containing(at)?.index !== at) return text;
+    return text.slice(0, at);
   } catch {
     return text;
   }

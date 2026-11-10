@@ -225,3 +225,35 @@ margin, dropping the indentation check or its tab, treating only `\n` as a line 
 the read limit each failed the property, a negative case or the timing case. In
 `MessageMarkdown.tsx`, passing the raw last block failed the hold test and three reviewed render
 cases. Not holding back a reply parsed whole failed the definition case.
+
+## Review round 3
+
+GPT-6.1 Sol reviewed `streamingHoldBack` at `31f43c3`. Across 619,942 inputs and prefixes it found
+no output that was not a prefix, none past the 120-character bound, none crossing a line break and
+none cutting code, and it measured a worst call of 0.235 ms. It reported two findings, both fixed
+here by the orchestrating agent with the fix the reviewer verified in a scratch wrapper.
+
+1. Ordinary prose could leave the whole live reply blank. `_private is the field name used
+   throughout this example.`, `*args are passed through unchanged to the wrapped function.`,
+   `| this is a paragraph of ordinary prose, not a table.` and `[ a bracket followed by plain
+   prose.` each returned an empty string, because a hold from the start of the line hides the line.
+   A hold that leaves only quote and list markers before the cut is now dropped once the line ends
+   a sentence.
+2. A cut could split a grapheme: `"؀`abc"` returned `"؀"`, a detached Arabic mark. A cut
+   that is not on a grapheme boundary now holds nothing, and so does a browser with no
+   `Intl.Segmenter`.
+
+The new cases failed first: 7 failed, 47 passed, each for the reviewer's reason.
+
+| Break | Result |
+| --- | --- |
+| Finished-sentence release applied to any cut, not only one that hides the line | 1 failed: "still holds an opener at the start of a line while its sentence is unfinished" |
+| Release without the sentence test | 3 failed: the same test, the table header case and the marker line case |
+| Grapheme boundary check removed | 1 failed: "never cuts inside a grapheme" |
+
+After the fix: `npx vitest run tests/streaming-hold-back.test.ts tests/message-markdown.test.ts`,
+94 passed. The timing case, which runs with the segmenter in place, still passes its 1 ms median.
+
+Known limit, unchanged: a bold sentence at the start of a line, such as `**This matters.**`, can
+show its opening markers for one update if the update ends exactly between the full stop and the
+closing markers.

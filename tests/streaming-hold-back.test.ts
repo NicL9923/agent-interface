@@ -137,4 +137,31 @@ describe("holding back a streaming reply's unfinished tail", () => {
   ])("shows %s as typed", (_case, text) => {
     expect(streamingHoldBack(text)).toBe(text);
   });
+
+  // A hold from the start of the line hides the whole line. Once that line reads as a finished
+  // sentence, the marker was never an opener, and a pause would leave the reply blank.
+  it.each([
+    ["an underscore name", "_private is the field name used throughout this example."],
+    ["a starred name", "*args are passed through unchanged to the wrapped function."],
+    ["a line starting with a pipe", "| this is a paragraph of ordinary prose, not a table."],
+    ["a bracket", "[ a bracket followed by plain prose."],
+    ["a question in a list item", "- *args or **kwargs?"],
+    ["a quoted sentence", '> _private is "the field."'],
+  ])("shows a finished sentence that starts with %s", (_case, text) => {
+    expect(streamingHoldBack(text)).toBe(text);
+  });
+
+  it("still holds an opener at the start of a line while its sentence is unfinished", () => {
+    expect(streamingHoldBack("**Note: feed the hor")).toBe("");
+    expect(streamingHoldBack("- **Water the")).toBe("- ");
+    // Text before the hold stays on screen, so a finished sentence after it changes nothing.
+    expect(streamingHoldBack("Feed the **horses first.")).toBe("Feed the ");
+  });
+
+  // U+0600 joins the character after it into one grapheme, so cutting between them would render a
+  // detached mark. An ordinary combining accent sits before the cut and stays whole.
+  it("never cuts inside a grapheme", () => {
+    expect(streamingHoldBack("\u0600`abc")).toBe("\u0600`abc");
+    expect(streamingHoldBack("Cafe\u0301 `abc")).toBe("Cafe\u0301 ");
+  });
 });
