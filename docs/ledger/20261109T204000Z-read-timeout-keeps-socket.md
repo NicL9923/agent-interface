@@ -64,3 +64,12 @@ Each was applied by hand, `tests/hermes-adapter.test.ts` run, and the source res
 - The probe goes through the shared `rpc` path and joins the in-flight read: 3 tests failed, the new
   drop test and both existing heartbeat tests.
 - The probe's timeout no longer drops the socket: the same 3 tests failed.
+
+### Checks, round 1
+
+Run on NicolasLaptop (Linux, Node 24.22.2) at `fd032ca`, the fix commit.
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/hermes-adapter.test.ts`: 217 tests passed.
+- `npx vitest run tests/hermes-qualification.test.ts`: 5 tests passed.
+- `npm test`: 169 files, 2,492 tests passed.
