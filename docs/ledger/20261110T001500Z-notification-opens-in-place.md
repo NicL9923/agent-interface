@@ -345,3 +345,150 @@ Each line was broken by hand, `tests/service-worker.test.ts` run, and the source
 - A real notification tap, a browser behind another application, and a real late page. The worker
   cases fake the browser APIs at their boundary.
 - Firefox, Safari and an installed iOS web app: not run.
+
+## November 10 fourth review round: the design reduced
+
+GPT-6.1 Sol's fourth review at `4f6839e` found three paths that left the person with no window in
+front and no notification, all on a tap of a notification that had come back: a prompt answer from
+a visible window that could not come forward, a hidden window whose new window was refused, and a
+navigation that worked while the window stayed hidden. It also found that two overlapping taps
+could each open a new window for a hidden window that could not come forward. Every round so far
+had found new cases of the same two kinds, so the orchestrator decided to cut the states down to
+one invariant instead of patching the cases. This round does not merge `main`. Checks ran on
+NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromium).
+
+### The invariant and the rules
+
+Every tap ends with a window known to be in front showing the chat, or the notification on screen
+again. "In front" is a window that was focused already, one whose `focus()` succeeded, or one
+`openWindow` just opened. The comment above `openChat` holds this table, and `reach()` reads as it:
+
+| Rule | Window this worker controls | Then |
+| --- | --- | --- |
+| 1 | none | `openWindow`. If that fails, the notification comes back. |
+| 2 | answers within 250 ms | The chat is open in it. In front: done. If not, it comes back. |
+| 3 | no answer in time, first tap | The window is left as it is and a focus attempted. The notification comes back, marked as having come back. |
+| 4 | no answer in time, tap on a marked notification | `navigate` the window, or `openWindow` if that fails. Then, unless a window is known to be in front, the notification comes back. |
+
+The 250 ms wait and its reasoning, the rule that a first tap never replaces the document, and the
+page side (the discard question, the sheet and account binding) are unchanged.
+
+### Removed
+
+- The ten-second late listening (`OPEN_LATE_MS`), the answer counts per window (`answered`,
+  `answerKey`), `within()` and `closeShownAgain()`. `askToOpen` closes its port at the 250 ms
+  deadline, so a late answer is not heard. If a page answers late, it has opened the chat, and the
+  notification that came back stays until the person dismisses it or taps it, which gets a prompt
+  answer.
+- Opening a new window for a window that answered (`reachPerson()` and its `visible`/`hidden`
+  split). A window that answered shows the chat; if it is not in front, the notification comes
+  back. This removes the double open.
+- The limit of one re-show. The notification now comes back every time a tap does not reach the
+  person, always silent and marked. It comes back only as the direct result of a tap, so it cannot
+  loop without the person tapping. The limit was what left the round's three paths with nothing on
+  screen.
+- The `.catch(() => showAgain(...))` in the `notificationclick` handler moved into `openChat`, so
+  overlapping taps share it.
+
+### Overlap
+
+With the late listening gone, the overlap left is two taps on the same chat while the first is
+still being handled: a double tap, or taps on two notifications about one chat. Without a guard
+each would ask the page, and on rule 1 or 4 each would navigate or open a window. `openChat` keeps
+one attempt in flight per address, and a second tap joins it; the entry goes when the attempt ends,
+so the next tap starts its own. The key is the address alone, not window and address: the worker
+picks the window after an `await`, and a window the first tap opened can appear in the second
+tap's `matchAll`, so a window-keyed check could miss the join. One attempt per chat also covers
+the window the orchestrator named.
+
+### Tests
+
+`tests/service-worker.test.ts`, "notification taps with the app open":
+
+- One table, "rule N: …", one row per rule and way it ends, 13 rows. Each asserts the invariant
+  through `ending()`: a new window `openWindow` resolved, or an open window that answered in time
+  or was navigated and was focused already or focused; otherwise exactly one notification, marked
+  as having come back. Each also asserts how many times the window was asked, navigated, and a new
+  window opened.
+- "two overlapping taps act once", 5 rows from that table: rules 1, 2, 3 and both outcomes of 4.
+  The notifications are untagged, so two shown would both stay; the second tap starts before the
+  first has heard anything back. Each asserts one ask, load or new window and at most one
+  notification.
+- "brings the notification back when a step fails in a way the rules do not name": `matchAll`
+  rejects.
+- Kept: the 250 ms boundary (now asserting the tap ends at 250 ms), the sequential second tap that
+  loads into a silent window, the new window a quarter second after a failed load, the uncontrolled
+  window, the window the person was last in, and the re-shown notification's fields and actions.
+- Deleted with the late listening: both "closes the brought-back notification when the page
+  answers late…", "closes only the notification it brought back…", "does not load the chat on a
+  second tap once the page has answered the first one late", "shows a notification again only
+  once…", and the third round's 10-row table.
+
+### Red before the change
+
+The new `tests/service-worker.test.ts` copied onto a worktree at `4f6839e`:
+`npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 13 failed,
+13 passed. Each changed row failed:
+
+| Test | Failure on `4f6839e` |
+| --- | --- |
+| waits 250 ms for an answer, then leaves the window as it is… | "expected false to be true": the tap still listened past 250 ms |
+| rule 1: a new window is refused on a tap of one that came back | "a window in front, or the notification back: expected 1 to be +0": nothing on screen |
+| rule 2: the window cannot come forward (hidden) | "expected 'in front' to be 'back'": a second window opened |
+| rule 2: the window cannot come forward, on a tap of one that came back | nothing on screen |
+| rule 3: the window comes forward; rule 3: the page answers late | timed out in 15,000 ms: the tap waited ten seconds |
+| rule 4: the chat loads into the window, which cannot come forward | nothing on screen |
+| rule 4: loading fails and a new window is refused | nothing on screen |
+| two overlapping taps, rule 1 | "expected { … opened: 2 } to deeply equal { … opened: 1 }" |
+| two overlapping taps, rule 2 | "expected 'in front' to be 'back'": new windows opened |
+| two overlapping taps, rule 3 | timed out in 15,000 ms |
+| two overlapping taps, rule 4: loading fails and a new window opens | "expected { asked: 2, navigated: 2, opened: 2 } to deeply equal { asked: 1, navigated: 1, opened: 1 }" |
+| two overlapping taps, rule 4: …cannot come forward | nothing on screen |
+
+The rows that pass there are the ones whose behavior did not change: rule 1 with a new window or
+refused on a first tap, rule 2 in front either way, and rule 4 in front either way. "brings the
+notification back when a step fails…" needs the fake's new `clients` handle, so it was written
+after this run; mutant W12 below shows it can fail.
+
+### Mutants
+
+Each line was broken by hand, `tests/service-worker.test.ts` run (76 tests), and the source
+restored.
+
+| Mutation | Result |
+| --- | --- |
+| W1 A second tap never joins | failed: all 5 overlap rows |
+| W2 An attempt is never cleared | failed: "loads the chat into a window that still does not answer…" |
+| W3 An answer in time counts as in front | failed: both rule 2 "cannot come forward" rows and their overlap row |
+| W4 A first tap without an answer navigates | failed: 5 |
+| W5 A navigation counts as in front | failed: rule 4 "…cannot come forward" and its overlap row |
+| W6 No new window after `navigate` fails | failed: 4 |
+| W7 A refused new window counts as in front | failed: 5 |
+| W8 `focused` ignored | failed: "rule 2: the window was focused already" |
+| W9 Answer wait 250 ms changed to 1,000 | failed: 12 |
+| W10 The notification brought back is not marked | failed: 11 |
+| W11 Not silent | failed: 2 |
+| W12 An unexpected failure not caught | failed: "brings the notification back when a step fails…" |
+| W13 Never brought back | failed: 16 |
+| W14 No focus attempted | failed: 4 |
+| W15 Port not closed at the deadline | survived |
+
+W15 survives because closing the port is cleanup: the answer promise has already settled at the
+deadline, so a late message reaching `onmessage` cannot change the outcome. It stays so a stalled
+page's port is released.
+
+### Checks
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
+  tests/close-request.test.ts`: 3 files, 103 tests passed.
+- `npm test`: 173 files, 2,716 tests passed.
+- `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed. The in-place case runs
+  rule 2 with a window focused already.
+
+### Not exercised
+
+- A real notification tap, a browser behind another application, a real late page and real
+  overlapping taps. The worker cases fake the browser APIs at their boundary; the e2e calls
+  `openChat`.
+- Safari, Firefox and an installed iOS web app: not run.

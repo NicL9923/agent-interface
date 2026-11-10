@@ -55,6 +55,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   const getNotifications = vi.fn(async ({ tag }: { tag?: string } = {}) => shown.filter(each => tag === undefined || each.tag === tag));
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
+  const clients = { matchAll: async (query: { includeUncontrolled?: boolean } = {}) => (options.windows ?? []).filter(client => client.controlled || query.includeUncontrolled), openWindow, claim };
   const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
   // Installing needs the network; tests of later steps keep the default of being offline.
@@ -77,7 +78,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       location: { origin: 'https://app.example' },
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
       registration: { showNotification, getNotifications, update, unregister },
-      clients: { matchAll: async (query: { includeUncontrolled?: boolean } = {}) => (options.windows ?? []).filter(client => client.controlled || query.includeUncontrolled), openWindow, claim },
+      clients,
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
@@ -109,7 +110,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     await Promise.all(background);
     return answer as Response;
   };
-  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, shown, openWindow, setAppBadge, clearAppBadge, update, unregister };
+  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, shown, openWindow, setAppBadge, clearAppBadge, update, unregister };
 }
 
 describe('service worker privacy and return path', () => {
@@ -619,17 +620,33 @@ describe('service worker app shell', () => {
 describe('service worker notification taps with the app open', () => {
   const url = 'https://app.example/?bot=ranch';
   const tapped = { title: 'Ranch Hand', body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'bot:ranch', actions: [] as { action: string; title: string }[], data: { url: '/?bot=ranch' } as Record<string, unknown> };
+  const cameBack = { ...tapped, data: { url: '/?bot=ranch', reshown: true } };
   async function tap(sw: ReturnType<typeof worker>, notification: Partial<typeof tapped> & { data: Record<string, unknown> } = tapped) {
     let done: Promise<unknown> | undefined;
     sw.handlers.notificationclick({ notification: { ...tapped, ...notification, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
     return done!;
   }
-
   /** The notification the worker brought back, as a tap on it delivers it. */
   const broughtBack = (sw: ReturnType<typeof worker>) => {
     const [title, options] = sw.showNotification.mock.calls[0];
     return { title, ...options, data: options.data ?? {} };
   };
+  const fulfilled = async (mock: ReturnType<typeof vi.fn>) =>
+    (await Promise.allSettled(mock.mock.results.map(result => result.value))).some(result => result.status === 'fulfilled');
+  /**
+   * The invariant every tap ends in: a window known to be in front shows the chat, or exactly one
+   * notification, marked as having come back, is on screen. A new window is in front; an open one
+   * shows the chat once it answered in time or was navigated, and is in front when it was focused
+   * already or its focus() worked.
+   */
+  async function ending(sw: ReturnType<typeof worker>, window?: Window, answeredInTime = false) {
+    const shows = answeredInTime || !!window && await fulfilled(window.navigate);
+    const inFront = await fulfilled(sw.openWindow) || !!window && shows && (!!window.focused || await fulfilled(window.focus));
+    const back = sw.shown.filter(each => each.data?.reshown === true && each.data.url === '/?bot=ranch');
+    expect(inFront ? 0 : 1, 'a window in front, or the notification back').toBe(sw.shown.length);
+    expect(back).toHaveLength(sw.shown.length);
+    return inFront ? 'in front' : 'back';
+  }
 
   it('asks the window to open the chat in place and focuses it, without reloading it', async () => {
     const window = openWindowOf();
@@ -648,9 +665,18 @@ describe('service worker notification taps with the app open', () => {
     expect(other.postMessage).not.toHaveBeenCalled();
   });
 
+  it('opens a new window beside one this worker does not control, which it can neither ask nor navigate', async () => {
+    const window = openWindowOf({ controlled: false });
+    const sw = worker({ windows: [window] });
+    await tap(sw);
+    expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
+    expect(window.postMessage).not.toHaveBeenCalled();
+    expect(window.navigate).not.toHaveBeenCalled();
+  });
+
   // The page is busy, as with an edited settings form, and has not answered when the wait ends.
-  // Loading the chat into it would replace that form, so a first tap never does.
-  it('leaves a window that does not answer in time as it is, focused, and brings the notification back', async () => {
+  // Loading the chat into it would replace that form, so a first tap never does, and the tap ends there.
+  it('waits 250 ms for an answer, then leaves the window as it is and brings the notification back', async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
@@ -660,21 +686,16 @@ describe('service worker notification taps with the app open', () => {
       await vi.advanceTimersByTimeAsync(249);
       expect(sw.showNotification).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
+      expect(finished).toBe(true);
       expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', expect.objectContaining({ silent: true, data: { url: '/?bot=ranch', reshown: true } }));
-      expect(window.focus).toHaveBeenCalled();
       expect(window.navigate).not.toHaveBeenCalled();
       expect(sw.openWindow).not.toHaveBeenCalled();
-      // It listens a while longer for a late answer, then lets the notification stand.
-      await vi.advanceTimersByTimeAsync(9_749);
-      expect(finished).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(finished).toBe(true);
-      expect(sw.shown).toHaveLength(1);
     } finally { vi.useRealTimers(); }
   });
 
-  // A window still running a release from before pages answered never answers. The second tap is the
-  // person asking again, so it loads the chat there the way taps always did.
+  // A window still running a release from before pages answered never answers. The tap on the
+  // notification that came back is the person asking again, so it loads the chat there. Taps one
+  // after the other each make their own attempt.
   it('loads the chat into a window that still does not answer when the brought-back notification is tapped', async () => {
     vi.useFakeTimers();
     try {
@@ -690,139 +711,109 @@ describe('service worker notification taps with the app open', () => {
       expect(window.postMessage).toHaveBeenCalledTimes(2);
       expect(window.navigate).toHaveBeenCalledExactlyOnceWith(url);
       expect(sw.openWindow).not.toHaveBeenCalled();
-      // Never a third time.
       expect(sw.showNotification).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); }
   });
 
-  it('opens a new window on the second tap when loading the chat into the silent one fails', async () => {
+  it('opens a new window a quarter second after a tap on one that came back when loading the chat into the silent window fails', async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
       window.navigate.mockRejectedValue(new TypeError('not controlled'));
       const sw = worker({ windows: [window] });
-      const done = tap(sw, { data: { url: '/?bot=ranch', reshown: true } });
+      const done = tap(sw, cameBack);
       await vi.advanceTimersByTimeAsync(250);
-      // Opened a quarter second after the tap, well inside Firefox's second.
+      // Well inside Firefox's second.
       expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
       await done;
     } finally { vi.useRealTimers(); }
   });
 
-  // The page was busy past the wait, then opened the chat itself. The notification brought back for
-  // a second tap goes, whether the answer lands before it is on screen or after.
-  it.each([
-    ['after the notification is back on screen', false],
-    ['while the notification is still being shown', true],
-  ])('closes the brought-back notification when the page answers late, %s, and opens nothing itself', async (_name, beforeShown) => {
-    vi.useFakeTimers();
-    try {
-      const window = openWindowOf({ answers: false });
-      const sw = worker({ windows: [window] });
-      let showing!: () => void;
-      if (beforeShown) sw.showNotification.mockImplementationOnce(function (this: unknown, ...args) {
-        const show = sw.showNotification.getMockImplementation()!;
-        return new Promise<void>(resolve => { showing = () => resolve(show.apply(this, args)); });
-      });
-      const done = tap(sw);
-      await vi.advanceTimersByTimeAsync(250);
-      expect(sw.showNotification).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(350);
-      window.ports[0].postMessage({ opened: true });
-      await vi.advanceTimersByTimeAsync(0);
-      if (beforeShown) showing();
-      await done;
-      expect(sw.shown).toEqual([]);
-      expect(window.navigate).not.toHaveBeenCalled();
-      expect(sw.openWindow).not.toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
-  });
-
-  // Untagged notifications are all listed together, so the late answer picks out the one it brought
-  // back: not another chat's brought-back notification, nor a newer one about this chat.
-  it('closes only the notification it brought back when the page answers late', async () => {
-    vi.useFakeTimers();
-    try {
-      const window = openWindowOf({ answers: false });
-      const sw = worker({ windows: [window] });
-      await sw.showNotification('Barn', { data: { url: 'https://app.example/?bot=barn', reshown: true } });
-      const done = tap(sw, { tag: undefined, data: { url: url } });
-      await vi.advanceTimersByTimeAsync(250);
-      await sw.showNotification('Ranch Hand', { body: 'A newer reply.', data: { url } });
-      window.ports[0].postMessage({ opened: true });
-      await vi.advanceTimersByTimeAsync(0);
-      await done;
-      expect(sw.shown.map(each => [each.title, each.data])).toEqual([
-        ['Barn', { url: 'https://app.example/?bot=barn', reshown: true }],
-        ['Ranch Hand', { url }],
-      ]);
-    } finally { vi.useRealTimers(); }
-  });
-
-  // The page answers the first tap late, while the second tap waits for its own answer. It already
-  // opened the chat, so loading the chat over it would open it twice.
-  it('does not load the chat on a second tap once the page has answered the first one late', async () => {
-    vi.useFakeTimers();
-    try {
-      const window = openWindowOf({ answers: false });
-      const sw = worker({ windows: [window] });
-      void tap(sw);
-      await vi.advanceTimersByTimeAsync(250);
-      const second = tap(sw, broughtBack(sw));
-      await vi.advanceTimersByTimeAsync(100);
-      window.ports[0].postMessage({ opened: true });
-      await vi.advanceTimersByTimeAsync(150);
-      await second;
-      expect(window.navigate).not.toHaveBeenCalled();
-      expect(sw.openWindow).not.toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
-  });
-
-  // One case per row of the table above openChat, each tapped first as a new notification and then,
-  // in a fresh worker, as one that came back. "In front" is a window focused already or one whose
-  // focus() worked; a visible window can sit behind another application.
+  // One case per rule of the table above openChat and per way it can end. "Refused" makes that call
+  // reject; a late answer lands after the 250 ms wait. Windows are visible unless hidden: visible
+  // or not, a window that cannot come forward is not in front, and no second window opens for it.
   type Row = {
-    answer: 'in time' | 'late' | 'never'; focus: 'focused already' | 'in front' | 'failed, visible' | 'failed, hidden';
-    refused?: boolean;
-    first: { opened: boolean; back: boolean }; again: { opened: boolean; navigated: boolean };
+    rule: 1 | 2 | 3 | 4; name: string; window?: 'none' | 'focused already'; hidden?: boolean;
+    answers?: 'in time' | 'late' | 'never'; reshown?: boolean;
+    focus?: 'works' | 'refused'; navigate?: 'works' | 'refused'; openWindow?: 'works' | 'refused';
+    ends: 'in front' | 'back'; calls: { asked: number; navigated: number; opened: number };
   };
   const rows: Row[] = [
-    { answer: 'in time', focus: 'in front', first: { opened: false, back: false }, again: { opened: false, navigated: false } },
-    { answer: 'in time', focus: 'focused already', first: { opened: false, back: false }, again: { opened: false, navigated: false } },
-    { answer: 'in time', focus: 'failed, visible', first: { opened: false, back: true }, again: { opened: false, navigated: false } },
-    { answer: 'in time', focus: 'failed, hidden', first: { opened: true, back: false }, again: { opened: true, navigated: false } },
-    { answer: 'in time', focus: 'failed, hidden', refused: true, first: { opened: true, back: true }, again: { opened: true, navigated: false } },
-    { answer: 'late', focus: 'in front', first: { opened: false, back: false }, again: { opened: false, navigated: true } },
-    { answer: 'late', focus: 'failed, visible', first: { opened: false, back: true }, again: { opened: false, navigated: true } },
-    { answer: 'late', focus: 'failed, hidden', first: { opened: true, back: false }, again: { opened: false, navigated: true } },
-    { answer: 'late', focus: 'failed, hidden', refused: true, first: { opened: true, back: true }, again: { opened: false, navigated: true } },
-    { answer: 'never', focus: 'failed, hidden', first: { opened: false, back: true }, again: { opened: false, navigated: true } },
+    { rule: 1, name: 'a new window opens', window: 'none', ends: 'in front', calls: { asked: 0, navigated: 0, opened: 1 } },
+    { rule: 1, name: 'a new window is refused', window: 'none', openWindow: 'refused', ends: 'back', calls: { asked: 0, navigated: 0, opened: 1 } },
+    { rule: 1, name: 'a new window is refused on a tap of one that came back', window: 'none', reshown: true, openWindow: 'refused', ends: 'back', calls: { asked: 0, navigated: 0, opened: 1 } },
+    { rule: 2, name: 'the window was focused already', window: 'focused already', answers: 'in time', focus: 'refused', ends: 'in front', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 2, name: 'the window comes forward', answers: 'in time', ends: 'in front', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 2, name: 'the window cannot come forward', answers: 'in time', focus: 'refused', hidden: true, ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 2, name: 'the window cannot come forward, on a tap of one that came back', answers: 'in time', reshown: true, focus: 'refused', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 3, name: 'the window comes forward', answers: 'never', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 3, name: 'the page answers late', answers: 'late', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
+    { rule: 4, name: 'the chat loads into the window, which comes forward', answers: 'never', reshown: true, ends: 'in front', calls: { asked: 1, navigated: 1, opened: 0 } },
+    { rule: 4, name: 'the chat loads into the window, which cannot come forward', answers: 'never', reshown: true, focus: 'refused', ends: 'back', calls: { asked: 1, navigated: 1, opened: 0 } },
+    { rule: 4, name: 'loading fails and a new window opens', answers: 'never', reshown: true, focus: 'refused', navigate: 'refused', ends: 'in front', calls: { asked: 1, navigated: 1, opened: 1 } },
+    { rule: 4, name: 'loading fails and a new window is refused', answers: 'never', reshown: true, navigate: 'refused', openWindow: 'refused', ends: 'back', calls: { asked: 1, navigated: 1, opened: 1 } },
   ];
-  it.each(rows.map(row => ({ ...row, refused: row.refused ?? false })))('answered $answer, focus $focus, a new window refused $refused', async ({ answer, focus, refused, first, again }) => {
+  const setUp = (row: Row) => {
+    const window = row.window === 'none' ? undefined
+      : Object.assign(openWindowOf({ answers: row.answers === 'in time', focused: row.window === 'focused already' }), { visibilityState: row.hidden ? 'hidden' : 'visible' });
+    if (row.focus === 'refused') window?.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
+    if (row.navigate === 'refused') window?.navigate.mockRejectedValue(new TypeError('Not this worker\'s window.'));
+    const sw = worker({ windows: window ? [window] : [] });
+    if (row.openWindow === 'refused') sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    return { window, sw };
+  };
+  const counts = (sw: ReturnType<typeof worker>, window?: Window) =>
+    ({ asked: window?.postMessage.mock.calls.length ?? 0, navigated: window?.navigate.mock.calls.length ?? 0, opened: sw.openWindow.mock.calls.length });
+
+  it.each(rows)('rule $rule: $name', async row => {
     vi.useFakeTimers();
     try {
-      for (const [reshown, expected] of [[false, first], [true, again]] as const) {
-        const window = Object.assign(openWindowOf({ answers: answer === 'in time', focused: focus === 'focused already' }),
-          { visibilityState: focus === 'failed, hidden' ? 'hidden' : 'visible' });
-        if (focus !== 'in front') window.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
-        const sw = worker({ windows: [window] });
-        if (refused) sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
-        const done = tap(sw, reshown ? { data: { url: '/?bot=ranch', reshown: true } } : tapped);
-        await vi.advanceTimersByTimeAsync(600);
-        if (answer === 'late') window.ports[0].postMessage({ opened: true });
+      const { window, sw } = setUp(row);
+      const done = tap(sw, row.reshown ? cameBack : tapped);
+      await vi.advanceTimersByTimeAsync(250);
+      await done;
+      if (row.answers === 'late') {
+        window!.ports[0].postMessage({ opened: true });
         await vi.advanceTimersByTimeAsync(10_000);
-        await done;
-        const which = reshown ? 'tap on one that came back' : 'first tap';
-        expect(sw.openWindow.mock.calls, which).toEqual(expected.opened ? [[url]] : []);
-        expect(window.navigate.mock.calls, which).toEqual('navigated' in expected && expected.navigated ? [[url]] : []);
-        expect(sw.shown.map(each => each.data), which).toEqual('back' in expected && expected.back ? [{ url: '/?bot=ranch', reshown: true }] : []);
-        // A notification comes back at most once.
-        if (reshown) expect(sw.showNotification, which).not.toHaveBeenCalled();
       }
+      expect(await ending(sw, window, row.answers === 'in time')).toBe(row.ends);
+      expect(counts(sw, window)).toEqual(row.calls);
     } finally { vi.useRealTimers(); }
   });
 
-  it('shows the notification again, quietly, when no way of opening the chat works', async () => {
+  // A person taps twice before the first tap has finished, or taps two notifications about the same
+  // chat. The second joins the first: one ask, one load, one new window, and one notification back.
+  // The notifications are untagged, so two shown would both stay on screen.
+  it.each([
+    rows.find(row => row.rule === 1 && row.ends === 'in front')!,
+    rows.find(row => row.rule === 2 && row.ends === 'back' && !row.reshown)!,
+    rows.find(row => row.rule === 3 && row.answers === 'never')!,
+    rows.find(row => row.rule === 4 && row.calls.opened === 1 && row.ends === 'in front')!,
+    rows.find(row => row.rule === 4 && row.calls.opened === 0 && row.ends === 'back')!,
+  ])('two overlapping taps act once, rule $rule: $name', async row => {
+    vi.useFakeTimers();
+    try {
+      const { window, sw } = setUp(row);
+      const notification = { ...(row.reshown ? cameBack : tapped), tag: undefined };
+      // The second tap arrives before the first has heard anything back.
+      const first = tap(sw, notification);
+      const second = tap(sw, notification);
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.all([first, second]);
+      expect(await ending(sw, window, row.answers === 'in time')).toBe(row.ends);
+      expect(sw.showNotification).toHaveBeenCalledTimes(row.ends === 'back' ? 1 : 0);
+      expect(counts(sw, window)).toEqual(row.calls);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('brings the notification back when a step fails in a way the rules do not name', async () => {
+    const sw = worker();
+    sw.clients.matchAll = async () => { throw new Error('The worker is shutting down.'); };
+    await tap(sw);
+    expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }]);
+  });
+
+  it('shows the notification again, quietly, with everything it carried', async () => {
     const sw = worker();
     sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
     await tap(sw);
@@ -838,21 +829,5 @@ describe('service worker notification taps with the app open', () => {
     const actions = [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }];
     await tap(sw, { tag: 'approval-1', actions, data: { url: '/?bot=ranch', declineToken: 'single-use' } });
     expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ actions, data: { url: '/?bot=ranch', declineToken: 'single-use', reshown: true } }));
-  });
-
-  it('shows a notification again only once, so failing taps never chain', async () => {
-    const sw = worker();
-    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
-    await expect(tap(sw, { data: { url: '/?bot=ranch', reshown: true } })).resolves.toBeUndefined();
-    expect(sw.showNotification).not.toHaveBeenCalled();
-  });
-
-  it('opens a new window beside one this worker does not control, which it can neither ask nor navigate', async () => {
-    const window = openWindowOf({ controlled: false });
-    const sw = worker({ windows: [window] });
-    await tap(sw);
-    expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
-    expect(window.postMessage).not.toHaveBeenCalled();
-    expect(window.navigate).not.toHaveBeenCalled();
   });
 });

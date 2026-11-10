@@ -228,103 +228,78 @@ self.addEventListener('push', (event) => {
 // How long an open window has to say it switched to the chat. A live page answers within a few
 // milliseconds (at most 2.1 ms over 30 tries in Chromium), or after the task it is busy with, so this
 // allows a quarter-second stall. It must stay well under a second: Firefox lets a worker open or
-// focus a window for one second after a tap, and on a second tap the fallbacks below, the last of
-// which opens a new window, run after this wait.
+// focus a window for one second after a tap, and on a tap of a notification that came back the
+// fallbacks below, the last of which opens a new window, run after this wait.
 const OPEN_ACK_MS = 250;
-// How long the worker keeps listening after that, for a page that was busy and opens the chat late.
-// Its answer then closes the notification the worker brought back for a second tap.
-const OPEN_LATE_MS = 10_000;
-
-// Answers heard, counted by window and address, so a tap can tell whether the page opened the chat
-// for an earlier tap while this one waited.
-const answered = new Map();
-const answerKey = (client, url) => client.id + ' ' + url;
 
 // Asks an open window to switch to the chat in place, as a click in it would, without reloading the
-// app. Resolves true once the page says it did, however late within OPEN_LATE_MS, and false after
-// that. src/app/worker-opens.ts answers it.
+// app. Resolves true if the page says it did within OPEN_ACK_MS, otherwise false; an answer after
+// that is not heard. src/app/worker-opens.ts answers it.
 function askToOpen(client, url) {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
     const done = (opened) => { clearTimeout(timer); channel.port1.close(); resolve(opened); };
-    const timer = setTimeout(() => done(false), OPEN_LATE_MS);
-    channel.port1.onmessage = () => {
-      answered.set(answerKey(client, url), (answered.get(answerKey(client, url)) ?? 0) + 1);
-      done(true);
-    };
+    const timer = setTimeout(() => done(false), OPEN_ACK_MS);
+    channel.port1.onmessage = () => done(true);
     try { client.postMessage({ type: 'OPEN_CHAT', url }, [channel.port2]); } catch { done(false); }
   });
 }
 
-// The answer if it comes within `ms`, otherwise false.
-function within(answer, ms) {
-  let timer;
-  return Promise.race([answer, new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); })])
-    .finally(() => clearTimeout(timer));
+// Opens a tapped notification's chat. Every tap ends one of two ways: a window known to be in front
+// shows the chat, or the notification is on screen again. "In front" means the window was focused
+// already or its focus() succeeded; a browser covered by another application still reports itself
+// visible, so visible is not enough. A window just opened with openWindow is in front.
+//
+// | Rule | Window this worker controls          | Then                                                           |
+// | ---- | ------------------------------------ | -------------------------------------------------------------- |
+// | 1    | none                                 | openWindow. If that fails, the notification comes back.        |
+// | 2    | answers within OPEN_ACK_MS           | The chat is open in it. In front: done. If not, it comes back. |
+// | 3    | no answer in time, first tap         | The window is left as it is and a focus attempted. The         |
+// |      |                                      | notification comes back, marked as having come back.           |
+// | 4    | no answer in time, tap on a marked   | navigate the window, or openWindow if that fails. Then, unless |
+// |      | notification                         | a window is known to be in front, the notification comes back. |
+//
+// A first tap never replaces the document of a window that has not answered: its page may be busy
+// with an edited form a reload would lose. If that page answers late, the chat opens and the
+// notification that came back stays until the person dismisses it, or taps it and gets a prompt
+// answer. The notification comes back only as the direct result of a tap, so it cannot loop on its
+// own. A tap on a chat that already has an attempt in flight joins that attempt, so two taps never
+// ask, navigate, open a window or bring the notification back twice.
+const attempts = new Map();
+function openChat(notification) {
+  const url = conversationUrl(notification.data?.url);
+  let attempt = attempts.get(url);
+  if (!attempt) {
+    attempt = reach(notification, url)
+      // A way of opening that failed unexpectedly has not reached the person either.
+      .catch(() => false)
+      .then((inFront) => inFront || showAgain(notification))
+      .finally(() => attempts.delete(url));
+    attempts.set(url, attempt);
+  }
+  return attempt;
 }
 
-// Opens a tapped notification's chat. An open window is asked to switch in place, and is focused.
-// "In front" means the window was focused already or focus() succeeded. Visible alone is not enough:
-// a browser covered by another application still reports `visible`. A notification comes back at
-// most once: a tap on one that came back never brings it back again.
-//
-// | Window answers | Focus              | First tap                                   | Tap on one that came back            |
-// | -------------- | ------------------ | ------------------------------------------- | ------------------------------------ |
-// | in time        | in front           | done                                        | done                                 |
-// | in time        | failed, visible    | bring it back; no second window             | nothing more                         |
-// | in time        | failed, hidden     | open a new window, or bring it back         | open a new window                    |
-// | late           | in front           | bring it back, close it at the answer       | load the chat into the window *      |
-// | late           | failed, visible    | bring it back and leave it                  | load the chat into the window *      |
-// | late           | failed, hidden     | bring it back; at the answer open a new     | load the chat into the window *      |
-// |                |                    | window, and close it only if that worked    |                                      |
-// | never          | any                | bring it back and leave it                  | load the chat into the window *      |
-//
-// A first tap never reloads a window that has not answered: its page may be busy with an edited form
-// a reload would lose. * The second tap is the person asking again, as a window still running a
-// release from before pages answered needs: the chat loads into it, or into a new window when that
-// fails, unless the page answered the first tap meanwhile.
-async function openChat(notification) {
-  const url = conversationUrl(notification.data?.url);
+// Follows the table above. True when a window known to be in front shows the chat.
+async function reach(notification, url) {
   // Only a window this worker controls runs code that answers, and only such a window can be navigated.
   const windows = await self.clients.matchAll({ type: 'window' });
   const existing = windows.find((client) => client.focused) ?? windows.find((client) => client.visibilityState === 'visible') ?? windows[0];
-  if (!existing) return self.clients.openWindow(url);
-  // Focused first, since the browser allows it only shortly after the tap. A failure is kept.
+  if (!existing) return openNew(url);
+  // Focused first, since the browser allows it only shortly after the tap.
   const focusing = existing.focus().then(() => true, () => false);
-  const earlier = answered.get(answerKey(existing, url)) ?? 0;
-  const answer = askToOpen(existing, url);
-  const inTime = await within(answer, OPEN_ACK_MS);
-  const place = existing.focused || await focusing ? 'front' : existing.visibilityState === 'visible' ? 'visible' : 'hidden';
-  if (inTime) {
-    if (!await reachPerson(place, url)) await showAgain(notification);
-    return;
-  }
-  if (!notification.data?.reshown) {
-    await showAgain(notification);
-    if (await answer && await reachPerson(place, url)) await closeShownAgain(notification);
-    return;
-  }
-  // The second tap. A page that opened the chat for the first one while this one waited has done
-  // what was asked, and loading the chat over it would open it twice.
-  if ((answered.get(answerKey(existing, url)) ?? 0) > earlier) return;
+  const answered = await askToOpen(existing, url);
+  const front = existing.focused || await focusing;
+  if (answered) return front;
+  if (!notification.data?.reshown) return false;
   try {
     await existing.navigate(url);
-    return;
+    return front;
   } catch { /* Closed meanwhile, or no longer this worker's. */ }
-  await self.clients.openWindow(url);
+  return openNew(url);
 }
 
-// After a window opened the chat: true when the person can see it. A window in front shows it. One
-// visible behind another application may not, and a second window would show the chat twice, so the
-// answer is false. A hidden one cannot, so the chat opens in a new window, true when that worked.
-async function reachPerson(place, url) {
-  if (place === 'front') return true;
-  if (place === 'visible') return false;
-  try {
-    await self.clients.openWindow(url);
-    return true;
-  } catch { return false; }
-}
+const openNew = (url) => self.clients.openWindow(url).then(() => true, () => false);
 
 async function decline(notification) {
   const url = conversationUrl(notification.data?.url);
@@ -346,11 +321,9 @@ async function decline(notification) {
   });
 }
 
-// The chat did not open, because every way of opening it failed or the open window did not answer.
-// The notification is already closed, so it comes back, quietly, for the person to tap again. A tap
-// on one that came back is not shown a third time, so a browser that always refuses cannot chain them.
+// No window known to be in front shows the chat. The notification is already closed, so it comes
+// back, quietly and marked, for the person to tap again; a tap on it is rule 4 above.
 async function showAgain(notification) {
-  if (notification.data?.reshown) return;
   await self.registration.showNotification(notification.title, {
     body: notification.body,
     icon: notification.icon,
@@ -368,15 +341,5 @@ self.addEventListener('notificationclick', (event) => {
     event.waitUntil(decline(event.notification));
     return;
   }
-  // A way of opening that failed, such as a refused new window, brings the notification back.
-  event.waitUntil(openChat(event.notification).catch(() => showAgain(event.notification)));
+  event.waitUntil(openChat(event.notification));
 });
-
-// Closes the notification showAgain brought back for this chat. A failure leaves it to be tapped,
-// which asks the page again; it never shows the notification once more.
-async function closeShownAgain(notification) {
-  try {
-    const shown = await self.registration.getNotifications(notification.tag ? { tag: notification.tag } : {});
-    for (const each of shown) if (each.data?.reshown && each.data.url === notification.data?.url) each.close();
-  } catch { /* See above. */ }
-}

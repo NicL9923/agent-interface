@@ -78,28 +78,33 @@ device gets it as before. Security alerts always reach every device. See
 <!-- END device activity -->
 
 Tapping a web notification while the app is open in a window switches that window to the
-chat, as choosing it there would, and brings the window forward without reloading it. The
-worker asks the page with an `OPEN_CHAT` message and waits 250 ms for its answer. The
-worker counts a window as in front only when it was focused already or it came forward;
-a browser covered by another application still reports itself visible. A page that answers
-from a hidden window that cannot come forward gets the chat in a new window. One that answers
-from a visible window that cannot come forward gets the notification back quietly instead,
-since a second window would show the chat twice.
+chat, as choosing it there would, and brings the window forward without reloading it. Every
+tap ends one of two ways: a window known to be in front shows the chat, or the notification
+is back on screen, quietly, to tap again. A window counts as in front only when it was focused
+already, it came forward when asked, or the worker just opened it; a browser covered by
+another application still reports itself visible. The worker follows four rules:
 
-A page that does not answer in time may be busy with something a reload would lose, such
-as an edited settings form, so the first tap never reloads it. The window stays as it is,
-brought forward, and the notification comes back quietly. If the page opens the chat late
-after all, within ten seconds, the worker treats the answer as it would a prompt one, and
-closes that notification only once the person can see the chat: the window is in front, or
-it was hidden and a new window opened for the chat. Tapping the notification
-that came back is asking a second time: the worker asks the page again, and only if it still
-does not answer in 250 ms loads the chat's address into the window, or opens a new window
-when that fails. A window running a release from before pages answered behaves this way:
-the first tap brings it forward and the notification back, and the second opens the chat
-as taps always did. A window the worker does not control gets a new window at once. Each
+1. No window the worker controls: it opens a new one. If the browser refuses, the
+   notification comes back.
+2. The page answers its `OPEN_CHAT` message within 250 ms: the chat is open there. If the
+   window is in front, that is all; if not, the notification comes back. No second window
+   opens, so the chat never shows twice.
+3. The page does not answer in time, on a first tap: it may be busy with something a reload
+   would lose, such as an edited settings form, so the window is left as it is and asked to
+   come forward, and the notification comes back marked as having come back. If the page
+   opens the chat late after all, the notification simply stays until it is dismissed or
+   tapped; a tap then gets a prompt answer.
+4. The page does not answer in time, on a tap of a notification that came back: that is the
+   person asking again, so the worker loads the chat's address into the window, or opens a
+   new window when that fails. Unless a window is then known to be in front, the
+   notification comes back again.
+
+A window running a release from before pages answered gets the notification back on the
+first tap and the chat on the second, as taps always did. A notification comes back only
+because of a tap, so it never loops on its own. A second tap on the same chat while the
+first is still being handled joins it, so nothing opens, loads or comes back twice. Each
 fallback ends well inside the one second Firefox allows a worker to open a window after a
-tap. If no way works, the notification comes back, and one that came back is never shown
-again.
+tap.
 
 An open assistant settings sheet or Settings closes the way its close button does before the
 chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
