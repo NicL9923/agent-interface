@@ -472,6 +472,38 @@ READ_WORKERS = 4
 DECORATED_TTL = 600
 UNTRACKED_REDACTION_TTL = 30
 DECORATED_LIMIT = 32
+# Entries per table of one canonical session's RowCache; the oldest go first.
+ROW_CACHE_LIMIT = 20000
+
+
+class RowCache:
+    """Per-row results an open computed for one canonical session that no later write can change.
+
+    The decorated-history cache misses for the whole of a turn, so an open during a turn reads
+    these instead of redoing work that grows with the transcript. Each table answers only
+    from its own key; none depends on redaction state or the journal mutation count.
+
+    ``originals``: a visible row ID -> the earliest row ID with its ``message_uid`` in this
+    stored session. Hermes's ``messages.id`` is AUTOINCREMENT, writes serialize, and no writer
+    changes a stored ``message_uid`` except to fill a NULL with a fresh random one, so once a
+    row is readable every lower ID is final. Only rows the lookup found are kept.
+    ``tool_results``: a tool row ID -> (its content, that content parsed). Hermes's proactive
+    prune rewrites a row's content under the same ID, so a hit needs the same content.
+    ``tool_records``: a journal ``tools.id`` -> its parsed record. The add-on only inserts them.
+
+    Callers hold the session's profile lock. ``scope`` is the stored session the tables
+    describe; a changed one starts a new cache.
+    """
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.originals, self.tool_results, self.tool_records = {}, {}, {}
+
+    @staticmethod
+    def keep(table, key, value):
+        table[key] = value
+        while len(table) > ROW_CACHE_LIMIT:
+            del table[next(iter(table))]
 
 # Methods a held maintenance lease still admits: status, history and discovery reads.
 MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
@@ -505,6 +537,10 @@ class Bridge:
         self.keepers = {}
         self.canonical = {}
         self.decorated = {}
+        # RowCache per canonical session ID, pruned with the decorated cache. ``projecting`` is
+        # the one this thread's native activation may use while it projects history.
+        self.row_caches = {}
+        self.projecting = contextvars.ContextVar("agent_interface_projecting", default=None)
         self.settlement = {}
         self.discovery_lock = threading.RLock()
         self.routine_scans = {}
@@ -692,6 +728,8 @@ class Bridge:
         # Keep the canonical native projection, adding only details present in its
         # original tool rows. The compact native view otherwise omits most outputs.
         messages = self.native_history(history, **kwargs)
+        # Only an app open's own activation has a cache; other native readers parse every row.
+        rows = self.projecting.get()
         tool_rows = {}
         for row in history:
             if not isinstance(row, dict) or row.get("role") != "tool":
@@ -715,12 +753,25 @@ class Bridge:
                 message["row_id"] = raw["_row_id"]
             result = raw.get("content")
             if result is not None:
-                try:
-                    result = json.loads(result) if isinstance(result, str) else result
-                except (json.JSONDecodeError, TypeError):
-                    pass
-                message["app_tool_result"] = result
+                message["app_tool_result"] = self.tool_result(result, raw.get("_row_id"), rows)
         return messages
+
+    @staticmethod
+    def tool_result(content, row_id, rows):
+        """A tool row's content, parsed when it is JSON, reusing this row's last parse of the same content."""
+        if not isinstance(content, str):
+            return content
+        known = rows.tool_results.get(row_id) if rows is not None and type(row_id) is int else None
+        # Usually the very string parsed last time, which compares by identity.
+        if known is not None and known[0] == content:
+            return known[1]
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            parsed = content
+        if rows is not None and type(row_id) is int:
+            RowCache.keep(rows.tool_results, row_id, (content, parsed))
+        return parsed
 
     def artifacts(self, result, session):
         # Only actual native tool results can register outputs. Never scan user text.
@@ -972,6 +1023,18 @@ class Bridge:
         # Vault secrets and plugin patterns registered at runtime redact native commentary.
         return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml")), redaction_state()
 
+    def row_cache(self, sid, session):
+        """The canonical session's RowCache, a new one when its stored session changed.
+
+        Callers hold the profile's lock, the only one under which its tables change.
+        """
+        scope = session.get("session_key")
+        with self.cache_lock:
+            rows = self.row_caches.get(sid)
+            if rows is None or rows.scope != scope:
+                rows = self.row_caches[sid] = RowCache(scope)
+            return rows
+
     def activate(self, profile, omit, skip_cache):
         """Activate or resume the profile's canonical session; None for an unknown profile.
 
@@ -985,11 +1048,14 @@ class Bridge:
         with self.cache_lock:
             for old in [sid for sid in decorated if sid not in live_canonical]:
                 del decorated[old]
+            for old in [sid for sid in self.row_caches if sid not in live_canonical]:
+                del self.row_caches[old]
         cached = None
         identity = None
         mutation = None
         if profile in canonical and canonical[profile] in server._sessions:
             sid = canonical[profile]
+            rows = self.row_cache(sid, server._sessions[sid])
             identity = None if omit else self.history_identity(server._sessions[sid])
             with journal.lock:
                 mutation = journal.mutation
@@ -1000,13 +1066,17 @@ class Bridge:
                         cached = entry[2]
                         # Eviction keeps the most recently read histories; lifetime counts from the fill.
                         decorated[sid] = (*entry[:4], time.monotonic())
-            value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
-            # Native activation takes its own snapshot. Never combine cached history with
-            # a live payload that crossed a history or journal mutation.
-            if cached is not None and (self.history_identity(server._sessions[sid]) != identity or entry[1] != journal.mutation):
-                cached = None
-                identity = self.history_identity(server._sessions[sid])
-                value = self.native("session.activate", {"session_id": sid, "profile": profile})
+            token = self.projecting.set(rows)
+            try:
+                value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
+                # Native activation takes its own snapshot. Never combine cached history with
+                # a live payload that crossed a history or journal mutation.
+                if cached is not None and (self.history_identity(server._sessions[sid]) != identity or entry[1] != journal.mutation):
+                    cached = None
+                    identity = self.history_identity(server._sessions[sid])
+                    value = self.native("session.activate", {"session_id": sid, "profile": profile})
+            finally:
+                self.projecting.reset(token)
             if cached is not None:
                 value["messages"] = cached
                 value["messages_omitted"] = False
@@ -1078,31 +1148,64 @@ class Bridge:
         value["app_run_id"] = current[0] if current else None
         value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
 
-    def original_rows(self, session, messages):
+    def original_rows(self, session, messages, rows):
         """Show each copy native in-place compaction makes under the row ID of the message it copies.
 
         Compaction archives every row and stores its kept head and tail again as new rows. Every
         copy keeps the message's ``message_uid``. Without this, the copies of recent messages would
         lose their receipts (sender, files, run) and every copy would change its message ID.
+        ``rows`` is the session's RowCache, or None; the store is asked only about rows it lacks.
         """
-        ids = [m["row_id"] for m in messages if type(m.get("row_id")) is int]
         key = session.get("session_key")
-        if not ids or not key or not callable(getattr(self.server, "_session_db", None)):
-            return
-        with self.server._session_db(session) as db:
-            if db is None:
-                return
-            visible = json.dumps(ids)
-            # The session index finds every copy; a uid join instead takes seconds on a long chat.
-            first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
-                                      "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, visible)))
-            uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, visible)))
+        # A cache filled for another stored session is not this one's.
+        known = rows.originals if rows is not None and rows.scope == key else {}
+        ids = [m["row_id"] for m in messages if type(m.get("row_id")) is int and m["row_id"] not in known]
+        found = {}
+        if ids and key and callable(getattr(self.server, "_session_db", None)):
+            with self.server._session_db(session) as db:
+                if db is not None:
+                    visible = json.dumps(ids)
+                    # The session index finds every copy; a uid join instead takes seconds on a long chat.
+                    first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
+                                              "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, visible)))
+                    uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, visible)))
+                    for row_id, uid in uids.items():
+                        original = first.get(uid)
+                        found[row_id] = original if type(original) is int and original < row_id else row_id
+        # Only rows the store returned are kept: one it cannot read yet is asked again next open.
+        for row_id, original in found.items():
+            RowCache.keep(known, row_id, original)
         for message in messages:
-            original = first.get(uids.get(message.get("row_id")))
+            original = found.get(message.get("row_id"), known.get(message.get("row_id")))
             if type(original) is int and original < message["row_id"]:
                 message["row_id"] = original
 
-    def attribute(self, profile, sid, value):
+    def tool_records(self, ids, rows):
+        """Parsed journal tool records by ``tools.id``, in the order of ``ids``.
+
+        Each is (result, artifacts, detail or None, detail's parsed arguments or None). Rows in
+        the session's RowCache are not read again. Callers hold journal.lock.
+        """
+        known = rows.tool_records if rows is not None else {}
+        missing = [record_id for record_id in ids if record_id not in known]
+        found = {}
+        if missing:
+            for record_id, result, artifacts, detail in self.journal.db.execute(
+                    "SELECT id,result,artifacts,detail FROM tools WHERE id IN (SELECT value FROM json_each(?))", (json.dumps(missing),)):
+                detail = json.loads(detail) if detail else None
+                arguments = None
+                if isinstance(detail, dict):
+                    try:
+                        arguments = json.loads(detail.get("arguments", "{}"))
+                    except (ValueError, TypeError):
+                        arguments = None
+                found[record_id] = (json.loads(result), json.loads(artifacts or "[]"), detail, arguments)
+        records = {record_id: found[record_id] if record_id in found else known[record_id] for record_id in ids if record_id in found or record_id in known}
+        for record_id, record in found.items():
+            RowCache.keep(known, record_id, record)
+        return records
+
+    def attribute(self, profile, sid, value, rows=None):
         """Bind app receipts, files and tool details to native history rows.
 
         Returns (messages, journal mutation after binding, whether the result is cacheable).
@@ -1110,7 +1213,7 @@ class Bridge:
         Read each journal table once per poll, not once per message. Binding only fills
         a NULL row_id, so the unbound snapshot can only overstate candidates, and only
         a row ID bound here needs a reread. Callers hold journal.lock, which native
-        writers also take, so none lands mid-poll.
+        writers also take, so none lands mid-poll. ``rows`` is the session's RowCache, or None.
         """
         journal, server = self.journal, self.server
         stored = value["canonical_stored_session_id"]
@@ -1121,9 +1224,11 @@ class Bridge:
         attributed = {}
         for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
+        # Which records each call has comes from the index alone; their bodies come from the cache.
+        calls = {row[0]: row[1:] for row in journal.db.execute("SELECT id,tool_id,run_id FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str])))}
         tool_records = {}
-        for row in journal.db.execute("SELECT tool_id,run_id,result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str]))):
-            tool_records.setdefault(row[:2], []).append(row[2:])
+        for record_id, record in self.tool_records(list(calls), rows).items():
+            tool_records.setdefault(calls[record_id], []).append(record)
         rebound = set()
         current_run = None
         for message in messages:
@@ -1175,22 +1280,17 @@ class Bridge:
                 elif type(message.get("tool_call_id")) is str:
                     recorded = tool_records.get((message["tool_call_id"], current_run), [])
                 else:
-                    recorded = journal.db.execute("SELECT result,artifacts,detail FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall()
-                tool = next((item for item in recorded if json.loads(item[0]) == message.get("app_tool_result")), None)
+                    found = journal.db.execute("SELECT id FROM tools WHERE profile=? AND stored_session=? AND tool_id=? AND run_id=? ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), message.get("tool_call_id"), current_run)).fetchall()
+                    recorded = list(self.tool_records([row[0] for row in found], rows).values())
+                tool = next((item for item in recorded if item[0] == message.get("app_tool_result")), None)
                 if tool:
                     # The persisted native output remains authoritative.
-                    message["app_artifacts"] = json.loads(tool[1] or "[]")
+                    message["app_artifacts"] = tool[1]
                     # Reused IDs within a run cannot identify one call's
                     # timestamps or arguments. Fall back to its native row.
-                    if len(recorded) == 1 and tool[2]:
-                        detail = json.loads(tool[2])
-                        if isinstance(detail, dict) and detail.get("name") == message.get("name"):
-                            try:
-                                arguments = json.loads(detail.get("arguments", "{}"))
-                            except (ValueError, TypeError):
-                                arguments = None
-                            if arguments == (message.get("args") or {}):
-                                message["app_tool_call"] = detail
+                    detail = tool[2]
+                    if len(recorded) == 1 and isinstance(detail, dict) and detail.get("name") == message.get("name") and tool[3] == (message.get("args") or {}):
+                        message["app_tool_call"] = detail
         return messages, journal.mutation, not unbound
 
     def unrepresented_tool_calls(self, session, messages):
@@ -1262,12 +1362,13 @@ class Bridge:
         sid = value["session_id"]
         session = server._sessions[sid]
         self.describe_task(profile, sid, session, value)
+        rows = self.row_cache(sid, session)
         if cached is None:
             # Reads the session store, so never under journal.lock, which native writers take.
-            self.original_rows(session, value.get("messages", []))
+            self.original_rows(session, value.get("messages", []), rows)
         with journal.lock:
             if cached is None:
-                messages, bound_mutation, cacheable = self.attribute(profile, sid, value)
+                messages, bound_mutation, cacheable = self.attribute(profile, sid, value, rows)
         # Never acquire history_lock while holding journal.lock: native flushes
         # emit frames under history_lock and the frame hook needs journal.lock.
         after = self.history_identity(session) if not omit else None
