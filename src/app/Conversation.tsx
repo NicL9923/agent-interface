@@ -48,7 +48,8 @@ import { continueDraftRevisions } from "../shared/draft-diff";
 import { unknownEarlierFiles, type Artifact } from "../shared/artifacts";
 import { continueChips, continueTurns, settleChips, settleRevisions, settleTurns, useSettledWindow, type Turn } from "./transcript-window";
 import { useEarlierFiles } from "./use-earlier-files";
-import { imageSize, rememberImageSize } from "./image-sizes";
+import { imageSize, readerSees, rememberImageSize, reshapes, rowOf, scrollerOf } from "./image-sizes";
+import type { ImageSize } from "./image-sizes";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
@@ -608,29 +609,46 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
   </details>;
 }
 function FileLink({ file }: { file: FileRef }) {
-  // The frame is fixed for as long as the image is mounted: its natural ratio when this page knows it, else the
-  // bounded frame in styles.css. Taking a size learned on load would resize the frame, the shift this prevents.
-  const [size] = useState(() => imageSize(file.id));
+  // The frame around the image holds its space: the image's natural shape when this page knows it, else the 4:3
+  // frame in styles.css. A loaded image far from its frame's shape takes its own once (see reshapes), at once unless
+  // the reader is looking at it, else as soon as it leaves the view (see readerSees). One that fails leaves the frame
+  // as it was. The frame, not the image, carries the shape, because a browser drops a failed image's aspect ratio.
+  const [shape, setShape] = useState(() => imageSize(file.id));
+  const [waiting, setWaiting] = useState<ImageSize>();
+  const [failed, setFailed] = useState(false);
+  const frame = useRef<HTMLSpanElement>(null);
+  const href = file.url || `/api/files/${encodeURIComponent(file.id)}`;
+  useEffect(() => {
+    const element = frame.current;
+    if (!waiting || !element) return;
+    const apply = () => { setShape(waiting); setWaiting(undefined); };
+    if (typeof IntersectionObserver === "undefined") return apply();
+    // Its first report is the row's state now, so one already out of view reshapes at once.
+    const observer = new IntersectionObserver(entries => { if (!entries.some(entry => entry.isIntersecting)) apply(); }, { root: scrollerOf(element) });
+    observer.observe(rowOf(element));
+    return () => observer.disconnect();
+  }, [waiting]);
   return (
-    <a
-      className="file-link"
-      href={file.url || `/api/files/${encodeURIComponent(file.id)}`}
-      target="_blank"
-      rel="noreferrer"
-    >
+    <a className="file-link" href={href} target="_blank" rel="noreferrer">
       {file.mime.startsWith("image/") && (
-        <img
-          src={file.url || `/api/files/${encodeURIComponent(file.id)}`}
-          alt={file.name}
-          width={size?.width}
-          height={size?.height}
-          style={size && { aspectRatio: `${size.width} / ${size.height}` }}
-          loading="lazy"
-          decoding="async"
-          onLoad={event => rememberImageSize(file.id, event.currentTarget)}
-        />
+        <span className="file-frame" ref={frame} style={shape && { aspectRatio: `${shape.width} / ${shape.height}` }}>
+          {failed ? <span className="file-failed"><Icon name="file" size={20} />Couldn't load this image</span> : <img
+            src={href}
+            alt={file.name}
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailed(true)}
+            onLoad={event => {
+              const loaded = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight };
+              rememberImageSize(file.id, event.currentTarget);
+              if (!reshapes(shape, loaded)) return;
+              if (frame.current && readerSees(frame.current)) setWaiting(loaded);
+              else setShape(loaded);
+            }}
+          />}
+        </span>
       )}
-      <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
+      <span className="file-name"><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
     </a>
   );
 }

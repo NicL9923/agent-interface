@@ -275,3 +275,32 @@ test.describe("on a phone held sideways with its on-screen keyboard up", () => {
     await expect(field).toBeFocused();
   });
 });
+
+test("a transcript image that fails to load keeps the space it held while loading", async ({ page, allowConsoleError }) => {
+  // Chromium logs the image's 404. Nothing else is excused.
+  allowConsoleError.push(/status of 404/);
+  let fail = () => {};
+  const failing = new Promise<void>(resolve => { fail = resolve; });
+  await page.route("**/api/files/*", async route => { await failing; await route.fulfill({ status: 404 }); });
+  // Read whole every time, so the image's message is in each read.
+  await page.route("**/api/bots/ranch/conversation*", async route => {
+    const headers = { ...route.request().headers() };
+    delete headers["if-none-match"];
+    const response = await route.fetch({ headers }), body = await response.json();
+    body.messages.push({ id: "photo", role: "assistant", text: "The gate.", createdAt: "2026-11-05T14:00:00Z",
+      files: [{ id: "missing-gate", name: "gate.png", mime: "image/png" }] });
+    await route.fulfill({ status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" }, json: body });
+  });
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  const link = conversation(page).locator('[data-message-id="photo"] .file-link');
+  await expect(link).toBeVisible();
+  const loading = (await link.boundingBox())!;
+  fail();
+  await expect.poll(() => link.evaluate(item => {
+    const image = item.querySelector("img");
+    return !image || (image.complete && image.naturalWidth === 0);
+  })).toBe(true);
+  expect((await link.boundingBox())!.height).toBe(loading.height);
+  await expect(link.getByText("Couldn't load this image")).toBeVisible();
+});
