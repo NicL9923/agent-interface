@@ -95,6 +95,7 @@ seconds from the cut until each stream's next request.
 | `main` 39e35a6, 2 runs | 82.0, 82.0 s | 82.0, 82.0 s |
 | First round 2e95e56, 2 runs | 17.0, 17.0 s | 17.0, 17.0 s |
 | After the review fixes, 2 runs | 18.4, 18.8 s | 18.1, 18.4 s |
+| After the recovery fix 0bc4adb, 2 runs | 18.5, 18.0 s | 19.0, 18.8 s |
 
 The second round adds the first retry's 1 to 2 seconds after the watchdog's verdict.
 
@@ -148,7 +149,9 @@ leftover timer had fired harmlessly. The test now checks right after closing.
   counting; any number taken as an interval; the interval kept across connections; `open` replacing a
   fresh stream; a refused stream never retried; `close` leaving the timer; no `ping=10` in the URL.
 
-A later commit measured recovery from the headers with half an interval of slack and ran 4 more:
+A later commit, 0bc4adb, measured recovery from the headers with half an interval of slack. On it,
+typecheck, lint, `npm test` (184 files, 3,079 tests), build and e2e (19) passed; request counts were not
+rerun, since nothing they count changed. It ran 4 more mutations:
 recovery measured from the request (1 red), a whole interval required (1), exactly half refused (1),
 the greeting counted (5). All went red.
 
