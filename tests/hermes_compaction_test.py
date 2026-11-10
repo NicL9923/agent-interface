@@ -499,6 +499,20 @@ class PreemptTests(unittest.TestCase):
             seen.append(("held", fixture.session.get(compaction.OWNER)))
         self.assertEqual(seen, [("claim", None), ("held", threading.get_ident()), ("release", None)])
 
+    def test_an_input_on_its_way_to_admission_holds_off_a_new_compaction(self):
+        fixture = Fixture(self)
+        # The input preempts before submission_lock; no compaction may start before it takes the lock.
+        with fixture.idle.admitting("sid"):
+            self.assertIsNone(fixture.idle.compact("default", "sid"))
+            self.assertEqual(fixture.native.calls, [])
+        # A compaction registered before the hold is the one the input's preempt finds and stops.
+        thread, results = fixture.running()
+        with fixture.idle.admitting("sid"):
+            self.assertTrue(fixture.idle.preempt("sid"))
+        thread.join(5)
+        self.assertEqual((results, fixture.events), ([{"status": "aborted"}], [("cancel", True, True)]))
+        self.assertEqual(fixture.idle.pending, {})
+
     def test_a_compaction_that_cannot_be_cancelled_releases_the_input_after_the_bound(self):
         fixture = Fixture(self)
         fixture.native.answers = [None]
