@@ -247,6 +247,24 @@ describe("SendTimings", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("gives up on a send once more sessions went unidentified than it holds, keeping no uncertainty after", () => {
+    const fixture = timings();
+    const { tracker, lines, frame, read, admit, at } = fixture;
+    const send = tracker.begin("shared", "send", 0);
+    at(10);
+    // Each session streams one turn that ends before any read identifies it. Past the limit, nothing is held.
+    for (let session = 0; session < SEND_TIMING_HELD * 4; session++) {
+      frame("start", `s${session}`); frame("text", `s${session}`); frame("end", `s${session}`);
+    }
+    // Reads that disagree on a turn blind every open send, a given-up one included.
+    read("one", true, "late"); read("two", true, "late");
+    expect({ frames: send.frames.size, blind: send.blind.size, lives: send.lives.size }).toEqual({ frames: 0, blind: 0, lives: 0 });
+    admit(send, "send");
+    expect(lines).toEqual([{ message: "Send timing: a moment could not be tied to the send's run",
+      fields: { sendTiming: expect.objectContaining({ firstFrameMs: undefined, firstLiveMs: undefined, ended: "uncorrelated" }) } }]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("ends a send when a read finds another run running, keeping what its own run gave", () => {
     const { tracker, lines, frame, read, admit, at } = timings();
     const send = tracker.begin("shared", "quiet", 0);

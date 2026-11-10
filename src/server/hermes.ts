@@ -464,7 +464,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const detail = active ? (runningTool ? `Using ${runningTool.name}` : state?.detail) : undefined;
     const runId = value.app_run_id ?? value.app_interruption?.runId ?? undefined;
     const fresh = current && generation === structuralGenerationOf(botId);
-    // No turn started or ended here since the read began, so the run it names is the running turn's.
+    // No turn started or ended here since the read began, so the running turn is reported with the session's
+    // open app run. That is the turn's own run except in the limit stated in send-timing.ts.
     if (fresh) toTurnWatchers(watcher => watcher.run(sid, botId, typeof value.app_run_id === 'string' ? value.app_run_id : undefined, !!value.info?.running));
     // Live patches need only the last prompt and its persisted assistant segments,
     // never a second retained copy of an older client's full transcript.

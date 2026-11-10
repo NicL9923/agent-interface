@@ -228,3 +228,75 @@ Not tested: a native turn running while an idle compaction is preempted and a ne
 case Hermes queues the new task and a read names its run during the native turn. It needs a preempted
 compaction and a native turn starting inside one admission. It is stated as a limit in the model comment,
 which was added after these checks ran and changes no code.
+
+## Review round 3
+
+GPT-6.1 Sol reviewed `f8e71ab`, cleared the ordinary paths and verified two findings:
+
+- D1: a fresh read can tie the wrong turn to a new task's run. A send preempts an idle compaction, an
+  unrelated native turn starts before the add-on reads the session's state, and the add-on queues the send
+  as a new root. A read during the native turn names that root, since `OPEN_RUN` returns the session's
+  newest open receipt, so the native turn's text and live event were logged as `measured`, `steered: false`,
+  20 and 25 ms, where the send's own turn gave 120 and 125 ms. The reviewer reproduced it with the real
+  add-on, compaction and journal code and replayed it through the real runtime and `SendTimings`.
+- D2: a send's `blind` map had no size limit. Turns on distinct sessions that ended unidentified each
+  added an entry, so 10,000 sessions held 10,000 entries until the deadline.
+
+### D1: not guarded, stated as a limit
+
+What the admission answer carries today, from `admitted()` and `Journal.receipt()` in
+`src/hermes/extension.py` and `receipt()` in `src/server/hermes-mapping.ts`: `requestId`, `status`,
+`runId`, `userRowId`, `senderId`, `steering`, `app_run_id`, `admission: "canonical"` and an optional
+`message`. Node maps `runId`, `messageId`, `message` and `steered`. `submit` computes `preempted` and uses it
+only to force `steering = False`; native `prompt.submit`'s own answer is reduced to accepted or rejected.
+`userRowId` is null for both kinds of new task, since the add-on binds it at `message.complete`. Nothing
+that reaches Node says the task was queued behind another turn or preempted a compaction.
+
+No sound Node-only rule is cheap enough:
+
+- At the answer, the two cases are identical: `steering: false`, the request ID as the run, and one turn
+  started on the session inside the admission window. A rule keyed to "a turn was running when a non-steered
+  answer arrived" also drops every ordinary send whose own `message.start` reaches Node before the answer,
+  which this branch already observed (B3, and `firstFrameMs` can precede `admissionMs`). It is not even
+  sound: the native turn's start is emitted from Hermes's turn thread and can reach Node after the answer.
+- The two cases differ only later: after the native turn ends, the same run opens again in the send's own
+  turn. Detecting that means holding every new task's moments until a fresh read after the add-on settled
+  the run, before any further turn on the session. That is sound for the reviewer's order, because the run
+  stays open until the send's own turn settles. But the add-on settles a run in `followups` without sending a
+  frame, so the only read that could confirm it is the chat's refetch after `message.complete`, which races
+  Hermes's post-turn work. An unknown and possibly large share of ordinary sends would end without moments,
+  and runs with a queued follow-up turn would always be dropped. For a diagnostic meant to measure ordinary
+  sends, that cost is not acceptable without production numbers on that race.
+
+So the code stays unguarded. The model comment in `src/server/send-timing.ts`, the run report comment in
+`src/server/hermes.ts` and `docs/native-api.md` now say a read names the session's open app run, which is
+the running turn's run except in this sequence, and that `measured` is not a guarantee in it. The fix
+belongs in the add-on: in the `preempted and not current` branch with the session running, it knows the
+new task was queued behind another turn and could put that in its answer, so Node could omit both moments.
+No test was added for D1: a test of the unguarded sequence could only pin the wrong output.
+
+### D2: a capped `blind` map
+
+`blind()` now gives up on a send at `SEND_TIMING_HELD` (8) sessions: the send becomes `uncorrelated`, its
+held frames and blind entries are cleared, and a given-up send takes no further entries. Uncertainty is never
+evicted while measuring continues, since a forgotten session could credit its later text to the send.
+A live time already held by run is kept, as for the other limits.
+
+Red run on `f8e71ab`: the new test in `tests/send-timing.test.ts`, 32 sessions each streaming a turn that
+ended unidentified and then two disagreeing reads, failed with `blind` 33 where 0 was expected.
+
+Mutants, each applied by a script, `tests/send-timing.test.ts` and `tests/hermes-adapter.test.ts` run, the
+source restored: the cap removed, blind entries kept on loss, and entries added after loss were all killed.
+The last first survived, because a given-up send reaches `blind()` only through a conflicted read; the test
+now makes one. Survived: the cap compared with `>` instead of `>=`, which holds 9 sessions instead of 8 and
+changes nothing a log or memory bound exposes.
+
+### Checks, round 3
+
+Run on NicolasLaptop (Linux, Node 24.22.2) at the commit that carries this section.
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/send-timing.test.ts tests/hermes-adapter.test.ts tests/conversation-events.test.ts tests/talk-api.test.ts tests/bot-access.test.ts`:
+  5 files, 349 tests passed. `tests/send-timing.test.ts` alone passed five runs in a row (43 tests).
+- `npx vitest run tests/hermes-qualification.test.ts`: 5 tests passed.
+- `npm test`: 170 files, 2,549 tests passed. The known flaky transcript test did not fail.

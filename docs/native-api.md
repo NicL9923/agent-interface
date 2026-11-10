@@ -113,21 +113,34 @@ A moment is recorded only when it is tied to the send's run by identity, never b
 the order events arrived in. Hermes's admission answer names the run: the send's
 own request ID for a new task, or the running task's root for a steer. A live event
 carries the run of the conversation read it was built from. Session frames carry
-only a session ID, so a frame's turn is identified by a read that lands while the
-turn runs, with no turn starting or ending on that session during the read. Open
-chats make that read after each turn starts. A steer is measured by its run's next
-growth after it arrived, across turns of that run, because Hermes's native steering
-answers the same way when it queues the text for the next turn.
+only a session ID, so a frame's turn is taken to be the run that a read names when
+it lands while the turn runs, with no turn starting or ending on that session
+during the read. The read names the session's open app run, which is the running
+turn's run except in the sequence below. Open chats make that read after each turn
+starts. A steer is measured by its run's next growth after it arrived, across turns
+of that run, because Hermes's native steering answers the same way when it queues
+the text for the next turn.
+
+One sequence breaks that identity, and the server does not detect it. A new
+message preempts an idle compaction, an unrelated native turn starts on the
+session before the add-on reads its state, and the add-on queues the message as a
+new task behind that turn. A read during the native turn names the new task's run,
+so that turn's text and live events are recorded as the message's, and the line
+can end `measured` with `steered: false` and moments that are too early. Hermes's
+answer is the same as for a message that started its own turn, so nothing in this
+server tells the two apart. In that sequence `measured` is not a guarantee.
 
 `ended` says why the line was written. Only `measured` carries both moments; any
 other value leaves out what could not be tied to the send's run:
 
 - `measured`: both `firstFrameMs` and `firstLiveMs` were recorded. A tool or
-  status event written first does not end it; the line waits for text.
+  status event written first does not end it; the line waits for text. The
+  preempted-compaction sequence above can produce a wrong `measured` line.
 - `uncorrelated`: Hermes's answer named no run; or an earlier turn of the run's
   session streamed text after the send arrived and ended before any read
   identified it, so the run's later text may not be its first; or more turns or
-  runs streamed at once, before they were identified, than a send holds (8).
+  runs streamed at once, before they were identified, than a send holds (8); or
+  turns on more sessions than that ended unidentified while the send was open.
 - `next-run`: a read found another run running for the assistant, so the send's
   run ended without the missing moment, as a run that only ran a tool or failed.
 - `deadline`: two minutes passed after the send arrived, with `gaveUpAfterMs`.

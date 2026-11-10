@@ -3,7 +3,10 @@ import type { TurnWatcher } from "../shared/types.js";
 
 /** How long after it begins a send's measurement is released, logged with whatever was correlated by then. */
 export const SEND_TIMING_GIVE_UP_MS = 120_000;
-/** The unidentified turns, and the runs, a send keeps a first time for while it cannot yet tell which is its own. */
+/**
+ * The unidentified turns, and the runs, a send keeps a first time for while it cannot yet tell which is its own,
+ * and the sessions it keeps an unidentified earlier turn for. Past any of these, the send is uncorrelated.
+ */
 export const SEND_TIMING_HELD = 8;
 /** Sessions whose current turn is tracked. Frames of other clients' sessions also arrive here. */
 const SESSIONS = 16;
@@ -35,8 +38,8 @@ export type SendRoute = "messages" | "steer" | "talk";
 /**
  * Why a record finished, as its log line names it. Only "measured" carries both moments.
  * - uncorrelated: a moment could not be tied to the send's run. Hermes's answer named no run, an earlier
- *   turn of the run's session streamed text no read identified, or more turns or runs streamed at once
- *   than a send holds.
+ *   turn of the run's session streamed text no read identified, more turns or runs streamed at once
+ *   than a send holds, or turns on more sessions than it holds ended unidentified.
  * - next-run: a read found another run running on the assistant's session, so the send's run is over.
  * - deadline: two minutes passed after the send began.
  * - disconnected: the Hermes socket dropped while the record was open, so frames may have been missed.
@@ -109,8 +112,8 @@ const messages: Record<SendEnded, string> = {
  * - Identity. Hermes's admission answer names the send's run: its own request ID for a new task, or the
  *   running task's root for a steer. Session frames carry only a session ID. A live event carries the run
  *   of the conversation read it was built from. A fresh read, one with no turn starting or ending on its
- *   session between the read's start and now, names the run open during the session's running turn, so
- *   the runtime reports it with run() and that turn takes the run.
+ *   session between the read's start and now, names the session's open app run, which the runtime reports
+ *   with run() and the running turn takes. That is the turn's own run except in the limit below.
  * - First live: the first live event written after arrival whose run equals the answer's run. Until the
  *   answer, the first time per run is kept, for at most SEND_TIMING_HELD runs.
  * - First text: the first text frame after arrival on a turn identified as the answer's run, provided no
@@ -118,9 +121,16 @@ const messages: Record<SendEnded, string> = {
  *   landed in it, or that two reads disagreed on. Such a turn may have been the run's, so the later text
  *   is not its first and is omitted. Until a turn is identified, the send keeps its first text time
  *   there, for at most SEND_TIMING_HELD turns at once.
- * - Limit: when an idle compaction is preempted and a native turn starts inside that send's admission,
- *   Hermes queues the new task and a read during the native turn names the new run. That turn's text
- *   would be taken as the send's. It needs both events inside one admission and is not otherwise guarded.
+ * - Limit, not guarded: a read names the session's open app run, which is not always the running turn's.
+ *   A send preempts an idle compaction, an unrelated native turn starts before the add-on reads the
+ *   session's state, and the add-on queues the send as a new task behind it. A read during the native turn
+ *   names the send's run, so that turn's text and live events are recorded as the send's and the line can
+ *   end "measured" with steered false. The answer is the same as for a send that started its own turn
+ *   (steering false, its request ID as the run), and the native turn's frames may reach Node before or
+ *   after it. Node could tell the two apart only by holding every new task's moments until a read after
+ *   its run settled, and the add-on settles a run without a frame, so that would drop an unknown share of
+ *   ordinary sends. The add-on sees the case (preempted, no open task, session running) and could say so
+ *   in its answer; until it does, "measured" is not a guarantee in this one sequence.
  * - A steer is measured by its run's next growth after it arrived. Native steering answers "queued" for an
  *   ordinary steer too, and queued text drains into a later turn of the same run, so a steer and a queued
  *   send cannot be told apart. Both are measured on their run, past turn boundaries.
@@ -292,7 +302,10 @@ export class SendTimings implements TurnWatcher {
 
   private blind(record: SendRecord, turn: Turn): void {
     record.frames.delete(turn);
-    if (!record.blind.has(turn.session)) record.blind.set(turn.session, turn.seq);
+    if (record.lost || record.blind.has(turn.session)) return;
+    // Forgetting a session's uncertainty could credit its later text to the send, so give up instead.
+    if (record.blind.size >= SEND_TIMING_HELD) return this.lose(record);
+    record.blind.set(turn.session, turn.seq);
   }
 
   /** Takes the first text time of the send's own run, unless an unidentified turn before it may have been the run's. */
@@ -312,6 +325,7 @@ export class SendTimings implements TurnWatcher {
   private lose(record: SendRecord): void {
     record.lost = true;
     record.frames.clear();
+    record.blind.clear();
     if (record.admission) this.finish(record, "uncorrelated");
   }
 
