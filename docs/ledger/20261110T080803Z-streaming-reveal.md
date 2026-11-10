@@ -1,6 +1,6 @@
 # November 10 revealing a streaming reply at a steady pace
 
-Branch `t3/streaming-reveal` over `28da836`, on NicolasLaptop (Fedora, Linux x64), Node 24.22.2.
+Branch `t3/streaming-reveal` over `f436f66`, then merged with `main` at `3bfd79d` (#306, turn events), on NicolasLaptop (Fedora, Linux x64), Node 24.22.2.
 Web client only; no server, Hermes or iOS code changed.
 
 ## Application tests
@@ -9,6 +9,14 @@ Web client only; no server, Hermes or iOS code changed.
 - `npx vitest run tests/streaming-reveal.test.ts tests/live-reply-ui.test.ts tests/message-markdown.test.ts tests/app-ui.test.ts tests/shell-ui.test.ts tests/transcript-rerender.test.ts`: 6 files, 169 tests passed.
 - `npm test`: 177 files, 2785 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 8 passed in Chromium.
+
+After merging `main` at `3bfd79d`:
+
+- `npm run typecheck` and `npm run lint` passed.
+- The six files above: 192 tests passed.
+- `npm test`: 181 files, 2925 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 9 passed in Chromium, including main's new reply
+  streamed through a tool call.
 
 ## Parse cost
 
@@ -32,8 +40,12 @@ frame while a 1,600-character answer streamed at 150 characters a second (14.3 s
 
 | Build | Text changes/s | Characters per change, median and max | ms between changes, median and p95 | Long tasks |
 | --- | --- | --- | --- | --- |
-| `main` | 4.0 | 36, 45 | 250, 250 | 0 |
-| This branch | 29.4 | 5, 26 | 33, 50 | 0 |
+| `main` at `f436f66` | 4.0 | 36, 45 | 250, 250 | 0 |
+| This branch over `f436f66` | 29.4 | 5, 26 | 33, 50 | 0 |
+| `main` at `3bfd79d` | 4.0 | 36, 54 | 250, 250 | 0 |
+| This branch merged with `3bfd79d` | 28.2 | 5, 26 | 33, 50 | 0 |
+
+After the merge the preview sends versioned reads and `turn` events as `e2e/server.ts` does.
 
 The caret showed after the last character of a list item mid-stream and was gone once the
 reply was saved.

@@ -15,7 +15,7 @@ import { existsSync } from "node:fs";
 import { createApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
 import { botFixture, capabilitiesFixture, conversationFixture } from "../../tests/helpers/runtime-fixtures.js";
-import type { Inflight, Message, Runtime, ToolCall } from "../../src/shared/types.js";
+import type { Activity, Inflight, LiveTurn, Message, Runtime, ToolCall } from "../../src/shared/types.js";
 
 if (!existsSync("dist/client/index.html")) throw new Error("Run `npm run build` first: the preview serves dist/client.");
 const port = Number(process.argv[2] ?? 4190);
@@ -40,10 +40,25 @@ const answer = [
 
 const bot = botFixture({ id: "ranch", name: "Ranch Hand" });
 const thread: Message[] = [{ id: "seed-1", role: "assistant", text: "Morning. The north fence is fixed.", createdAt: new Date().toISOString() }];
-let turn: { runId: string; live: string; calls: ToolCall[] } | undefined;
+let turn: { runId: string; prompt: number; live: string; calls: ToolCall[]; done: boolean } | undefined;
 const watchers = new Set<(kind?: "inflight") => void>();
 const notify = (kind?: "inflight") => { for (const changed of watchers) changed(kind); };
 const liveMessage = (): Message => ({ id: "session-inflight", role: "assistant", text: turn!.live });
+const activity = (): Activity => ({ runId: turn!.runId, state: turn!.done ? "done" : turn!.calls.some(call => call.status === "running") ? "working" : "thinking" });
+// Each change to the turn's structure has a new version. `?inflight=3` streams get the turn whole from
+// the server's own read, 60 ms later, as e2e/server.ts and Hermes do.
+let generation = 0, readAt = -1;
+const version = () => `preview:0:${generation}`;
+const followers = new Set<() => void>();
+function structural() {
+  const asked = ++generation;
+  notify();
+  if (followers.size) setTimeout(() => {
+    if (generation !== asked) return;
+    readAt = asked;
+    for (const follower of [...followers]) follower();
+  }, 60);
+}
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 async function stream(text: string) {
   for (let at = 0; at < text.length; at += step) {
@@ -53,23 +68,26 @@ async function stream(text: string) {
   }
 }
 async function run(runId: string) {
-  turn = { runId, live: "", calls: [] };
+  turn = { runId, prompt: thread.length - 1, live: "", calls: [], done: false };
+  structural();
   await pause(400);
   await stream(first);
   // A tool call saves the segment before it, as Hermes does, and the next live reply starts empty.
   const call: ToolCall = { id: randomUUID(), name: "terminal", status: "running", startedAt: new Date().toISOString() };
   thread.push({ id: randomUUID(), runId, role: "assistant", text: first, createdAt: new Date().toISOString() });
-  turn = { runId, live: "", calls: [call] };
-  notify();
+  turn.live = "";
+  turn.calls = [call];
+  structural();
   await pause(1200);
   turn.calls = [{ ...call, status: "completed", completedAt: new Date().toISOString() }];
   thread.push({ id: randomUUID(), runId, role: "tool", text: "", toolCall: turn.calls[0], createdAt: new Date().toISOString() });
-  notify();
+  structural();
   await stream(answer);
   await pause(saveDelay);
   thread.push({ id: randomUUID(), runId, role: "assistant", text: answer, createdAt: new Date().toISOString() });
-  turn = undefined;
-  notify();
+  turn.live = "";
+  turn.done = true;
+  structural();
 }
 
 const unscripted = (name: string) => async (): Promise<never> => { throw new Error(`The streaming preview does not script ${name}.`); };
@@ -86,16 +104,25 @@ const runtime: Runtime = {
   conversation: async () => conversationFixture({
     botId: "ranch",
     messages: [...thread, ...turn?.live ? [liveMessage()] : []],
-    ...turn ? { activity: { state: "working", runId: turn.runId }, toolCalls: turn.calls } : {},
+    version: version(),
+    ...turn ? { activity: activity(), toolCalls: turn.calls } : {},
   }),
-  inflight: (): Inflight | undefined => turn && { botId: "ranch", message: liveMessage(), activity: { state: "working", runId: turn.runId }, toolCalls: turn.calls },
+  inflight: (): Inflight | undefined => turn && { botId: "ranch", message: liveMessage(), activity: activity(), toolCalls: turn.calls },
+  turn: (): LiveTurn | undefined => turn && readAt === generation ? {
+    botId: "ranch", version: version(), message: liveMessage(), activity: activity(), toolCalls: turn.calls,
+    turn: { messages: thread.slice(turn.prompt), after: thread[turn.prompt - 1]?.id ?? null },
+  } : undefined,
+  followTurns(_botId, restored) {
+    const follower = () => restored();
+    followers.add(follower);
+    return () => { followers.delete(follower); };
+  },
   routines: async () => [],
   discoverEvents: async cursor => ({ cursor, events: [] }),
   lookupSubmission: async () => null,
   submit: async input => {
     const runId = randomUUID();
     thread.push({ id: randomUUID(), runId, role: "user", text: input.text, createdAt: new Date().toISOString(), sender: { id: input.senderId, name: input.senderId } });
-    notify();
     void run(runId);
     return { requestId: input.requestId, status: "accepted", runId };
   },
