@@ -1047,6 +1047,77 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await expect(runtime.realtimeSession!({...input,voice:'ash'})).rejects.toMatchObject({statusCode:502});
   });
 
+  describe('live voice status off the request path', () => {
+    let answers: ((answer: Response | Error) => void)[];
+    let statusReads: number;
+    beforeEach(() => {
+      answers = []; statusReads = 0;
+      vi.stubGlobal('fetch', vi.fn((url: URL | string) => {
+        if (!new URL(url).pathname.endsWith('/voice/status')) return Promise.resolve(Response.json({profiles: []}));
+        statusReads++;
+        return new Promise<Response>((resolve, reject) => answers.push(answer => answer instanceof Error ? reject(answer) : resolve(answer)));
+      }));
+      // Only the clock is virtual: the fake socket and these waits run on real timers.
+      vi.useFakeTimers({toFake: ['Date']});
+    });
+    const status = (available: boolean) => Response.json({available, reason: available ? 'Ready.' : 'The voice plugin is disabled.'});
+    const stillWaiting = Symbol('still waiting');
+    /** What the read resolved to, or stillWaiting when it is still waiting after a real 50 ms. */
+    const soon = <T,>(read: Promise<T>) => Promise.race([read, new Promise<typeof stillWaiting>(resolve => setTimeout(() => resolve(stillWaiting), 50))]);
+    async function known(available: boolean) {
+      const first = runtime.capabilities();
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      // The first read on a connection has nothing to answer with, so it waits.
+      expect(await soon(first)).toBe(stillWaiting);
+      answers.at(-1)!(status(available));
+      expect((await first).liveVoice.supported).toBe(available);
+    }
+
+    it('answers at once with the known value while a stale one refreshes in the background', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(statusReads).toBe(2);
+      // A second read during the refresh joins it instead of starting another.
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(statusReads).toBe(2);
+      answers[1](status(false));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'The voice plugin is disabled.'}));
+      expect(statusReads).toBe(2);
+    });
+
+    it('reports a failed background refresh as unavailable instead of keeping the old value', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      answers[1](new TypeError('fetch failed'));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'Hermes could not report live voice.'}));
+      // The next refresh that succeeds restores it.
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: false}});
+      answers[2](status(true));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice.supported).toBe(true));
+    });
+
+    it('drops the value on disconnect and ignores a refresh that started before it', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      sockets[0].close();
+      await runtime.reconnect!();
+      const after = runtime.capabilities();
+      await vi.waitFor(() => expect(statusReads).toBe(3));
+      expect(await soon(after)).toBe(stillWaiting);
+      answers[2](status(false));
+      expect((await after).liveVoice.supported).toBe(false);
+      // The old connection's refresh answers last. It must not replace the new connection's value.
+      answers[1](status(true));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect((await runtime.capabilities()).liveVoice.supported).toBe(false);
+      expect(statusReads).toBe(3);
+    });
+  });
+
   it('passes on the add-on\'s plain voice errors and names an add-on that predates live voice',async()=>{
     let answer=Response.json({error:'Sign in to ChatGPT in Hermes to use live voice.'},{status:409});
     vi.stubGlobal('fetch',vi.fn(async()=>answer));
