@@ -350,6 +350,13 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     end(): Promise<void>;
     /** Guidance the app admitted as steering, which Hermes saved as a prompt of its own. */
     guidance(id: number, requestId: string, text: string): void;
+    /**
+     * A new prompt Hermes saved before its native turn starts: the app's, under a new app run `extra.app_run_id`, or another
+     * client's, with no app run. Call `begin` next.
+     */
+    prompt(id: number, text: string, extra?: Record<string, unknown>): void;
+    /** The native turn stops, failed or interrupted, and Hermes's snapshot keeps the prompt and the reply it reports. */
+    stop(snapshot: Record<string, unknown>): Promise<void>;
   };
   /**
    * The real app through `?inflight=MODE` and the conversation read, with Hermes's frames, saved rows and its snapshot of the
@@ -393,6 +400,14 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       guidance(id, requestId, text) {
         s.hermes.history.push(row(id, "user", text, { app_request_id: requestId, app_run_id: "run-2", app_steering: true }));
       },
+      prompt(id, text, extra = {}) {
+        s.hermes.history.push(row(id, "user", text, extra));
+        s.hermes.runId = typeof extra.app_run_id === "string" ? extra.app_run_id : undefined;
+      },
+      stop: snapshot => turn.structural(() => {
+        Object.assign(s.hermes, { running: false, runId: undefined, inflight: snapshot });
+        s.hermes.frame("message.complete", { text: "" });
+      }),
     };
     await turn.begin(prompt?.[1] ?? "Check the barn");
     await script(turn);
@@ -405,8 +420,15 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
   const shown = (messages: Message[]) => messages.filter(message => message.role !== "tool").map(message => message.text);
   const pdf = { path: "/uploads/a.pdf", name: "a.pdf", mime: "application/pdf" };
   /** A hidden prompt Hermes saved for a native turn it started itself, such as a goal continuation. No read shows it. */
-  const hidden = (turn: Native) => turn.s.hermes.history.push(row(5, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }));
+  const hidden = (turn: Native, id = 5) => turn.s.hermes.history.push(row(id, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }));
+  const photo = { path: "/uploads/c.png", name: "c.png", mime: "image/png" };
   const cases: { name: string; script: (turn: Native) => Promise<void>; live: string; turn: string[]; shown: string[];
+    /**
+     * The native turn stopped. Hermes's snapshot still holds its prompt and reply, but the stream sends no live text after the
+     * stop: modes 1 and 2 send nothing and mode 3 a last turn with an empty reply. Every client takes the settled read over
+     * a retained live tail, so the read's live row, `live`, is what shows.
+     */
+    settled?: true;
     /** The native turn's saved prompt row and the prompt Hermes reports for it, in place of "Check the barn". */
     prompt?: [Record<string, unknown>, string] }[] = [
     {
@@ -554,16 +576,171 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Loft dry."],
     },
   ];
-  describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts, prompt }) => {
+  // The boundary looks for the reported prompt only among the trailing prompts: the last one and the steered guidance directly
+  // before it, back to and including the first prompt that is not guidance. The three orders below are GPT-6.1 Sol's, where
+  // a search of the whole history reached an older prompt with the same text. Each matches nothing in the trailing prompts
+  // and falls back to the last prompt, so it shows what main shows.
+  cases.push(
+    {
+      // Another client's image saves its own `@image:` text, so the app image's empty prompt is not the last one.
+      name: "another client's uncaptioned image after an app image sent alone, both finished",
+      prompt: [row(3, "user", "@image:/uploads/c.png", { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [photo] }), ""],
+      async script(turn) {
+        await turn.say("Read it.");
+        turn.s.hermes.history.push(row(4, "assistant", "Read it.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.prompt(5, "@image:/uploads/d.png");
+        await turn.begin("");
+        await turn.say("A cow.");
+        // Hermes saved the reply and its snapshot of the finished turn still holds it.
+        turn.s.hermes.history.push(row(6, "assistant", "A cow."));
+        await turn.stop({ user: "", assistant: "A cow." });
+      },
+      live: "", turn: ["5", "6"],
+      settled: true,
+      shown: ["Fence?", "Fixed.", "", "Read it.", "@image:/uploads/d.png", "A cow."],
+    },
+    {
+      // Hermes removes bracketed-paste markers from the prompt it reports, and the add-on keeps them in the saved row.
+      name: "a failed pasted prompt whose reported text equals an older prompt",
+      prompt: [row(3, "user", "Check the gate", { app_request_id: "req-2", app_run_id: "run-2" }), "Check the gate"],
+      async script(turn) {
+        await turn.say("Looking.");
+        await turn.segment(4, "Looking.");
+        await turn.say(" Gate shut.");
+        turn.s.hermes.history.push(row(5, "assistant", "Gate shut.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.prompt(6, "[200~Check the gate[201~", { app_request_id: "req-3", app_run_id: "run-3" });
+        await turn.begin("Check the gate");
+        await turn.say("Looking.");
+        await turn.say(" Gate open.");
+        await turn.stop({ user: "Check the gate", assistant: "Looking. Gate open.", error: "boom" });
+      },
+      live: "Looking. Gate open.", turn: ["req-3"],
+      settled: true,
+      shown: ["Fence?", "Fixed.", "Check the gate", "Looking.", "Gate shut.", "[200~Check the gate[201~", "Looking. Gate open."],
+    },
+    {
+      name: "a prompt not saved yet that repeats a prompt before the last one, interrupted",
+      async script(turn) {
+        await turn.say("Barn checked.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn checked.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-3" });
+        await turn.begin("Check the loft");
+        await turn.say("Loft checked.");
+        turn.s.hermes.history.push(row(6, "assistant", "Loft checked.", { app_run_id: "run-3" }));
+        await turn.end();
+        // The app admitted "Check the barn" again as run-4. Hermes reports its prompt before it saved it.
+        turn.s.hermes.runId = "run-4";
+        await turn.begin("Check the barn");
+        await turn.say("Barn checked.");
+        await turn.say(" Door shut.");
+        await turn.stop({ user: "Check the barn", assistant: "Barn checked. Door shut.", interrupted: true });
+      },
+      live: "Barn checked. Door shut.", turn: ["req-3", "6"],
+      settled: true,
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Check the loft", "Loft checked.", "Barn checked. Door shut."],
+    },
+    {
+      // Identical to main: the hidden prompt matches nothing, and the last shown prompt is the queued guidance.
+      name: "a hidden continuation after guidance Hermes queued",
+      async script(turn) {
+        await turn.say("Barn is dry.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.guidance(5, "steer-two", "Check the loft");
+        await turn.begin("Check the loft");
+        await turn.say("Checked.");
+        await turn.segment(6, "Checked.");
+        await turn.end();
+        hidden(turn, 7);
+        await turn.begin("Continue toward the goal.");
+        await turn.say("Checked.", false);
+        await turn.segment(8, "Checked.");
+        await turn.say(" Loft dry.");
+      },
+      live: "Loft dry.", turn: ["steer-two", "6", "8"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Checked.", "Checked.", "Loft dry."],
+    },
+    {
+      // Differs from main, which strips from the last prompt, the guidance, and so repeats "Read it.".
+      name: "an image sent alone, then guidance steered into its turn",
+      prompt: [row(3, "user", "@image:/uploads/c.png", { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [photo] }), ""],
+      async script(turn) {
+        await turn.say("Read it.");
+        await turn.segment(4, "Read it.", () => turn.guidance(5, "steer-two", "Summarize it"));
+        await turn.say(" Two pages.");
+      },
+      live: "Two pages.", turn: ["req-2", "4", "steer-two"],
+      shown: ["Fence?", "Fixed.", "", "Read it.", "Summarize it", "Two pages."],
+    },
+    {
+      // Differs from main, which strips from the second guidance and so repeats both segments.
+      name: "two guidance messages steered into the running native turn",
+      async script(turn) {
+        await turn.say("Looking.");
+        await turn.segment(4, "Looking.", () => turn.guidance(5, "steer-two", "Check the loft too"));
+        await turn.say(" Loft checked.");
+        await turn.segment(6, "Loft checked.", () => turn.guidance(7, "steer-three", "And the gate"));
+        await turn.say(" Gate shut.");
+      },
+      live: "Gate shut.", turn: ["req-2", "4", "steer-two", "6", "steer-three"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Looking.", "Check the loft too", "Loft checked.", "And the gate", "Gate shut."],
+    },
+    {
+      // Differs from main, which strips from the steered guidance and so repeats "Loft checked.".
+      name: "guidance Hermes queued, then guidance steered into that native turn",
+      async script(turn) {
+        await turn.say("Barn is dry.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.guidance(5, "steer-two", "Check the loft");
+        await turn.begin("Check the loft");
+        await turn.say("Loft checked.");
+        await turn.segment(6, "Loft checked.", () => turn.guidance(7, "steer-three", "And the gate"));
+        await turn.say(" Gate shut.");
+      },
+      live: "Gate shut.", turn: ["steer-two", "6", "steer-three"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "And the gate", "Gate shut."],
+    },
+    {
+      // The accepted gap, pinned as the rule gives it. Queued guidance "Check the loft" started its own native turn, and Hermes
+      // now reports a new native turn whose prompt, "Check the barn" again, it has not saved. The rule matches the run's first
+      // prompt, which ends the trailing prompts, so "Barn checked." is stripped as if the guidance had been steered into the
+      // barn turn. Main strips from the guidance and shows the whole reply. Rows and text cannot tell the two apart. It needs
+      // an unsaved prompt that repeats one in the trailing prompts and a reply that starts with that turn's first saved words,
+      // and it clears once Hermes saves the prompt, which is then the last match. 5688e59 shows the same.
+      name: "the accepted gap: a native turn not saved yet that repeats the run's first prompt after queued guidance",
+      async script(turn) {
+        await turn.say("Barn checked.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn checked.", { app_run_id: "run-2" }));
+        await turn.end();
+        turn.guidance(5, "steer-two", "Check the loft");
+        await turn.begin("Check the loft");
+        await turn.say("Loft checked.");
+        turn.s.hermes.history.push(row(6, "assistant", "Loft checked.", { app_run_id: "run-2" }));
+        await turn.end();
+        await turn.begin("Check the barn");
+        await turn.say("Barn checked.", false);
+        await turn.say(" Door shut.");
+      },
+      live: "Door shut.", turn: ["req-2", "4", "steer-two", "6"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Check the loft", "Loft checked.", "Door shut."],
+    },
+  );
+  describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts, prompt, settled }) => {
     it.each(["1", "2", "3"])("?inflight=%s and the conversation read show each saved segment once", async mode => {
       const result = await nativeTurns(mode, script, prompt);
-      expect(result.live).toBe(expected);
-      expect(result.read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: expected });
+      if (!settled) expect(result.live).toBe(expected);
+      if (expected) expect(result.read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: expected });
+      else expect(result.read.messages.map(message => message.id)).not.toContain("live-one-inflight");
       expect(shown(result.read.messages)).toEqual(texts);
       if (mode !== "3") return;
       // The event starts at the native turn's prompt, and the client keeps every earlier row it holds above it.
       expect(result.turn!.messages.map(message => message.id)).toEqual(ids);
-      expect(shown([...placeTurn(saved(result.read.messages), result.turn!)!, { ...result.turn!.message, text: result.live }])).toEqual(texts);
+      const reply = expected ? [{ ...result.turn!.message, text: expected }] : [];
+      expect(shown([...placeTurn(saved(result.read.messages), result.turn!)!, ...reply])).toEqual(texts);
     });
   });
 });

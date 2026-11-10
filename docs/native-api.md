@@ -179,18 +179,36 @@ and private agent handoffs are redacted. A persisted segment is any assistant ro
 saved since the prompt of the Hermes turn that is running, the prompt Hermes
 reports for it. Guidance steered into that turn keeps the segments saved before
 it, so the live reply never repeats them. Guidance Hermes queued instead starts a
-turn of its own, so only that turn's segments count. The reported prompt is
-compared trimmed and without its trailing file references, as the saved prompt
-shows it, so a file sent alone is matched by its empty text, and an image sent
-alone, which Hermes reports as an empty prompt, too. When no shown prompt has the
-reported text, as for a hidden prompt such as a goal continuation or one Hermes has
-not saved yet, the segments count from the last shown prompt, as before turn
-events existed. One known gap remains: a turn whose prompt is not saved yet and
-whose live text starts with the same words as a segment the earlier turn saved in
-the same run loses those words until its prompt is saved. Closing it needs the
-Hermes add-on to mark where a native turn starts. Apply a patch only while the fetched
-conversation is active and its `activity.runId` matches the patch. A settled
-conversation or a newer run supersedes a retained live tail.
+turn of its own, so only that turn's segments count. Only steered guidance follows
+a running turn's prompt, so the reported prompt is looked for only among the
+trailing prompts: the last shown prompt and, while the prompts before it are
+steered guidance, those, back to and including the first prompt that is not
+guidance. The last of them with the reported text is the turn's prompt, and an
+older prompt worded the same is never reached. The reported prompt is compared
+trimmed and without its trailing file references, as the saved prompt shows it,
+so a file sent alone is matched by its empty text, and an image sent alone, which
+Hermes reports as an empty prompt, too. When no trailing prompt has the reported
+text, as for a hidden prompt such as a goal continuation or one Hermes has not
+saved yet, the segments count from the last shown prompt, as before turn events
+existed. So the segments counted are the same as before except where guidance was
+steered into the running turn.
+
+Two known gaps remain, each needing prompts worded exactly alike. Guidance steered
+into the running turn and worded exactly like its prompt is taken as the turn's
+start, so a segment the turn saved before the guidance shows again in the live
+reply, as it did before turn events existed. And a turn whose prompt is not shown
+yet, that repeats word for word a trailing prompt other than the last, such as the
+run's first prompt after queued guidance, and whose live text starts with what
+that prompt's turn saved first, loses those words from its live reply, which
+showed them before turn events existed. Rows and text cannot tell that turn from
+guidance steered into the earlier one. It clears when Hermes saves the prompt,
+which is then the last one with its text. A hidden prompt is never shown, so for
+one worded like a person's prompt it lasts the turn. A marker from the Hermes
+add-on for where a native turn starts would close both.
+
+Apply a patch only while the fetched conversation is active and its
+`activity.runId` matches the patch. A settled conversation or a newer run
+supersedes a retained live tail.
 Structural events still send `data: change`, meaning refetch. Clients fetch on
 stream open and reconnect; the server sends no initial notice. Streams without the parameter retain their
 one-change-per-second streaming cadence.

@@ -289,20 +289,45 @@ const trailingFiles = /(?:(?:^|\n)@file:"(?:[^"\\]|\\.)*")+\s*$/;
  */
 export const nativePrompt = (inflight: Wire | undefined): string | undefined =>
   typeof inflight?.user === 'string' ? inflight.user.replace(trailingFiles, '').trim() : undefined;
-/** The index of the last prompt, at or after `from`, whose text is `prompt` (`nativePrompt`). -1 when none is. */
-export const promptRow = (messages: Message[], prompt: string | undefined, from = 0): number =>
-  prompt === undefined ? -1 : messages.findLastIndex((message, index) => index >= from && message.role === 'user' && message.text.trim() === prompt);
+/**
+ * The row of the prompt Hermes reports for the running native turn (`nativePrompt`), looked for only among the trailing prompts
+ * at or after `from`: the last prompt and, while the prompts before it are steered guidance, those, back to and including the
+ * first prompt that is not guidance. The last of them whose text is `prompt`. An empty prompt, such as an image sent alone, is
+ * a prompt like any other. -1 when none has it, or when no prompt is reported.
+ */
+export function promptRow(messages: Message[], prompt: string | undefined, from = 0): number {
+  if (prompt === undefined) return -1;
+  for (let index = messages.length - 1; index >= from; index--) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+    if (message.text.trim() === prompt) return index;
+    if (!message.steered) return -1;
+  }
+  return -1;
+}
 /**
  * Where the native turn Hermes is running starts. Hermes sets its prompt when a native turn starts, from a person's message or
  * from guidance it queued instead of steering in, and keeps it when guidance is steered into the running turn. The turn's live
  * text accumulates from that same start, so the turn's saved messages and the live reply's removal of saved text both start
- * at the last prompt with that text (`promptRow`).
+ * at its prompt row (`promptRow`).
  *
- * When no shown prompt has it, the last prompt, as on main. A hidden prompt, such as a goal continuation, and one Hermes has
- * not saved yet look the same here. For a hidden one this is right: its turn's saved segments follow the last shown prompt.
- * For one not saved yet it is right unless the new turn's live text starts with the same words as a segment the earlier
- * native turn saved under the same app run, since stripping goes on until a segment does not match. Telling the two apart
- * needs the add-on to mark where a native turn starts. With no prompt reported, the last prompt too. -1 when there is none.
+ * Only steered guidance follows a running turn's prompt, so the search stops at the first prompt that is not guidance, and an
+ * older prompt worded the same is never reached. When no trailing prompt has the reported text, as for a hidden prompt such as
+ * a goal continuation, one Hermes has not saved yet, or no prompt reported, the boundary is the last prompt, as on main. A
+ * hidden prompt's turn saves its segments after the last shown prompt, so that is right for it. A prompt not saved yet whose
+ * live text starts with what the native turn before it saved under the same app run loses those words, as on main. So the
+ * boundary is main's except where guidance was steered into the running turn: there the turn's own prompt keeps the
+ * segments saved before the guidance out of the live reply.
+ *
+ * Two known gaps, each needing prompts worded exactly alike:
+ * - Guidance steered in place and worded exactly like the turn's prompt is taken as the start, so a segment the turn saved
+ *   before it shows again in the live reply. Main does the same.
+ * - A native turn whose prompt is not shown yet repeats word for word a trailing prompt other than the last, such as the app
+ *   run's first prompt after queued guidance, and its live text starts with what that prompt's turn saved first. Those
+ *   words are left out of the live reply; main shows them. Rows and text cannot tell this from guidance steered into the
+ *   earlier turn. It clears when Hermes saves the prompt, which is then the last match. A hidden prompt is never saved
+ *   as a shown row, so for one worded like a person's prompt it lasts the turn.
+ * A marker from the add-on for where a native turn starts would close both. -1 when there is no prompt at all.
  */
 export function turnStart(messages: Message[], prompt: string | undefined, from = 0): number {
   const matched = promptRow(messages, prompt, from);
@@ -423,11 +448,11 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   // The run ID proves rows belong to this task, and queued follow-ups share it, so only
   // rows after the native turn's prompt count (`turnStart`): guidance steered into the
   // turn keeps its segments, and guidance Hermes queued starts a native turn of its own.
-  // A prompt no shown row has falls back to the last prompt, as on main. Without a run ID, nothing is removed.
+  // A prompt none of the trailing prompts has falls back to the last prompt, as on main. Without a run ID, nothing is removed.
   const run = active && typeof value.app_run_id === 'string' ? value.app_run_id : undefined;
   const prompt = nativePrompt(inflight);
   // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
-  // the saved turn too, unless the snapshot names a prompt no shown row has.
+  // the saved turn too, unless the snapshot names a prompt none of the trailing prompts has.
   const savedPrompt = !prompt || promptRow(rows, prompt) >= 0;
   const lastTurn = rows.slice(turnStart(rows, prompt) + 1).filter(row => row.role === 'assistant');
   const persisted = run ? lastTurn.filter(row => row.runId === run) : !active && savedPrompt ? lastTurn : [];

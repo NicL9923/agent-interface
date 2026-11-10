@@ -335,8 +335,8 @@ describe("turn reads for streams that follow turns", () => {
 
 describe("the live reply's saved text", () => {
   // Hermes names the native turn's prompt before it saved it. No saved row matches, so the boundary falls back to the last
-  // prompt, as on main. That is the one known gap: the earlier native turn's "Checked." under the same app run is stripped
-  // from this turn's live text when it starts with the same words. Closing it needs the add-on to mark a native turn's start.
+  // prompt, as on main, and the earlier native turn's "Checked." under the same app run is stripped from this turn's live
+  // text, which starts with the same words. Main strips it too. It clears once Hermes saves the prompt.
   it("falls back to the last prompt while the native turn's prompt is not saved", async () => {
     midTurn();
     saveSegment(4, "Checked.");
@@ -392,6 +392,9 @@ describe("turnRows", () => {
     ["no prompt reported", undefined, { after: "a2", messages: shown.slice(5, 6) }],
     // Before Hermes saved the prompt, or for a hidden one, the last prompt, as on main.
     ["a prompt not saved yet", "u3", { after: "a2", messages: shown.slice(5, 6) }],
+    // Only steered guidance follows a running turn's prompt, so a match before the last prompt that is not guidance is an
+    // earlier turn's, never this one's.
+    ["a prompt only a turn before the last one has", "u1", { after: "a2", messages: shown.slice(5, 6) }],
   ])("starts at the native turn's prompt with %s, keeps progress lines, and leaves out the live reply", (_name, prompt, rows) => {
     expect(turnRows(shown, prompt, "live-inflight", 0, false)).toEqual(rows);
   });
