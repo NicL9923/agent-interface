@@ -263,11 +263,26 @@ function within(answer, ms) {
     .finally(() => clearTimeout(timer));
 }
 
-// Opens a tapped notification's chat. An open window is asked to switch in place. A window that does
-// not answer in time is never reloaded on a first tap: its page may be busy with an edited form that
-// a reload would lose. It stays as it is, focused, and the notification comes back. Tapping that one
-// is the person asking a second time, and only then is a silent window loaded with the chat, or a new
-// window opened, as for a window still running a release from before pages answered.
+// Opens a tapped notification's chat. An open window is asked to switch in place, and is focused.
+// "In front" means the window was focused already or focus() succeeded. Visible alone is not enough:
+// a browser covered by another application still reports `visible`. A notification comes back at
+// most once: a tap on one that came back never brings it back again.
+//
+// | Window answers | Focus              | First tap                                   | Tap on one that came back            |
+// | -------------- | ------------------ | ------------------------------------------- | ------------------------------------ |
+// | in time        | in front           | done                                        | done                                 |
+// | in time        | failed, visible    | bring it back; no second window             | nothing more                         |
+// | in time        | failed, hidden     | open a new window, or bring it back         | open a new window                    |
+// | late           | in front           | bring it back, close it at the answer       | load the chat into the window *      |
+// | late           | failed, visible    | bring it back and leave it                  | load the chat into the window *      |
+// | late           | failed, hidden     | bring it back; at the answer open a new     | load the chat into the window *      |
+// |                |                    | window, and close it only if that worked    |                                      |
+// | never          | any                | bring it back and leave it                  | load the chat into the window *      |
+//
+// A first tap never reloads a window that has not answered: its page may be busy with an edited form
+// a reload would lose. * The second tap is the person asking again, as a window still running a
+// release from before pages answered needs: the chat loads into it, or into a new window when that
+// fails, unless the page answered the first tap meanwhile.
 async function openChat(notification) {
   const url = conversationUrl(notification.data?.url);
   // Only a window this worker controls runs code that answers, and only such a window can be navigated.
@@ -275,20 +290,18 @@ async function openChat(notification) {
   const existing = windows.find((client) => client.focused) ?? windows.find((client) => client.visibilityState === 'visible') ?? windows[0];
   if (!existing) return self.clients.openWindow(url);
   // Focused first, since the browser allows it only shortly after the tap. A failure is kept.
-  const focused = existing.focus().then(() => true, () => false);
+  const focusing = existing.focus().then(() => true, () => false);
   const earlier = answered.get(answerKey(existing, url)) ?? 0;
   const answer = askToOpen(existing, url);
-  if (await within(answer, OPEN_ACK_MS)) {
-    // A hidden window that switched but cannot come forward shows nothing, so the chat opens in a
-    // new one. A visible window already shows it.
-    if (!await focused && existing.visibilityState !== 'visible') await self.clients.openWindow(url);
+  const inTime = await within(answer, OPEN_ACK_MS);
+  const place = existing.focused || await focusing ? 'front' : existing.visibilityState === 'visible' ? 'visible' : 'hidden';
+  if (inTime) {
+    if (!await reachPerson(place, url)) await showAgain(notification);
     return;
   }
-  await focused;
   if (!notification.data?.reshown) {
     await showAgain(notification);
-    // The page opened the chat after all, so the notification brought back for it goes.
-    if (await answer) await closeShownAgain(notification);
+    if (await answer && await reachPerson(place, url)) await closeShownAgain(notification);
     return;
   }
   // The second tap. A page that opened the chat for the first one while this one waited has done
@@ -299,6 +312,18 @@ async function openChat(notification) {
     return;
   } catch { /* Closed meanwhile, or no longer this worker's. */ }
   await self.clients.openWindow(url);
+}
+
+// After a window opened the chat: true when the person can see it. A window in front shows it. One
+// visible behind another application may not, and a second window would show the chat twice, so the
+// answer is false. A hidden one cannot, so the chat opens in a new window, true when that worked.
+async function reachPerson(place, url) {
+  if (place === 'front') return true;
+  if (place === 'visible') return false;
+  try {
+    await self.clients.openWindow(url);
+    return true;
+  } catch { return false; }
 }
 
 async function decline(notification) {

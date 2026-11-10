@@ -778,22 +778,48 @@ describe('service worker notification taps with the app open', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  // A hidden window switched to the chat but cannot come forward, so the person would see nothing.
-  // A visible one already shows the chat, and a second window would show it twice.
-  it.each([
-    ['a hidden one opens the chat in a new window', 'hidden', false, [url], false],
-    ['a hidden one shows the notification again when no window can open either', 'hidden', true, [url], true],
-    ['a visible one opens nothing more', 'visible', false, [], false],
-  ])('when a window answers but cannot be focused, %s', async (_name, visibilityState, refused, opened, reshown) => {
-    const window = Object.assign(openWindowOf(), { visibilityState });
-    window.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
-    const sw = worker({ windows: [window] });
-    if (refused) sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
-    await tap(sw);
-    expect(window.postMessage).toHaveBeenCalledOnce();
-    expect(sw.openWindow.mock.calls).toEqual(opened.map(each => [each]));
-    expect(sw.showNotification.mock.calls).toEqual(reshown ? [['Ranch Hand', expect.objectContaining({ data: { url: '/?bot=ranch', reshown: true } })]] : []);
-    expect(window.navigate).not.toHaveBeenCalled();
+  // One case per row of the table above openChat, each tapped first as a new notification and then,
+  // in a fresh worker, as one that came back. "In front" is a window focused already or one whose
+  // focus() worked; a visible window can sit behind another application.
+  type Row = {
+    answer: 'in time' | 'late' | 'never'; focus: 'focused already' | 'in front' | 'failed, visible' | 'failed, hidden';
+    refused?: boolean;
+    first: { opened: boolean; back: boolean }; again: { opened: boolean; navigated: boolean };
+  };
+  const rows: Row[] = [
+    { answer: 'in time', focus: 'in front', first: { opened: false, back: false }, again: { opened: false, navigated: false } },
+    { answer: 'in time', focus: 'focused already', first: { opened: false, back: false }, again: { opened: false, navigated: false } },
+    { answer: 'in time', focus: 'failed, visible', first: { opened: false, back: true }, again: { opened: false, navigated: false } },
+    { answer: 'in time', focus: 'failed, hidden', first: { opened: true, back: false }, again: { opened: true, navigated: false } },
+    { answer: 'in time', focus: 'failed, hidden', refused: true, first: { opened: true, back: true }, again: { opened: true, navigated: false } },
+    { answer: 'late', focus: 'in front', first: { opened: false, back: false }, again: { opened: false, navigated: true } },
+    { answer: 'late', focus: 'failed, visible', first: { opened: false, back: true }, again: { opened: false, navigated: true } },
+    { answer: 'late', focus: 'failed, hidden', first: { opened: true, back: false }, again: { opened: false, navigated: true } },
+    { answer: 'late', focus: 'failed, hidden', refused: true, first: { opened: true, back: true }, again: { opened: false, navigated: true } },
+    { answer: 'never', focus: 'failed, hidden', first: { opened: false, back: true }, again: { opened: false, navigated: true } },
+  ];
+  it.each(rows.map(row => ({ ...row, refused: row.refused ?? false })))('answered $answer, focus $focus, a new window refused $refused', async ({ answer, focus, refused, first, again }) => {
+    vi.useFakeTimers();
+    try {
+      for (const [reshown, expected] of [[false, first], [true, again]] as const) {
+        const window = Object.assign(openWindowOf({ answers: answer === 'in time', focused: focus === 'focused already' }),
+          { visibilityState: focus === 'failed, hidden' ? 'hidden' : 'visible' });
+        if (focus !== 'in front') window.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
+        const sw = worker({ windows: [window] });
+        if (refused) sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+        const done = tap(sw, reshown ? { data: { url: '/?bot=ranch', reshown: true } } : tapped);
+        await vi.advanceTimersByTimeAsync(600);
+        if (answer === 'late') window.ports[0].postMessage({ opened: true });
+        await vi.advanceTimersByTimeAsync(10_000);
+        await done;
+        const which = reshown ? 'tap on one that came back' : 'first tap';
+        expect(sw.openWindow.mock.calls, which).toEqual(expected.opened ? [[url]] : []);
+        expect(window.navigate.mock.calls, which).toEqual('navigated' in expected && expected.navigated ? [[url]] : []);
+        expect(sw.shown.map(each => each.data), which).toEqual('back' in expected && expected.back ? [{ url: '/?bot=ranch', reshown: true }] : []);
+        // A notification comes back at most once.
+        if (reshown) expect(sw.showNotification, which).not.toHaveBeenCalled();
+      }
+    } finally { vi.useRealTimers(); }
   });
 
   it('shows the notification again, quietly, when no way of opening the chat works', async () => {

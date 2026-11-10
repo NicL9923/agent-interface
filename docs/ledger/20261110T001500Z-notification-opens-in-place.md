@@ -266,3 +266,82 @@ without `getNotifications` would otherwise bring back a notification for a chat 
   APIs at their boundary; the e2e calls `openChat`.
 - Firefox, Safari and an installed iOS web app: not run.
 - How long Safari keeps a worker alive for the ten-second late listen.
+
+## November 10 third review round
+
+GPT-6.1 Sol's third review verified two findings at `55c68ad`. This round does not merge `main`.
+Checks ran on NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromium).
+
+### Findings and changes
+
+- P2, visible was taken as proof the window reached the person. The Page Visibility
+  specification allows `visible` while another application covers the browser. A window now
+  counts as in front only when it was `focused` already or its `focus()` succeeded. A window that
+  answers in time from behind another application gets the notification back once; no second
+  window opens, since the first already shows the chat.
+- P2, a late answer skipped the focus result. A first tap's late answer now gets the same
+  handling as a prompt one, through `reachPerson()`, and `closeShownAgain` runs only once the
+  window is in front or a new window opened for the hidden one. A hidden window whose new window
+  is refused keeps the notification.
+- `openChat` carries the rule as one table in its comment, and the code follows it: `place` is
+  `front`, `visible` or `hidden`; an in-time answer brings the notification back when
+  `reachPerson` is false; a late answer closes it only when `reachPerson` is true.
+- README: the paragraphs on taps with the app open say what counts as in front and when a late
+  answer closes the notification.
+
+### The table
+
+| Window answers | Focus | First tap | Tap on one that came back |
+| --- | --- | --- | --- |
+| in time | in front | done | done |
+| in time | failed, visible | bring it back; no second window | nothing more |
+| in time | failed, hidden | open a new window, or bring it back | open a new window |
+| late | in front | bring it back, close it at the answer | load the chat into the window |
+| late | failed, visible | bring it back and leave it | load the chat into the window |
+| late | failed, hidden | bring it back; at the answer open a new window, and close it only if that worked | load the chat into the window |
+| never | any | bring it back and leave it | load the chat into the window |
+
+"Load the chat into the window" falls back to a new window when `navigate` fails, and does
+nothing when the page answered the first tap meanwhile. Both are unchanged from the second round.
+
+### Red before the fix
+
+On `55c68ad` plus the new table test, which replaces the three-case "when a window answers but
+cannot be focused" test:
+
+- `npx vitest run tests/service-worker.test.ts -t "answered"`: 4 of 10 cases failed, the rows
+  whose behavior changed. In time, failed while visible: "first tap: expected [] to deeply equal
+  [ { url: '/?bot=ranch', …(1) } ]", nothing came back. Late, failed while visible: the same.
+  Late, failed while hidden: "first tap: expected [] to deeply equal [ Array(1) ]", no new window.
+  Late, failed while hidden with the new window refused: nothing came back.
+
+### Mutants
+
+Each line was broken by hand, `tests/service-worker.test.ts` run, and the source restored.
+
+| Mutation | Result |
+| --- | --- |
+| `existing.focused` ignored | failed: "in time, focus focused already" |
+| Visible counted as in front | failed: both "failed, visible" rows |
+| A late answer closes without `reachPerson` | failed: the three late rows that are not in front |
+| A hidden window opens no new window | failed: all four hidden rows |
+| A refused new window counted as reached | failed: both refused rows |
+| An in-time answer never brings the notification back | failed: in time "failed, visible", and the refused hidden row |
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed. `npm ci` ran once this round, on the other
+  branch; `package.json` and `package-lock.json` match.
+- `npx vitest run tests/service-worker.test.ts`: 72 tests passed.
+- `npm test`: 173 files, 2,712 tests passed.
+- `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed. A temporary probe in the
+  in-place e2e case, removed before commit, read the window as `focused: true`,
+  `visibilityState: 'visible'`, with `focus()` refused ("Not allowed to focus a window."). The
+  e2e therefore runs the "focused already" row, which is why the second round's visible-window
+  choice was needed and why `focused` counts as in front here.
+
+### Not exercised
+
+- A real notification tap, a browser behind another application, and a real late page. The worker
+  cases fake the browser APIs at their boundary.
+- Firefox, Safari and an installed iOS web app: not run.

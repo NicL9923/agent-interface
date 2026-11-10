@@ -79,13 +79,19 @@ device gets it as before. Security alerts always reach every device. See
 
 Tapping a web notification while the app is open in a window switches that window to the
 chat, as choosing it there would, and brings the window forward without reloading it. The
-worker asks the page with an `OPEN_CHAT` message and waits 250 ms for its answer. A page
-that answers from a hidden window that cannot come forward gets the chat in a new window.
+worker asks the page with an `OPEN_CHAT` message and waits 250 ms for its answer. The
+worker counts a window as in front only when it was focused already or it came forward;
+a browser covered by another application still reports itself visible. A page that answers
+from a hidden window that cannot come forward gets the chat in a new window. One that answers
+from a visible window that cannot come forward gets the notification back quietly instead,
+since a second window would show the chat twice.
 
 A page that does not answer in time may be busy with something a reload would lose, such
 as an edited settings form, so the first tap never reloads it. The window stays as it is,
 brought forward, and the notification comes back quietly. If the page opens the chat late
-after all, within ten seconds, the worker closes that notification. Tapping the notification
+after all, within ten seconds, the worker treats the answer as it would a prompt one, and
+closes that notification only once the person can see the chat: the window is in front, or
+it was hidden and a new window opened for the chat. Tapping the notification
 that came back is asking a second time: the worker asks the page again, and only if it still
 does not answer in 250 ms loads the chat's address into the window, or opens a new window
 when that fails. A window running a release from before pages answered behaves this way:
