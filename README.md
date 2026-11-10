@@ -173,7 +173,12 @@ The rest of this section is web-only. The avatar conductor and pose math that iO
 ### Crash reports
 
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
-Reload instead of a blank screen. Chat and group drafts are written to the device on
+Reload instead of a blank screen. A lazy screen that cannot load, as when a tab stayed
+open across a deploy and the screen's file is gone, says "This screen could not load" with
+Reload, and the rest of the app keeps working. The server answers a missing `/assets/` path
+with an uncached plain-text 404, never the app shell. The page never reloads itself; Reload
+loads the release the server has now, since the worker fetches the app shell from the network
+first. Chat and group drafts are written to the device on
 every edit, so a reload keeps them. While someone is signed in, the web client sends
 that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
 distinct report once, at most five per page load, and never chunk-load failures the
@@ -586,7 +591,8 @@ with local sign-in and a scripted assistant, so it never contacts Hermes, Google
 network. It covers sign-in, sending a message and receiving the reply over the live event
 stream, the service worker opening the app offline and recovering, a deploy whose new shell
 reaches the next load and whose release is offered until taken, a deploy whose worker cannot
-install still reaching the next load, and no page errors,
+install still reaching the next load, a lazy screen whose file a deploy retired offering
+Reload without reloading on its own, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.
