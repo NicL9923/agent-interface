@@ -167,7 +167,11 @@ it('shows a sent group message at once even while a background check is still ru
   await act(async()=>vi.advanceTimersByTimeAsync(GROUP_FALLBACK_POLL_MS));expect(held).toBeDefined();
   const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
   await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(field,'Plan Saturday');field.dispatchEvent(new Event('input',{bubbles:true}));});
-  await act(async()=>field.form!.requestSubmit());
+  const enter=(init:KeyboardEventInit)=>act(async()=>{field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,...init}));});
+  // Safari's Enter that confirms an IME word reports isComposing false and keyCode 229. It only confirms the word.
+  await enter({keyCode:229});
+  expect(vi.mocked(write).mock.calls.filter(([path])=>path==='/groups/room/messages')).toEqual([]);
+  await enter({});
   expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Plan Saturday'}));
   expect(container.querySelector('.group-message')?.textContent).toContain('Plan Saturday');
   await act(async()=>held!(state));

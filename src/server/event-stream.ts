@@ -1,7 +1,8 @@
 import type { FastifyReply } from "fastify";
 
 /** An open server-sent event stream. */
-export type EventStream = { send: (text: string) => void; end: () => void };
+/** send reports whether the text was written: false once the stream ended or the viewer lost access. */
+export type EventStream = { send: (text: string) => boolean; end: () => void };
 
 /**
  * Follows an event stream request's connection from the start of its handler, so setup that
@@ -57,8 +58,10 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   let ended = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const send = (text: string) => {
-    if (!options.allowed()) end();
-    else if (!ended) response.write(text);
+    if (!options.allowed()) { end(); return false; }
+    if (ended) return false;
+    response.write(text);
+    return true;
   };
   function end() {
     if (ended) return;

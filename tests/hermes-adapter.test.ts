@@ -13,6 +13,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
 import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
+import { SendTimings } from '../src/server/send-timing.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
 const realFetch=globalThis.fetch;
@@ -353,6 +354,76 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(value.message.reasoning).toBe('Next');
     expect(value.message.origin?.kind).toBe('scheduled');
     expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(opens);
+  });
+  it('reports turn starts, text, reasoning and ends by session, and ignores other frames', async () => {
+    const frames: unknown[][] = [], changes = vi.fn();
+    const watcher = {frame: vi.fn((...call: unknown[]) => { frames.push(call); }), run: vi.fn(), disconnected: vi.fn()};
+    const stop = runtime.watchTurns!(watcher);
+    runtime.watch!('shared', changes);
+    await runtime.conversation('shared');
+    const event=(type:string,session='live-one')=>sockets.at(-1)!.receive({method:'event',params:{session_id:session,type,payload:{text:'x'}}});
+    event('message.start'); event('reasoning.delta'); event('message.delta');
+    // Other live frames are not turn events.
+    event('status.update'); event('thinking.delta'); event('tool.start');
+    event('message.complete');
+    // A frame names no run or assistant, so a session nobody opened here is reported by its own ID.
+    event('message.delta', 'elsewhere');
+    expect(frames).toEqual([['live-one','start'],['live-one','text'],['live-one','text'],['live-one','end'],['elsewhere','text']]);
+    // A watcher that throws never stops frame processing.
+    watcher.frame.mockImplementation(() => { throw new Error('watcher failed'); });
+    changes.mockClear();
+    event('message.delta');
+    expect(changes).toHaveBeenCalledWith('inflight');
+    stop();
+    event('message.delta');
+    expect(watcher.frame).toHaveBeenCalledTimes(6);
+  });
+  it('reports the run a fresh read finds open, and nothing from a read a turn started or ended during', async () => {
+    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn()};
+    runtime.watchTurns!(watcher);
+    Object.assign(snapshot, {app_run_id: 'run-one', info: {running: true}});
+    await runtime.conversation('shared');
+    expect(watcher.run.mock.calls).toEqual([['live-one', 'shared', 'run-one', true]]);
+    // A turn starts while Hermes is answering the read: the run it names may be the previous turn's.
+    deferredMethods.add('agent-interface.open');
+    snapshot.app_run_id = 'run-two';
+    const read = runtime.conversation('shared');
+    await vi.waitFor(() => expect(calls.filter(call => call.method === 'agent-interface.open')).toHaveLength(2));
+    const stale = calls.at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    deferredMethods.clear();
+    sockets[0].receive({jsonrpc: '2.0', id: stale.id, result: {...structuredClone(snapshot), app_run_id: 'run-one'}});
+    await read;
+    // The read is asked again and only the fresh answer reports.
+    expect(watcher.run.mock.calls.slice(1)).toEqual([['live-one', 'shared', 'run-two', true]]);
+    // A turn starts while the history of an older add-on's answer is still being read.
+    deferredMethods.add('session.history');
+    const {messages: _rows, ...withoutRows} = snapshot;
+    snapshot = {...withoutRows, app_run_id: 'run-three'};
+    hermesChanged();
+    const late = runtime.conversation('shared');
+    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe('session.history'));
+    const history = calls.at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    sockets[0].receive({jsonrpc: '2.0', id: history.id, result: {messages: []}});
+    await late;
+    expect(watcher.run.mock.calls.slice(2)).toEqual([]);
+    deferredMethods.clear();
+    snapshot.messages = [];
+    // A read that finds no app run says so.
+    Object.assign(snapshot, {app_run_id: undefined, info: {running: false}});
+    hermesChanged();
+    await runtime.conversation('shared');
+    expect(watcher.run.mock.calls.at(-1)).toEqual(['live-one', 'shared', undefined, false]);
+  });
+  it('tells turn watchers the socket dropped before it forgets the session owners', async () => {
+    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn(() => runtime.inflight!('shared'))};
+    runtime.watchTurns!(watcher);
+    await runtime.conversation('shared');
+    sockets[0].close();
+    expect(watcher.disconnected).toHaveBeenCalledTimes(1);
+    // Called first, while the runtime still holds the session it is about to forget.
+    expect(watcher.disconnected.mock.results[0].value).toBeDefined();
   });
   it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
     snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
@@ -1047,6 +1118,77 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await expect(runtime.realtimeSession!({...input,voice:'ash'})).rejects.toMatchObject({statusCode:502});
   });
 
+  describe('live voice status off the request path', () => {
+    let answers: ((answer: Response | Error) => void)[];
+    let statusReads: number;
+    beforeEach(() => {
+      answers = []; statusReads = 0;
+      vi.stubGlobal('fetch', vi.fn((url: URL | string) => {
+        if (!new URL(url).pathname.endsWith('/voice/status')) return Promise.resolve(Response.json({profiles: []}));
+        statusReads++;
+        return new Promise<Response>((resolve, reject) => answers.push(answer => answer instanceof Error ? reject(answer) : resolve(answer)));
+      }));
+      // Only the clock is virtual: the fake socket and these waits run on real timers.
+      vi.useFakeTimers({toFake: ['Date']});
+    });
+    const status = (available: boolean) => Response.json({available, reason: available ? 'Ready.' : 'The voice plugin is disabled.'});
+    const stillWaiting = Symbol('still waiting');
+    /** What the read resolved to, or stillWaiting when it is still waiting after a real 50 ms. */
+    const soon = <T,>(read: Promise<T>) => Promise.race([read, new Promise<typeof stillWaiting>(resolve => setTimeout(() => resolve(stillWaiting), 50))]);
+    async function known(available: boolean) {
+      const first = runtime.capabilities();
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      // The first read on a connection has nothing to answer with, so it waits.
+      expect(await soon(first)).toBe(stillWaiting);
+      answers.at(-1)!(status(available));
+      expect((await first).liveVoice.supported).toBe(available);
+    }
+
+    it('answers at once with the known value while a stale one refreshes in the background', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(statusReads).toBe(2);
+      // A second read during the refresh joins it instead of starting another.
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(statusReads).toBe(2);
+      answers[1](status(false));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'The voice plugin is disabled.'}));
+      expect(statusReads).toBe(2);
+    });
+
+    it('reports a failed background refresh as unavailable instead of keeping the old value', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      answers[1](new TypeError('fetch failed'));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'Hermes could not report live voice.'}));
+      // The next refresh that succeeds restores it.
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: false}});
+      answers[2](status(true));
+      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice.supported).toBe(true));
+    });
+
+    it('drops the value on disconnect and ignores a refresh that started before it', async () => {
+      await known(true);
+      vi.setSystemTime(Date.now() + 30_000);
+      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      sockets[0].close();
+      await runtime.reconnect!();
+      const after = runtime.capabilities();
+      await vi.waitFor(() => expect(statusReads).toBe(3));
+      expect(await soon(after)).toBe(stillWaiting);
+      answers[2](status(false));
+      expect((await after).liveVoice.supported).toBe(false);
+      // The old connection's refresh answers last. It must not replace the new connection's value.
+      answers[1](status(true));
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect((await runtime.capabilities()).liveVoice.supported).toBe(false);
+      expect(statusReads).toBe(3);
+    });
+  });
+
   it('passes on the add-on\'s plain voice errors and names an add-on that predates live voice',async()=>{
     let answer=Response.json({error:'Sign in to ChatGPT in Hermes to use live voice.'},{status:409});
     vi.stubGlobal('fetch',vi.fn(async()=>answer));
@@ -1264,46 +1406,142 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
   });
 
-  it('bounds read requests, drops a dead transport, and never replays an uncertain mutation', async () => {
+  it('bounds read requests, drops the transport for an unanswered mutation, and never replays it', async () => {
     vi.useFakeTimers();
     deferredMethods.add('agent-interface.submit');
     const submitted = runtime.submit(input());
     await vi.advanceTimersByTimeAsync(0);
     deferredMethods.add('profiles.describe');
     const read = runtime.tools('shared');
-    const rejected = expect(read).rejects.toThrow('timed out');
+    const rejected = expect(read).rejects.toThrow('Hermes profiles.describe timed out. Try again.');
     await vi.advanceTimersByTimeAsync(10_000);
     await rejected;
-    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain'});
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
+    expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain', message: expect.stringContaining('agent-interface.submit timed out')});
+    expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
     await runtime.reconnect!();
     expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
   });
 
-  it('fails all concurrent RPCs with the same timeout and removes old socket listeners', async () => {
-    vi.useFakeTimers();
-    const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, {
-      frame: () => {}, disconnected: () => {}, connected: () => {}, watching: () => false,
+  describe('request timeouts on the shared socket', () => {
+    const transportHooks = () => ({frame: vi.fn(), disconnected: vi.fn(), connected: vi.fn(), watching: () => false});
+    async function connected(given = transportHooks()) {
+      vi.useFakeTimers();
+      const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, given);
+      const ready = transport.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      await ready;
+      return {transport, hooks: given};
+    }
+
+    it('fails a slow read alone, keeps the socket for other requests, and drops its late answer', async () => {
+      const {transport, hooks} = await connected();
+      deferredMethods.add('profiles.describe');
+      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await read).toMatchObject({code: 'unreachable', message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      expect(await transport.rpc('profiles.list')).toMatchObject({profiles: [{name: 'shared'}]});
+      expect(transport.connection?.ws).toBe(sockets[0]);
+      // Hermes answers the timed-out read after all. Nothing is waiting for it and it is not a session frame.
+      const late = calls.find(call => call.method === 'profiles.describe')! as Record<string, any>;
+      expect(() => sockets[0].receive({jsonrpc: '2.0', id: late.id, result: {toolsets: []}})).not.toThrow();
+      expect(hooks.frame).not.toHaveBeenCalled();
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      // A new read of the same method is sent afresh, not answered by the stale shared one.
+      deferredMethods.clear();
+      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
+      transport.close();
     });
-    const connected = transport.connect();
-    await vi.advanceTimersByTimeAsync(0);
-    await connected;
-    const old = sockets[0];
-    const remove = vi.spyOn(old, 'removeEventListener');
-    deferredMethods.add('profiles.describe');
-    deferredMethods.add('agent-interface.submit');
-    const read = transport.rpc('profiles.describe').catch(error => error);
-    const mutation = transport.rpc('agent-interface.submit').catch(error => error);
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(10_000);
-    const [first, second] = await Promise.all([read, mutation]);
-    expect(first).toBe(second);
-    expect(first.message).toContain('timed out');
-    expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
-    await transport.reconnect();
-    old.dispatchEvent(new Event('error'));
-    expect(transport.connection?.ws).toBe(sockets[1]);
-    transport.close();
+
+    // Steady session events keep the socket looking busy, so the heartbeat never probes it. A read
+    // timeout has to ask for the liveness probe itself, or a socket that answers nothing stays verified.
+    const tokens = async (socket: WireSocket, ms: number) => {
+      for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
+        if (socket.readyState === WireSocket.OPEN) socket.receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'x'}}});
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+    };
+    const probes = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+
+    it('probes at once when a read times out under steady events and drops the socket if the probe goes unanswered', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      deferredMethods.add('agent-interface.capabilities');
+      // A shared capabilities read is in flight when the probe starts. The probe must not join it.
+      const shared = transport.rpc('agent-interface.capabilities').catch(error => error);
+      const first = transport.rpc('profiles.describe', {name: 'one'}).catch(error => error);
+      await tokens(sockets[0], 1_000);
+      const second = transport.rpc('profiles.describe', {name: 'two'}).catch(error => error);
+      await tokens(sockets[0], 9_000);
+      expect(await first).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await shared).toMatchObject({message: 'Hermes agent-interface.capabilities timed out. Try again.'});
+      // Two reads timed out at ten seconds. One probe went out for both, apart from the shared read.
+      expect(probes()).toBe(handshake + 2);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(await second).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 2);
+      // The bound: the unanswered probe drops the socket ten seconds after the first read timed out.
+      await tokens(sockets[0], 8_000);
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      await tokens(sockets[0], 1_000);
+      expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(await transport.status()).toMatchObject({connected: false, detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      transport.close();
+    });
+
+    it('keeps the socket when the probe after a read timeout is answered, and later reads work', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      const handshake = probes();
+      deferredMethods.add('profiles.describe');
+      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      await tokens(sockets[0], 10_000);
+      expect(await read).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(probes()).toBe(handshake + 1);
+      await tokens(sockets[0], 30_000);
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      expect(sockets[0].readyState).toBe(WireSocket.OPEN);
+      deferredMethods.clear();
+      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(transport.connection?.ws).toBe(sockets[0]);
+      transport.close();
+    });
+
+    it('drops the socket when the heartbeat liveness probe times out', async () => {
+      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+      deferredMethods.add('agent-interface.capabilities');
+      // The heartbeat probes a socket quiet for ten seconds, then gives the probe ten more.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(calls.filter(call => call.method === 'agent-interface.capabilities')).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
+      expect(await transport.status()).toMatchObject({connected: false, code: 'unreachable', detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      transport.close();
+    });
+
+    it('drops the socket for an unanswered mutation and removes its listeners', async () => {
+      const {transport, hooks} = await connected();
+      const old = sockets[0];
+      const remove = vi.spyOn(old, 'removeEventListener');
+      deferredMethods.add('agent-interface.submit');
+      const mutation = transport.rpc('agent-interface.submit').catch(error => error);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(hooks.disconnected).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(35_000);
+      expect((await mutation).message).toBe('Hermes agent-interface.submit timed out. Do not replay an uncertain submission.');
+      expect(hooks.disconnected).toHaveBeenCalledWith(true);
+      expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
+      await transport.reconnect();
+      old.dispatchEvent(new Event('error'));
+      expect(transport.connection?.ws).toBe(sockets[1]);
+      transport.close();
+    });
   });
 
   it('settles concurrent pending calls on disconnect and does not resend a closed submission', async () => {
@@ -1338,15 +1576,29 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
   });
 
-  it('disables every capability if the read-only image probe loses the verified connection', async () => {
+  it('keeps the connection when the image probe times out and asks again on the next read', async () => {
     vi.useFakeTimers();
     await runtime.status();
     deferredMethods.add('image.generate');
     const capabilities = runtime.capabilities();
     await vi.advanceTimersByTimeAsync(10_000);
+    const value = await capabilities;
+    expect(value.chat.supported).toBe(true);
+    expect(value.imageGeneration).toMatchObject({supported: false});
+    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+    deferredMethods.clear();
+    imageReady = true;
+    expect((await runtime.capabilities()).imageGeneration.supported).toBe(true);
+    expect(calls.filter(call => call.method === 'image.generate')).toMatchObject([{params: {probe: true}}, {params: {probe: true}}]);
+  });
+
+  it('disables every capability if the image probe loses the verified connection', async () => {
+    await runtime.status();
+    deferredMethods.add('image.generate');
+    const capabilities = runtime.capabilities();
+    await vi.waitFor(() => expect(calls.some(call => call.method === 'image.generate')).toBe(true));
+    sockets[0].close();
     expect(Object.values(await capabilities).every(value => !value.supported)).toBe(true);
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
-    expect(calls.filter(call => call.method === 'image.generate')).toMatchObject([{params: {probe: true}}]);
   });
 
   it('verifies liveness after socket silence and keeps a healthy manual reconnect read-only', async () => {
@@ -2174,5 +2426,114 @@ describe('approval scopes, question shapes and the steering decision on the wire
     runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
     expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
     expect(JSON.parse(String((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
+  });
+});
+
+// Review round 2: each case reproduced a misattribution of the event-order model through this runtime.
+describe('send timing through the real runtime', () => {
+  type Line = Record<string, unknown>;
+  function attach() {
+    vi.useFakeTimers({toFake: ['performance']});
+    const lines: Line[] = [];
+    const log = {info: (fields: {sendTiming: Line}) => { lines.push(fields.sendTiming); }, warn: () => { throw new Error('warn'); }, error: () => { throw new Error('error'); }};
+    const timings = new SendTimings(log as never);
+    runtime.watchTurns!(timings);
+    const now = () => performance.now();
+    const start = now();
+    const at = (ms: number) => vi.advanceTimersByTime(start + ms - now());
+    const frame = (type: string) => sockets.at(-1)!.receive({method: 'event', params: {session_id: 'live-one', type, payload: {text: 'x'}}});
+    /** A conversation read, as an open chat makes after each structural change. */
+    const read = async (runId?: string, running = true) => {
+      snapshot.app_run_id = runId; snapshot.info = {running};
+      hermesChanged();
+      await runtime.conversation('shared');
+    };
+    /** The event stream writes the live reply, as conversation-routes.ts does. */
+    const written = () => { const value = runtime.inflight!('shared'); if (value) timings.written('shared', value.activity.runId); };
+    const admitted = (record: ReturnType<SendTimings['begin']>, runId: string, steered = false) =>
+      timings.admitted(record, steered ? 'steer' : 'messages', steered, {arrival: record.arrival, hermesStart: record.arrival, admitted: now()}, runId);
+    const timing = (requestId: string) => lines.find(line => line.requestId === requestId);
+    return {timings, now, at, frame, read, written, admitted, timing};
+  }
+
+  it('times two sends begun while idle each by its own run, not by the next turn to start', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const a = t.timings.begin('shared', 'A', t.now()), b = t.timings.begin('shared', 'B', t.now());
+    t.at(10); t.frame('message.start'); await t.read('A');
+    t.at(14); t.frame('message.delta');
+    t.at(17); t.written();
+    t.at(18); t.admitted(a, 'A');
+    t.at(30); t.frame('message.complete');
+    t.at(40); t.frame('message.start'); await t.read('B');
+    t.at(64); t.frame('message.delta');
+    t.at(67); t.written();
+    t.at(70); t.admitted(b, 'B');
+    expect(t.timing('A')).toMatchObject({firstFrameMs: 14, firstLiveMs: 17, ended: 'measured'});
+    expect(t.timing('B')).toMatchObject({firstFrameMs: 64, firstLiveMs: 67, ended: 'measured'});
+  });
+
+  it('never credits a routine turn that started before Hermes answered to the send', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const send = t.timings.begin('shared', 'mine', t.now());
+    // A routine's turn runs in the chat first. Hermes has no app run open for it.
+    t.at(10); t.frame('message.start'); await t.read(undefined);
+    t.at(20); t.frame('message.delta'); t.written();
+    t.at(30); t.frame('message.complete');
+    t.at(40); t.frame('message.start'); await t.read('mine');
+    t.at(50); t.admitted(send, 'mine');
+    t.at(60); t.frame('message.delta');
+    t.at(65); t.written();
+    expect(t.timing('mine')).toMatchObject({firstFrameMs: 60, firstLiveMs: 65, ended: 'measured'});
+  });
+
+  it('measures a steer Hermes queued by the first growth of its run after the send, past the turn that was running', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const first = t.timings.begin('shared', 'first', t.now());
+    t.at(10); t.frame('message.start'); await t.read('R');
+    t.at(12); t.frame('message.delta'); t.written();
+    t.admitted(first, 'R');
+    // A steer arrives while the reply runs. Hermes queues it: the running turn ends without growing.
+    t.at(50); const steer = t.timings.begin('shared', 'steer', t.now());
+    t.at(55); t.admitted(steer, 'R', true);
+    t.at(60); t.frame('message.complete');
+    // The queued guidance drains into the next turn of the same run.
+    t.at(70); t.frame('message.start'); await t.read('R');
+    t.at(90); t.frame('message.delta');
+    t.at(95); t.written();
+    expect(t.timing('steer')).toMatchObject({firstFrameMs: 40, firstLiveMs: 45, ended: 'measured'});
+  });
+
+  it('drops a measurement when the socket disconnects while it is open', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const send = t.timings.begin('shared', 'cut', t.now());
+    t.at(10); t.frame('message.start'); await t.read('R');
+    t.at(20); t.admitted(send, 'R');
+    // The socket drops before any text. Hermes ends that turn and starts another while nobody listens.
+    sockets.at(-1)!.close();
+    await runtime.reconnect!();
+    t.at(200); await t.read('R');
+    // The later turn streams, and its start was never seen.
+    t.at(220); t.frame('message.delta');
+    t.at(230); t.written();
+    expect(t.timing('cut')).toMatchObject({ended: 'disconnected', firstFrameMs: undefined, firstLiveMs: undefined});
+  });
+
+  it('measures a steer by the first growth after it arrived, while the session had no owner yet', async () => {
+    await runtime.status();
+    const t = attach();
+    // An unowned session's turn streams before any send.
+    t.at(20); t.frame('message.start'); t.frame('message.delta');
+    t.at(30); const steer = t.timings.begin('shared', 'steer', t.now());
+    t.at(40); t.frame('message.delta');
+    // The open names the owner, then Hermes answers the steer.
+    t.at(45); await t.read('R');
+    t.at(50); t.admitted(steer, 'R', true);
+    t.at(60); t.written();
+    t.at(70); t.frame('message.complete');
+    expect(t.timing('steer')).toMatchObject({firstFrameMs: 10, firstLiveMs: 30, ended: 'measured'});
   });
 });

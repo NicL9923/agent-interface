@@ -463,7 +463,10 @@ Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
 installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
 reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
 "Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
-in that chat. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
+in that chat. Enter sends and Shift+Enter starts a new line. While a Japanese,
+Chinese or Korean input method is composing a word, Enter, Escape and the arrow keys
+belong to it, in every browser including Safari, so confirming a word never sends the
+message, moves a find, or picks a palette entry. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
 or moving an assistant on home shows Undo for five seconds. Web text follows the
 browser's text size setting.
 

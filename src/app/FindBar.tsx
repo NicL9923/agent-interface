@@ -7,6 +7,7 @@ import type { SavedConversation } from "./storage";
 import { localMatches, mergeFindMatches } from "./transcript-logic";
 import type { FindMatch } from "./transcript-logic";
 import { shownMessages, matchRanges } from "./find-ranges";
+import { imeKey } from "./ime";
 
 /** Server search waits for a pause in typing, and needs at least this many characters. */
 const SEARCH_DELAY = 300;
@@ -82,14 +83,14 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
   const searching = query.trim().length >= SEARCH_MIN && remote?.query !== query.trim();
   const status = !needle ? "" : matches.length ? `${index + 1} of ${matches.length}` : searching ? "Searching…" : "No matches";
   return <div className="find-bar" role="search" onKeyDown={event => {
-    if (event.key === "Escape") { event.preventDefault(); onClose(); }
+    if (event.key === "Escape" && !imeKey(event.nativeEvent)) { event.preventDefault(); onClose(); }
   }}>
     <Icon name="search" size={16} />
     <input ref={input} type="search" aria-label="Find in chat" placeholder="Find in chat" value={query}
       enterKeyHint="search" autoComplete="off" spellCheck={false}
       onChange={event => { setQuery(event.target.value); setSelected(null); }}
       onKeyDown={event => {
-        if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+        if (event.key !== "Enter" || imeKey(event.nativeEvent)) return;
         event.preventDefault();
         go(event.shiftKey ? 1 : -1);
       }} />
