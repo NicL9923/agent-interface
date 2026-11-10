@@ -1,8 +1,9 @@
 # November 10 a receipt bound only on evidence that ties the row to the request
 
 Branch `t3/receipt-turn-binding` over `origin/main` at `5d74731`, on NicolasLaptop (Linux x86_64, Python 3.14.10,
-Node 24.22.2). First round at `c8f9a85`; second round after GPT-6.1 Sol's review of it. Source fingerprints are under
-Checks. No Hermes process ran and the production host was not touched.
+Node 24.22.2). First round at `c8f9a85`; second round after GPT-6.1 Sol's review of it; third round after the same
+reviewer's review of `c8f9a85..579fc08`. Source fingerprints are under Checks. No Hermes process ran and the production
+host was not touched.
 
 ## Fault
 
@@ -44,10 +45,15 @@ checked at the qualified `b9cb268` and `d23cc6b`. None is necessarily the produc
   `{"status": "queued", "text": text}` (`tui_gateway/methods_session_interrupt.py:114-130` at `ed1afb0`,
   `tui_gateway/methods_session.py:2283-2299` at the others). `ed1afb0`'s `steer` takes a `ticket` (`agent/interrupt_control.py:310`),
   but only Hermes's own gateway transfer passes one, and the row carries none. The turn drains every pending steer as
-  one newline-joined text after a tool batch and appends it as one user row of display kind `steer`
-  (`agent/agent_runtime_helpers.py:3668-3703`, `agent/prompt_builder.py:586-592`; `:3516-3554` at the others), which
-  history shows with the steer's own words (`tui_gateway/session_history.py:329-332`). Leftover steering becomes the
-  next prompt.
+  one newline-joined text after a tool batch (`agent/interrupt_control.py:90-102`) and appends it as one user row of
+  display kind `steer` (`agent/agent_runtime_helpers.py:3668-3703`, `agent/prompt_builder.py:586-592`; `:3516-3554` at
+  the others), which history shows with the steer's own words (`tui_gateway/session_history.py:329-332`). A turn can
+  deliver earlier steers at one tool batch and end before a later steer reaches another; that leftover becomes the next
+  prompt (`agent/turn_finalizer.py:844-849`, `tui_gateway/prompt_turn.py:441-451`).
+- The staged row is not always the turn's row. When Hermes rewrote the prompt for image parts or `@` expansion and
+  could not rewrite the staged row to match, the turn skips it and writes a row of its own
+  (`tui_gateway/session_workdir.py:807-835` at `ed1afb0`, `:581-605` at the others). `prompt.submit` has then already
+  named the staged row, and the completion reports the new one.
 
 ## Change
 
@@ -59,7 +65,11 @@ checked at the qualified `b9cb268` and `d23cc6b`. None is necessarily the produc
   the finished turn's thread never inherits that turn's claim.
 - `message.complete` for the claimed turn's session binds the reported prompt row to the claimed receipt, once, if
   Hermes's admission answer named no row, and stores the turn's `row_ids` in a new nullable `receipts.turn_rows`
-  column. Any other completion binds nothing.
+  column. A receipt bound at admission keeps that row when the completion reports another. Any other completion binds
+  nothing.
+- `row_ids` is stored only when it is a list of positive integers, booleans excluded, and is checked again when read,
+  because a stored copy may be damaged (`turn_extent`). Anything else stores no turn, and a damaged stored turn leaves
+  its steers unbound while the open answers.
 - This claim covers every image send that starts at once, with words or alone: the add-on submits the receipt's text
   unchanged after staging, and Hermes runs that text with the staged images. Read-time image recovery is removed.
 - A steer is bound at read only when its root's turn has finished and stored its rows, exactly one user row among
@@ -74,14 +84,17 @@ checked at the qualified `b9cb268` and `d23cc6b`. None is necessarily the produc
 
 ## Decisions in the second round
 
-- Steering. Hermes gives a steer no identity, so the add-on binds only when the result cannot be ambiguous. The end
-  of the root's run is the end of the root's turn as Hermes reports it (`row_ids`), which needs no guess about where
-  the next turn starts in history. Residual: if Hermes compacted away one of two same-word rows of a finished turn
-  and kept the other, the survivor counts as the only one. A steer Hermes ran as its own turn after the root finished
-  is outside the root's turn and stays unbound; the first round bound it by words.
+- Steering. Hermes gives a steer no identity, so the add-on binds only when the turn's rows leave one candidate. The
+  end of the root's run is the end of the root's turn as Hermes reports it (`row_ids`), which needs no guess about where
+  the next turn starts in history. A steer Hermes ran as its own turn after the root finished is outside the root's
+  turn and stays unbound; the first round bound it by words. The second round named compaction as the only residual
+  case. That was wrong; the third round lists the known limit below.
 - Images. The preferred fix held: the claim already compares the turn's text with the text the add-on submitted after
   staging, and an image sent alone submits an empty text that Hermes runs as an empty text. No case of an image send
-  that starts at once needs recovery, so recovery is gone rather than narrowed.
+  that starts at once needs recovery, so recovery is gone rather than narrowed. Removing it loses more than queued
+  image sends, which the third round's review pointed out: an image receipt an older add-on left unbound, or one whose
+  completion the add-on missed, stays unbound although its row exists; and an image sent alone shows unattributed
+  until its turn completes, where recovery could bind it at the first open after Hermes wrote the row.
 - Sanitized text. The claim compares with the receipt's text as sent, not with Hermes's sanitized copy. A text send is
   bound by its answer's `user_row_id` whatever the sanitizer did. A send whose answer named no row and whose words the
   sanitizer changed stays unbound; that is a leaked bracketed-paste marker together with a failed staged write. Calling
@@ -94,6 +107,42 @@ checked at the qualified `b9cb268` and `d23cc6b`. None is necessarily the produc
   still hold a wrong binding from the old completion hook or the old steering and image matchers. This change does not
   repair them, and no repair tool is built.
 
+## Decisions in the third round
+
+GPT-6.1 Sol reviewed `c8f9a85..579fc08` and found it ready after fixes. It cleared the removal of the read-time check,
+the image rule, the schema change with old and new add-ons in both directions, the cache, and the four claim-guard
+mutations. Three findings, and the orchestrator's decision on the first:
+
+- Steering, the reviewer's P1. The rule stays as it is, by the orchestrator's decision, with no added conditions. It
+  is stricter than `main`'s on every path, and without it every steer in a shared chat would show with no sender,
+  which the web client draws the same as the viewer's own message (`src/app/Conversation.tsx:519-522`). The cases it
+  gets wrong are recorded below as a known limit. The test fake hid them: it wrote each correction as its own row and
+  consumed all waiting corrections or none. It now joins every steer waiting at a tool batch into one row, and a test
+  can end a tool batch while the turn runs, so a turn delivers earlier steers and hands later ones to the next turn.
+- Malformed `row_ids`, P2. A claimed completion with `row_ids=[10, {}]` was stored, and every later open with an
+  unbound steer in that run raised `TypeError` building the set. Fixed at the write and at the read, as above.
+- The admission-row guard, P2. `COALESCE(row_id,?)` is reachable: Hermes can name staged row A at admission, fail to
+  adopt it, write row B and report B. The second round said upstream always adopts the staged row; it does not. The
+  code already kept A. A test now covers it.
+
+### Known limit: a native client's identical words in the same turn
+
+The rule can still give a member's steer a native client's row when a client outside the app sends the steer's exact
+words within the same turn. The reviewer showed three sequences:
+
+1. A native correction "Avoid flights" lands in Alice's turn. Kim then steers the same words too late to be delivered,
+   and Hermes carries Kim's into the next turn. The root's rows hold one match, the native row, and Kim's receipt
+   takes it.
+2. The native correction lands first. Kim's "Avoid flights" is then joined with Bob's "Use trains" into one row. Kim's
+   receipt takes the earlier native row.
+3. Kim's and Bob's joined row lands first. A native client later sends "Avoid flights" in the same turn. Kim's receipt
+   takes that row.
+
+Each needs a client outside the app to send identical words in the same turn as a member's steer. A compaction that
+drops one of two same-word rows of a finished turn and keeps the other is a fourth case of the same kind. Closing them
+needs Hermes to identify the row a steer became, which it does not at `ed1afb0`, `b9cb268` or `d23cc6b`. No test
+asserts these wrong outcomes.
+
 ## What stays unbound
 
 Each shows Hermes's own row, unattributed:
@@ -101,12 +150,13 @@ Each shows Hermes's own row, unattributed:
 - a send Hermes queued or redirected, with or without images;
 - a send whose turn's completion reported no prompt row, or whose words Hermes's sanitizer changed while its answer
   named no row;
-- a steer beside another client's correction or another steer with the same words in the root's turn;
-- steers Hermes delivered together as one row;
+- a steer beside another client's correction or another steer with the same words in the root's turn, when both
+  rows are in that turn;
+- steers Hermes delivered together as one row, unless the known limit above applies;
 - a steer Hermes ran as its own turn after the root's turn ended, and a steer into a later turn of the same task, such
   as a goal continuation;
-- a steer whose root is unbound, or whose root's turn reported no rows, including every steer in a journal from
-  before this change that is still unbound.
+- a steer whose root is unbound, or whose root's turn reported no rows or rows that are not a list of row IDs,
+  including every steer in a journal from before this change that is still unbound.
 
 Image sends by case: an image with words that starts at once is bound at admission by the staged row Hermes names.
 An image sent alone that starts at once is bound when its turn completes, and is unattributed only while the turn
@@ -196,8 +246,38 @@ compared:
 | Steer: a row another receipt holds can be taken | the steering table [the row held by another receipt] |
 | Cache off while any receipt is unbound | `test_unbound_sends_and_steers_still_let_opens_reuse_decorated_history` |
 
-Not caught: replacing `COALESCE(row_id,?)` with the completion's row, which would overwrite a row Hermes's answer
-named. In the fake, as in upstream, the claimed turn adopts the staged row, so both are the same row.
+Third round. Tests written before the fix, run against `579fc08`'s `src/hermes/extension.py`:
+
+| Reproduction | Red on `579fc08`, for the reviewer's reason |
+| --- | --- |
+| A completion with a dict, string, boolean or zero among its `row_ids` | `test_a_completion_with_malformed_row_ids_saves_no_turn_and_later_opens_still_answer` [each of the four]: the bad list was stored |
+| A stored turn with a dict element, a non-list or text that is not JSON | `test_a_damaged_stored_turn_leaves_the_steer_unbound_and_the_open_answers` [each]: the open raised `TypeError` or `JSONDecodeError` |
+| A stored turn with a string, boolean or zero element | the same test [each]: Kim's steer bound to row 12 |
+
+The write case of a whole value that is not a list passed on `579fc08`, which already refused it at the write. The
+steering and admission-row tests accompany no code fix: they passed on `579fc08` once the fake behaved as Hermes does,
+and each protects a line, proved below.
+
+Third round mutants, applied by a script that replaces one exact text, runs the module, restores the file and checks
+its SHA-256:
+
+| Broken | Red |
+| --- | --- |
+| Completion overwrites the admission row (`row_id=?` for `COALESCE(row_id,?)`) | `test_a_row_hermes_named_at_admission_is_kept_when_its_turn_reports_another` |
+| Write stores any list, as on `579fc08` | the malformed-completion test [dict], [string], [boolean], [zero] |
+| `isinstance(row, int)` for `type(row) is int` | the malformed-completion test and the damaged-turn test, each [boolean] |
+| `row >= 0` for `row > 0` | both tests [zero] |
+| No list check | the malformed-completion test [not a list], the damaged-turn test [not a list], `test_a_steer_stays_unbound_when_its_roots_turn_reports_no_rows` |
+| Read uses the stored value unchecked | the damaged-turn test [dict], [not a list], [string], [boolean], [zero] |
+| Read does not catch the JSON error | the damaged-turn test [not JSON] |
+| Steer matches one line of a joined row | `test_two_members_steers_hermes_joined_into_one_row_bind_to_neither` |
+| Steer never binds | `test_a_turn_binds_the_steer_it_delivered_alone_and_not_the_one_it_handed_to_the_next_turn`, `test_a_steer_consumed_in_place_is_bound_to_the_only_row_in_its_turn_with_its_words`, the steering table [one row in the turn], both guard tests [well formed] |
+| Steer rows outside the root's turn count | the delivered-alone test, `test_guidance_that_runs_as_its_own_turn_stays_unattributed`, the steering table [one row in the turn], the damaged-turn test [well formed] |
+| Fake: a tool batch writes each steer as its own row, as before | the joined-row test errors: Hermes wrote no joined row |
+
+Not caught in the second round: replacing `COALESCE(row_id,?)` with the completion's row, which would overwrite a row
+Hermes's answer named. The fake always adopted the staged row. The second round said upstream does too; it does not
+(see Native evidence), and the third round's test catches the mutant.
 
 Not run: real Hermes, the extension probe (`scripts/spike/extension_probe.py`, which checks an image sent alone
 against real Hermes), `npm test`, iOS and production. The inline guidance check `app_prompt` still matches by text;
