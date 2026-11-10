@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { request } from "../client-api";
+import { accountGeneration } from "./account-epoch";
 /** The server forgets a client after 45 seconds without a beat. */
 const HEARTBEAT_MS = 15_000;
 /** A focused window nobody has touched for this long no longer counts as reading. */
@@ -8,10 +9,13 @@ export const IDLE_MS = 5 * 60_000;
 // lack randomUUID, and this module loads with the app shell.
 const client = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
-// One report at a time, so leaving one chat can never land after arriving in the next.
+// One report at a time, so leaving one chat can never land after arriving in the next. A report still
+// waiting when the browser changes accounts belongs to the account that left, so it never goes.
 let reports = Promise.resolve();
 function report(botId: string, state: "active" | "left" | "idle") {
-  reports = reports.then(() => request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state } })).then(() => {}, () => {});
+  const generation = accountGeneration();
+  reports = reports.then(() => generation === accountGeneration()
+    ? request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state } }) : undefined).then(() => {}, () => {});
 }
 
 /** Closes this browser's notifications for a chat now on screen. Routine results open elsewhere. */

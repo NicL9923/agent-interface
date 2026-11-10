@@ -2,22 +2,26 @@ import { useEffect } from "react";
 import { request } from "../client-api";
 import { deviceHeartbeatMs, deviceIdleMs } from "../shared/device-activity";
 import { deviceId } from "./device-id";
+import { accountGeneration } from "./account-epoch";
 
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
 type Report = { state: "active" | "inactive"; idleMs?: number };
 // One report in flight at a time, and at most one waiting behind it: the latest. A waiting report is
 // worked out only as it goes, so a slow server never receives an old "active" after the window was
 // left, and the idle time it carries is the time at sending, which the server stamps.
+// A report waiting when the browser changes accounts belongs to the account that left, so it never goes.
 let sending = false;
-let next: (() => Report) | undefined;
+let next: { current: () => Report; generation: number } | undefined;
 function report(current: () => Report) {
-  next = current;
+  next = { current, generation: accountGeneration() };
   if (sending) return;
   sending = true;
   void (async () => {
     while (next) {
-      const body = { deviceId: deviceId(), ...next() };
+      const waiting = next;
       next = undefined;
+      if (waiting.generation !== accountGeneration()) continue;
+      const body = { deviceId: deviceId(), ...waiting.current() };
       // Activity is a hint: a failed report only means this device's alerts follow the old rule a while longer.
       await request("PUT /devices/activity", { body }).catch(() => {});
     }
