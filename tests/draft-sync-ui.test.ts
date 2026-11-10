@@ -9,6 +9,7 @@ import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shar
 import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 import { DRAFT_POLL_MS } from '../src/app/use-draft';
+import { LOCAL_SAVE_WAIT_MS } from '../src/app/storage';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
 vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
@@ -351,5 +352,35 @@ describe('draft sync across devices',()=>{
     expect(draftPuts('shared').at(-1)).toEqual(['/bots/shared/draft',{text:'Before hiding',attachments:[],baseRevision:1},'PUT',{keepalive:true}]);
     await advance(400);
     expect(draftPuts('shared')).toHaveLength(2);
+  });
+});
+
+describe('this device\'s copy of the draft',()=>{
+  const hide=(state:'hidden'|'visible')=>act(async()=>{
+    Object.defineProperty(document,'visibilityState',{configurable:true,value:state});
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  it('is stored a moment after a keystroke rather than during it',async()=>{
+    await renderApp();
+    await type('Saddle up');
+    expect(cached('shared')?.text).not.toBe('Saddle up');
+    // Coming back to the page is no reason to write.
+    try{await hide('visible');}finally{Reflect.deleteProperty(document,'visibilityState');}
+    expect(cached('shared')?.text).not.toBe('Saddle up');
+    await advance(LOCAL_SAVE_WAIT_MS);
+    expect(cached('shared')).toMatchObject({text:'Saddle up',botId:'shared',userId:'one'});
+  });
+
+  it.each([
+    ['closed',()=>act(async()=>{window.dispatchEvent(new Event('pagehide'));})],
+    ['hidden',()=>hide('hidden')],
+  ])('keeps the draft typed offline just before the page is %s',async(_,leave)=>{
+    await renderApp();
+    // Offline, no server save runs on the way out, so this device's copy is all there is.
+    await act(async()=>{window.dispatchEvent(new Event('offline'));});
+    await type('Saddle up');
+    try{await leave();}finally{Reflect.deleteProperty(document,'visibilityState');}
+    expect(cached('shared')).toMatchObject({text:'Saddle up',botId:'shared',userId:'one'});
+    expect(draftPuts('shared')).toEqual([]);
   });
 });
