@@ -79,6 +79,8 @@ test("an open tab is offered a new release, and its next load reaches it without
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   await expect.poll(caches).toEqual([current.replace("agent-interface-", "agent-interface-next-")]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
+});
+
 test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
