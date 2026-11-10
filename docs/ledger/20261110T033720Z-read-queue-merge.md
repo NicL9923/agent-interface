@@ -107,9 +107,47 @@ of one run's median. The benchmark calls the open handler directly, so the read 
 | --- | --- | --- | --- | --- | --- |
 | `ec24b94` | 81.3 ms | 88.8 ms | 20.2 ms | 59.3 ms | 0.8 ms |
 | `t3/open-row-memo` at `0110552` | 21.6 ms | 26.1 ms | 5.2 ms | 15.1 ms | 1.0 ms |
-| This branch | 22.7 ms | 29.2 ms | 5.6 ms | 15.4 ms | 1.1 ms |
+| This branch at `989a4de` | 22.7 ms | 29.2 ms | 5.6 ms | 15.4 ms | 1.1 ms |
 
 The 1 ms between the two branches is inside the run-to-run spread on this machine (minimums 21.3 and
 21.5 ms).
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Merge of `t3/open-row-memo` review round 2, November 9
+
+`t3/open-row-memo` changed under this branch again (`50feeb7`): its review round 2 removed the
+`originals` table, so `original_rows()` asks state.db about every visible row on every open, as
+`origin/main` does. This branch merges it with a normal merge commit. The only conflict was the same
+capability-matrix paragraph; the resolution keeps the read queue's text and takes the row cache's new
+sentence about compaction copies. Source fingerprint
+`sha256:a24edfa8f2dc47b00d266a19dc74071ba83428a06ec3edaefdbe97df036db1c2` (1666 files); `src/hermes`
+`sha256:f1e6f143cea23b906e552e1ba7bfab5a9ada55cbb398a3d37394e38cf685e1fc`.
+
+The table above measured `0110552`. The row cache now saves less; see that branch's ledger.
+
+### Checks on the merged state
+
+- `npm run test:py`: 42 files passed, 0 skipped, 0 failed (Python 3.14.10).
+- `npm run lint:py` with ruff 0.17.3 from `.github/requirements-ci.txt`: passed.
+- `npm run typecheck`: passed, after `npm ci` on `t3/open-row-memo` (same lockfile).
+  `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts`: 2 files, 220 tests
+  passed.
+
+### Measurement
+
+The same benchmark, now in WAL mode and timing `original_rows`, seven interleaved rounds against
+`git archive` of `origin/main` (`0d205eb`) and `50feeb7`. Each cell is the median across rounds of one
+run's median, or of its p90. The load average was about 10 throughout, so every build ran about 10%
+slower than in `t3/open-row-memo`'s own nine rounds; compare rows within this table.
+
+| Code | Open median | Open p90 | Decorate median | Decorate p90 | `original_rows` median |
+| --- | --- | --- | --- | --- | --- |
+| `origin/main` | 91.9 ms | 131.2 ms | 64.5 ms | 99.8 ms | 13.4 ms |
+| `t3/open-row-memo` at `50feeb7` | 36.1 ms | 48.2 ms | 27.1 ms | 38.6 ms | 13.1 ms |
+| This branch at the merge | 35.9 ms | 51.2 ms | 27.8 ms | 41.4 ms | 13.4 ms |
+
+The two branches are within run-to-run spread of each other; the benchmark does not go through the read
+queue.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
