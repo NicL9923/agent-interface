@@ -114,17 +114,18 @@ How the address resolves on this branch, the saved home included:
 
 - The server's `POST /api/auth/logout` deletes the session and nothing else
   (`src/server/auth.ts:218`). Subscriptions are keyed by endpoint and user
-  (`src/server/store-notifications.ts:200`), so a sign-out the server takes leaves them.
-- The online sign-out calls `notifications.disable()` before `signOutOf` (`src/App.tsx`, `signOut`;
+  (`src/server/store-notifications.ts:196-208`), so a sign-out the server takes leaves them.
+- The online sign-out calls `notifications.disable()` before `signOutOf` (`src/App.tsx:281-284`;
   the same on `main`), which sends `DELETE /push/subscriptions` and unsubscribes the browser. That
   path already stops pushes.
 - The app never subscribes without a person's action: `refresh` only reads
-  (`src/components/use-device-notifications.ts:61-75`), and `pushManager.subscribe` runs only in
-  `enable`, from the Settings switch or the one-time prompt. So unsubscribing turns notifications
+  (`src/components/use-device-notifications.ts:50-80`), and `pushManager.subscribe` runs only in
+  `enable` (line 126), from the Settings switch or the one-time prompt. So unsubscribing turns notifications
   off until the person turns them on again, which the online sign-out already does today.
 - Only the offline sign-out kept the subscription, with the server still sending member one's
   pushes to it. Ending it in the browser matches the online sign-out; the server drops the
-  endpoint at its next push, when the push service answers 404 or 410.
+  endpoint at its next push, when the push service answers that it is gone
+  (`webPushDead` in `src/server/notifications.ts`).
 
 ### Tests
 
@@ -152,5 +153,6 @@ the names alone, which a row's text mixes with its description.
 
 - A real push service answering for an ended subscription, and Chrome's background notice for a
   dropped push: not run.
-- A session the server refuses, or a lapsed sign-in hint, still leaves the subscription with the
-  server; see the follow-up in the account transitions ledger.
+- A session the server refuses leaves the subscription with the server and the browser, as before
+  this change. Ending it there would turn notifications off at every lapsed session, since nothing
+  subscribes again without the person; that is a follow-up, not this stack's.
