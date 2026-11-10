@@ -7,9 +7,11 @@ import { useEnterSends } from "./enter-key";
 import "./shell.css";
 
 const order: ShortcutId[] = ["palette", "pinned", "find", "stop", "undo", "help"];
-const composerKeys: [string, string][] = [
-  ["Enter", "Send your message"],
-  ["Shift+Enter", "Start a new line"],
+/** What Enter does depends on the device's pointers. See enter-key.ts. */
+const composerKeys = (enterSends: boolean): [string, string][] => [
+  ...enterSends ? [["Enter", "Send your message"], ["Shift+Enter", "Start a new line"]] as [string, string][]
+    : [["Enter", "Start a new line"]] as [string, string][],
+  ["Ctrl+Enter or ⌘Enter", "Send your message"],
   ["↑", "Recall your earlier messages from an empty composer"],
   ["↓", "Move forward, then back to your draft"],
   ["Esc", "Leave recall and restore your draft"],
@@ -28,8 +30,8 @@ export function ShortcutsDialog({ onClose }: { onClose(): void }) {
       <h3 className="shortcut-heading">Anywhere</h3>
       <dl className="shortcut-list">{order.map(id => row([formatCombo(shortcuts[id]), shortcuts[id].label]))}</dl>
       <h3 className="shortcut-heading">In the composer</h3>
-      {!enterSends && <p className="shortcut-heading">On this touch screen, Return starts a new line and the Send button sends. These keys apply once you type on a hardware keyboard.</p>}
-      <dl className="shortcut-list">{composerKeys.map(row)}</dl>
+      {!enterSends && <p className="shortcut-note">On this touch screen, Return starts a new line and the Send button sends. A keyboard without a trackpad does the same, so send from it with Ctrl+Enter or ⌘Enter. With a mouse or trackpad, Enter sends.</p>}
+      <dl className="shortcut-list">{composerKeys(enterSends).map(row)}</dl>
     </div>
   </Dialog>;
 }

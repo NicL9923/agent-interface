@@ -61,3 +61,74 @@ Not checked on a device: what Safari and Chrome on a phone report for `any-point
 label each on-screen keyboard draws for `enterkeyhint`; whether either platform's on-screen keyboard
 sends a lone Shift; an iPad with a trackpad keyboard and one without; a touch-screen laptop; and
 input-method composition on a phone.
+
+## Review round 2
+
+After merging `composer-keyboard-viewport` at `a8a161c`, which carries `origin/main` at `3bfd79d`, as `a408aee`.
+An independent GPT-6.1 Sol review of `0276253` found that iOS fires DOM Shift and Caps Lock key events from its
+on-screen keyboard (WebKit bug 191475), so tapping Shift for one capital letter switched the tab to "Enter sends"
+for good. It also found that no key in the list is guaranteed to come only from hardware, and that refused
+`sessionStorage` kept the detection from taking effect. The orchestrator replaced both findings with a simpler rule.
+
+### What changed
+
+- `src/app/enter-key.ts` no longer watches keys or uses `sessionStorage`. The device's pointers alone decide what
+  plain Enter does, with nothing remembered. A fine pointer, no coarse pointer, or no `matchMedia` means Enter sends
+  and Shift+Enter starts a new line. A device whose only pointer is coarse gets a new line from Return and sends with
+  the Send button. The answer and `enterkeyhint` follow a change in `any-pointer`.
+- `sendsOnKey` is the one rule both message boxes call: Ctrl+Enter or Cmd+Enter always sends, and plain Enter sends
+  where `enterSends`. Keys an input method is using never send. Ctrl+Enter and Cmd+Enter were checked as unbound
+  first, in `src/app/shortcuts.ts`, the Find and approval-menu key listeners, and both composers. Both composers
+  still run the IME guard before anything else.
+- The group composer's mention picker still takes Enter, including Ctrl+Enter, while suggestions show, as it takes
+  Tab. The next Ctrl+Enter sends.
+- The shortcuts dialog lists what Enter does on this device and lists "Ctrl+Enter or ⌘Enter" as Send. On a touch-only
+  device it adds a note: a keyboard without a trackpad gets a new line too, so it sends with Ctrl+Enter or ⌘Enter.
+  The README says the same and states that limit.
+
+### Red proof
+
+The new tests were written first and run on `a408aee`:
+
+- "starts a new line on a touch screen whatever keys came before, and sends nothing" (Shift, Caps Lock, Tab, then
+  Enter) failed with `expected 'send' to be 'enter'`, the reviewer's finding. So did the group chat's version.
+- "sends on a touch screen with Ctrl+Enter" and "with Cmd+Enter" failed, assistant and group alike: the key was
+  left alone.
+- The shortcut list test failed on the missing rows.
+
+Each line of the new rule was then broken by hand, and the named tests went red before the line was restored:
+
+- Dropping `event.ctrlKey` from `sendsOnKey`: both Ctrl+Enter touch-screen tests failed. Dropping `event.metaKey`:
+  both Cmd+Enter tests failed.
+- Dropping `imeKey` from `sendsOnKey`: both "never sends on ..." helper tests failed. The composers' own early
+  return hides it from the UI tests, so the helper has its own test.
+- Not subscribing to `change`: "follows a trackpad connected and removed while the page is open" failed.
+- Dropping `fine.matches`: the touch-screen laptop, the mouse or trackpad and the trackpad-connected tests failed.
+- Ignoring `enterSends` in `sendsOnKey`: four Return-on-touch tests failed, including the group chat's.
+
+The tests for the remembered-key heuristic (`hardwareKey`, the sessionStorage refusal, Shift switching to send)
+were deleted with it.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/shell-ui.test.ts tests/collaboration-ui.test.ts tests/enter-key.test.ts tests/keyboard-viewport.test.ts tests/transcript-ui.test.ts`:
+  5 files, 188 tests passed.
+- `npm test`: 181 files, 2948 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 10 passed, including the landscape Send test from the first branch.
+
+### Real browser, no device
+
+The build ran on the e2e server in Chromium with Playwright's `iPhone 15 Pro Max`, `Pixel 7` and `Desktop Chrome`
+profiles. Both phone profiles reported a coarse pointer and no fine one. They showed `enterkeyhint="enter"`. After
+Shift, Caps Lock, Tab and Caps Lock, Enter left `feed\n` with no message POST and the hint stayed `enter`.
+Ctrl+Enter and Meta+Enter each sent one message. On desktop the hint was `send` and Enter, Ctrl+Enter and
+Meta+Enter each sent. Playwright's keys arrive as hardware key events. Emulation shows no on-screen keyboard and
+cannot change `any-pointer` while a page is open, so that path is covered by the unit test only.
+
+### Not run on a device
+
+Still unchecked on a device: what Safari and Chrome on a phone report for `any-pointer`, with and without a
+trackpad keyboard; the Return key label each on-screen keyboard draws for `enterkeyhint`; Ctrl+Enter and Cmd+Enter
+from an iPad or Android hardware keyboard; the `change` event when a trackpad connects; and input-method composition
+on a phone.

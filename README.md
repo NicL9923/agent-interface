@@ -558,11 +558,13 @@ Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
 installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
 reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
 "Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
-in that chat. With a hardware keyboard, Enter sends and Shift+Enter starts a new line.
-On a phone or tablet with only its on-screen keyboard, Return starts a new line and the
-Send button sends, in assistant and group chats alike. A mouse or trackpad, or the first
-key only a hardware keyboard has in that tab, such as Shift, Tab or a Cmd shortcut,
-makes Enter send; `src/app/enter-key.ts` holds the rule. While a Japanese,
+in that chat. With a mouse or trackpad, Enter sends and Shift+Enter starts a new line.
+On a touch screen with no mouse or trackpad, Return starts a new line and the Send button
+sends. Ctrl+Enter or Cmd+Enter sends on every device. This holds in assistant and group
+chats alike, and follows a trackpad connected or removed while the page is open. The app
+cannot tell a hardware keyboard from an on-screen one, so a tablet with a keyboard but no
+trackpad also gets a new line from Enter, and sends with Ctrl+Enter, Cmd+Enter or the Send
+button. `src/app/enter-key.ts` holds the rule. While a Japanese,
 Chinese or Korean input method is composing a word, Enter, Escape and the arrow keys
 belong to it, in every browser including Safari, so confirming a word never sends the
 message, moves a find, or picks a palette entry. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning

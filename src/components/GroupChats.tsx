@@ -16,7 +16,7 @@ import { Icon } from './Icon';
 import { Avatar } from './Avatar';
 import { When } from './When';
 import { imeKey } from '../app/ime';
-import { useEnterSends } from '../app/enter-key';
+import { sendsOnKey, useEnterSends } from '../app/enter-key';
 import './collaboration.css';
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
@@ -114,7 +114,8 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const [mentionIndex, setMentionIndex] = useState(0);
   const mentionList = useId();
   const field = useRef<HTMLTextAreaElement>(null);
-  // On a touch screen with only an on-screen keyboard, Return starts a new line. See enter-key.ts.
+  // On a touch screen with no mouse or trackpad, Return starts a new line. Ctrl+Enter and Cmd+Enter
+  // send everywhere. See enter-key.ts.
   const enterSends = useEnterSends();
   const caret = useRef<number | null>(null);
   const suggestions = mention && state ? matchMembers(state.room.members, mention.query) : [];
@@ -259,7 +260,7 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
                 if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
                 if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
               }
-              if (event.key === 'Enter' && !event.shiftKey && enterSends) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
+              if (sendsOnKey(event.nativeEvent, enterSends)) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
             }} enterKeyHint={enterSends ? 'send' : 'enter'} />
           <div className="composer-tools"><span id="group-status" role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>

@@ -1,58 +1,46 @@
 import { useSyncExternalStore } from "react";
+import { imeKey } from "./ime";
 
 /**
- * What Return does in a message box. With a hardware keyboard, Enter sends and Shift+Enter starts a
- * new line. On a touch screen with only an on-screen keyboard, Return starts a new line and the
- * Send button sends, so a phone can write more than one line.
+ * What Enter does in a message box, decided by the device's pointers alone and never remembered:
+ * - With a mouse or trackpad (`any-pointer: fine`), with no touch screen (no `any-pointer: coarse`),
+ *   or where the browser cannot answer a media query, Enter sends and Shift+Enter starts a new line.
+ * - On a device whose only pointer is coarse, a phone or tablet, Return starts a new line and the
+ *   Send button sends, so a person can write more than one line on an on-screen keyboard.
+ * - Everywhere, Ctrl+Enter and Cmd+Enter send.
  *
- * No browser reports a hardware keyboard, so two signals stand in for one:
- * - A mouse or trackpad (`any-pointer: fine`) means a computer, a touch-screen laptop, or a tablet
- *   with a trackpad keyboard, where a keyboard is plausibly at hand. A computer with no pointer at
- *   all (`any-pointer: none`) is driven by its keyboard. Both keep Enter sending.
- * - Only a device whose sole pointer is coarse, a phone or tablet, starts with Return as a new line,
- *   until this tab sees a key no on-screen keyboard sends: a lone modifier, Tab, Escape, a function
- *   key, or a Ctrl or Cmd chord. A tablet with a keyboard but no trackpad shows one at its first
- *   capital letter or shortcut.
+ * No browser reports a hardware keyboard, and no key proves one: iOS fires Shift and Caps Lock key
+ * events from its on-screen keyboard (WebKit bug 191475), Android lets an input method send hardware
+ * key events, and third-party keyboards send Tab, Escape and Ctrl. So a tablet with a keyboard and no
+ * trackpad gets a new line from Enter, and sends with Ctrl+Enter, Cmd+Enter or the Send button.
  */
-const SEEN = "agent-interface:hardware-keyboard";
-const HARDWARE_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Tab", "Escape"]);
-
-/** Whether a key press could only have come from a hardware keyboard. */
-export function hardwareKey(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey">) {
-  return HARDWARE_KEYS.has(event.key) || /^F\d{1,2}$/.test(event.key) || event.ctrlKey || event.metaKey;
-}
-
-const seen = () => { try { return sessionStorage.getItem(SEEN) === "1"; } catch { return false; } };
 const media = (query: string) => typeof matchMedia === "function" ? matchMedia(query) : undefined;
 
-/** Whether Enter sends here. Where the browser cannot say, it does, as on a computer. */
+/** Whether plain Enter sends on this device. Where the browser cannot say, it does, as on a computer. */
 export function enterSends() {
   const coarse = media("(any-pointer: coarse)"), fine = media("(any-pointer: fine)");
   if (!coarse || !fine) return true;
-  return !coarse.matches || fine.matches || seen();
+  return !coarse.matches || fine.matches;
 }
 
-const listeners = new Set<() => void>();
-const notify = () => { for (const listener of listeners) listener(); };
-const noteKey = (event: KeyboardEvent) => {
-  if (!hardwareKey(event) || seen()) return;
-  try { sessionStorage.setItem(SEEN, "1"); } catch { /* Private browsing can refuse storage; the next key tries again. */ }
-  notify();
-};
+/**
+ * Whether a key press in a message box sends it: Ctrl+Enter or Cmd+Enter always, and Enter without
+ * Shift where `enterSends`. A key an input method is using, such as the Enter that confirms a word,
+ * never sends.
+ */
+export function sendsOnKey(event: Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "metaKey" | "isComposing" | "keyCode">, enterSends: boolean) {
+  if (event.key !== "Enter" || imeKey(event)) return false;
+  return event.ctrlKey || event.metaKey || (enterSends && !event.shiftKey);
+}
+
 function subscribe(listener: () => void) {
-  if (!listeners.size) window.addEventListener("keydown", noteKey, true);
-  listeners.add(listener);
-  // Attaching or removing a trackpad keyboard changes the answer while the page is open.
+  // Connecting or removing a trackpad keyboard changes the answer while the page is open.
   const queries = ["(any-pointer: coarse)", "(any-pointer: fine)"].map(media);
   for (const query of queries) query?.addEventListener?.("change", listener);
-  return () => {
-    for (const query of queries) query?.removeEventListener?.("change", listener);
-    listeners.delete(listener);
-    if (!listeners.size) window.removeEventListener("keydown", noteKey, true);
-  };
+  return () => { for (const query of queries) query?.removeEventListener?.("change", listener); };
 }
 
-/** Whether Enter sends in a message box, updated as a keyboard or pointer appears. */
+/** Whether plain Enter sends in a message box, updated as a pointer appears or leaves. */
 export function useEnterSends() {
   return useSyncExternalStore(subscribe, enterSends, () => true);
 }

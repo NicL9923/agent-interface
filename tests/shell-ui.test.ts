@@ -420,37 +420,85 @@ describe("composer", () => {
       expect(sends()).toEqual(["Feed the horses\n"]);
     });
 
-    it("sends on Enter on a touch screen once a key only a hardware keyboard has is pressed", async () => {
+    it("starts a new line on a touch screen whatever keys came before, and sends nothing", async () => {
       touchOnly();
       await render();
       await typeInto(field(), "Feed the horses");
-      // The Shift held for a capital letter.
-      await press({ key: "Shift", shiftKey: true });
-      expect(hint()).toBe("send");
-      expect(await press({ key: "Enter", keyCode: 13 })).toBe(false);
+      // An iPhone's on-screen Shift and Caps Lock fire these too, and third-party keyboards send Tab.
+      for (const key of ["Shift", "CapsLock", "Tab"]) await press({ key, shiftKey: key === "Shift" });
+      expect(hint()).toBe("enter");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+    });
+
+    it.each([
+      ["a touch screen", "Ctrl", touchOnly],
+      ["a touch screen", "Cmd", touchOnly],
+      ["a mouse or trackpad", "Ctrl", () => stubMatchMedia(query => query === "(any-pointer: fine)")],
+      ["a mouse or trackpad", "Cmd", () => stubMatchMedia(query => query === "(any-pointer: fine)")],
+    ])("sends on %s with %s+Enter", async (_, modifier, device) => {
+      device();
+      await render();
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13, ctrlKey: modifier === "Ctrl", metaKey: modifier === "Cmd" })).toBe(false);
       expect(sends()).toEqual(["Feed the horses"]);
     });
 
-    it("says in the shortcut list what Return does on a touch screen, and only there", async () => {
-      const note = () => document.body.querySelector(".shortcuts-dialog")?.textContent?.includes("Return starts a new line");
-      touchOnly();
-      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
-      expect(note()).toBe(true);
-      await mount.render(createElement("div"));
-      stubMatchMedia();
-      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
-      expect(note()).toBe(false);
+    it("follows a trackpad connected and removed while the page is open", async () => {
+      const pointers = new Set(["(any-pointer: coarse)"]);
+      const changed = new Set<() => void>();
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        get matches() { return pointers.has(query); },
+        media: query,
+        addEventListener: (_: string, listener: () => void) => changed.add(listener),
+        removeEventListener: (_: string, listener: () => void) => changed.delete(listener),
+      }));
+      const connect = (on: boolean) => act(async () => {
+        if (on) pointers.add("(any-pointer: fine)"); else pointers.delete("(any-pointer: fine)");
+        for (const listener of [...changed]) listener();
+      });
+      await render();
+      expect(hint()).toBe("enter");
+      await connect(true);
+      expect(hint()).toBe("send");
+      await connect(false);
+      expect(hint()).toBe("enter");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(sends()).toEqual([]);
     });
 
-    it.each([["a hardware keyboard", () => stubMatchMedia()], ["a touch screen", touchOnly]])(
-      "leaves the Enter that confirms an IME word to the input method with %s", async (_, device) => {
-        device();
-        await render();
-        await typeInto(field(), "こんにちは");
-        expect(await press({ key: "Enter", isComposing: false, keyCode: 229 })).toBe(true);
-        expect(field().value).toBe("こんにちは");
-        expect(sends()).toEqual([]);
-      });
+    it("lists what Enter does on this device in the shortcut list, and that Ctrl+Enter or Cmd+Enter always sends", async () => {
+      const keys = () => Object.fromEntries([...document.body.querySelectorAll(".shortcuts-dialog .shortcut-row")]
+        .map(row => [row.querySelector("kbd")!.textContent, row.querySelector("dt")!.textContent]));
+      const note = () => document.body.querySelector(".shortcuts-dialog .shortcut-note")?.textContent ?? "";
+      touchOnly();
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(keys()).toMatchObject({ Enter: "Start a new line", "Ctrl+Enter or ⌘Enter": "Send your message" });
+      expect(keys()).not.toHaveProperty("Shift+Enter");
+      // The one case the rule gets wrong: a keyboard with no trackpad on a touch screen.
+      expect(note()).toContain("keyboard without a trackpad");
+      await mount.render(createElement("div"));
+      stubMatchMedia(query => query === "(any-pointer: fine)");
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(keys()).toMatchObject({ Enter: "Send your message", "Shift+Enter": "Start a new line", "Ctrl+Enter or ⌘Enter": "Send your message" });
+      expect(note()).toBe("");
+    });
+
+    it.each([
+      ["Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Enter", "a touch screen", touchOnly],
+      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Ctrl+Enter", "a touch screen", touchOnly],
+    ])("leaves the %s that confirms an IME word to the input method with %s", async (keys, _, device) => {
+      device();
+      await render();
+      await typeInto(field(), "こんにちは");
+      expect(await press({ key: "Enter", ctrlKey: keys === "Ctrl+Enter", isComposing: false, keyCode: 229 })).toBe(true);
+      expect(field().value).toBe("こんにちは");
+      expect(sends()).toEqual([]);
+    });
   });
 
   it("never recalls into a draft while its send is in flight", async () => {

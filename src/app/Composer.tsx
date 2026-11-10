@@ -18,7 +18,7 @@ import { largePasteFile } from "./large-paste";
 import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
 import { imeKey } from "./ime";
-import { useEnterSends } from "./enter-key";
+import { sendsOnKey, useEnterSends } from "./enter-key";
 
 /** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
 export function useStopResponse(botId: string, report: (message: string) => void) {
@@ -213,7 +213,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   // between messages. Focus moves as the default of mousedown, which a touch also fires; a click,
   // a key, a screen reader and voice control still activate the button.
   const keepFocus = (event: React.MouseEvent) => event.preventDefault();
-  // On a touch screen with only an on-screen keyboard, Return starts a new line. See enter-key.ts.
+  // On a touch screen with no mouse or trackpad, Return starts a new line. Ctrl+Enter and Cmd+Enter
+  // send everywhere. See enter-key.ts.
   const enterSends = useEnterSends();
   const [attachNotice, setAttachNotice] = useState<string[]>([]);
   const addFiles = (files: File[]) => {
@@ -404,7 +405,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               recallTo(recall.draft, null, "end");
               return;
             }
-            if (event.key === "Enter" && !event.shiftKey && enterSends) {
+            if (sendsOnKey(event.nativeEvent, enterSends)) {
               event.preventDefault();
               if (
                 !(
