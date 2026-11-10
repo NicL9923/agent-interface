@@ -60,3 +60,30 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
 });
+
+test.describe("after a deploy retires a lazy screen's file", () => {
+  // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
+  test.use({ serviceWorkers: "block" });
+
+  test("the tab reloads itself once, then leaves the screen's Reload prompt", async ({ page, allowConsoleError }) => {
+    // Chromium logs the refused file, and React the screen error the prompt handles. Nothing else is excused.
+    allowConsoleError.push(/status of 404/, /dynamically imported module/);
+    await signIn(page);
+    // The page asks for a name this build never had, as a page from the previous release would, and the real server answers.
+    await page.route(/\/assets\/UsagePanel-[^/]+\.js$/, route => route.continue({ url: route.request().url().replace(/UsagePanel-[^/]+\.js$/, "UsagePanel-retired0.js") }));
+    let loads = 0;
+    page.on("load", () => { loads++; });
+    const openUsage = async () => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Usage/ }).click();
+    };
+
+    await openUsage();
+    await expect.poll(() => loads).toBe(1);
+    await expect(assistants(page)).toBeVisible();
+
+    await openUsage();
+    await expect(page.getByRole("alert").filter({ hasText: "This screen could not load." })).toBeVisible();
+    expect(loads).toBe(1);
+  });
+});

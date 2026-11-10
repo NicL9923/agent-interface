@@ -282,7 +282,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const uploading = uploads.some(item => item.botId === botId);
   // One array per change, so the composer is not handed a new list every render.
   const shownUploads = useMemo(() => uploads.filter(item => item.botId === botId), [uploads, botId]);
-  return { draft, setDraft, draftReady, uploads: shownUploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
+  // Files exist only in this page until they reach Hermes, in any chat, so a reload would drop them.
+  const holdingFiles = uploads.length > 0;
+  return { draft, setDraft, draftReady, uploads: shownUploads, previews, uploading, holdingFiles, upload, retryUpload, cancelUpload, clearUploads };
 }
 export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
   draft: Draft;

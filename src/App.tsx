@@ -15,6 +15,7 @@ import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useDeviceActivity } from "./app/use-device-activity";
 import { useSubmission } from "./app/use-submission";
+import { draftKept, useChunkRecovery } from "./app/chunk-recovery";
 import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
 import { withRunsShown } from "./shared/routine-runs";
@@ -108,7 +109,7 @@ export function App() {
   }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
+  const { draft, setDraft, draftReady, uploads, previews, uploading, holdingFiles, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, setConversation, disconnected: conversationDisconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
@@ -125,6 +126,9 @@ export function App() {
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
+  // A lazy screen's missing bundle reloads the tab onto the release the server has, unless that
+  // would lose a file still uploading, a draft the device has not kept, or a send on its way.
+  useChunkRecovery(() => !pending && !sending && !holdingFiles && draftKept(draft));
   // The anchored send follows the ID Hermes gave its message, once the receipt names one.
   const { sentAs } = history;
   useEffect(() => { if (receipt?.messageId) sentAs(receipt.requestId, receipt.messageId); }, [receipt, sentAs]);
