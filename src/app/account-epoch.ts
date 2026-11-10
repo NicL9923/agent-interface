@@ -85,14 +85,16 @@ let generation = 0;
 let era = 0;
 /** Whether an app is drawing for the record, which is when requests are checked against it. */
 let guarding = false;
-/** Whether the generation drew an account from a bootstrap, so its address may name that account's chats. */
-let shown = false;
 /**
- * Whether a generation that drew an account ended since the tab last started one. Set by any end
- * while one shows and cleared only by the start that follows, so a second end during another tab's
- * change, which finds nothing shown, does not forget that the address may name the last account's chats.
+ * The account whose chats, panels, rooms and messages the address may name: the one the record named
+ * when the generation started, or the one its bootstrap named since, which can be learned before the
+ * record says it. `{}` is an account not yet named.
+ * Null when it can name none, as an address opened while signed out, which the next account keeps;
+ * undefined before this tab's first start, when the address is the one the page opened with.
  */
-let endedShown = false;
+let addressFor: { user?: string } | null | undefined;
+/** The account a settled record says this browser has, `{}` when it does not name it, or null signed out. */
+const accountOf = (record: AuthEpoch | null) => !record || record.signedOut ? null : { ...record.user ? { user: record.user } : {} };
 const listeners = new Set<() => void>();
 const endHooks = new Set<() => void>();
 
@@ -105,8 +107,6 @@ export function onAccountEnd(hook: () => void) {
 }
 function end() {
   generation++;
-  if (shown) endedShown = true;
-  shown = false;
   for (const hook of endHooks) hook();
 }
 function notify() {
@@ -163,7 +163,7 @@ export function watchAccount(listener: () => void) {
     if (listeners.size) return;
     // No app draws any more, as after a test unmounts it, so none shows an account.
     guarding = false;
-    shown = false;
+    addressFor = undefined;
     window.removeEventListener("storage", heard);
     window.removeEventListener("pagehide", cover);
     window.removeEventListener("pageshow", woke);
@@ -223,6 +223,13 @@ export function uncoverEnded() {
 
 export type AccountStart = { wait: number } | { start: "bootstrap" | "signed-out"; leftAccount: boolean };
 /**
+ * Whether an address that belonged to `before` must go before `next`'s first draw: unless it named no
+ * account's chats, or the next account is the same one, named. A sign-out or an account not yet named
+ * is never the same one.
+ */
+const addressLeaves = (before: typeof addressFor, next: typeof addressFor) =>
+  !!before && !(before.user !== undefined && before.user === next?.user);
+/**
  * What the app draws for the stored record, and from then on the record this tab acts under. While
  * another tab's sign-in or sign-out is on its way, nothing: the answer is not yet knowable. After a
  * sign-out this tab saw, the sign-in screen; otherwise bootstrap decides. Call it once per change.
@@ -234,12 +241,16 @@ export function accountStart(): AccountStart {
   const now = stored(), record = parseEpoch(now);
   if (changingNow(record) && now !== owned) {
     held = WAITING;
+    // A page that opens during a change opened its address under the account the mark started from.
+    if (addressFor === undefined) addressFor = accountOf(record);
     return { wait: record!.at + CHANGE_STALE_MS };
   }
   held = seen = now;
   guarding = true;
-  const leftAccount = endedShown;
-  endedShown = false;
+  // Decided only against a settled record, so a change another tab undoes keeps the address it found.
+  const next = accountOf(record);
+  const leftAccount = addressLeaves(addressFor, next);
+  addressFor = next;
   // Another tab may have told the service worker otherwise since, and closed before it settled.
   told = undefined;
   return { start: generation > 0 && record?.signedOut ? "signed-out" : "bootstrap", leftAccount };
@@ -338,7 +349,8 @@ export function accountNamed(user: string, drawn: string | undefined) {
     held = seen = store(settled({ user }));
   }
   tellWorker(user);
-  shown = true;
+  // From here the address may name this account's chats, whatever the record named when the generation started.
+  addressFor = { user };
   return true;
 }
 

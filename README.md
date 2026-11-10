@@ -157,9 +157,11 @@ upload. Once they differ, the tab unmounts everything it held for the account, i
 reads, live connections, drafts in memory and cached responses, discards any answer still on
 its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
-address that named the last account's chat, panel or room is reset to `/`; an address opened
-while signed out is kept. A sign-in that the server refuses puts the record back, so other tabs
-read the same account again. A record left marked as under way by a tab that closed
+address belongs to the account the record named when its screen started, even one still
+connecting, or to the account its check named since. It is reset to `/`, fragment included,
+before a sign-out or another account draws; an address opened while signed out is kept for the
+next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
+same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
 is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
 reads and writes the record under one lock, so another tab's step cannot land between. Storage
