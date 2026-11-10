@@ -296,3 +296,8 @@ row keeps thinking on the copy's read, and a later comparable read ends it. The 
 without a version, a server restart between the reads, and a chat left and returned to. Its three breaks of
 `settledHere` each failed 10 of the 60 tests. It agreed the two-reads-in-one-admission remainder belongs to the change
 that has the server read the admission answer's `turn` field.
+
+After merging `main` at `15f6dcb`: `npm run typecheck`, `npm run lint` passed; `npm test`: 195 files, 3,271 tests
+passed. On the merge before it, at `eb98808`, which differs only by #325's test and ledger: `ruff check .` and
+`npm run build` passed, and `npm run test:e2e` (`E2E_PORT=4273`) passed 24 in Chromium. `npm test` there failed once
+in #323's slow-client test, the failure #325 fixes.
