@@ -32,20 +32,25 @@ const canShare = () => typeof navigator !== "undefined" && typeof navigator.shar
  * on the right with its bubble, a reply on the left. A reply made of several parts shows the time
  * once, under the last, while each part keeps its own actions.
  */
-export function MessageMeta({ message, own, when, delivery, actions }: {
+export function MessageMeta({ message, own, when, delivery, actions, pending = false }: {
   message: Message;
   own: boolean;
   /** Shown as the message's time. Omitted for the parts of a reply before the last. */
   when?: string;
   delivery?: "sending" | "unconfirmed";
   actions: boolean;
+  /**
+   * The reply is still streaming. The row takes its full size, with its actions, but is hidden and
+   * inert, so the reply's saved copy reveals it in place without moving anything.
+   */
+  pending?: boolean;
 }) {
   const tools = useContext(TranscriptTools);
   // Always visible, unlike the actions, so a refused reply is never hidden by the pointer leaving.
   const speechError = tools?.speech.error?.id === message.id ? tools.speech.error.text : undefined;
   if (!when && !delivery && !actions) return null;
   return <>
-    <div className={`message-meta message-meta-${own ? "own" : "reply"}`}>
+    <div className={`message-meta message-meta-${own ? "own" : "reply"}`} inert={pending || undefined} aria-hidden={pending || undefined}>
       {delivery ? <span className="message-delivery">{delivery === "sending" ? "Sending…" : "Not confirmed yet"}</span> : when && <When value={when} />}
       {actions && <MessageActions message={message} />}
     </div>
