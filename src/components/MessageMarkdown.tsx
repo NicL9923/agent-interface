@@ -175,6 +175,12 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
   return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
 });
 
+/**
+ * A block re-renders when what it shows changes. The message ID reaches only reply cards, so a
+ * live row saved under Hermes's own ID keeps its parsed blocks unless one holds a card.
+ */
+const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) => a.text === b.text && a.inlineUi === b.inlineUi && a.botId === b.botId
+  && a.userId === b.userId && a.unavailable === b.unavailable && (a.messageId === b.messageId || !/agent-ui/.test(b.text));
 /** One parsed piece of a reply, without its container, so several can share one. */
 const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
   const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
@@ -185,7 +191,7 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
       </Markdown>
     </ReplyContext.Provider>
   );
-});
+}, sameBlock);
 
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
@@ -255,30 +261,40 @@ export function streamingBlocks(text: string): string[] | null {
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
  * grows, so a long reply no longer re-parses from the top several times a second. A short
  * unfinished marker, link or table header at the growing end is held back until it is whole, so it
- * does not flash as raw Markdown. The saved reply replaces this and is parsed whole.
+ * does not flash as raw Markdown. Without `holdBack` it renders a saved reply in the same blocks
+ * from its raw text, so a row that streamed keeps its nodes when saved.
  */
-export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
+export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = true, ...props }: MessageMarkdownProps & { holdBack?: boolean }) {
   const blocks = useMemo(() => {
     const split = streamingBlocks(props.text);
-    return split ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : null;
-  }, [props.text]);
-  const whole = useMemo(() => blocks ? "" : streamingHoldBack(props.text), [blocks, props.text]);
-  if (!blocks) return <MessageMarkdown {...props} text={whole} />;
-  return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
+    return split && holdBack ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : split;
+  }, [props.text, holdBack]);
+  const whole = useMemo(() => blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text, [blocks, holdBack, props.text]);
+  // One container however the reply splits, so the reply's node never changes while it streams.
+  return <div className="message-markdown">
+    {blocks ? blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />) : <MarkdownBlocks key="whole" {...props} text={whole} />}
+  </div>;
 });
 
 /**
- * A reply still arriving, as the transcript's live row shows it. Its text is revealed at a steady
- * pace (see streaming-reveal.ts), then split and held back as StreamingMarkdown does. Revealing
- * comes first so the hold-back judges the end a person actually sees: a cut the reveal makes
- * inside `**bold**` is held back like one the stream made. Both keep a prefix, so the result is a
- * prefix of what arrived. A caret follows the last character until the row is saved.
+ * A reply in the transcript. A live one is revealed at a steady pace (see streaming-reveal.ts),
+ * then split and held back as StreamingMarkdown does. Revealing comes first so the hold-back judges
+ * the end a person actually sees: a cut the reveal makes inside `**bold**` is held back like one
+ * the stream made. Both keep a prefix, so the result is a prefix of what arrived. A caret follows
+ * the last character while it is live.
+ *
+ * Once saved, the reply shows its raw text at once, with no pacing or hold-back. A row that
+ * streamed keeps rendering in the same blocks, so React keeps its nodes, and any selection or
+ * copy state in them; a reply that was never live renders as MessageMarkdown.
  */
-export const LiveMarkdown = memo(function LiveMarkdown(props: MessageMarkdownProps) {
-  const text = useRevealed(props.text);
+export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: MessageMarkdownProps & { live: boolean }) {
+  const [streamed, setStreamed] = useState(live);
+  if (live && !streamed) setStreamed(true);
+  const text = useRevealed(props.text, live);
+  if (!live && !streamed) return <MessageMarkdown {...props} />;
   return <>
-    <StreamingMarkdown {...props} text={text} />
-    <StreamingCaret text={text} />
+    <StreamingMarkdown {...props} text={text} holdBack={live} />
+    {live && <StreamingCaret text={text} />}
   </>;
 });
 

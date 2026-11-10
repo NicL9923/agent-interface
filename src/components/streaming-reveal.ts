@@ -68,15 +68,16 @@ const instant = () => hidden() || prefersReducedMotion();
 
 /**
  * The part of a live reply's `text` to show now. Re-renders on animation frames, at most once per
- * MIN_FRAME_MS, until the reveal catches up.
+ * MIN_FRAME_MS, until the reveal catches up. When `live` is false, as once the reply is saved,
+ * all of it shows at once.
  */
-export function useRevealed(text: string): string {
+export function useRevealed(text: string, live = true): string {
   const [state, setState] = useState(() => ({ pace: settledPace(text), length: text.length }));
   let current = state;
   // New text is taken in during render, so the frame that shows it never paints a stale cut.
-  if (state.pace.text !== text) {
+  if (state.pace.text !== text || !live && state.length < text.length) {
     const now = performance.now();
-    const pace = arrive(state.pace, text, now, instant());
+    const pace = arrive(state.pace, text, now, !live || instant());
     current = { pace, length: visibleLength(pace, now) };
     setState(current);
   }

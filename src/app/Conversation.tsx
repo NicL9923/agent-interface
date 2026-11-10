@@ -4,7 +4,7 @@ import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
-import { LiveMarkdown, MessageMarkdown } from "../components/MessageMarkdown";
+import { ReplyMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
@@ -506,6 +506,10 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   });
   const afterFold = fold ? [fold, ...shown] : [];
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
+  // An assistant reply is keyed by its place among the turn's replies, not its ID. The live reply is
+  // always the turn's last, and its saved copy takes that place under Hermes's own ID, so React
+  // keeps the row's node, with any selection in it, instead of building the reply again.
+  let replies = 0;
   const rows = block.messages.flatMap((message, position) => {
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
     // in a turn read as one reply, with the time under the last part.
@@ -531,24 +535,24 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
     const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
       className={`message message-${exchange ? "agent" : message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
-      key={message.id}
+      key={reply && !exchange && message.role === "assistant" ? `reply:${replies++}` : message.id}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
       {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
       {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
       {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
-        streaming
-          ? <LiveMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant" && !progress} />
+        <ReplyMarkdown live={streaming} text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected}
+          inlineUi={message.role === "assistant" && (streaming || !progress)} />
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
       {own && message.steered && <p className="message-steered">Added to the current task</p>}
       {!own && files}
       {turnFiles?.replyId === message.id && !streaming && <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />}
-      {!exchange && !streaming && !progress && (reply || own) && <MessageMeta message={message} own={own}
-        when={endsRun ? when : undefined} delivery={delivery}
+      {/* A live reply holds its meta row's place, hidden, so nothing moves when it is saved. */}
+      {!exchange && !progress && (reply || own) && <MessageMeta message={message} own={own}
+        when={endsRun ? when : undefined} delivery={delivery} pending={streaming}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
     return message.id === foldAt && fold ? [...afterFold, article] : [article];

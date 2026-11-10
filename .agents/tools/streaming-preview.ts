@@ -6,7 +6,9 @@
  *   npm run build && npx tsx .agents/tools/streaming-preview.ts [port]
  *
  * Open http://127.0.0.1:4190, choose "Enter local workspace" and then Ranch Hand. STREAM_CHARS
- * sets how many characters arrive every 40 ms (default 6, about 150 a second). Nothing leaves the machine.
+ * sets how many characters arrive every 40 ms (default 6, about 150 a second). SAVE_DELAY_MS holds the
+ * finished answer live that long before saving it (default 0), to select text before the hand-off.
+ * Nothing leaves the machine.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -18,6 +20,7 @@ import type { Inflight, Message, Runtime, ToolCall } from "../../src/shared/type
 if (!existsSync("dist/client/index.html")) throw new Error("Run `npm run build` first: the preview serves dist/client.");
 const port = Number(process.argv[2] ?? 4190);
 const step = Number(process.env.STREAM_CHARS ?? 6);
+const saveDelay = Number(process.env.SAVE_DELAY_MS ?? 0);
 const first = "Let me check the gate log before I answer.";
 const answer = [
   "## North pasture", "",
@@ -63,6 +66,7 @@ async function run(runId: string) {
   thread.push({ id: randomUUID(), runId, role: "tool", text: "", toolCall: turn.calls[0], createdAt: new Date().toISOString() });
   notify();
   await stream(answer);
+  await pause(saveDelay);
   thread.push({ id: randomUUID(), runId, role: "assistant", text: answer, createdAt: new Date().toISOString() });
   turn = undefined;
   notify();

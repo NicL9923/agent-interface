@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveMarkdown } from "../src/components/MessageMarkdown";
+import { ReplyMarkdown } from "../src/components/MessageMarkdown";
 import { CATCH_UP_MS, arrive, graphemeCut, settledPace, visibleLength } from "../src/components/streaming-reveal";
 import type { Pace } from "../src/components/streaming-reveal";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); });
 
-const show = (text: string) => mount.render(createElement(LiveMarkdown, { text }));
+const show = (text: string) => mount.render(createElement(ReplyMarkdown, { text, live: true }));
 const shown = () => mount.container.querySelector(".message-markdown")?.textContent ?? "";
 const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
 /** What shows after each frame until `ms` have passed. */

@@ -226,6 +226,10 @@ still win.
   arriving, however long it is, and a reply already under way when the chat opens shows at once.
   A caret after the last character pulses until the reply is saved. The text shows at once in a
   hidden tab, and under reduced motion, where the caret stays lit and still.
+- When a streamed reply is saved under Hermes's own ID, its row stays in place: React keeps the
+  same nodes, so a text selection, a code block's copy state and the reader's spot survive. The
+  row's time and actions appear in space it already held while streaming. Files the turn made
+  still appear below the reply once it is saved, since their size is not known before.
 - On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
   it hops and the other pinned ones look over. Approving a request or answering a question makes
   the assistant cheer, and settled approval cards fold away.

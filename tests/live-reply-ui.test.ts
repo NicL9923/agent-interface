@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
 import { CATCH_UP_MS } from "../src/components/streaming-reveal";
-import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, type InflightDelta, type Message } from "../src/shared/types";
+import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, type InflightDelta, type Message, type ToolCall } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
@@ -38,6 +38,8 @@ beforeEach(() => {
   // Browser APIs jsdom lacks, which the real Avatar uses.
   Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+  // jsdom has no layout. The Quote button measures a selection in a reply.
+  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
   unexpected = [];
   server = { botId: "home", messages: [question], approvals: [], files: [], activity: running };
   vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit = {}) => {
@@ -74,9 +76,9 @@ const live = (text: string): Inflight => ({ botId: "home", message: { id: "s1-in
 async function send(type: "inflight" | "inflight-delta", value: Inflight | InflightDelta) {
   await act(async () => stream().emit(type, JSON.stringify(value)));
 }
-/** The turn ends: the next read has Hermes's saved copy, and the stream says something changed. */
-async function save(messages: Message[]) {
-  server = { ...server, messages: [question, ...messages], activity: { state: "idle" } };
+/** The next read has these rows after the question, and the stream says something changed. */
+async function save(messages: Message[], activity: Conversation["activity"] = { state: "idle" }) {
+  server = { ...server, messages: [question, ...messages], activity };
   await act(async () => stream().emit("message", "change"));
   await advance(0);
 }
@@ -99,6 +101,90 @@ describe("a live reply in the transcript", () => {
     await save([{ id: "m2", role: "assistant", text: `The north gate${rest}`, createdAt: "2026-11-10T15:00:00Z" }]);
     expect(row("s1-inflight")).toBeNull();
     expect(replyText("m2")).toBe(`The north gate${rest}`);
+    expect(mount.container.querySelector(".streaming-caret")).toBeNull();
+  });
+});
+
+const saved = (id: string, text: string): Message => ({ id, role: "assistant", text, runId: "run-1", createdAt: "2026-11-10T15:00:00Z" });
+const toolRow = (status: ToolCall["status"]): Message => ({ id: "t1", role: "tool", text: "", runId: "run-1", createdAt: "2026-11-10T14:59:30Z",
+  toolCall: { id: "call-1", name: "terminal", status, startedAt: "2026-11-10T14:59:30Z" } });
+const meta = (element: Element) => element.querySelector(".message-meta");
+
+describe("a live reply's row when it is saved", () => {
+  it("keeps the reply's nodes and a selection in it, takes the saved ID, and reveals its meta row in the place it held", async () => {
+    await open();
+    await send("inflight", live("The north gate is latched."));
+    const live1 = row("s1-inflight")!, body = live1.querySelector(".message-markdown")!;
+    // The meta row already takes its place, hidden from people and assistive technology.
+    const held = meta(live1)!;
+    expect(held.getAttribute("aria-hidden")).toBe("true");
+    expect(held.hasAttribute("inert")).toBe(true);
+    const words = body.querySelector("p")!.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(words, 4);
+    range.setEnd(words, 14);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    expect(document.getSelection()!.toString()).toBe("north gate");
+
+    await save([saved("m2", "The north gate is latched.")]);
+    expect(row("m2")).toBe(live1);
+    expect(live1.dataset.messageId).toBe("m2");
+    expect(row("m2")!.querySelector(".message-markdown")).toBe(body);
+    expect(document.getSelection()!.toString()).toBe("north gate");
+    expect(meta(live1)).toBe(held);
+    expect(held.hasAttribute("inert")).toBe(false);
+    expect(held.querySelector('button[aria-label="Copy reply"]')).not.toBeNull();
+  });
+
+  it("gives the saved copy of the last segment the live node, and keeps an earlier segment in its own", async () => {
+    server = { ...server, messages: [question, saved("m2", "Checking the gate log."), toolRow("completed")] };
+    await open();
+    await send("inflight", live("The north gate is latched."));
+    const first = row("m2")!, last = row("s1-inflight")!;
+    expect(last).not.toBe(first);
+    await save([saved("m2", "Checking the gate log."), toolRow("completed"), saved("m3", "The north gate is latched.")]);
+    expect(row("m2")).toBe(first);
+    expect(row("m3")).toBe(last);
+    expect(replyText("m2")).toBe("Checking the gate log.");
+    expect(replyText("m3")).toBe("The north gate is latched.");
+  });
+
+  it("hands the live node to the segment a tool call saves, and starts the next live reply in a new node", async () => {
+    await open();
+    await send("inflight", live("Checking the gate log."));
+    const segment = row("s1-inflight")!;
+    // Hermes saves the reply so far when a tool starts; the turn is still running.
+    await save([saved("m2", "Checking the gate log."), toolRow("running")], running);
+    expect(row("m2")).toBe(segment);
+    expect(row("s1-inflight")).toBeNull();
+    await send("inflight", live("The north gate is latched."));
+    const next = row("s1-inflight")!;
+    expect(next).not.toBe(segment);
+    expect(row("m2")).toBe(segment);
+    expect(replyText("m2")).toBe("Checking the gate log.");
+    expect(replyText("s1-inflight")).toBe("The north gate is latched.");
+  });
+
+  it("removes the live row when the reply ends with nothing saved", async () => {
+    await open();
+    await send("inflight", live("Let me look"));
+    await save([]);
+    expect(mount.container.querySelector(".message-assistant")).toBeNull();
+    expect(mount.container.querySelector(".streaming-caret")).toBeNull();
+  });
+
+  it("keeps the node when a failed turn saves the reply so far, showing its raw text and its meta row", async () => {
+    await open();
+    await send("inflight", live("Checking the **north"));
+    const partial = row("s1-inflight")!;
+    // Live, the unfinished bold is held back.
+    expect(replyText("s1-inflight")).toBe("Checking the");
+    await save([saved("m2", "Checking the **north")], { state: "failed" });
+    expect(row("m2")).toBe(partial);
+    // Saved, the reply shows as written, with no hold-back.
+    expect(replyText("m2")).toBe("Checking the **north");
+    expect(meta(partial)!.hasAttribute("inert")).toBe(false);
     expect(mount.container.querySelector(".streaming-caret")).toBeNull();
   });
 });
