@@ -170,3 +170,7 @@ runbook only:
   and four full waits do not fit. The comment now says three, and that a longer chain is held for review.
 - The runbook's step 3 now says the temporary file goes in the same directory as `status.json`, and step 1 says why
   the wait must not be skipped.
+
+After merging `main` at `145104f`: `npm run typecheck`, `npm run lint`, `ruff check .` passed; `npm run test:py`:
+44 files passed in 212.1 s on Python 3.14.10; `npm test`: 195 files, 3,271 tests passed. The guarded tool was not run,
+and `NATIVE` has not reached a real Hermes.
