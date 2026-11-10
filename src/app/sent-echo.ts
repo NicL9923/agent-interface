@@ -5,6 +5,17 @@ import type { Draft, Pending, SavedConversation } from "./storage";
 /** How long an accepted message may stay missing from a conversation that never shows its run. */
 export const ECHO_PATIENCE = 30_000;
 /**
+ * How long the early thinking row stays while the send's request has not answered. A healthy admission,
+ * including one that first stops an idle compaction, answers in well under two seconds; past this the
+ * request is in trouble, and the message's own "Sending…" says so without claiming the assistant is on it.
+ */
+export const SENDING_ROW_MS = 5_000;
+/**
+ * How long the early thinking row stays after Hermes's copy arrives in a read without the turn's report.
+ * The report is normally the next change notice; past this no turn is coming that the row could stand for.
+ */
+export const COPY_HANDOFF_MS = 5_000;
+/**
  * A sent message shown in the transcript at once, until Hermes's own copy arrives. It never
  * changes what was sent or saved: it is only drawn from the pending submission and its receipt.
  */
@@ -24,6 +35,11 @@ export type SentEcho = {
   steered?: boolean;
   /** The chat showed work when it was sent, so it can only join that work or wait behind it. */
   duringWork?: boolean;
+  /** When the request last went out, and whether it has been out longer than SENDING_ROW_MS. */
+  sendingSince?: number;
+  slow?: boolean;
+  /** When Hermes's copy arrived while the chat showed no work yet; see handingOff. */
+  copiedAt?: number;
 };
 const active = (state: string) => ["thinking", "working", "waiting", "blocked"].includes(state);
 /** Whether Hermes's own copy of the message is in the conversation. */
@@ -55,7 +71,7 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   if (pending && pending.requestId !== next?.request.requestId) {
     if (!sender) return null;
     next = {
-      request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending",
+      request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending", sendingSince: now,
       ...(conversation?.botId === pending.botId && active(conversation.activity.state) ? { duringWork: true } : {}),
       // A live reply's row is replaced as it is saved, so it cannot anchor anything.
       after: conversation?.botId === pending.botId
@@ -65,14 +81,20 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   if (!next) return null;
   if (pending?.requestId === next.request.requestId) {
     const status = sending ? "sending" : "unconfirmed";
-    if (next.status !== status) next = { ...next, status };
+    // A retry goes out again, so its bound starts over.
+    if (next.status !== status) next = { ...next, status, ...status === "sending" ? { sendingSince: now, slow: false } : {} };
+    if (status === "sending" && !next.slow && now - (next.sendingSince ?? now) >= SENDING_ROW_MS) next = { ...next, slow: true };
   } else if (next.status !== "accepted") {
     // A refused, interrupted or abandoned send leaves only the draft it came from.
     if (receipt?.requestId !== next.request.requestId || receipt.status !== "accepted") return null;
     next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now, ...(receipt.steered ? { steered: true } : {}) };
   }
   if (conversation?.botId !== next.request.botId) return next;
-  if (echoShown(next, conversation)) return null;
+  if (echoShown(next, conversation)) {
+    if (!handingOff(next, conversation)) return null;
+    const copiedAt = next.copiedAt ?? now;
+    return now - copiedAt >= COPY_HANDOFF_MS ? null : next.copiedAt === undefined ? { ...next, copiedAt } : next;
+  }
   if (next.status !== "accepted") return next;
   // Some prompts are saved only when their run finishes, so the echo stands in until then.
   if (active(conversation.activity.state)) return next.ran ? next : { ...next, ran: true };
@@ -101,15 +123,25 @@ export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
  * Whether the open chat shows its assistant thinking before Hermes reports the turn. A message sent
  * while the chat showed no work starts a turn, so the activity row appears with its echo instead of a
  * round trip later, and Hermes's own report takes over the same row. It ends when the send is refused,
- * fails, is given up or comes back uncertain (the echo leaves or reads as unconfirmed), when Hermes
- * steers it into a running task, when the chat shows the turn's work or Hermes's copy of the message,
- * and at the latest when the echo's own patience runs out. While the chat shows work, that work's row
- * is already there, so a message sent then never adds one.
+ * fails, is given up or comes back uncertain (the echo leaves or reads as unconfirmed), while its request
+ * has been out longer than SENDING_ROW_MS (it returns if Hermes then accepts it), when Hermes steers it
+ * into a running task, when the chat shows the turn's work, when Hermes's copy is followed by a reply or by
+ * nothing for COPY_HANDOFF_MS, and at the latest when the echo's own patience runs out. While the chat
+ * shows work, that work's row is already there, so a message sent then never adds one.
  */
 export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation | null): boolean {
   if (!conversation || active(conversation.activity.state)) return false;
   return echoes.some(echo => echo.request.botId === conversation.botId && !echo.duringWork && !echo.steered && !echo.ran
-    && (echo.status === "sending" || echo.status === "accepted") && !echoShown(echo, conversation));
+    && (echo.status === "sending" ? !echo.slow : echo.status === "accepted" && (!echoShown(echo, conversation) || handingOff(echo, conversation))));
+}
+/**
+ * Hermes's copy of a message that starts a turn is in the chat, and the turn's report is not yet: they can
+ * come in separate reads. The row stays through that gap, so the report takes over the same node and is not
+ * announced twice. It ends with the report, with a reply after the copy, or after COPY_HANDOFF_MS.
+ */
+function handingOff(echo: SentEcho, conversation: SavedConversation) {
+  return echo.status === "accepted" && !echo.duringWork && !echo.steered && !echo.ran && !active(conversation.activity.state)
+    && conversation.messages.at(-1)?.role === "user";
 }
 /** The conversation with its echoes at the end, as the person's own messages. */
 export function withEchoes(conversation: SavedConversation | null, echoes: SentEcho[]): SavedConversation | null {
@@ -164,5 +196,14 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
     const timer = setTimeout(() => setEchoes(current => nextEchoes(current, { pending, receipt, sending, conversation, sender, now: Date.now() })), ECHO_PATIENCE + 100);
     return () => clearTimeout(timer);
   }, [waiting, pending, receipt, sending, conversation, sender?.id]);
+  // The early row's two bounds: a request still out, and Hermes's copy without the turn's report.
+  const deadline = Math.min(...echoes.map(echo => echo.status === "sending" && !echo.slow ? (echo.sendingSince ?? 0) + SENDING_ROW_MS
+    : echo.copiedAt !== undefined ? echo.copiedAt + COPY_HANDOFF_MS : Infinity));
+  useEffect(() => {
+    if (deadline === Infinity) return;
+    const timer = setTimeout(() => setEchoes(current => nextEchoes(current, { pending, receipt, sending, conversation, sender, now: Date.now() })),
+      Math.max(0, deadline - Date.now()));
+    return () => clearTimeout(timer);
+  }, [deadline, pending, receipt, sending, conversation, sender?.id]);
   return echoes;
 }

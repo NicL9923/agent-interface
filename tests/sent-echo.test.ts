@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { awaitingTurn, ECHO_PATIENCE, nextEcho, nextEchoes, restoreSent, sendingDraft, withEchoes } from "../src/app/sent-echo";
+import { awaitingTurn, COPY_HANDOFF_MS, ECHO_PATIENCE, nextEcho, nextEchoes, restoreSent, SENDING_ROW_MS, sendingDraft, withEchoes } from "../src/app/sent-echo";
 import type { SentEcho } from "../src/app/sent-echo";
 import type { Pending, SavedConversation } from "../src/app/storage";
 import type { Message, SubmissionReceipt } from "../src/shared/types";
@@ -163,8 +163,37 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     ["Hermes steered it into the running task", [step(sending, { receipt: { ...accepted, steered: true } })!], conversation()],
     ["it was sent while the chat showed work", [step(null, { pending: request, sending: true, conversation: conversation(undefined, "working") })!], conversation()],
     ["its turn already showed work", [{ ...acceptedEcho, ran: true }], conversation()],
-    ["Hermes's copy is in the chat", [acceptedEcho], conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }])],
+    ["Hermes's copy is in the chat with a reply after it",
+      [acceptedEcho], conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }, { id: "b", role: "assistant", text: "Done" }])],
+    ["its request has been out longer than the bound", [{ ...sending, slow: true }], conversation()],
   ])("does not show when %s", (_, echoes, shown) => {
     expect(awaitingTurn(echoes, shown)).toBe(false);
+  });
+
+  const copied = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }]);
+  it("stays while Hermes's copy is in the chat before the turn's report, and only for the handoff bound", () => {
+    const kept = step(acceptedEcho, { receipt: accepted, conversation: copied, now: 2000 })!;
+    expect(kept).toMatchObject({ copiedAt: 2000 });
+    expect(awaitingTurn([kept], copied)).toBe(true);
+    // The copy is Hermes's, so the echo is not drawn a second time.
+    expect(withEchoes(copied, [kept])).toBe(copied);
+    expect(step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
+    expect(step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    // The report takes over, and a steered or already-run message never stood for a new turn.
+    expect(step(kept, { receipt: accepted, conversation: { ...copied, activity: { state: "thinking" } }, now: 2100 })).toBeNull();
+    expect(step({ ...acceptedEcho, steered: true }, { receipt: accepted, conversation: copied, now: 2000 })).toBeNull();
+    // Only a message Hermes accepted hands off: one still on its way leaves with its copy, as before.
+    expect(step(sending, { pending: request, sending: true, conversation: conversation([{ id: "req", role: "user", text: "Hello there" }]) })).toBeNull();
+  });
+
+  it("marks a request out for the bound as slow, and starts the bound again when a retry goes out", () => {
+    const out = (echo: SentEcho, now: number, isSending = true) => step(echo, { pending: request, sending: isSending, now })!;
+    expect(out(sending, 1000 + SENDING_ROW_MS - 1)).toBe(sending);
+    const slow = out(sending, 1000 + SENDING_ROW_MS);
+    expect(slow).toMatchObject({ status: "sending", slow: true });
+    const unconfirmed = out(slow, 9000, false);
+    const retried = out(unconfirmed, 20_000);
+    expect(retried).toMatchObject({ status: "sending", slow: false, sendingSince: 20_000 });
+    expect(awaitingTurn([retried], conversation())).toBe(true);
   });
 });

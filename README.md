@@ -678,9 +678,16 @@ describes recovery.
 Conversations show an animated avatar inline after the latest message while
 Hermes thinks or uses tools. A message sent while nothing is running shows the
 assistant thinking at once, beside the message, and Hermes's own report takes over
-the same row without a second announcement. That early row goes if the send is
-refused, fails or is unconfirmed, and a message sent while the assistant works adds
-none. Stop appears once Hermes reports the turn. Thinking keeps the character visible with a gentle
+the same row without a second announcement, also when Hermes's saved copy of the
+message arrives one read before that report. That early row goes if the send is
+refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
+when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
+copy arrives and no report of the turn follows within 5 seconds. A message sent
+while the assistant works adds none. Stop appears once Hermes reports the turn.
+One case still shows thinking for the echo's 30 seconds with nothing running:
+Hermes's typed stop phrase, which acts only while Hermes's own voice mode is on
+for the session. WildBots never turns that mode on, and the add-on reports the
+phrase as accepted like any message. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning

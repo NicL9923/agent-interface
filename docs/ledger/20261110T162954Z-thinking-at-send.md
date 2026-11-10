@@ -98,3 +98,72 @@ tools index. On merge commit `068654a`: `npm run typecheck`, `npm run lint` and 
 `npm test`: 193 files, 3,224 tests passed; `npm run build` passed; `npm run test:e2e`: 21 passed in Chromium.
 `measure-thinking-gap.mjs --runs 5`: 0 ms echo to row at both admission delays, one row node, none removed,
 one status text, the sent message moved 18 px as on `main`.
+
+## Review fix round: Grok 4.7's findings
+
+Grok 4.7 reviewed `b40f057` and ran every check. Its findings and what changed:
+
+1. A send whose request had not settled showed "thinking" with nothing running until the 60 s write timeout
+   (`src/client-api.ts:71`). Now the early row shows at once as before, and a `sending` echo stops counting once its
+   request has been out `SENDING_ROW_MS`, 5 s (`src/app/sent-echo.ts`). The message keeps its own "Sending…", as on
+   `main`; when the admission then answers accepted, the row comes back by the normal path. A Retry starts the bound
+   again. No cancel or abort was added. The bound: a healthy admission answered in 0.08 s in the idle-compaction
+   probe on real Hermes, including sends that stopped a held compaction (under 0.1 s), and in 1.1 s once with the
+   host's load average at 7.4 (`docs/ledger/20261109T152849Z-idle-compaction.md`). Loopback here answers in about
+   35 ms. 5 s covers the slowest healthy admission seen several times over plus a slow phone round trip, and ends
+   the claim long before the add-on's 30 s preempt bound (`src/hermes/compaction.py:30`) or the 60 s write timeout.
+2. Hermes's copy arriving in one read and the turn's report in the next unmounted the early row and announced
+   thinking twice. An accepted echo whose copy is in the chat now stays while the chat shows no work and the copy
+   is still the last message (`handingOff`), so the report takes over the same row and status node. It ends with
+   the report, with a reply after the copy, or `COPY_HANDOFF_MS`, 5 s, after the copy arrived. The report normally
+   follows as the next change notice; 5 s is the same scale as the admission bound and keeps a stray copy without a
+   turn from claiming work for long. Only an accepted message hands off; one still `sending` when its copy arrives
+   leaves with it, as before (a narrow race, left as is).
+3. The `!connectionShown &&` gate in `src/App.tsx` had no test. "shows the chat disconnected, not thinking, when the
+   connection drops while a message is on its way" now fails without it.
+4. What stays: Hermes's typed stop phrase would show thinking for the echo's 30 s. It acts only while Hermes's own
+   voice mode is on for the session, and this app never enables it. Reviewer's citations, each read here:
+   `src/server/hermes.ts:385` sends `voice_turn` only for a spoken Talk turn, never voice mode;
+   `src/hermes/extension.py:1885` passes that mark to `prompt.submit`, and `:1909` folds every status but
+   `rejected` into `accepted`. Upstream, in the Hermes checkout the reviewer used: `tui_gateway/methods_prompt.py:239`
+   is `_consume_typed_stop_phrase`, which ends a session's voice chat for a bare stop phrase typed while its voice
+   mode is on, and `tui_gateway/methods_voice.py:59` is `_session_voice_enabled`, that gate: the session's own
+   `/voice on` or the voice sidecar's environment flag. README says so.
+
+Tests written first and seen red for the reviewer's reason before the change: the bound test (row still there past
+5 s), the split test (row unmounted after the copy), and the bounded-drop test (row already gone). The disconnected
+test passed with the gate in place and went red with it removed.
+
+Red proof, each line broken by hand and restored (`tests/thinking-at-send-ui.test.ts`, `tests/sent-echo.test.ts`):
+
+| Break | Red |
+| --- | --- |
+| `awaitingTurn` ignores `slow` | "does not show when its request has been out longer than the bound", "leaves a send whose request has not answered…" |
+| The bound timer in `useSentEchoes` never set | "leaves a send whose request has not answered…", "drops the row a bounded time after Hermes's copy arrives…" |
+| `slow` never set | "marks a request out for the bound as slow…", "leaves a send whose request has not answered…" |
+| A retry keeps the old `sendingSince` | "marks a request out for the bound as slow, and starts the bound again when a retry goes out" |
+| `awaitingTurn` ignores `handingOff` | the unit handoff test, "keeps one row and one announcement…", "drops the row a bounded time…" |
+| `nextEcho` drops a shown echo at once | the same three |
+| A reply after the copy ignored | "does not show when Hermes's copy is in the chat with a reply after it", "drops the row at once when Hermes's copy arrives with the turn's reply already after it" |
+| The handoff never ends | the unit handoff test, "drops the row a bounded time…" |
+| `!connectionShown &&` removed | "shows the chat disconnected, not thinking…" only |
+
+The first run of the gate break also failed four later tests: the offline stub leaked when the assertion threw.
+Its cleanup moved to `afterEach`, and the rerun failed only the gate's test.
+
+`node .agents/tools/measure-thinking-gap.mjs --runs 5 --delays 0,1500,7000`, Chromium 1280 x 800, `E2E_PORT=4271`:
+
+| Admission | Echo to row | Row nodes inserted, removed | Sent message moved |
+| --- | --- | --- | --- |
+| immediate | 0 ms in 5 of 5 | 1, 0 | 18 px |
+| held 1,500 ms | 0 ms in 5 of 5 | 1, 0 | 18 px |
+| held 7,000 ms | 0 ms in 5 of 5 | 2, 1: gone at the bound, back on acceptance | 65 px |
+
+The 7 s case is the trade the bound makes: the row leaves while the message reads "Sending…", and returns when
+Hermes accepts it, announced again. The tool reads positions in a MutationObserver, before the transcript's
+ResizeObserver places the sent message, so the 65 px may include a frame that is never painted; not separated here.
+
+Checks at this commit: `npm ci` once; `npm run typecheck`, `npm run lint` passed; `ruff check .` with ruff 0.17.3:
+all checks passed; `npx vitest run tests/thinking-at-send-ui.test.ts tests/sent-echo.test.ts`: 2 files, 48 tests
+passed; `npm test`: 193 files, 3,232 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4261`):
+21 passed in Chromium. Safari, Firefox, screen-reader speech and a real phone: not run.

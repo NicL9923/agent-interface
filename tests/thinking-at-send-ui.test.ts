@@ -4,7 +4,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, write } from "../src/client-api";
-import { ECHO_PATIENCE } from "../src/app/sent-echo";
+import { COPY_HANDOFF_MS, ECHO_PATIENCE, SENDING_ROW_MS } from "../src/app/sent-echo";
 import { defaultPreferences } from "../src/shared/types";
 import type { ActivityState, Bootstrap, Conversation, SubmissionReceipt } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -82,7 +82,10 @@ beforeEach(() => {
   });
   ({ container, root } = mountRoot());
 });
-afterEach(() => expect(unexpected).toEqual([]));
+afterEach(() => {
+  Reflect.deleteProperty(navigator, "onLine");
+  expect(unexpected).toEqual([]);
+});
 
 async function open() {
   await act(async () => root.render(createElement(App)));
@@ -90,11 +93,30 @@ async function open() {
 }
 // Send reads "Send guidance" while the assistant works.
 const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"], [aria-label="Send guidance"]')!;
+/** Sends the draft. The echo starts between the click and the request, so these bracket its start. */
 async function send() {
+  const clicked = Date.now();
   await act(async () => sendButton().click());
   // The draft's digest settles in real time; the request leaves once it has.
   await waitForUi(() => expect(sent).toBeDefined());
+  return { clicked, requested: Date.now() };
 }
+/** Moves the pinned clock to an absolute time. */
+const advanceTo = (time: number) => advance(time - Date.now());
+/** Every status node the activity row has mounted, so a second announcement shows as a second node. */
+function watchStatusNodes() {
+  const nodes: Element[] = [];
+  const record = () => {
+    const node = row()?.querySelector('[role="status"]');
+    if (node && !nodes.includes(node)) nodes.push(node);
+  };
+  const observer = new MutationObserver(record);
+  observer.observe(container, { childList: true, subtree: true });
+  record();
+  return { nodes, stop: () => observer.disconnect() };
+}
+/** The sidebar row's activity for the assistant, as its class names it. */
+const sidebarState = () => container.querySelector(".bot-activity")?.className.match(/state-(\w+)/)?.[1] ?? null;
 /** The activity row under the transcript, and what its status line says. */
 const row = () => container.querySelector<HTMLElement>(".conversation-activity");
 /** What the row's status says to assistive technology: its text without the parts hidden from it. */
@@ -225,6 +247,76 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await report({ state: "done", messages: [prompt, answer, { id: "a1", role: "assistant", text: "Other task done." }] });
     // The queued message's own turn has shown work already, so the chat waits for Hermes to report it.
     expect(row()).toBeNull();
+  });
+
+  // A healthy admission answers in well under a second. Past the bound the request is in trouble, and the
+  // message's own "Sending…" says so without the chat claiming the assistant is on it, as main does.
+  it("leaves a send whose request has not answered to its Sending… state once the bound passes, and shows the row again when Hermes accepts it", async () => {
+    await open();
+    const { clicked, requested } = await send();
+    expect(status()).toBe("Shared is thinking...");
+    expect(sidebarState()).toBe("thinking");
+    const early = row();
+    await advanceTo(clicked + SENDING_ROW_MS - 1);
+    expect(row()).toBe(early);
+    expect(echo()?.textContent).toContain("Sending…");
+    await advanceTo(requested + SENDING_ROW_MS);
+    expect(row()).toBeNull();
+    expect(sidebarState()).toBeNull();
+    expect(echo()?.textContent).toContain("Sending…");
+    await act(async () => sent!.resolve({}));
+    expect(status()).toBe("Shared is thinking...");
+    expect(echo()?.textContent).not.toContain("Sending…");
+  });
+
+  // Hermes's saved copy can arrive in one read and the turn's report in the next.
+  it("keeps one row and one announcement when Hermes's copy arrives before the turn's report", async () => {
+    await open();
+    await send();
+    const watch = watchStatusNodes();
+    await act(async () => sent!.resolve({}));
+    const early = row();
+    await report({ messages: [prompt, answer, copy()] });
+    expect(row()).toBe(early);
+    expect(status()).toBe("Shared is thinking...");
+    await report({ state: "thinking" });
+    expect(row()).toBe(early);
+    expect(status()).toBe("Shared is thinking...");
+    watch.stop();
+    expect(watch.nodes).toHaveLength(1);
+  });
+
+  it("drops the row a bounded time after Hermes's copy arrives when no turn follows", async () => {
+    await open();
+    await send();
+    await act(async () => sent!.resolve({}));
+    // The chat reads the copy within report()'s 1.5 s, so these bracket its arrival.
+    const notified = Date.now();
+    await report({ messages: [prompt, answer, copy()] });
+    const read = Date.now();
+    await advanceTo(notified + COPY_HANDOFF_MS - 1);
+    expect(status()).toBe("Shared is thinking...");
+    await advanceTo(read + COPY_HANDOFF_MS);
+    expect(row()).toBeNull();
+    expect(echo()).toBeDefined();
+  });
+
+  it("drops the row at once when Hermes's copy arrives with the turn's reply already after it", async () => {
+    await open();
+    await send();
+    await act(async () => sent!.resolve({}));
+    await report({ messages: [prompt, answer, copy(), { id: "a1", role: "assistant", text: "Fed." }] });
+    expect(row()).toBeNull();
+  });
+
+  it("shows the chat disconnected, not thinking, when the connection drops while a message is on its way", async () => {
+    await open();
+    await send();
+    expect(status()).toBe("Shared is thinking...");
+    Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
+    await act(async () => { window.dispatchEvent(new Event("offline")); });
+    expect(row()?.className).toContain("state-disconnected");
+    expect(status()).toBeNull();
   });
 
   it("goes after the echo's patience when an accepted message never starts a turn, as a typed stop phrase does", async () => {
