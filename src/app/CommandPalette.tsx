@@ -11,6 +11,7 @@ import { formatCombo, shortcuts } from "./shortcuts";
 import { isUnread, type ReadThrough } from "./unread";
 import type { View } from "./view";
 import { mainBot } from "../shared/main-assistant";
+import { imeKey } from "./ime";
 import "./shell.css";
 
 type Command = PaletteItem & { icon: ReactNode; detail?: string; hint?: string; checked?: boolean; run(): void };
@@ -146,7 +147,7 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
         placeholder="Search assistants and actions" value={query} maxLength={200} autoComplete="off" spellCheck={false}
         onChange={event => setQuery(event.target.value)}
         onKeyDown={event => {
-          if (event.nativeEvent.isComposing) return;
+          if (imeKey(event.nativeEvent)) return;
           if (event.key === "ArrowDown" || event.key === "ArrowUp") {
             event.preventDefault();
             setActive(value => step(value, event.key === "ArrowDown" ? 1 : -1, results.length));

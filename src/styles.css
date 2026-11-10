@@ -824,6 +824,11 @@ a {
   font-size: 1rem;
   line-height: 1.5;
 }
+/* The field grows with its text up to max-height, then scrolls. Browsers without field-sizing get
+   the same from the script in Composer.tsx, which measures on each keystroke. */
+@supports (field-sizing: content) {
+  .composer textarea { field-sizing: content; }
+}
 .composer textarea::placeholder { white-space: nowrap; }
 .composer textarea:focus-visible {
   outline: none;

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useStableCallback } from "../app/use-stable-callback";
 import { ApiError, request } from "../client-api";
 import type { WebPushSubscription } from "../shared/api";
 import { notificationPromptKey as promptKey } from "../app/storage";
@@ -99,7 +100,7 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       && !alreadyPrompted(userId) && "Notification" in window && Notification.permission !== "denied");
   }, [userId, vapid, state.checking, state.enabled, state.error, state.canEnable]);
 
-  const enable = async () => {
+  const enable = useStableCallback(async () => {
     if (!userId || busy.current || !state.canEnable) return;
     const account = userId;
     const worker = registration.current;
@@ -140,8 +141,8 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (user.current === account) setState((previous) => ({ ...previous, busy: false }));
       else void latestRefresh.current();
     }
-  };
-  const disable = async () => {
+  });
+  const disable = useStableCallback(async () => {
     if (!userId) return;
     if (busy.current) throw new Error("Wait for the notification change to finish before signing out.");
     const account = userId;
@@ -178,6 +179,8 @@ export function useDeviceNotifications(userId?: string, vapid?: string) {
       if (user.current === account) setState((previous) => ({ ...previous, busy: false }));
       else void latestRefresh.current();
     }
-  };
-  return { ...state, prompt, enable, disable, refresh, dismissPrompt: () => { if (user.current) rememberPrompt(user.current); setPrompt(false); } };
+  });
+  const dismissPrompt = useCallback(() => { if (user.current) rememberPrompt(user.current); setPrompt(false); }, []);
+  // One object while nothing in it changes, so the memoized transcript skips a keystroke in the composer.
+  return useMemo(() => ({ ...state, prompt, enable, disable, refresh, dismissPrompt }), [state, prompt, enable, disable, refresh, dismissPrompt]);
 }

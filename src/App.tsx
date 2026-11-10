@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ActivityState, Bot, Preferences } from "./shared/types";
+import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { api, write } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
@@ -297,6 +297,17 @@ export function App() {
   const cancelUploadFile = useStableCallback(cancelUpload);
   const retrySend = useStableCallback(retry);
   const discardSend = useStableCallback(discard);
+  // The transcript is memoized too, so a keystroke in the composer does not re-render it through this.
+  const addToDraft = useStableCallback((text: string, files: FileRef[] = []) => {
+    // Drafts are known by their text, so one on its way must not change.
+    if (sendingDraft(draft, pending, sending)) return false;
+    // Files join those already there, as many as a message can carry.
+    const missing = files.filter(file => !draft.attachments.some(kept => kept.id === file.id));
+    const added = missing.slice(0, Math.max(0, MAX_ATTACHMENTS - draft.attachments.length - uploads.length));
+    setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text,
+      attachments: [...previous.attachments, ...added.filter(file => !previous.attachments.some(kept => kept.id === file.id))] }));
+    return missing.length - added.length;
+  });
   const ownConversation = conversation?.botId === botId ? conversation : null;
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
@@ -372,17 +383,7 @@ export function App() {
             reconnect={session.reconnect} error={error} setError={setError}
             notifications={notifications} scroll={scroll} endSpace={endSpace} content={content} history={history} reply={reply} onScroll={scrolled}
             onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
-            onDraft={(text, files = []) => {
-              // Drafts are known by their text, so one on its way must not change.
-              if (sendingDraft(draft, pending, sending)) return false;
-              // Files join those already there, as many as a message can carry.
-              const missing = files.filter(file => !draft.attachments.some(kept => kept.id === file.id));
-              const added = missing.slice(0, Math.max(0, MAX_ATTACHMENTS - draft.attachments.length - uploads.length));
-              setDraft(previous => ({ ...previous, dirty: true, text: previous.text.trim() ? `${previous.text.trimEnd()}\n\n${text}` : text,
-                attachments: [...previous.attachments, ...added.filter(file => !previous.attachments.some(kept => kept.id === file.id))] }));
-              return missing.length - added.length;
-            }}
-            onCreate={() => setPanel({ kind: "settings", bot: "new" })} />
+            onDraft={addToDraft} onCreate={newBot} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
             state={state}
             active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}

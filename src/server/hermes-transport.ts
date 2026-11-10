@@ -27,6 +27,8 @@ export type Connection = {
   removeListeners?: () => void;
   scope?: Scope.Closeable;
   closeReason?: Error;
+  /** The liveness probe in flight on this socket. At most one runs at a time. */
+  probe?: Promise<Wire>;
 };
 type Pending = {
   connection: Connection;
@@ -66,6 +68,7 @@ const readMethods = new Set([
   'profiles.list', 'profiles.describe', 'session.history', 'model.options',
   'groups.capabilities', 'groups.list', 'groups.state', 'groups.log',
 ]);
+const isRead = (method: string, params: Wire) => readMethods.has(method) || method === 'image.generate' && params.probe === true;
 // A quiet socket is checked in the background, so no request waits on a dead one,
 // and open chats reconnect without waiting for a request.
 const HEARTBEAT_MS = 10_000;
@@ -317,7 +320,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
           announced = rawRpc(current, 'client.capabilities', {server_requests: true});
         }
         // One round trip: the contract check follows the client announcement on the same socket.
-        const checked = rawRpc(current, 'agent-interface.capabilities');
+        const checked = rawRpc(current, 'agent-interface.capabilities', {}, true);
         checked.catch(() => { /* Settled below, after the announcement. */ });
         if (announced) await announced;
         let capabilities: Wire;
@@ -353,10 +356,22 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (closed || connecting) return;
       const current = connection;
       if (current?.verified && current.ws.readyState === WebSocket.OPEN) {
-        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void rpc('agent-interface.capabilities').catch(() => {});
+        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) probe(current);
       } else if (hooks.watching() && retryAt <= Date.now()) void connect().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeat.unref?.();
+  }
+  /**
+   * The one read whose timeout still drops the socket: a socket that cannot answer it is dead. The
+   * heartbeat asks for it after ten quiet seconds. A read timeout asks for it at once, because steady
+   * session events keep a socket looking busy even when it answers no request. It is sent on its own,
+   * never joining a shared read, and a second ask while one is in flight waits on the same probe.
+   */
+  function probe(current: Connection): void {
+    if (current.probe || connection !== current || !current.verified) return;
+    const sent = rawRpc(current, 'agent-interface.capabilities', {}, true);
+    current.probe = sent;
+    sent.catch(() => {}).finally(() => { if (current.probe === sent) current.probe = undefined; });
   }
   function receive(current: Connection, data: string): void {
     if (connection !== current) return;
@@ -403,29 +418,46 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (current) disconnect(current, unavailable());
       throw unavailable();
     }
-    const key = share && (readMethods.has(method) || method === 'image.generate' && params.probe === true)
+    const key = share && isRead(method, params)
       ? `${method}:${JSON.stringify(params)}`
       : undefined;
     if (key && reads.has(key)) return reads.get(key)!;
-    const request = rawRpc(current, method, params);
-    if (key) reads.set(key, request);
-    try { return await request; }
-    finally { if (key && reads.get(key) === request) reads.delete(key); }
+    const sent = rawRpc(current, method, params);
+    if (key) reads.set(key, sent);
+    try { return await sent; }
+    finally { if (key && reads.get(key) === sent) reads.delete(key); }
   }
-  function rawRpc(current: Connection, method: string, params: Wire = {}): Promise<Wire> {
+  /**
+   * A read that times out fails alone and leaves the socket open, because one slow read must not
+   * drop every open chat's live state. A request that changes state, the handshake and the
+   * heartbeat's liveness probe still drop the socket when they time out: an unanswered mutation
+   * leaves its outcome uncertain on that socket, and an unanswered handshake or probe means it is
+   * dead. drop overrides that choice for one request. A read timeout starts the liveness probe, so a
+   * socket that stopped answering is dropped within one more read timeout.
+   */
+  function rawRpc(current: Connection, method: string, params: Wire = {}, drop?: boolean): Promise<Wire> {
     if (connection !== current || current.ws.readyState !== WebSocket.OPEN) {
       if (connection === current) disconnect(current, unavailable());
       return Promise.reject(unavailable());
     }
     const id = ++serial;
-    const timeout = readMethods.has(method) || method === 'client.capabilities' || method === 'image.generate' && params.probe === true
-      ? 10_000
-      : 45_000;
+    const read = isRead(method, params);
+    const timeout = read || method === 'client.capabilities' ? 10_000 : 45_000;
+    const drops = drop ?? !read;
     const deferred = Deferred.makeUnsafe<Wire, Error>();
     const scope = Scope.makeUnsafe();
     const timer = Effect.runFork(Effect.gen(function* () {
       yield* Effect.sleep(timeout);
-      disconnect(current, new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`));
+      if (drops) {
+        disconnect(current, new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`));
+        return;
+      }
+      // An answer that arrives later finds no pending request and is dropped in receive().
+      if (pending.get(id)?.deferred !== deferred) return;
+      pending.delete(id);
+      Deferred.doneUnsafe(deferred, Effect.fail(new TransportError('unreachable', `Hermes ${method} timed out. Try again.`)));
+      // The socket stays only while it still answers: an unanswered probe drops it ten seconds from now.
+      probe(current);
     }));
     Effect.runSync(Scope.addFinalizer(scope, Effect.sync(() => timer.interruptUnsafe())));
     pending.set(id, {connection: current, deferred, scope});

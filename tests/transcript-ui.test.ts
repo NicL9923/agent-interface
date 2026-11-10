@@ -713,6 +713,10 @@ describe("find in chat", () => {
     await advance(300);
     expect(api).toHaveBeenCalledWith("/search?q=gate&botId=shared");
     expect(count()).toBe("3 of 3");
+    // Safari's Enter and Escape that end an IME composition report keyCode 229 and belong to the input method.
+    await act(async () => find().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true })));
+    await act(async () => find().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", keyCode: 229, bubbles: true })));
+    expect(count()).toBe("3 of 3");
     await act(async () => find().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     expect(count()).toBe("2 of 3");
     // The oldest match is not loaded: the window reloads from it.
