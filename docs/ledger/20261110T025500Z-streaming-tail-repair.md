@@ -174,8 +174,8 @@ row arrives.
   in the parse of that prefix. More than 1,000 prefixes must be cut, which an identity function
   fails. A table of 20 positive cases holds each construct while unfinished and shows it whole
   once finished; 24 negative cases show globs, names, indexes, URLs and every kind of code as
-  typed. A timing case requires a median under 1 ms on 100,000 characters and on five blocks at
-  the read limit.
+  typed. A timing case requires a median under 1 ms on 100,000 characters and on four blocks at
+  or near the read limit.
 - `tests/message-markdown.test.ts`: all 18 reviewed inputs from both rounds, plus a readable
   copy of the slowest, are checked through the real components: the live render equals
   `MessageMarkdown` rendering the same prefix. React Markdown took about 80 seconds to render
@@ -187,9 +187,9 @@ row arrives.
 ### Timing
 
 `npx tsx` with Node 24.22.2 on NicolasLaptop, 50 warm-up calls, then 101 timed calls each: the
-100,000-character block took 0.0002 ms median and 0.005 ms max, because it is not read. The worst
-4,000-character block, alternating `_a ` and `b_ ` runs, took 0.14 ms median and 0.55 ms max
-across the runs. A scratch search over 3,000 random 4,000-character blocks built from repeated
+100,000-character block took 0.0002 ms median and 0.005 ms max, because it is not read. Across six
+adversarial 4,000-character blocks, the slowest median was 0.14 ms, for alternating `_a ` and
+`b_ ` runs, and the slowest single call was 0.55 ms, for `*a ` runs. A scratch search over 3,000 random 4,000-character blocks built from repeated
 marker shapes found a worst single call of 0.9 ms.
 
 While measuring I found my first fence regex backtracked exponentially: `"-   ".repeat(20) + "x"`
@@ -206,12 +206,14 @@ match. The same input takes 0.02 ms, and a 4,000-character version is in the tim
 
 ### Red proof, round 2
 
-35 hand mutations, each run against both test files and then restored. All 35 turned at least
-one test red. On the first pass 29 did. Of the six survivors, one was a redundant guard (a
-construct before the window returning early), now deleted, because the final bound check already
-shows it as typed. The other five got a case each, and each now goes red: an underscore inside a
-word closing emphasis, a link destination not skipped, the bound not enforced on a line-level
-cut, openers or brackets beyond the bound blocking a later hold, and escapes ignored.
+Hand mutations, each run against both test files and then restored. On the first pass 29 of 35
+turned at least one test red. Of the six survivors, one was a redundant guard, a construct before
+the window returning early, now deleted because the final bound check already shows it as typed.
+The other five got a case each and now go red: an underscore inside a word closing emphasis, a
+link destination not skipped, the bound not enforced on a line-level cut, an opener beyond the
+bound blocking a later hold, and escapes ignored. A further mutation, a bracket beyond the bound
+blocking a later hold, was added with its case and goes red. On the final code all 35 mutations
+go red.
 
 Per rule: not holding an unclosed code span, removing each marker's opener test (`*`, `_`, `~~`),
 letting a shorter closer close, letting closers never close, letting an opener follow a letter,
