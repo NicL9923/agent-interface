@@ -399,24 +399,50 @@ class LaneQueue:
                 else:
                     lane.append((merge, run, [request]))
                 return
-            self.queues[key] = collections.deque([(merge, run, [request])])
-        self.pool.submit(self.run_next, key)
+            lane = self.queues[key] = collections.deque([(merge, run, [request])])
+            # Scheduled under the lock, so no request joins a lane whose worker may never run.
+            try:
+                self.pool.submit(self.run_next, key, lane)
+            except BaseException:
+                # The executor can queue the work item and then fail to start its thread. That item
+                # runs on the next worker that starts, and finds its lane gone.
+                del self.queues[key]
+                raise
 
-    def run_next(self, key):
+    def run_next(self, key, lane):
         with self.lock:
-            _, run, requests = self.queues[key].popleft()
+            # A work item whose scheduling failed: its caller was refused, so it runs nothing.
+            if self.queues.get(key) is not lane:
+                return
+            _, run, requests = lane.popleft()
         try:
             run(requests)
         except Exception:
             logging.getLogger(__name__).exception("Add-on request failed")
         finally:
             with self.lock:
-                more = bool(self.queues[key])
+                more = bool(lane)
                 if not more:
                     del self.queues[key]
             # Requeue behind other keys' work instead of looping, so keys share workers fairly.
+            # If a new thread fails to start here, this worker still runs the queued item.
             if more:
-                self.pool.submit(self.run_next, key)
+                self.pool.submit(self.run_next, key, lane)
+
+
+class Reservation:
+    """One admission reservation, released at most once, so a second release cannot free another request's."""
+
+    def __init__(self, retirement):
+        self.retirement, self.lock, self.held = retirement, threading.Lock(), True
+
+    def release(self):
+        with self.lock:
+            held, self.held = self.held, False
+        if held:
+            self.retirement.release()
+        else:
+            logging.getLogger(__name__).error("An admission reservation was released twice; the second release was ignored", stack_info=True)
 
 
 def answered(response, rid, queued):
@@ -777,6 +803,7 @@ class Bridge:
         server, retirement = self.server, self.retirement
         if not retirement.acquire():
             return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        reservation = Reservation(retirement)
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         profile = params.get("profile", "default")
         # Listed while its reservation is held, so maintenance status and acquire agree about it.
@@ -799,7 +826,7 @@ class Bridge:
                     response = self.original_handle(request)
                 except Exception as exc:
                     response = server._err(request["id"], -32000, f"handler error: {exc}")
-                for each, arrival in requests:
+                for each, arrival, _ in requests:
                     reply = answered(response, each["id"], started - arrival)
                     if reply is not None:
                         transport.write(reply)
@@ -807,8 +834,8 @@ class Bridge:
                 if send is not None:
                     with self.sends_in_flight_lock:
                         self.sends_in_flight.pop(id(send), None)
-                for _ in requests:
-                    retirement.release()
+                for *_, held in requests:
+                    held.release()
         # A profile that is not a name still gets its handler's answer, from a lane of its own.
         lane = (method, profile if method in PROFILE_LANES and isinstance(profile, str) else None)
         merge = None
@@ -820,12 +847,13 @@ class Bridge:
                 merge = None
         try:
             (self.sends if method in QUEUED_SENDS else self.reads).submit(
-                lane, lambda requests: context.run(answer, requests), (request, arrived), merge)
+                lane, lambda requests: context.run(answer, requests), (request, arrived, reservation), merge)
         except BaseException:
             if send is not None:
                 with self.sends_in_flight_lock:
                     self.sends_in_flight.pop(id(send), None)
-            retirement.release()
+            # Nothing was queued, so native dispatch answers the raise and nothing else ever will.
+            reservation.release()
             raise
         return None
 

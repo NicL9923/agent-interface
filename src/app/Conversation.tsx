@@ -1,10 +1,10 @@
 import { matchCombo, shortcuts } from "./shortcuts";
-import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
-import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
+import { ReplyMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
@@ -30,6 +30,7 @@ import type { SentEcho } from "./sent-echo";
 import type { useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
+import { emptyReplyKeys, replyKeys } from "./reply-keys";
 import { AttentionList } from "./AttentionList";
 import { ApprovalCard, DeclinedStep } from "./ApprovalCard";
 import { useDeclined } from "./decline-handoff";
@@ -506,6 +507,12 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
   });
   const afterFold = fold ? [fold, ...shown] : [];
   // One keyed list, so the fold keeps its open state when finishing moves it above the reply.
+  // Each row is keyed by its own identity. A streamed reply's saved copy takes the live row's key
+  // when the hand-off is unambiguous (see replyKeys), so React keeps the row's node, with any
+  // selection in it, instead of building the reply again.
+  const handoff = useRef(emptyReplyKeys());
+  const { key: rowKey, record } = replyKeys(handoff.current, block.messages);
+  useLayoutEffect(() => { handoff.current = record; });
   const rows = block.messages.flatMap((message, position) => {
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
     // in a turn read as one reply, with the time under the last part.
@@ -531,24 +538,24 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
     const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
       className={`message message-${exchange ? "agent" : message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
-      key={message.id}
+      key={rowKey(message)}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
       {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
       {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
       {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
-        streaming
-          ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
-          : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant" && !progress} />
+        <ReplyMarkdown live={streaming} text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected}
+          inlineUi={message.role === "assistant" && (streaming || !progress)} />
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>
       )}
       {own && message.steered && <p className="message-steered">Added to the current task</p>}
       {!own && files}
       {turnFiles?.replyId === message.id && !streaming && <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />}
-      {!exchange && !streaming && !progress && (reply || own) && <MessageMeta message={message} own={own}
-        when={endsRun ? when : undefined} delivery={delivery}
+      {/* A live reply holds its meta row's place, hidden, so nothing moves when it is saved. */}
+      {!exchange && !progress && (reply || own) && <MessageMeta message={message} own={own}
+        when={endsRun ? when : undefined} delivery={delivery} pending={streaming}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;
     return message.id === foldAt && fold ? [...afterFold, article] : [article];
