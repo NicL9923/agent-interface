@@ -275,10 +275,24 @@ its SHA-256:
 | Steer rows outside the root's turn count | the delivered-alone test, `test_guidance_that_runs_as_its_own_turn_stays_unattributed`, the steering table [one row in the turn], the damaged-turn test [well formed] |
 | Fake: a tool batch writes each steer as its own row, as before | the joined-row test errors: Hermes wrote no joined row |
 
+Third round, on the committed tree:
+
+Source fingerprint sha256:0c49cb52bad49af736ae6258cdb3e466a304107581007eb60f0a9bae528b5157 (1687 source files); `src/hermes` alone sha256:f28d0282091b5596e899881bb92879b494b416f20a3ae419c032bd00d185ecb3 (20 source files).
+
+- `npm ci`, then `npm run test:py`: 43 files passed, 0 skipped, 0 failed (Python 3.14.10, 199 s).
+- `npm run lint:py` with ruff 0.17.3 from `.github/requirements-ci.txt`: passed. `npm run lint`: passed.
+- `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+`tests/hermes_turn_binding_test.py` now has 26 tests, four of them tables with 25 subtest cases in all. One older test changed its setup: in the
+same-words test a tool batch delivers the native correction before Kim steers, because the honest fake would
+otherwise join the two into one row and the test would no longer cover two rows with the same words.
+
 Not caught in the second round: replacing `COALESCE(row_id,?)` with the completion's row, which would overwrite a row
 Hermes's answer named. The fake always adopted the staged row. The second round said upstream does too; it does not
 (see Native evidence), and the third round's test catches the mutant.
 
-Not run: real Hermes, the extension probe (`scripts/spike/extension_probe.py`, which checks an image sent alone
-against real Hermes), `npm test`, iOS and production. The inline guidance check `app_prompt` still matches by text;
+Not run, in any round: real Hermes, the extension probe (`scripts/spike/extension_probe.py`, which checks an image
+sent alone against real Hermes), `npm test`, iOS and production. The inline guidance check `app_prompt` still matches by text;
 it changes no stored data and is unchanged.
