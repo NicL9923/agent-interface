@@ -520,12 +520,29 @@ READ_WORKERS = 4
 # only the wait for a compaction to stop runs beside them, and the idle compactor runs one
 # compaction at a time, so a second assistant's send never waits for a worker behind it.
 SEND_WORKERS = 4
-# What Hermes did with a new task it did not start at once, by native prompt.submit's answer
-# (tui_gateway/session_auto_continue.py _handle_busy_submit at ed1afb0). "streaming" means it
-# started the turn. Over a running session, "queued" means the text waits as its own turn behind
-# that work; "steered" and "redirected" mean busy_input_mode put it into the running turn instead,
-# so it never gets a turn of its own. Any other answer reports nothing.
+# What Hermes did with a new task it did not start at once, by native prompt.submit's successful
+# answer at ed1afb0. Over a running session (tui_gateway/session_auto_continue.py _handle_busy_submit),
+# "queued" is the busy queue's disposition: the text was queued, merged into a queued prompt, or
+# dropped as a copy of the running prompt, so it promises no separate later turn; a session another
+# gateway owns queues it in that owner's queue (methods_prompt.py _submit_to_ledger_owner). "steered"
+# and "redirected" put it into the running turn, which gives it no turn of its own. See admission_turn.
 ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined"}
+
+
+def admission_turn(result):
+    """What a new task's successful prompt.submit answer says about its turn; None only for a started turn.
+
+    Only "streaming" says Hermes started the turn (methods_prompt.py:973; compute_host_bridge.py:327
+    for an isolated turn). A typed stop phrase while the session's voice mode is on ends the voice
+    chat and admits nothing: {"voice_stopped": true} (methods_prompt.py:265-268, checked first at :835-836, and :760-761), "none".
+    Any answer this does not know is "unknown", never taken for a started turn.
+    """
+    status = result.get("status")
+    if status == "streaming":
+        return None
+    if status is None and result.get("voice_stopped") is True:
+        return "none"
+    return ADMISSION_TURN.get(status, "unknown")
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity, journal mutation and native
@@ -1603,7 +1620,7 @@ class Bridge:
         if message is not None:
             value["message"] = message
         if turn is not None:
-            # A new task that did not start its own turn at once: see ADMISSION_TURN.
+            # A new task Hermes did not start at once: see admission_turn.
             value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
         return self.server._ok(rid, value)
@@ -1843,17 +1860,20 @@ class Bridge:
         mark = time.perf_counter()
         status = "rejected" if result.get("status") == "rejected" else "accepted"
         # Steering already joins the running task, and native session.steer answers "queued" when it
-        # accepts, so only a new task's answer says whether its turn started.
-        turn = None if steering else ADMISSION_TURN.get(result.get("status"))
+        # accepts, so only a new task's answer says whether its turn started. A refusal has no turn.
+        turn = None if steering or status == "rejected" else admission_turn(result)
+        # A typed stop admitted nothing, so nothing will settle its receipt: it is settled now, and
+        # never holds up the next send as a task Hermes is finishing.
+        settled = steering or status == "rejected" or turn == "none"
         if not steering:
             self.turn_started(sid, native_rid, result.get("status") == "streaming")
         with journal.lock, journal.db:
-            journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
-            if interrupted and status == "accepted":
+            journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), settled, request_id))
+            if interrupted and status == "accepted" and turn != "none":
                 journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
-            response = self.admitted(rid, request_id, turn=turn)
+            response = self.admitted(rid, request_id, "Hermes ended its voice chat. Nothing was sent to the assistant." if turn == "none" else None, turn=turn)
             self.admitting.discard(request_id)
         timed("journal", mark)
         return response

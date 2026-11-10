@@ -61,3 +61,58 @@ Every one went red:
 | The capability not reported | `test_the_add_on_says_it_reports_the_turn` |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Review fixes
+
+An independent reviewer (GPT-6.1 Sol) verified two findings with reproductions against the add-on.
+`t3/send-lanes` is merged in with a normal merge commit after its own review fixes, so this branch also carries the
+turn-claim binding rule ([20261110T094510Z-receipt-turn-binding.md](20261110T094510Z-receipt-turn-binding.md)) and
+the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lanes.md)). Source fingerprint
+`sha256:8022e337ba3d76dbe4ce9b80d4b39619edd86df56293a04007c515a9d194896a` (1688 files); `src/hermes` alone `sha256:ecaf02b4cd90992e8290e60302e7c01a8e3d54b89a2dcc9f3e86b1a69b5c93f6`. Same host and versions as above.
+
+- P2, a missing `turn` did not always mean a turn started. Read from `ed1afb0`, native `prompt.submit` answers
+  success in five shapes: `streaming` when it started the turn (`tui_gateway/methods_prompt.py:973`, and
+  `compute_host_bridge.py:327` with `turn_isolation`); `steered` or `redirected` into a running turn
+  (`session_auto_continue.py:246-259`); `queued` from the busy queue (`:454`); `queued` with `forwarded: true` in
+  another gateway owner's queue (`methods_prompt.py:762-763`); and `{"voice_stopped": true}` for a stop phrase typed
+  while the session's voice mode is on, which ends the voice chat and admits nothing (`:239-268`, `:760-761`, checked
+  first at `:835-836`). `admission_turn` now names each: nothing for `streaming` only, `queued`, `joined`, `none`
+  for a typed stop, and `unknown` for any answer it does not know. Only a missing `turn` on an accepted new task means
+  the turn started.
+- Decision, typed stop. The receipt exists: it was written before Hermes was called, and a replay of the request ID
+  must answer the same, never send again. It is `accepted`, since Hermes acted on the text and the client should
+  clear the draft, with `turn: "none"` and a message saying nothing was sent to the assistant. It is settled at once:
+  no turn will end it, and an unsettled receipt with Hermes idle would refuse every later send as "Hermes is finishing
+  the preceding task", and the next turn's followups would settle it with that turn's outcome. Its run ID stays its
+  own request ID, as for every receipt: the journal and the receipt lookup derive it that way, Node's `runId` is a
+  string or absent, and no events ever name it. It clears no interruption review, because nothing ran. An unknown
+  answer keeps today's handling, accepted and unsettled, so a turn it may have started still settles it.
+- P3, `queued` overstated. Hermes's busy queue merges text into the only queued prompt when it has no image or author,
+  and drops text identical to the running prompt, answering `queued` either way (`session_auto_continue.py:147-176`,
+  `:441-454`). `docs/HermesCapabilityMatrix.md` and `docs/native-api.md` now call `queued` the busy queue's
+  disposition, not a promise of a separate later turn, and so does the code comment.
+- With the binding rule, a queued or joined new task is bound to no prompt row: no turn claims it, because a drain runs
+  under the finished turn's request ID and a correction runs in another turn. Its words show as Hermes saved them,
+  unattributed, and the app's sent echo matches them by text. A queued image send is the exception: an open's image
+  recovery binds the row holding exactly its text and its own uploads.
+
+## Review checks
+
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (Python 3.14.10). `AdmissionTurnTests`: 4 tests, one new,
+  and its table grew from 4 to 9 native answers. `tests/hermes_turn_binding_test.py`: 18 tests, one new.
+- `npm run lint:py` with ruff 0.17.3: passed.
+- `npm run typecheck`: passed. `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts`:
+  2 files, 233 tests passed.
+
+## Review red proof
+
+| Broken | Red |
+| --- | --- |
+| A typed stop read as an unknown answer | `test_a_typed_stop_admits_nothing_and_holds_up_no_later_send` |
+| A typed stop's receipt left unsettled | the same test: the next send is refused as finishing |
+| A typed stop clears the interruption review | the same test |
+| An unknown answer reported with no `turn` | the answer table, 3 cases |
+| `streaming` not the only answer read as started | the answer table and the typed-stop test |
+| A queued or joined send bound by `main`'s completion hook | `test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row`, both cases |
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.

@@ -796,18 +796,30 @@ class OpenTests(unittest.TestCase):
 
 class AdmissionTurnTests(unittest.TestCase):
     """Whether a new task started its own turn, as native prompt.submit answered."""
-    def submit(self, hermes, rid, native):
+    def submit(self, hermes, rid, native, **extra):
+        """Submit with Hermes answering ``native``: a prompt.submit or session.steer status, or a whole answer."""
         calls = []
+        # The gateway's own activation answers opens; admission answers ``native``; anything else is unexpected.
+        opens = hermes.__dict__.setdefault("activation", hermes.server.handle_request)
         def handle(request):
+            if request["method"] in ("session.activate", "session.resume", "profiles.list"):
+                return opens(request)
             calls.append(request["method"])
-            return hermes.server._ok(request["id"], {"status": native})
+            if request["method"] not in ("prompt.submit", "session.steer"):
+                raise AssertionError("Hermes method not configured for this test: " + request["method"])
+            return hermes.server._ok(request["id"], native if isinstance(native, dict) else {"status": native})
         hermes.server.handle_request = handle
-        params = {"profile": "default", "request_id": rid, "sender_id": "member", "text": "Hello " + rid}
+        params = {"profile": "default", "request_id": rid, "sender_id": "member", "text": "Hello " + rid, **extra}
         return hermes.methods["agent-interface.submit"](rid, params)["result"], calls, params
 
     def test_a_new_task_says_when_hermes_did_not_start_its_turn_at_once(self):
         # The add-on read the session idle; Hermes's answer says whether a turn had taken it meanwhile.
-        for native, turn in [("streaming", None), ("queued", "queued"), ("redirected", "joined"), ("steered", "joined")]:
+        # Answers pinned from ed1afb0: methods_prompt.py:973 and :762, compute_host_bridge.py:327, session_auto_continue.py:259 and :454.
+        for native, turn in [("streaming", None), ({"status": "streaming", "turn_isolation": True}, None), ("queued", "queued"),
+                             ({"status": "queued", "admission_id": "a1", "forwarded": True}, "queued"),
+                             ("redirected", "joined"), ("steered", "joined"),
+                             # An answer this add-on does not know is never taken for a started turn.
+                             ("accepted", "unknown"), ({}, "unknown"), ({"voice_stopped": False}, "unknown")]:
             with self.subTest(native=native), FakeGateway([]) as hermes:
                 hermes.open()
                 answer, calls, params = self.submit(hermes, "send", native)
@@ -815,6 +827,26 @@ class AdmissionTurnTests(unittest.TestCase):
                                  (["prompt.submit"], "accepted", False, "send", turn))
                 # A replay answers the same, from what the journal saved.
                 self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], saved(answer))
+
+    def test_a_typed_stop_admits_nothing_and_holds_up_no_later_send(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO interruptions VALUES('default','stored','old',1)")
+            # Hermes's answer to a stop phrase typed while the session's voice mode is on (methods_prompt.py:265-268).
+            answer, calls, params = self.submit(hermes, "stop", {"voice_stopped": True}, reviewed_interruption=True)
+            self.assertEqual((calls, answer["status"], answer["steering"], answer["turn"]), (["prompt.submit"], "accepted", False, "none"))
+            self.assertIn("voice chat", answer["message"])
+            self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], saved(answer))
+            self.assertEqual(hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='stop'").fetchone(), (1,))
+            # No run is open, so an open names none and the next send is not held up as a task Hermes is finishing.
+            self.assertIsNone(hermes.open()["app_run_id"])
+            # Nothing ran, so the interruption still needs its review.
+            unreviewed = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "unreviewed", "sender_id": "member", "text": "Next"})
+            self.assertEqual(unreviewed["error"]["code"], 4094)
+            following, _, _ = self.submit(hermes, "next", "streaming", reviewed_interruption=True)
+            self.assertEqual((following["status"], following["runId"]), ("accepted", "next"))
+            self.assertNotIn("turn", following)
 
     def test_a_steer_carries_no_turn_though_hermes_answers_it_queued(self):
         with FakeGateway([]) as hermes:

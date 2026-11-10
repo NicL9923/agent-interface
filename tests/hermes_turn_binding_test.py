@@ -438,6 +438,19 @@ class TurnBindingTests(unittest.TestCase):
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
 
+    def test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row(self):
+        for busy, turn in (("queued", "queued"), ("redirected", "joined")):
+            with self.subTest(busy=busy), TurnHermes(busy=busy) as hermes:
+                hermes.races.append(lambda hermes=hermes: hermes.other_client("Book the dentist"))
+                answer = hermes.send("alice-1", "Make it Tuesday")
+                self.assertEqual((answer["status"], answer["steering"], answer["turn"], answer["userRowId"]), ("accepted", False, turn, None))
+                hermes.finish("Book the dentist")
+                if busy == "queued":
+                    hermes.finish("Make it Tuesday")
+                self.assertIsNone(hermes.bound("alice-1"))
+                self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+
+
 class OldBindingTests(unittest.TestCase):
     """A journal that earlier add-ons wrote: a queued send bound to the turn completed ahead of it."""
 
