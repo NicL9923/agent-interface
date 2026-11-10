@@ -25,6 +25,23 @@ import { shownMessages } from "./conversation-view.js";
 // Longer than the runtime shares one history read among readers.
 const sharedReadMargin = 60000;
 
+/**
+ * The least time between two live updates on a `?inflight=1` or `?inflight=2` stream. `?inflight=1` sends the
+ * whole reply each time: at 100 ms a 20,000-character reply cost 207 KB a second per stream instead of 83 KB,
+ * 1.24 MB a second for a household's six streams. `?inflight=2` is the iOS app's, which shows each update as it
+ * lands and re-renders the conversation for it; that cost was not measured on a phone, so it stays as it was.
+ * Measured November 10, 2026: docs/ledger/20261110T210126Z-live-tick.md.
+ */
+export const LIVE_TICK_MS = 250;
+/**
+ * The least time between two live updates on a `?inflight=3` turn stream, the web client's. Its paced reveal
+ * spreads each update over CATCH_UP_MS (src/components/streaming-reveal.ts), so at 100 ms instead of 250 a word
+ * showed 230 to 264 ms after Hermes produced it instead of 300 to 305 (medians at 150 characters a second; p95
+ * 292 to 315 against 338 to 349), with paints still 33 ms apart. Six streams of growth cost the server 7.7 ms
+ * of CPU and 12 KB a second, against 3.4 ms and 5.5 KB at 250. Measured as for LIVE_TICK_MS.
+ */
+export const TURN_TICK_MS = 100;
+
 /** Server-Timing for a conversation read. Headers stay out of the body, so its ETag still matches. */
 export function readTimingHeader(timing: ReadTiming, runtime: number, total: number): string {
   const metric = (name: string, ms: number) => `${name};dur=${Math.round(ms * 10) / 10}`;
@@ -212,6 +229,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // web app reads this one.
     const mode = (req.query as { inflight?: string }).inflight;
     const optedIn = mode === "1" || mode === "2" || mode === "3", deltas = mode === "2" || mode === "3", turns = mode === "3";
+    const tick = turns ? TURN_TICK_MS : LIVE_TICK_MS;
     // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any
     // unnamed or unknown data line as a conversation change and would refetch on every draft save.
     const draftNotices = (req.query as { drafts?: string }).drafts === "1";
@@ -244,9 +262,14 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         changed(); return;
       }
       livePending ??= setTimeout(() => {
+        livePending = undefined;
+        // A client that has not read what this stream already wrote gets nothing more until it has, so a slow
+        // one never has the server hold more than one update past the socket's buffer. `sent` stays what the
+        // client last got, so the update after the drain carries all the growth it missed.
+        if (stream && !stream.writable(() => notice("inflight"))) return;
         // On a turn stream, a tick that finds no reply to send leaves the window open, so the reply restored next goes at once.
         const previous = liveLast;
-        livePending = undefined; liveLast = Date.now();
+        liveLast = Date.now();
         void (async () => {
           // Privacy can change through another assistant's settings while this stream stays open.
           if (store.privacyVersion !== seen) {
@@ -292,7 +315,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
           }
           if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId, value.activity.runId);
         })().catch(() => changed());
-      }, Math.max(0, liveLast + 250 - Date.now()));
+      }, Math.max(0, liveLast + tick - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
     const ownDraft = draftKey(signedIn(req).id, botId);
@@ -315,7 +338,12 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         if (draftNotices) draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
         // Only turn streams hear the server's own turn reads; ?inflight=1 and ?inflight=2 wait for a client's read.
-        if (turns) unfollow = runtime.followTurns?.(botId, () => notice("inflight"));
+        // A restored turn goes at once, without waiting out the tick: it carries a new structure, such as the
+        // saved reply of a turn that just ended, and comes at most once per server read.
+        if (turns) unfollow = runtime.followTurns?.(botId, () => {
+          clearTimeout(livePending); livePending = undefined; liveLast = 0;
+          notice("inflight");
+        });
       },
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
       allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),

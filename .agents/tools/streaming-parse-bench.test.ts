@@ -1,6 +1,7 @@
 // Counts and times how often a live reply re-parses while about 20,000 characters stream, as the
 // transcript showed it before pacing (StreamingMarkdown at each update) and after (ReplyMarkdown, live, on
 // animation frames). Run: npx vitest run --config .agents/tools/streaming-parse-bench.config.ts
+// UPDATE_MS sets the time between the server's updates (default 250); the reply grows 500 characters a second either way.
 // jsdom is slower than a browser, so the times are an upper bound; the counts are exact.
 import { act, createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
@@ -20,7 +21,7 @@ vi.mock("react-markdown", async importActual => {
 });
 const { ReplyMarkdown, StreamingMarkdown } = await import("../../src/components/MessageMarkdown");
 
-const UPDATE_MS = 250, FRAME_MS = 1000 / 60;
+const UPDATE_MS = Number(process.env.UPDATE_MS ?? 250), FRAME_MS = 1000 / 60;
 // A prose reply of the kind assistants write, and the worst case: one fence that is still open, so
 // the whole reply is its last block.
 const paragraph = (index: number) => `Step ${index}: check the **water trough**, then the [gate log](https://example.test/${index}) and \`fence.ts\`. ` +
@@ -33,12 +34,12 @@ afterEach(() => { vi.useRealTimers(); });
 const median = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)] ?? 0;
 const p95 = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length * 0.95)] ?? 0;
 
-// The last two seconds of the stream, when the reply is longest: 8 updates of 125 characters.
+// The last two seconds of the stream, when the reply is longest: 1,000 characters in updates UPDATE_MS apart.
 async function measure(name: string, text: string, live: boolean) {
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "Date", "setTimeout"] });
   const { root } = mountRoot();
   const component = (props: { text: string }) => live ? createElement(ReplyMarkdown, { ...props, live: true }) : createElement(StreamingMarkdown, props);
-  const step = 125, start = text.length - 8 * step;
+  const updates = Math.round(2000 / UPDATE_MS), step = Math.round(1000 / updates), start = text.length - updates * step;
   await act(async () => root.render(createElement(component, { text: text.slice(0, start) })));
   parses.count = 0;
   parses.ms = [];
@@ -49,11 +50,11 @@ async function measure(name: string, text: string, live: boolean) {
     await act(async () => work());
     rendering += Number(process.hrtime.bigint() - begin) / 1e6;
   };
-  for (let update = 1; update <= 8; update++) {
+  for (let update = 1; update <= updates; update++) {
     await timed(() => root.render(createElement(component, { text: text.slice(0, start + update * step) })));
     for (let frame = 0; frame < UPDATE_MS / FRAME_MS; frame++) await timed(() => vi.advanceTimersByTime(FRAME_MS));
   }
-  const seconds = 8 * UPDATE_MS / 1000;
+  const seconds = updates * UPDATE_MS / 1000;
   console.log(`${name}, ${live ? "after (paced)" : "before"}: ${(parses.count / seconds).toFixed(1)} parses/s, `
     + `median ${median(parses.ms).toFixed(2)} ms, p95 ${p95(parses.ms).toFixed(2)} ms, ${(parses.ms.reduce((a, b) => a + b, 0) / seconds).toFixed(0)} ms parsing and ${(rendering / seconds).toFixed(0)} ms rendering per second`);
   await act(async () => root.unmount());

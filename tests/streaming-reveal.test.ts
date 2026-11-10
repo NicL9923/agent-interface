@@ -183,16 +183,18 @@ describe("the reveal's pacing rule", () => {
     }
   });
 
-  it("paints at most once per paced frame across arrivals, so a reply growing four times a second stays near 30 updates a second", async () => {
+  // The server's turn stream sends growth every 100 ms (TURN_TICK_MS), so arrivals often land within a
+  // paced frame of the last paint.
+  it("paints at most once per paced frame across arrivals, so a reply growing ten times a second stays near 30 updates a second", async () => {
     // A long open code block, the case where each paint re-parses the most.
     let text = `\`\`\`\n${"let gate = latched;\n".repeat(1000)}`;
     const log: Shown[] = [];
     const render = () => mount.render(createElement(Probe, { text, log }));
     await render();
     const started = performance.now();
-    for (let arrival = 0; arrival < 12; arrival++) {
-      await frameByFrame(250);
-      text += "let gate = latched;\n".repeat(12);
+    for (let arrival = 0; arrival < 30; arrival++) {
+      await frameByFrame(100);
+      text += "let gate = latched;\n".repeat(5);
       await render();
     }
     await frameByFrame(CATCH_UP_MS + PACED);

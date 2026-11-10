@@ -462,7 +462,7 @@ const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSl
     {runCards(runSlots[blocks.length], shared.botId, runActions)}
   </>;
 });
-// A stream changes the latest reply about four times a second, and `turns` rebuilds every block each
+// A stream changes the latest reply up to ten times a second, and `turns` rebuilds every block each
 // time. A turn is compared by what it shows, so finished turns, and a reload with the same content, bail out.
 const sameFile = (a: FileRef, b: FileRef) => a === b || a.id === b.id && a.name === b.name && a.mime === b.mime && a.size === b.size && a.url === b.url;
 const sameCall = (a?: ToolCall, b?: ToolCall) => a === b || !!a && !!b && a.id === b.id && a.name === b.name && a.status === b.status
