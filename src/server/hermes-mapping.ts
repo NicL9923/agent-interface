@@ -1,4 +1,4 @@
-import type { ActivityState, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall } from '../shared/types.js';
+import type { ActivityState, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall, TurnRows } from '../shared/types.js';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
 import { computerHandoffMethod as COMPUTER_HANDOFF, terminalCommandPattern, terminalRequestLimits, terminalRequestMethod as TERMINAL_REQUEST, type ComputerHandoff, type TerminalRequest } from '../shared/computer.js';
 import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId, type ConnectionRequest } from '../shared/integrations.js';
@@ -278,6 +278,22 @@ export function historyRows(sid: string, history: Wire[], files: (row: Wire) => 
     messages.push(origin ? {...message, origin} : message);
   });
   return {messages, starts};
+}
+/**
+ * The running turn's saved messages in a read's shown messages: from the last prompt a person sent to the end,
+ * without the live reply `liveId`. Guidance steered into a turn belongs to that turn, so it never starts one
+ * unless no other prompt is in the read. `windowStart` is where the read's own window begins, after the earlier
+ * messages a cut window keeps for files and origins, which are never part of a turn. `after` is the message just
+ * before the turn, null when the turn starts the whole history, and absent when the read began inside it.
+ */
+export function turnRows(shown: Message[], liveId: string, windowStart: number, cut: boolean): TurnRows {
+  const saved = shown.at(-1)?.id === liveId ? shown.slice(0, -1) : shown;
+  const prompt = (steered: boolean) => saved.findLastIndex((message, index) => index >= windowStart && message.role === 'user' && (steered || !message.steered));
+  let start = prompt(false);
+  if (start < 0) start = prompt(true);
+  if (start < 0) start = Math.min(windowStart, saved.length);
+  const after = start > windowStart ? saved[start - 1].id : cut ? undefined : null;
+  return {messages: saved.slice(start), ...(after !== undefined ? {after} : {})};
 }
 /** Visible history rows as messages. See `historyRows`. */
 export const historyMessages = (sid: string, history: Wire[], files: (row: Wire) => FileRef[]): Message[] => historyRows(sid, history, files).messages;

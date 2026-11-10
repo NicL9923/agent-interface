@@ -77,7 +77,9 @@ so treat a truncated body as a failed download.
 every file. With `turns` or `start`, it returns that window, `earlier` messages
 before it, and only the window's `files`; `earlierFiles` counts files that only
 earlier messages carry, and `GET /api/bots/:id/files?before=MESSAGE_ID` lists
-those messages with their files. `GET /api/bots/:id/events` is a server-sent
+those messages with their files. Every read also returns `version`, the
+structural version of the conversation when the read began, which orders it
+against `?inflight=3` turn events (below). `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
@@ -105,7 +107,7 @@ line. Its `sendTiming` field holds `route` (`messages`, `steer` or `talk`), `bot
 `prepareMs` (the admission call began), `admissionMs` (Hermes answered),
 `firstFrameMs` (the first `message.delta` or `reasoning.delta` of the send's run
 after it arrived, which can come before `admissionMs`) and `firstLiveMs` (the first
-`inflight` or `inflight-delta` event of that run written to any open event stream).
+`inflight`, `inflight-delta` or `turn` event of that run written to any open event stream).
 Subtract neighbours for the time each stage took; `firstLiveMs` is what a person
 watching an open chat waited.
 
@@ -199,6 +201,59 @@ If a delta's `messageId` or base lengths do not match the reply you hold, or you
 hold none, discard it, refetch the conversation and reconnect the stream, which
 restarts from a whole event. A server that predates `?inflight=2` treats it as no
 opt-in and sends only change notices, which clients already handle.
+
+`?inflight=3` opts in to turn events, so a reply keeps streaming across tool calls
+without waiting for a refetch. The web client uses it. `?inflight=1` and
+`?inflight=2` are unchanged, so the iOS app and cached web bundles are not
+affected. A server that predates `?inflight=3` treats it as no opt-in and sends
+only change notices.
+
+On a `?inflight=2` stream, live replies stop after each change to the turn's
+structure, such as a tool finishing, a progress line or a turn starting, until a
+client's refetch lets the server rebuild the reply. On a `?inflight=3` stream the
+server reads the running turn itself after each such change: once for all of an
+assistant's `?inflight=3` streams, with at most one read on its way and one queued,
+and never while no such stream is open. Its read is the turn's own window, from the
+turn's first message.
+
+Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
+messages, after?, message, activity, toolCalls}`:
+
+- `messages`: the running turn's saved messages, from the prompt that started it,
+  exactly as `GET /api/bots/:id/conversation` shows them to the same person: sender
+  names, private-assistant redaction, file references and progress lines. Guidance
+  steered into the turn belongs to it. A finished turn is sent once more with its
+  final messages and settled `activity`.
+- `after`: the ID of the message just before `messages[0]`, `null` when the turn
+  starts the conversation, and absent when the server's read did not include it.
+- `message`, `activity` and `toolCalls`: the live reply, as in `inflight`, built
+  on the same read as `messages`, so it leaves out exactly the text in `messages`.
+- `version`: that read's structural version.
+
+Growth of that reply arrives as `inflight-delta`, as on `?inflight=2`, based on the
+last `turn` event's `message`. The server sends a whole `turn` event instead
+whenever the read the reply is built on changed, in every case where `?inflight=2`
+sends a whole `inflight` except after a `data: change` notice, and on a new stream.
+`data: change` notices still follow every structural change at most once a second.
+Keep refetching on them: approvals, requests, files, the draft and the read
+position come only from the read.
+
+Place a turn in the conversation you hold: keep everything before `messages[0]`,
+or through the message `after` names, or nothing when `after` is `null`, and replace
+the rest with `messages` followed by `message` as the live row. Drop any
+`-inflight` row you held. If you hold neither message, or a kept message is also
+in `messages`, discard the event and refetch.
+
+Order turns and reads by `version`, which has the form `BOOT:EPOCH:GENERATION`.
+Two versions with the same `BOOT` compare by `EPOCH`, then `GENERATION`, as
+integers. A different `BOOT` means the server restarted, and neither is older:
+take whichever arrived last. A read can arrive after a turn event that is newer
+than it, because the read set out first. Place that turn on top of the read. A turn
+event older than the conversation you hold changes nothing. Show a live reply
+only beside messages of its own version: after a read newer than your last turn
+event, show the read's own `-inflight` row until a turn event of that version
+arrives, and keep applying growth to the older reply meanwhile so its base lengths
+still match.
 
 `GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
 roster fields only: `id`,

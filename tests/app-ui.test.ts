@@ -145,21 +145,21 @@ describe("conversation state", () => {
     await render();
     const reads = vi.mocked(api).mock.calls.length;
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=3")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
     });
     expect(container.textContent).toContain("Growing reply");
     expect(vi.mocked(api).mock.calls).toHaveLength(reads);
   });
   describe("inflight growth notices", () => {
     const run = { state: "thinking" as const, runId: "run" };
-    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=2"))!;
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=3"))!;
     const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
     const whole = (text: string) => JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [] });
     const growth = (changes: object) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: 7, baseReasoningLength: 0, activity: run, ...changes });
     it("opts in to growth notices and applies one that continues the reply it holds", async () => {
       conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
       await render();
-      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2&drafts=1");
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=3&drafts=1");
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
@@ -192,11 +192,75 @@ describe("conversation state", () => {
       expect(reads()).toBeGreaterThan(before);
     });
   });
+  describe("turn events", () => {
+    const run = { state: "thinking" as const, runId: "run-2" };
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=3"))!;
+    const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
+    const prompt = { id: "req-2", role: "user" as const, text: "Check the barn" };
+    const earlier = [{ id: "u1", role: "user" as const, text: "Fence?" }, { id: "a1", role: "assistant" as const, text: "Fixed." }];
+    const saved = { id: "4", role: "assistant" as const, text: "Looking in the barn." };
+    const turn = (version: string, messages: object[], text: string, extra: object = {}) => JSON.stringify({ botId: "shared", version, messages,
+      message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [], ...extra });
+    const growth = (base: number, appendText: string) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: base, baseReasoningLength: 0, appendText, activity: run });
+    const count = (text: string) => container.textContent!.split(text).length - 1;
+    async function opened() {
+      conversation = { ...conversation, activity: run, messages: [...earlier, prompt], version: "b:1:5" };
+      await render();
+      await act(async () => open().emit("turn", turn("b:1:6", [prompt, saved], "Found")));
+    }
+    it("shows a saved segment and the live reply from one event, without a read, and grows the reply", async () => {
+      await opened();
+      const before = reads();
+      expect(count("Looking in the barn.")).toBe(1);
+      expect(container.textContent).toContain("Found");
+      await act(async () => open().emit("inflight-delta", growth(5, " it.")));
+      expect(container.textContent).toContain("Found it.");
+      expect(reads()).toBe(before);
+    });
+    it("puts the turn back on top of a read that set out before it", async () => {
+      await opened();
+      // The read began before Hermes saved the segment: it still holds that text as its own live tail.
+      conversation = { ...conversation, version: "b:1:5", messages: [...earlier, prompt, { id: "sid-inflight", role: "assistant", text: "Looking in the barn. Fou" }] };
+      await changed();
+      // Once: the read's own live tail, which repeats the saved segment, is not shown beside the turn.
+      expect(count("Looking in the barn.")).toBe(1);
+      expect(container.textContent).toContain("Found");
+    });
+    it("lets a newer read stand, and shows no live reply built on an older one until its own turn arrives", async () => {
+      await opened();
+      conversation = { ...conversation, version: "b:1:7", messages: [...earlier, prompt, saved, { id: "5", role: "assistant", text: "Found the leak." },
+        { id: "sid-inflight", role: "assistant", text: "Checking the gate" }] };
+      await changed();
+      await act(async () => open().emit("inflight-delta", growth(5, " stale")));
+      expect(container.textContent).toContain("Found the leak.");
+      expect(container.textContent).toContain("Checking the gate");
+      expect(container.textContent).not.toContain("Found stale");
+      await act(async () => open().emit("turn", turn("b:1:7", [prompt, saved, { id: "5", role: "assistant", text: "Found the leak." }], "Checking the gate and fence")));
+      expect(container.textContent).toContain("Checking the gate and fence");
+      expect(count("Found the leak.")).toBe(1);
+    });
+    it("never brings back a reply a newer read already finished", async () => {
+      await opened();
+      conversation = { ...conversation, activity: { state: "done", runId: "run-2" }, version: "b:1:9", messages: [...earlier, prompt, saved, { id: "5", role: "assistant", text: "All done." }] };
+      await changed();
+      await act(async () => open().emit("turn", turn("b:1:8", [prompt, saved], "stale tail")));
+      expect(container.textContent).toContain("All done.");
+      expect(container.textContent).not.toContain("stale tail");
+    });
+    it("reads the conversation for a turn it cannot place", async () => {
+      await opened();
+      const before = reads();
+      await act(async () => open().emit("turn", turn("b:1:7", [{ id: "u9", role: "user", text: "Elsewhere" }], "Lost")));
+      await advance(0);
+      expect(reads()).toBeGreaterThan(before);
+      expect(container.textContent).not.toContain("Lost");
+    });
+  });
   it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
     conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };
     await render();
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=3")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };

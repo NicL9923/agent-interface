@@ -1,6 +1,7 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnWatcher } from '../shared/types.js';
+import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, LiveInflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnRows, TurnWatcher } from '../shared/types.js';
 import ClientWebSocket from 'ws';
+import { randomUUID } from 'node:crypto';
 import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
 import type { ConnectionRequestResult } from '../shared/integrations.js';
@@ -18,7 +19,7 @@ import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
-import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, openRequests, receipt, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, openRequests, receipt, turnRows, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -116,8 +117,22 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   };
   const structuralGenerations = new Map<string, number>();
   const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
+  // A structural generation as clients see it. Generations restart with the process, so each carries
+  // this runtime's own boot, and versions from another boot never compare as older or newer.
+  const boot = randomUUID().slice(0, 8);
+  const versionOf = (generation: string) => `${boot}:${generation}`;
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
-  const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]}>();
+  // What a live reply is built on: the last prompt and its saved assistant segments, the running
+  // turn's saved messages for `?inflight=3` streams, and the version of the read they came from.
+  const snapshots = new Map<string, {value: Wire; rows: Message[]; activity: Conversation["activity"]; version: string; turn: TurnRows}>();
+  // The running turn's first message, from the latest read that stored a snapshot. A turn read starts its window there.
+  const turnStarts = new Map<string, string>();
+  // Streams that follow turns, counted per assistant, and each assistant's turn read: one at a time, and one more queued.
+  const turnFollowers = new Map<string, number>();
+  const turnReads = new Map<string, {queued: boolean; running: Promise<void>}>();
+  // Conversation reads on their way per assistant, each with the structural generation its current open
+  // was asked at. A turn read waits for those asked at the current one instead of overlapping them.
+  const reading = new Map<string, Set<{read: Promise<unknown>; generation: string}>>();
   let capabilityCache: Capabilities | undefined;
   let voiceStatus: {at: number; value: Capabilities['liveVoice']} | undefined;
   let voiceRead: Promise<Capabilities['liveVoice']> | undefined;
@@ -231,6 +246,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       if (!delta) snapshots.delete(botId);
       if (delta && params.type === 'tool.start') structurallyChanged(botId);
       changed(botId, delta ? "inflight" : undefined);
+      // A turn read already on its way is superseded by a tool start too, so it is read again.
+      if (!delta || params.type === 'tool.start' && turnReads.has(botId)) readTurn(botId);
     }
     // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
     else for (const pending of opening.keys()) changed(pending, delta && params.type !== 'tool.start' ? "inflight" : undefined);
@@ -418,15 +435,37 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     discoveryGeneration++;
     return { ...input, id: jobId, enabled: isEnabled(job) };
   }
-  async function readConversation(botId: string, options: ConversationOptions): Promise<Conversation> {
+  /**
+   * A conversation read. Its open is never asked before the assistant's turn read's and answered after it:
+   * the add-on can answer opens out of order, and an earlier-asked answer arriving after a later one is
+   * superseded and asked again. So a read waits for a turn read on its way, and a turn read waits for a read
+   * whose open was asked at the current structural generation. A read asked before a change retries anyway,
+   * and its retry is asked after the turn read's open.
+   */
+  function readConversation(botId: string, options: ConversationOptions): Promise<Conversation> {
+    const turn = turnReads.get(botId)?.running;
+    const entry = {read: Promise.resolve() as Promise<unknown>, generation: structuralGenerationOf(botId)};
+    const read = turn ? turn.then(() => readConversationNow(botId, options, 3, entry)) : readConversationNow(botId, options, 3, entry);
+    entry.read = read;
+    const reads = reading.get(botId) ?? new Set();
+    reading.set(botId, reads.add(entry));
+    const done = () => {
+      reads.delete(entry);
+      if (!reads.size && reading.get(botId) === reads) reading.delete(botId);
+    };
+    read.then(done, done);
+    return read;
+  }
+  async function readConversationNow(botId: string, options: ConversationOptions, attempts = 3, asked?: {generation: string}): Promise<Conversation> {
     await connect();
     // A superseded answer is older than live state, so ask again. One that stays superseded through
     // a burst of changes is shown as Hermes answered it, without reading or seeding live state.
     let generation: string, value: Wire;
     for (let attempt = 1; ; attempt++) {
       generation = structuralGenerationOf(botId);
+      if (asked) asked.generation = generation;
       value = await open(botId, options.history === false ? {history: false} : {window: options.window}, options.timing);
-      if (!supersededOpens.has(value) || attempt === 3) break;
+      if (!supersededOpens.has(value) || attempt >= attempts) break;
     }
     const current = !supersededOpens.has(value);
     const sid = value.session_id;
@@ -467,17 +506,6 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // No turn started or ended here since the read began, so the running turn is reported with the session's
     // open app run. That is the turn's own run except in the limit stated in send-timing.ts.
     if (fresh) toTurnWatchers(watcher => watcher.run(sid, botId, typeof value.app_run_id === 'string' ? value.app_run_id : undefined, !!value.info?.running));
-    // Live patches need only the last prompt and its persisted assistant segments,
-    // never a second retained copy of an older client's full transcript.
-    if (options.history !== false && fresh) {
-      snapshots.set(botId, {
-        value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
-          inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
-        rows: rows.slice(Math.max(0, rows.findLastIndex(row => row.role === 'user')))
-          .filter(row => row.id !== `${sid}-inflight` && (row.role === 'user' || row.role === 'assistant')),
-        activity: {state: attention.length ? 'blocked' : activity, detail, runId},
-      });
-    }
     // Hermes returns a window's earlier rows first: those the app needs for files and origins.
     const cut = value.app_window && Number.isInteger(value.app_window.earlier) && Number.isInteger(value.app_window.context)
       ? value.app_window as {earlier: number; context: number}
@@ -485,6 +513,21 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     const shown = withMessageOrigins(rows);
     // Hermes counted the window's context in history rows, and a row can show as several messages.
     const contextEnd = cut ? starts[cut.context] ?? savedRows : 0;
+    // Live patches need only the last prompt and its persisted assistant segments, and `?inflight=3`
+    // streams the running turn's saved messages, never a second retained copy of an older client's full transcript.
+    if (options.history !== false && fresh) {
+      const turn = turnRows(shown, `${sid}-inflight`, contextEnd, !!cut);
+      if (turn.messages[0]) turnStarts.set(botId, turn.messages[0].id);
+      snapshots.set(botId, {
+        value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
+          inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
+        rows: rows.slice(Math.max(0, rows.findLastIndex(row => row.role === 'user')))
+          .filter(row => row.id !== `${sid}-inflight` && (row.role === 'user' || row.role === 'assistant')),
+        activity: {state: attention.length ? 'blocked' : activity, detail, runId},
+        version: versionOf(generation),
+        turn,
+      });
+    }
     return {
       botId,
       sessionId: value.canonical_stored_session_id ?? value.stored_session_id ?? value.info?.stored_session_id ?? sid,
@@ -496,7 +539,39 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       approvals,
       attention,
       files: rows.flatMap(x => x.files ?? []),
+      // When the read began, so a read superseded meanwhile never claims a later version than it may hold.
+      version: versionOf(generation),
     };
+  }
+  /**
+   * Reads the running turn for streams that follow it, after a change to its structure removed the
+   * snapshot live replies are built on, and reports an inflight change once one is stored again. A client
+   * read asked since the change is waited for (see readConversation), and one that stored a snapshot leaves
+   * nothing to read. A read superseded with nothing queued after it is tried twice more.
+   */
+  function readTurn(botId: string, failures = 0): void {
+    if (!turnFollowers.get(botId)) return;
+    const current = turnReads.get(botId);
+    if (current) { current.queued = true; return; }
+    const entry = {queued: false, running: Promise.resolve()};
+    turnReads.set(botId, entry);
+    entry.running = (async () => {
+      const generation = structuralGenerationOf(botId);
+      const current = [...reading.get(botId) ?? []].filter(read => read.generation === generation).map(read => read.read);
+      if (current.length) await Promise.allSettled(current);
+      if (snapshots.has(botId)) return true;
+      const start = turnStarts.get(botId);
+      // From the turn's first message, or, before any read named one, the add-on's latest page.
+      await readConversationNow(botId, {window: start ? {start} : {turns: 1}}, 1);
+      return snapshots.has(botId);
+    })().then(restored => {
+      if (turnReads.get(botId) === entry) turnReads.delete(botId);
+      if (restored) changed(botId, "inflight");
+      if (entry.queued || !restored && failures < 2) readTurn(botId, restored ? 0 : failures + 1);
+    }, () => {
+      // Hermes failed or the socket dropped: the clients' own change notices read again.
+      if (turnReads.get(botId) === entry) turnReads.delete(botId);
+    });
   }
   /**
    * Live voice, as the add-on last reported it. A known value is returned at once and, once 30 seconds
@@ -1108,7 +1183,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       for (const event of result.events ?? []) if (typeof event.botId === 'string') changed(event.botId);
       return result;
     },
-    inflight(botId): Inflight | undefined {
+    inflight(botId): LiveInflight | undefined {
       const saved = snapshots.get(botId), sid = live.get(botId), state = sid ? transient.get(sid) : undefined;
       if (!saved || !sid || !state || saved.value.session_id !== sid) return undefined;
       const message = inflightMessage({...saved.value, inflight: {...saved.value.inflight, assistant: state.text, reasoning: state.reasoning}}, saved.rows, state);
@@ -1116,7 +1191,19 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         : state.tools.some(tool => tool.status === 'running') ? 'working'
         : ["idle", "disconnected"].includes(state.state) ? saved.activity.state
         : state.state;
-      return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools};
+      return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools,
+        version: saved.version, turn: saved.turn};
+    },
+    followTurns(botId) {
+      turnFollowers.set(botId, (turnFollowers.get(botId) ?? 0) + 1);
+      let following = true;
+      return () => {
+        if (!following) return;
+        following = false;
+        const count = (turnFollowers.get(botId) ?? 1) - 1;
+        if (count) turnFollowers.set(botId, count);
+        else turnFollowers.delete(botId);
+      };
     },
     watchTurns(watcher) {
       turnWatchers.push(watcher);

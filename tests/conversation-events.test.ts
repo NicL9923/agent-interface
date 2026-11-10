@@ -109,6 +109,19 @@ describe("conversation change stream", () => {
     expect(events.text).toContain("another member's assistant");
     await events.close();
   });
+  it("sends a turn stream nothing live from a runtime that cannot read turns, and its change notices as before", async () => {
+    const s = await setup();
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    s.change("shared", "inflight");
+    await pass(300);
+    // Neither a live event nor the notice a failed live event falls back to.
+    expect(events.text).not.toContain("event:");
+    expect(events.notices()).toBe(0);
+    s.change("shared");
+    await events.until(() => events.notices() === 1);
+    await events.close();
+  });
   describe("inflight growth notices", () => {
     const live = (text: string, extra: Partial<Message> = {}, id = "sid-inflight", toolCalls: ToolCall[] = [], activity: Activity = { state: "thinking", runId: "run" }) =>
       ({ botId: "shared", message: { id, role: "assistant" as const, text, ...extra }, activity, toolCalls });

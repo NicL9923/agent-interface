@@ -320,6 +320,11 @@ export interface Conversation {
     /** The earlier messages the app still needs: those with files, and the prompts their replies answer. */
     context: Message[];
   };
+  /**
+   * The structural version this read reflects, at the least: the runtime's version when the read began.
+   * Compare with `compareVersions` in shared/inflight.ts. Absent from a runtime that does not track one.
+   */
+  version?: string;
 }
 export interface Inflight {
   botId: string;
@@ -341,6 +346,29 @@ export interface InflightDelta {
   appendReasoning?: string;
   activity: Activity;
   toolCalls?: ToolCall[];
+}
+/**
+ * The running turn's saved messages, as one read found them: the tail of the conversation from the
+ * turn's prompt on, without the live reply. `after` names the message just before `messages[0]`,
+ * null when the turn starts the conversation, and is absent when the read did not include it.
+ */
+export interface TurnRows {
+  messages: Message[];
+  after?: string | null;
+}
+/** A live reply with the read it was built on, as the runtime reports it to the event stream. */
+export interface LiveInflight extends Inflight {
+  /** The structural version of the read whose saved messages the live reply leaves out. */
+  version?: string;
+  turn?: TurnRows;
+}
+/**
+ * What `event: turn` carries on a stream opened with `?inflight=3`: the running turn whole, its saved
+ * messages and its live reply, both from one read at `version`. Growth after it arrives as
+ * `inflight-delta` events based on this event's `message`.
+ */
+export interface TurnEvent extends Inflight, TurnRows {
+  version: string;
 }
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
@@ -551,7 +579,13 @@ export interface Runtime {
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
-  inflight?(botId: string): Inflight | undefined;
+  inflight?(botId: string): LiveInflight | undefined;
+  /**
+   * Keeps the running turn readable for live events while the returned function is not called: after a
+   * change to the turn's structure, the runtime reads the turn itself, at most once at a time per
+   * assistant, and reports an inflight change once a live reply can be built again.
+   */
+  followTurns?(botId: string): () => void;
   /** Reports the turn events a send is timed by, in frame order. Unsubscribe with the returned function. */
   watchTurns?(watcher: TurnWatcher): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
