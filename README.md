@@ -398,7 +398,15 @@ link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
 
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Manual reconnect checks immediately. The transport bounds
+online or into view. Manual reconnect checks immediately. One failed conversation read
+is not an outage: a chat shows it is disconnected after a second failure in a row, or
+3 seconds without a successful read, and at once when the browser is offline or the
+server answers that Hermes is unavailable. The next successful read clears it. From the
+first failure, actions that need the connection are refused: Send, Stop, the model
+picker, approvals, reply cards, and saving or listening to a reply. Until the chat shows
+it is disconnected, a refused Send or Stop says the connection is being checked, and a
+send refused from the keyboard says so in the composer's status line. A failure belongs
+to its chat, so it refuses nothing once that chat is closed or gone. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.

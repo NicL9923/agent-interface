@@ -19,6 +19,7 @@ import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
 import { imeKey } from "./ime";
 import { sendsOnKey, useEnterSends } from "./enter-key";
+import { CHECKING_CONNECTION, NOT_SENT_CHECKING, WAITING_FOR_CONNECTION } from "./use-conversation";
 
 /** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
 export function useStopResponse(botId: string, report: (message: string) => void) {
@@ -155,7 +156,7 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   return { panel, over };
 }
 // Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
-export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, connectionShown, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -165,7 +166,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   active: boolean;
   /** The placeholder while the assistant waits on a request this person could answer by message. */
   waiting?: string;
+  /** A read just failed, or the connection is down: Send, Stop and Talk are refused. */
   connectionLost: boolean;
+  /** The chat shows it is disconnected, and the dock's connection notice explains it. */
+  connectionShown: boolean;
   draft: Draft;
   setDraft(update: (current: Draft) => Draft): void;
   draftReady: boolean;
@@ -257,12 +261,22 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     setRecall(next);
     setDraft(previous => ({ ...previous, dirty: true, text }));
   };
-  const [pasteStatus, setPasteStatus] = useState("");
+  // The status line under the message box: a long paste that became a file, or a send refused while
+  // the connection is checked. It is a polite live region that is always present, so a screen reader
+  // hears each new line once.
+  const [status, setStatus] = useState("");
   useEffect(() => {
-    if (!pasteStatus) return;
-    const timer = setTimeout(() => setPasteStatus(""), 8000);
+    if (!status) return;
+    const timer = setTimeout(() => setStatus(""), 8000);
     return () => clearTimeout(timer);
-  }, [pasteStatus]);
+  }, [status]);
+  // Why Send and Stop are refused for the connection: their tooltip and, beside their label, their
+  // accessible description. During the grace period nothing else says it.
+  const connectionReason = connectionLost ? connectionShown ? WAITING_FOR_CONNECTION : CHECKING_CONNECTION : undefined;
+  // A send refused during the grace period says so where the person is looking. Once the chat shows it
+  // is disconnected, the dock's connection notice explains, so the line steps aside for it.
+  const refusedForConnection = () => { if (connectionLost && !connectionShown) setStatus(NOT_SENT_CHECKING); };
+  useEffect(() => { if (connectionShown) setStatus(current => current === NOT_SENT_CHECKING ? "" : current); }, [connectionShown]);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   useEffect(() => { if (!pending || sending) setConfirmDiscard(false); }, [pending, sending]);
   const notices: DockItem[] = [...dock];
@@ -311,7 +325,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
           <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
         </div>}
-        <p id="composer-paste-status" className="composer-status" role="status">{pasteStatus}</p>
+        <p id="composer-paste-status" className="composer-status" role="status">{status}</p>
         <AttachmentTray attachments={shown.attachments} uploads={uploads} previews={previews}
           canOpen={boot.capabilities.generatedFiles.supported}
           onRemove={id => setDraft(previous => ({ ...previous, dirty: true, attachments: previous.attachments.filter(file => file.id !== id) }))}
@@ -358,12 +372,12 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               ? "Guide…"
               : "Message…")
           }
-          aria-describedby={pasteStatus ? "composer-paste-status" : undefined}
+          aria-describedby={status ? "composer-paste-status" : undefined}
           // Read-only rather than disabled, so focus stays here for the next message.
           readOnly={handedOff}
           onChange={(event) => {
             setRecall(null);
-            setPasteStatus("");
+            setStatus("");
             setDraft((previous) => ({
               ...previous,
               dirty: true,
@@ -383,7 +397,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             if (!pasted || attachUnavailable) return;
             event.preventDefault();
             addFiles([pasted]);
-            setPasteStatus(`Your paste was long, so it is attached as ${pasted.name} (${formatBytes(pasted.size)}).`);
+            setStatus(`Your paste was long, so it is attached as ${pasted.name} (${formatBytes(pasted.size)}).`);
           }}
           onKeyDown={(event) => {
             // Keys an input method is using, including the Enter that confirms a word, are its own.
@@ -420,6 +434,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
                 (draft.text.trim() || draft.attachments.length)
               )
                 void send();
+              else if (draft.text.trim() || draft.attachments.length) refusedForConnection();
             }
           }}
           rows={1}
@@ -440,7 +455,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response" onMouseDown={keepFocus}
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
-            title={boot.capabilities.stop.reason || "Stop response"}
+            title={boot.capabilities.stop.reason || connectionReason || "Stop response"}
             onClick={onStop}>
             <Icon name={stopping ? "spinner" : "stop"} className={stopping ? "spin" : undefined} size={19} />
           </button> : <button
@@ -448,6 +463,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             aria-label={active ? "Send guidance" : "Send message"}
             onMouseDown={keepFocus}
             aria-busy={submitting}
+            title={connectionReason}
             disabled={
               !draftReady ||
               pending !== null ||

@@ -5,6 +5,7 @@ import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
 import { applyInflightDelta, compareVersions, versionBoot, withTurn } from "../shared/inflight";
 import type { Inflight, Message, TurnEvent } from "../shared/types";
+import type { ErrorCode } from "../shared/errors";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
@@ -41,6 +42,31 @@ const placeElement = (container: HTMLElement, id: string) =>
   [...container.querySelectorAll<HTMLElement>(placeRows)].find(item => placeId(item) === id);
 const editable = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+/**
+ * After a failed read that may be one unlucky request, how long the chat waits for a read to succeed
+ * before it shows it is disconnected. A second failure in a row shows it sooner. The failure asks for no
+ * read of its own: the next read comes from a change notice, a wake or the poll, as on any other read.
+ */
+export const DISCONNECT_GRACE_MS = 3_000;
+/**
+ * Why an action that needs the connection is refused. During the grace period the chat still looks
+ * connected, so the refused control says it here; once the chat shows it is down, the connection
+ * notice says more and the control only names what it waits for.
+ */
+export const CHECKING_CONNECTION = "Checking the connection. Try again in a moment.";
+export const WAITING_FOR_CONNECTION = "Waiting for the connection. Your draft is kept.";
+/** The composer's status line after a send it refused during the grace period. */
+export const NOT_SENT_CHECKING = `Not sent. ${CHECKING_CONNECTION}`;
+// What the server answers when Hermes itself is down: its connection diagnosis, a refused credential or maintenance.
+const hermesDown = new Set<ErrorCode>(["not_configured", "invalid_config", "connecting", "unreachable", "unauthorized", "addon_missing",
+  "incompatible", "reconnecting", "closed", "hermes_unauthorized", "hermes_maintenance"]);
+/**
+ * A failed read that shows the connection is down: the browser is offline, or the server answered that
+ * Hermes is unavailable. Any other failure, such as a request that never reached the app, a timeout or an
+ * unreadable answer, may be a blip.
+ */
+export const provesDisconnected = (error: unknown) => navigator.onLine === false
+  || error instanceof ApiError && error.code !== undefined && hermesDown.has(error.code);
 // A progress line arrives mid-task and is not something to catch up on, so it never counts.
 const countsAsNew = (message: Message) =>
   !isActivityMessage(message) && message.interim !== true && (message.role === "user" || message.role === "assistant" && (!!message.text.trim() || !!message.files?.length));
@@ -51,7 +77,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const [conversation, setConversation] = useState<SavedConversation | null>(
     null,
   );
-  const [disconnected, setDisconnected] = useState(false);
+  // The chat whose latest read failed: a fact at once, so actions that need the connection are refused.
+  // The chat that shows it is disconnected: see DISCONNECT_GRACE_MS. Each belongs to the chat it was
+  // read for, so a failure gates nothing once its chat closes or leaves the roster, where no read
+  // would ever clear it.
+  const [readFailedFor, setReadFailedFor] = useState("");
+  const [disconnectedFor, setDisconnectedFor] = useState("");
+  const readFailed = !!botId && readFailedFor === botId;
+  const disconnected = !!botId && disconnectedFor === botId;
   const [reviewed, setReviewed] = useState(false);
   useEffect(() => setReviewed(false), [conversation?.activity.state, conversation?.activity.runId]);
   const [atLatest, setAtLatest] = useState(true);
@@ -122,7 +155,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // A conversation opened before shows at once while it is checked again, unless it opens at a message.
     const cached = opening ? undefined : cachedResponse<SavedConversation>(firstPage(botId));
     setConversation(cached?.botId === botId ? cached : null);
-    setDisconnected(false);
+    setReadFailedFor("");
+    setDisconnectedFor("");
     setReviewed(false);
     // The window starts at its oldest loaded message so new turns never push it along.
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
@@ -171,6 +205,25 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (heldTurn?.botId === value.botId && (compareVersions(heldTurn.version, value.version) ?? 0) > 0) shown = withTurn(value, heldTurn) ?? value;
       else heldTurn = undefined;
       return patch(shown, latestInflight);
+    };
+    // Failed reads in a row, and the grace a first one that may be a blip starts.
+    let failures = 0, grace: ReturnType<typeof setTimeout> | undefined;
+    const stopWaiting = () => { clearTimeout(grace); grace = undefined; };
+    const readOk = () => {
+      failures = 0;
+      stopWaiting();
+      setReadFailedFor("");
+      setDisconnectedFor("");
+    };
+    const readFailedWith = (error: unknown) => {
+      failures++;
+      setReadFailedFor(botId);
+      if (failures > 1 || provesDisconnected(error)) {
+        stopWaiting();
+        setDisconnectedFor(botId);
+        return;
+      }
+      grace = setTimeout(() => { grace = undefined; if (live) setDisconnectedFor(botId); }, DISCONNECT_GRACE_MS);
     };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
@@ -245,14 +298,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
         }
         setConversation(compose(result));
-        setDisconnected(false);
+        readOk();
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
         if (live && error instanceof ApiError && error.code === "assistant_not_found") {
           gone = true;
           missing.current?.(botId);
         } else if (live) {
-          setDisconnected(true);
+          readFailedWith(error);
           if (earlierPage) setEarlier({ loading: false, failed: true });
         }
       } finally {
@@ -344,6 +397,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     document.addEventListener("visibilitychange", hide);
     return () => {
       live = false;
+      stopWaiting();
       requestEarlier.current = () => {};
       requestStart.current = () => {};
       stopPolling();
@@ -645,5 +699,5 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     openMessage,
     openAt,
   }), [hasEarlier, complete, earlier, atLatest, atAttention, unseen, loadEarlier, jumpToLatest, anchorSend, sentAs, openMessage, openAt]);
-  return { conversation, setConversation, disconnected, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
+  return { conversation, setConversation, disconnected, readFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition };
 }

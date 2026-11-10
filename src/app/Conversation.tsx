@@ -27,7 +27,7 @@ import { messageOrigin } from "../shared/message-origin";
 import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
-import type { useConversation } from "./use-conversation";
+import { CHECKING_CONNECTION, type useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
 import { emptyReplyKeys, replyKeys } from "./reply-keys";
@@ -58,7 +58,7 @@ const noChips = new Map<string, Artifact[]>();
  * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
  * does not re-render the transcript, its decisions, or its activity avatar.
  */
-export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
+export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, connectionShown, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -70,7 +70,10 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   state: ActivityState;
   showActivity: boolean;
   avatarState: ActivityState;
+  /** A read just failed, or the connection is down: actions that need it are refused. */
   connectionLost: boolean;
+  /** The connection is down, as the chat shows it. It follows `connectionLost` after a grace period; see useConversation. */
+  connectionShown: boolean;
   offline: boolean;
   appUnavailable: boolean;
   checkingConnection: boolean;
@@ -129,15 +132,15 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
     enabled: !!selected && !!boot.capabilities.routines?.supported, hiddenRoutines });
   const runSlots = useMemo(() => placeRuns(blocks.map(turnTime), runs), [blocks, runs]);
   const runActions = useMemo(() => ({ onResults: onRoutineResults, onHide: onHideRoutineRuns }), [onRoutineResults, onHideRoutineRuns]);
-  const runningCall = connectionLost ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
+  const runningCall = connectionShown ? undefined : conversation?.toolCalls?.findLast(call => call.status === "running");
   const prop = avatarProp(runningCall?.name);
-  const action = activityAction(state, conversation?.activity.detail, { offline, connectionLost });
+  const action = activityAction(state, conversation?.activity.detail, { offline, connectionLost: connectionShown });
   const running = !!conversation && activeStates.includes(conversation.activity.state);
   // The running turn's one live row: the current tool's receipt, and in Advanced, the latest reasoning line.
   const liveTool = runningCall ? `${receipt(runningCall).label} · ${runningCall.name}` : undefined;
-  const liveThought = advanced && running && !connectionLost ? latestReasoning(conversation!.messages) : undefined;
+  const liveThought = advanced && running && !connectionShown ? latestReasoning(conversation!.messages) : undefined;
   // The running turn's tools so far. Hermes lists only the current turn's calls while it runs.
-  const turnCalls = running && !connectionLost ? conversation!.toolCalls ?? [] : [];
+  const turnCalls = running && !connectionShown ? conversation!.toolCalls ?? [] : [];
   const peeking = !!selected && !computerOpen && turnCalls.some(call => usesComputer(call.name));
   // Settled decisions fold away instead of vanishing; Reduce Motion removes them at once.
   const pendingApprovals = useMemo(() => conversation?.approvals.filter(approval => approval.status === "pending") ?? [], [conversation?.approvals]);
@@ -166,7 +169,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   });
   // Live Talk owns the speaker, so replies are not read aloud while it runs.
   const talking = useTalkLive();
-  const speech = useReplySpeech(botId, connectionLost || talking);
+  // A reply already playing stops only once the chat shows it is disconnected; starting one is refused at once (`tools.unavailable`).
+  const speech = useReplySpeech(botId, connectionShown || talking);
   const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey }),
     [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey]);
   const frame = useRef<HTMLDivElement>(null);
@@ -238,7 +242,7 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
         tabIndex={0}
       >
       <div className="transcript-content" ref={content}>
-        {!selected && connectionLost ? (
+        {!selected && connectionShown ? (
           <ConnectionPanel connection={boot.connection} offline={offline}
             appUnavailable={appUnavailable} busy={checkingConnection} retry={() => void reconnect()} />
         ) : !selected ? (
@@ -251,8 +255,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
             </p>
             <button
               className="primary"
-              disabled={!boot.capabilities.botConfiguration.supported}
-              title={boot.capabilities.botConfiguration.reason}
+              disabled={!boot.capabilities.botConfiguration.supported || connectionLost}
+              title={boot.capabilities.botConfiguration.reason ?? (connectionLost ? CHECKING_CONNECTION : undefined)}
               onClick={onCreate}
             >
               Create an assistant
@@ -269,12 +273,12 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
               </details>
             )}
           </div>
-        ) : !conversation && !connectionLost ? (
+        ) : !conversation && !connectionShown ? (
           <HistorySkeleton />
         ) : blocks.length || runs.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
-            <Turns blocks={blocks} advanced={advanced} disconnected={connectionLost} name={selected.name} botId={botId} userId={boot.user.id}
+            <Turns blocks={blocks} advanced={advanced} unavailable={connectionLost} disconnected={connectionShown} name={selected.name} botId={botId} userId={boot.user.id}
               running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions}
               replyFiles={replyFiles} onOpenFile={openFile} />
           </>
@@ -406,7 +410,11 @@ function HistoryEdge({ history, scroll, name, disabled }: {
   </div>;
 }
 type TurnProps = {
-  block: Turn; advanced: boolean; disconnected: boolean; name: string; botId: string; userId: string;
+  block: Turn; advanced: boolean; name: string; botId: string; userId: string;
+  /** Actions that need the connection are refused. Only a turn whose replies hold reply cards gets it. */
+  unavailable: boolean;
+  /** The chat shows it is disconnected. Only a turn with a running call, which then reads "Last seen running", gets it. */
+  disconnected: boolean;
   /** This is the latest turn and it is still working, so its work reads as live rather than finished. */
   live: boolean;
   /** The person's sent message still shown from this device, and how far it got. Only the turn that holds it gets these. */
@@ -415,6 +423,11 @@ type TurnProps = {
   files?: { replyId: string; artifacts: Artifact[] };
   onOpenFile(fileId?: string): void;
 };
+/**
+ * Reply cards are the only part of a reply that reads `unavailable`, and a change to it re-parses the
+ * reply's Markdown, so only a reply that may hold one gets it. Matched as loosely as sameBlock does.
+ */
+const holdsCards = (message: Message) => message.text.includes("agent-ui");
 /** When a turn started, for placing routine runs: its first dated message, shown or folded. */
 const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
   ?? [...block.tools.values()].find(message => message.createdAt)?.createdAt;
@@ -422,7 +435,7 @@ type RunActions = { onResults(routineId: string, resultId: string): void; onHide
 const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
   <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
 // Memoized so typing in the composer does not re-render the whole transcript.
-const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, replyFiles, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing" | "files"> & {
+const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSlots, runActions, replyFiles, unavailable, disconnected, ...shared }: Omit<TurnProps, "block" | "live" | "outgoingId" | "outgoing" | "files"> & {
   replyFiles: Map<string, Artifact[]>;
   blocks: Turn[];
   /** The latest turn is still working. */
@@ -437,7 +450,9 @@ const Turns = memo(function Turns({ blocks, running, outgoingId, outgoing, runSl
     {blocks.flatMap((block, index) => {
       const holdsEcho = outgoingId !== undefined && block.messages.some(message => message.id === outgoingId);
       const reply = block.messages.findLast(message => replyFiles.has(message.id));
+      // A turn gets the connection flags only when it shows them, so a change re-renders no other turn.
       return [...runCards(runSlots[index], shared.botId, runActions), <TurnView key={block.messages[0]?.id || `tools-${index}`} block={block} {...shared} live={running && index === blocks.length - 1}
+        unavailable={unavailable && block.messages.some(holdsCards)} disconnected={disconnected && [...block.tools.values()].some(message => message.toolCall?.status === "running")}
         outgoingId={holdsEcho ? outgoingId : undefined} outgoing={holdsEcho ? outgoing : undefined}
         files={reply && { replyId: reply.id, artifacts: replyFiles.get(reply.id)! }} />];
     })}
@@ -466,12 +481,12 @@ function sameTurn(a: Turn, b: Turn) {
   const left = [...a.tools], right = [...b.tools];
   return left.every(([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]));
 }
-const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.disconnected === b.disconnected && a.name === b.name
+const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.unavailable === b.unavailable && a.disconnected === b.disconnected && a.name === b.name
   && a.botId === b.botId && a.userId === b.userId && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
   && a.onOpenFile === b.onOpenFile && sameFiles(a.files, b.files) && sameTurn(a.block, b.block);
 const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) => a === b || !!a && !!b && a.replyId === b.replyId
   && a.artifacts.length === b.artifacts.length && a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file));
-const TurnView = memo(function TurnView({ block, advanced, disconnected, name, botId, userId, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
+const TurnView = memo(function TurnView({ block, advanced, unavailable, disconnected, name, botId, userId, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
   const work = [...block.tools.values()];
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
   // first reply when there is only reasoning, or at the end.
@@ -523,7 +538,7 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
       {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
       {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
       {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
-        <ReplyMarkdown live={streaming} text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected}
+        <ReplyMarkdown live={streaming} text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={unavailable && holdsCards(message)}
           inlineUi={message.role === "assistant" && (streaming || !progress)} />
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>

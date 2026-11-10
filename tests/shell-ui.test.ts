@@ -9,7 +9,7 @@ import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
+import { advance, mountRoot, renderedProps, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -66,15 +66,6 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
-/**
- * The props React last rendered onto an element. React replaces this object whenever the element's
- * component renders again, and keeps it when a memoized component above it skips rendering.
- */
-const renderedProps = (element: Element) => {
-  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
-  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
-  return (element as unknown as Record<string, unknown>)[key];
-};
 const render = async () => { await mount.render(createElement(App)); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
