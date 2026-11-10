@@ -482,6 +482,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const showEarly = useStableCallback((next: View) => { chosenEarly.current = true; showView(next); });
   const pickRoomEarly = useStableCallback((id: string) => { chosenEarly.current = true; selectRoom(id); });
   const earlyGroups = useMemo(() => ({ ...homeGroups, onSelect: pickRoomEarly }), [homeGroups, pickRoomEarly]);
+  // An offline sign-out that storage would not keep leaves the person signed in here, and says so.
+  const [signOutUnkept, setSignOutUnkept] = useState(false);
+  const signOutEarly = useStableCallback(() => {
+    if (!earlyHome) return;
+    setSignOutUnkept(false);
+    // A tab that has not yet seen another tab's change is refused; that change draws this tab again.
+    void signOutHere(earlyHome.user.id).then(done => { if (!done) setSignOutUnkept(true); }, () => {});
+  });
   if (session.auth) return <SignIn />;
   // The same tree as the full app below, so bootstrap's answer redraws home in place: rows, scroll and focus stay.
   if (!boot && earlyHome)
@@ -498,8 +506,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           <p>{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
           {appUnavailable && <button onClick={refreshSession}>Try again</button>}
           {/* Account is disabled until the app answers, so this is the way out for someone else at this browser. */}
-          {/* A tab that has not yet seen another tab's change is refused; that change draws this tab again. */}
-          {appUnavailable && <button onClick={() => void signOutHere(earlyHome.user.id).catch(() => {})}>Sign out of this device</button>}
+          {appUnavailable && <button onClick={signOutEarly}>Sign out of this device</button>}
+          {signOutUnkept && <p role="alert">Couldn't sign out of this device. This browser didn't save the change, so you're still signed in here.</p>}
         </main>
       </div>
     );

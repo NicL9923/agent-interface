@@ -45,13 +45,20 @@ export async function signOutOf(user: string) {
  * first bootstrap failed. It goes at once, as a sign-out the server took does, in every tab, and the
  * record says the server's session may still be live, so nothing reads with it until the sign-in
  * screen ends it there (`finishSignOut`).
+ *
+ * That record is all that stands between the live session and a later page, so it is written, and
+ * found in storage, before this member's copies go. When storage refuses it or does not keep it, the
+ * record goes back, nothing is removed, and this returns false: the person is still signed in here.
  */
 export async function signOutHere(user: string) {
   const change = await beginAccountChange({ ownTree: true });
-  forgetAccountContent(user);
-  forgetSignIn();
-  closeShownNotifications();
-  await change.settle({ signedOut: true, user, logout: true });
+  const done = await change.settleKept({ signedOut: true, user, logout: true }, () => {
+    forgetAccountContent(user);
+    forgetSignIn();
+    closeShownNotifications();
+  });
+  if (!done) await change.undo();
+  return done;
 }
 
 let finishing: Promise<void> | null = null;

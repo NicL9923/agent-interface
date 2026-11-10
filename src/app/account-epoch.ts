@@ -70,6 +70,16 @@ function store(text: string) {
   unwritten = now === text ? undefined : { over: now, text };
   return stored();
 }
+/**
+ * Writes `text` and says whether storage now holds it. Unlike `store`, a write storage refuses or does
+ * not keep is not kept in memory: the caller acts only once every tab and later page can read it.
+ */
+function persisted(text: string) {
+  try { localStorage.setItem(authEpochKey, text); } catch { return false; }
+  if (readStored() !== text) return false;
+  unwritten = undefined;
+  return true;
+}
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 type Settled = Pick<AuthEpoch, "signedOut" | "user" | "logout">;
 const settled = (fields: Settled) => JSON.stringify({ id: newId(), at: Date.now(), ...fields.signedOut ? { signedOut: true } : {},
@@ -267,8 +277,12 @@ export function accountStart(): AccountStart {
 
 /** Writes a settled record and ends this tab's generation, as every other tab will. */
 function transition(fields: Settled) {
+  settledAs(store(settled(fields)), fields);
+}
+/** Takes `text`, the settled record now stored, and ends this tab's generation, as every other tab will. */
+function settledAs(text: string, fields: Settled) {
   owned = null;
-  seen = store(settled(fields));
+  seen = text;
   tellWorker(fields.signedOut ? null : fields.user ?? null);
   end();
   notify();
@@ -310,6 +324,18 @@ export const beginAccountChange = ({ ownTree = false } = {}) => exclusive(() => 
   tellWorker(null);
   return {
     settle: (fields: Settled) => exclusive(() => transition(fields)),
+    /**
+     * Settles only once storage holds the record, so every tab and every later page reads it too, and
+     * runs `kept` just before this tab's generation ends. Returns false, having changed nothing, when
+     * storage refuses the write or does not keep it; the mark stays until `undo`.
+     */
+    settleKept: (fields: Settled, kept: () => void) => exclusive(() => {
+      const text = settled(fields);
+      if (!persisted(text)) return false;
+      kept();
+      settledAs(text, fields);
+      return true;
+    }),
     undo: () => exclusive(() => {
       owned = null;
       era++;

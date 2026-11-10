@@ -608,6 +608,41 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     expect(button("Enter local workspace")).toBeDefined();
   });
 
+  // The record that says the server's session may still be live is what keeps a later page from reading
+  // with it. Without it, the cookie that never got cleared draws this member's home again.
+  it.each([
+    ["refuses", () => { throw new DOMException("Full", "QuotaExceededError"); }],
+    ["silently drops", () => {}],
+  ])("keeps this member's copies and says it could not sign out when storage %s the record that says so", async (_name, write) => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    await open();
+    await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+    const before = localStorage.getItem(authEpochKey);
+    const setItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+      if (key === authEpochKey && value.includes('"logout":true')) return write();
+      setItem.call(this, key, value);
+    });
+    await act(async () => button("Sign out of this device").click());
+    await advance(0);
+    // Not presented as done: the saved home stays, with word of what happened where it shows its state.
+    expect(showsSavedHome()).toBe(true);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Couldn't sign out of this device");
+    expect(container.textContent).not.toContain("Enter local workspace");
+    expect([savedRoster(), JSON.parse(localStorage.getItem(signInHintKey)!), JSON.parse(localStorage.getItem(savedThemeKey)!)])
+      .toEqual([savedOne, hintFor("one"), { v: 1, user: "one", theme: "dark" }]);
+    // The record is member one's again, so no tab waits on a change that will never settle.
+    expect(localStorage.getItem(authEpochKey)).toBe(before);
+    // Once storage keeps it, the same button signs out.
+    vi.mocked(Storage.prototype.setItem).mockRestore();
+    await act(async () => button("Sign out of this device").click());
+    await advance(0);
+    expect(button("Enter local workspace")).toBeDefined();
+    expect([savedRoster(), localStorage.getItem(signInHintKey), localStorage.getItem(savedThemeKey)]).toEqual([null, null, null]);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ signedOut: true, logout: true, user: "one" });
+  });
+
   it("signs nobody out when another tab already changed the account, and draws that tab's account instead", async () => {
     signedInAsOne();
     store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
