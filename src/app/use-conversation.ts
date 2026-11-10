@@ -161,6 +161,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const inflightOf = (turn: TurnEvent): Inflight & { version?: string } =>
       ({ botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version });
     let pending: { turn: TurnEvent; ask: number } | undefined;
+    // Growth continues the turn whose live reply it extends, wherever that turn is kept, held or waiting, so a turn
+    // settling or restored later brings back the grown reply, not the one its event first carried. The live reply held
+    // is that turn's own message object (`inflightOf`), so identity names the turn growth extends.
+    const grown = (turn: TurnEvent | undefined, before: Message, after: Inflight): TurnEvent | undefined =>
+      turn?.message === before ? { ...turn, message: after.message, activity: after.activity, toolCalls: after.toolCalls } : turn;
     const compose = (value: SavedConversation): SavedConversation => {
       let shown = value;
       if (heldTurn?.botId === value.botId && (compareVersions(heldTurn.version, value.version) ?? 0) > 0) shown = withTurn(value, heldTurn) ?? value;
@@ -316,8 +321,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (!live || delta.botId !== botId) return true;
       // Growth that does not continue the held reply is dropped for a reload, never guessed at.
       const value = applyInflightDelta(latestInflight, delta);
-      if (value) showInflight(value);
-      return !!value;
+      if (!value) return false;
+      heldTurn = grown(heldTurn, latestInflight!.message, value);
+      if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
+      showInflight(value);
+      return true;
     });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {

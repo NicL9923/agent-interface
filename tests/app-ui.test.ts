@@ -500,6 +500,34 @@ describe("conversation state", () => {
         await advance(5000);
         expect(reads()).toBe(before);
       });
+      // Growth extends the turn it continues wherever that turn is kept, held or waiting, so settling restores the grown reply.
+      it.each([
+        // The reviewer's order: the view's turn grew before the other boot's turn arrived, and the read confirms the view's boot.
+        { name: "a held turn grew and the read confirms its boot", order: ["a", "grow", "b"], read: "a", shows: "A current and more", gone: "B current" },
+        // The mirror: the waiting turn grew before the view's turn arrived, and the read confirms the waiting turn's boot.
+        { name: "a waiting turn grew and the read confirms its boot", order: ["b", "grow", "a"], read: "b", shows: "B current and more", gone: "A current" },
+        // Growth after both arrived extends only the last turn heard, never the other one kept beside it.
+        { name: "the waiting turn grew last and the read confirms the held turn's boot", order: ["a", "b", "grow"], read: "a", shows: "A current", gone: "and more" },
+        { name: "the held turn grew last and the read confirms the waiting turn's boot", order: ["b", "a", "grow"], read: "b", shows: "B current", gone: "and more" },
+      ])("keeps each turn's own growth when $name", async ({ order, read, shows, gone }) => {
+        conversation = at("a:1:9", "A old");
+        await render();
+        const answer = holdNextRead();
+        const events = { a: turn("a:1:10", [prompt, saved], "A current"), b: turn("b:1:10", [prompt, saved], "B current") };
+        for (const step of order) {
+          await act(async () => open().emit(step === "grow" ? "inflight-delta" : "turn", step === "grow" ? growth(9, " and more") : events[step as "a" | "b"]));
+          await advance(0);
+        }
+        const before = reads();
+        await answer(read === "a" ? at("a:1:9", "A old") : at("b:1:9", "B old"));
+        expect(container.textContent).toContain(shows);
+        expect(container.textContent).not.toContain(gone);
+        // Further growth continues the restored reply, with no read for it.
+        await act(async () => open().emit("inflight-delta", growth(shows.length, ", still")));
+        expect(container.textContent).toContain(`${shows}, still`);
+        await advance(5000);
+        expect(reads()).toBe(before);
+      });
       // The read asked for a turn from another boot can be older than the turn and hold neither its first message nor `after`,
       // as when it joins the first page's prefetch that set out before. One more read, asked after the turn, places it.
       it("reads once more for another boot's turn that the first read of its boot cannot place", async () => {

@@ -281,7 +281,9 @@ for decides which `BOOT` your view shows, and the newest read asked wins:
   it, if that read has the event's `BOOT` and is older; otherwise drop the event.
   Never let settling it replace or drop a turn event you already placed from the
   read's `BOOT`: keep whichever of the two is newer, and keep growing that one's
-  live reply. If the read is older than the held event and holds neither its first
+  live reply. Apply each `inflight-delta` to the turn event whose live reply it
+  continues, wherever you keep that event, held or placed, so whichever turn you
+  keep brings back its live reply with the growth it already received. If the read is older than the held event and holds neither its first
   message nor `after`, read once more. A read that fails leaves the event held for
   the next read you take. Until then, keep showing what you hold, without the new
   live reply.
