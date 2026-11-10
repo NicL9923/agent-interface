@@ -179,7 +179,16 @@ and private agent handoffs are redacted. A persisted segment is any assistant ro
 saved since the prompt of the Hermes turn that is running, the prompt Hermes
 reports for it. Guidance steered into that turn keeps the segments saved before
 it, so the live reply never repeats them. Guidance Hermes queued instead starts a
-turn of its own, so only that turn's segments count. Apply a patch only while the fetched
+turn of its own, so only that turn's segments count. The reported prompt is
+compared trimmed and without its trailing file references, as the saved prompt
+shows it, so a file sent alone is matched by its empty text, and an image sent
+alone, which Hermes reports as an empty prompt, too. When no shown prompt has the
+reported text, as for a hidden prompt such as a goal continuation or one Hermes has
+not saved yet, the segments count from the last shown prompt, as before turn
+events existed. One known gap remains: a turn whose prompt is not saved yet and
+whose live text starts with the same words as a segment the earlier turn saved in
+the same run loses those words until its prompt is saved. Closing it needs the
+Hermes add-on to mark where a native turn starts. Apply a patch only while the fetched
 conversation is active and its `activity.runId` matches the patch. A settled
 conversation or a newer run supersedes a retained live tail.
 Structural events still send `data: change`, meaning refetch. Clients fetch on
@@ -270,12 +279,17 @@ for decides which `BOOT` your view shows, and the newest read asked wins:
   events from another `BOOT` that arrive meanwhile replace the held one and share
   that read. Place the held event on the first read you take that you asked after
   it, if that read has the event's `BOOT` and is older; otherwise drop the event.
-  A read that fails leaves the event held for the next read you take. Until then,
-  keep showing what you hold, without the new live reply.
+  Never let settling it replace or drop a turn event you already placed from the
+  read's `BOOT`: keep whichever of the two is newer, and keep growing that one's
+  live reply. If the read is older than the held event and holds neither its first
+  message nor `after`, read once more. A read that fails leaves the event held for
+  the next read you take. Until then, keep showing what you hold, without the new
+  live reply.
 
-No response, whatever its `BOOT`, should make you read again by itself, so two
-processes that disagree, such as two behind one address, cost one read per change
-notice and one per turn event they hold, never a loop. Merge asks made while a read is
+No response, whatever its `BOOT`, should make you read again by itself, apart from
+that one read for a held event it cannot place, so two processes that disagree,
+such as two behind one address, cost one read per change notice and at most two
+per turn event they hold, never a loop. Merge asks made while a read is
 on its way into one read.
 
 Within one `BOOT`, a read can arrive after a turn event that is newer than it,
