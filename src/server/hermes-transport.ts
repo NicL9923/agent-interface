@@ -50,6 +50,11 @@ export interface Contract {
    * assistant's, each marked main or not. See src/hermes/delegation.py.
    */
   delegation: number;
+  /**
+   * An add-on whose admission answer says when Hermes did not start a new task's turn (`turn`), so a new task's
+   * answer without one means the turn started. Earlier add-ons send no `turn` either way.
+   */
+  admissionTurn: boolean;
 }
 export interface TransportHooks {
   /** A frame that is not a response: a session event or a request from Hermes. */
@@ -109,6 +114,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     requiredSkills: new Set(),
     approvalSettings: false,
     delegation: 0,
+    admissionTurn: false,
   };
   const serviceAuth = options.authMode === 'service';
   const servicePath = (path: string) => serviceAuth ? '/api/agent-interface/service/' + path.slice('/api/'.length) : path;
@@ -164,6 +170,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     contract.incrementalDiscovery = false;
     contract.approvalSettings = false;
     contract.delegation = 0;
+    contract.admissionTurn = false;
     // A reconnected socket receives a session's frames only after reopening it. Watchers reload,
     // but failed attempts during an outage, which never carried frames, stay quiet.
     hooks.disconnected(current.verified);
@@ -196,6 +203,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     contract.canonicalSubmit = capabilities.canonical_submit === true;
     contract.incrementalDiscovery = capabilities.incremental_discovery === true;
     contract.approvalSettings = capabilities.approval_settings === true;
+    contract.admissionTurn = capabilities.admission_turn === true;
     contract.delegation = capabilities.delegation !== true ? 0
       : Number.isInteger(capabilities.delegation_version) && capabilities.delegation_version >= 2 ? 2 : 1;
     contract.requiredSkills = new Set(Array.isArray(capabilities.essential_skills)

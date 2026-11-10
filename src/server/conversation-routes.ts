@@ -461,7 +461,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       phases.admitted = performance.now();
       if (receipt.status === "accepted")
         timings.admitted(timing, voice ? "talk" : explicitSteering ? "steer" : "messages",
-          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted }, receipt.runId);
+          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted }, receipt.runId, receipt.turn);
       else timings.discard(timing);
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
@@ -484,6 +484,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   };
   apiRoute(app, "POST /bots/:id/messages", { body: message }, timedSend(false));
   apiRoute(app, "POST /bots/:id/steer", { body: message }, timedSend(true));
+  // A lookup never carries what Hermes's admission answer said about the turn. The recorded receipt keeps it, so a
+  // client whose answer was lost learns it here, while both say the message was accepted.
+  const withAdmission = (looked: SubmissionReceipt, recorded?: SubmissionReceipt): SubmissionReceipt =>
+    looked.status !== "accepted" || recorded?.status !== "accepted" ? looked
+      : { ...looked, ...recorded.turn ? { turn: recorded.turn } : {}, ...recorded.admittedVersion ? { admittedVersion: recorded.admittedVersion } : {} };
   apiRoute(app, "GET /submissions/:id", {}, async req => {
     const requestId = z.string().uuid().parse(req.params.id);
     const recorded = store.submission(requestId);
@@ -502,7 +507,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         const receipt = await runtime.lookupSubmission(requestId);
         if (receipt) {
           if (previous) store.receipt(receipt);
-          return told(receipt);
+          return told(withAdmission(receipt, previous?.receipt));
         }
         if (!previous)
           return {
