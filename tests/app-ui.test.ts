@@ -471,6 +471,52 @@ describe("conversation state", () => {
         expect(container.textContent).toContain("Found it");
         expect(reads.held()).toBe(0);
       });
+      // A turn from another boot waits for a read while a turn from the view's boot arrives and shows. Resolving the waiting
+      // turn never replaces or drops a held turn from the boot the read confirms, and the live reply follows that boot.
+      it.each([
+        // The reviewer's order: the read confirms the view's boot, whose newer turn already shows.
+        { name: "the read confirms the view's boot", first: "b", read: "a", shows: "A current", gone: ["B current", "A old"] },
+        // The mirror: the read confirms the other boot, whose waiting turn goes on top with its own live reply.
+        { name: "the read confirms the waiting turn's boot", first: "b", read: "b", shows: "B current", gone: ["A current", "A old"] },
+        // The view's turn arrived first, so the last live reply heard is the waiting turn's.
+        { name: "the view's turn came first and the read confirms its boot", first: "a", read: "a", shows: "A current", gone: ["B current", "A old"] },
+      ])("keeps the turn of the boot a read confirms when $name", async ({ first, read, shows, gone }) => {
+        conversation = at("a:1:9", "A old");
+        await render();
+        const answer = holdNextRead();
+        const events = { a: turn("a:1:10", [prompt, saved], "A current"), b: turn("b:1:10", [prompt, saved], "B current") };
+        for (const boot of first === "b" ? ["b", "a"] as const : ["a", "b"] as const) {
+          await act(async () => open().emit("turn", events[boot]));
+          await advance(0);
+        }
+        expect(container.textContent).toContain("A current");
+        const before = reads();
+        await answer(read === "a" ? at("a:1:9", "A old") : at("b:1:9", "B old"));
+        expect(container.textContent).toContain(shows);
+        for (const text of gone) expect(container.textContent).not.toContain(text);
+        // Growth of the turn shown goes on showing, with no read for it.
+        await act(async () => open().emit("inflight-delta", growth(shows.length, " and more")));
+        expect(container.textContent).toContain(`${shows} and more`);
+        await advance(5000);
+        expect(reads()).toBe(before);
+      });
+      // The read asked for a turn from another boot can be older than the turn and hold neither its first message nor `after`,
+      // as when it joins the first page's prefetch that set out before. One more read, asked after the turn, places it.
+      it("reads once more for another boot's turn that the first read of its boot cannot place", async () => {
+        conversation = bootA();
+        await render();
+        const answer = holdNextRead();
+        const before = reads();
+        const gate = { id: "u9", role: "user" as const, text: "And the gate" };
+        await act(async () => open().emit("turn", turn("z:1:3", [gate], "Gate shut")));
+        await advance(0);
+        conversation = { ...at("z:1:4", "Gate shut."), messages: [...earlier, prompt, saved, gate, { id: "sid-inflight", role: "assistant", text: "Gate shut." }] };
+        await answer(at("z:1:2", "Found"));
+        expect(reads()).toBe(before + 2);
+        expect(container.textContent).toContain("Gate shut.");
+        await advance(5000);
+        expect(reads()).toBe(before + 2);
+      });
       it("leaves a held turn behind when the person switches chats", async () => {
         const other = { ...bootstrap.bots[0], id: "other", name: "Other" };
         bootstrap.bots.push(other);

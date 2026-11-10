@@ -149,13 +149,17 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     //   is already asked, so dropping it asks nothing.
     // - A turn event from another process never decides it. It waits as `pending` and asks one read, which any later
     //   such turns share. The first read taken that set out after it settles it: the turn goes on top only when that read
-    //   is from the turn's process and older than the turn, and is dropped otherwise. A read that fails leaves it waiting.
+    //   is from the turn's process and older than the turn, and is dropped otherwise. A turn already held from the read's
+    //   process stays when it is as new. A read that fails leaves it waiting. A read older than the turn that cannot place
+    //   it, as one joined to a prefetch that set out before, asks one more read.
     // Reads are bounded: a response never asks for a read because of the process that answered it, so two processes that
     // disagree cost one read per change. Every read answers an input, such as the opening, a change notice, a reconnect, a
     // wake or poll, the person's navigation, growth that does not continue the reply held, a turn that cannot be placed, or
-    // a pending turn. Asks made while a read is on its way become one read. A response asks for another read itself only
+    // a pending turn, and once more when the read that settles it cannot place it. Asks made while a read is on its way become one read. A response asks for another read itself only
     // when the latest page slid past the cached message a reader is on, once, since that read starts from the message.
     let boot: string | undefined, asks = 0;
+    const inflightOf = (turn: TurnEvent): Inflight & { version?: string } =>
+      ({ botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version });
     let pending: { turn: TurnEvent; ask: number } | undefined;
     const compose = (value: SavedConversation): SavedConversation => {
       let shown = value;
@@ -219,8 +223,20 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         if (result !== current.current) holdPlace();
         if (target.current?.botId === botId && target.current.generation === generation) target.current.ready = true;
         if (from) boot = from;
-        // `compose` puts it on top only when it is from this read's process and newer, and drops it otherwise.
-        if (pending && asked >= pending.ask) { heldTurn = pending.turn; pending = undefined; }
+        if (pending && asked >= pending.ask) {
+          const waiting = pending.turn;
+          pending = undefined;
+          // From another process than this read's, the waiting turn is dropped. From this read's, it is held unless a turn
+          // already held from this process is as new; `compose` then puts the held turn on top only when it is newer.
+          const order = compareVersions(heldTurn?.version, waiting.version);
+          if (versionBoot(waiting.version) === from && (order === undefined || order < 0)) {
+            heldTurn = waiting;
+            // Newer than this read, which holds neither its first message nor `after`: one more read, asked after it, is as new.
+            if ((compareVersions(waiting.version, result.version) ?? 0) > 0 && !withTurn(result, waiting)) again = true;
+          }
+          // The live reply is the last turn heard, which can be from the other process. Growth continues the held turn's.
+          if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
+        }
         setConversation(compose(result));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
@@ -263,7 +279,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const showTurn = (turn: TurnEvent) => {
       const from = versionBoot(turn.version);
       // Growth on the stream continues this reply. It shows only beside a read of its own version (`patch`).
-      latestInflight = { botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version };
+      latestInflight = inflightOf(turn);
       // From another process than the view's, or before any read: it waits for a read asked after it. See `boot`.
       if (from && from !== boot) {
         if (pending) { pending.turn = turn; return; }
