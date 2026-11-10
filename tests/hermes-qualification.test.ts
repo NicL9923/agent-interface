@@ -43,6 +43,7 @@ describe("exact Hermes upgrade qualification", () => {
       "src/server/logging.ts": "log formatting",
       "src/server/route-path.ts": "route pattern lookup",
       "src/server/security-headers.ts": "HTTP headers",
+      "src/server/send-timing.ts": "send latency logging",
       "src/server/static-cache.ts": "static asset caching",
       "src/shared/device-activity.ts": "which device a person is using, for notification routing",
     };
