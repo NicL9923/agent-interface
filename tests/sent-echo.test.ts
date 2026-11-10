@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_PATIENCE, nextEcho, nextEchoes, restoreSent, sendingDraft, withEchoes } from "../src/app/sent-echo";
+import { awaitingTurn, ECHO_PATIENCE, nextEcho, nextEchoes, restoreSent, sendingDraft, withEchoes } from "../src/app/sent-echo";
 import type { SentEcho } from "../src/app/sent-echo";
 import type { Pending, SavedConversation } from "../src/app/storage";
 import type { Message, SubmissionReceipt } from "../src/shared/types";
@@ -141,5 +141,30 @@ describe("sent message echo", () => {
     const first = { ...sending, status: "accepted" as const };
     const second = { ...first, request: { ...first.request, requestId: "req-2" } };
     expect(withEchoes(conversation(undefined, "working"), [first, second])!.messages.map(message => message.id)).toEqual(["a", "req", "req-2"]);
+  });
+});
+
+describe("the assistant thinking before Hermes reports the turn", () => {
+  const acceptedEcho = step(sending, { receipt: accepted })!;
+  it("shows while a message sent to an idle chat is on its way, and after Hermes accepts it until the turn shows", () => {
+    expect(awaitingTurn([sending], conversation())).toBe(true);
+    expect(awaitingTurn([acceptedEcho], conversation())).toBe(true);
+    // A finished or failed turn before it does not count as work: the new message starts another.
+    for (const state of ["done", "failed", "interrupted"] as const) expect(awaitingTurn([sending], conversation(undefined, state))).toBe(true);
+  });
+
+  // Each case is one reason the row must not be there.
+  it.each<[string, SentEcho[], SavedConversation | null]>([
+    ["no conversation is loaded", [sending], null],
+    ["nothing was sent", [], conversation()],
+    ["Hermes reports the turn's own work", [sending], conversation(undefined, "working")],
+    ["the message went to another assistant", [{ ...sending, request: { ...request, botId: "other" } }], conversation()],
+    ["it ended without a receipt", [step(sending, { pending: request })!], conversation()],
+    ["Hermes steered it into the running task", [step(sending, { receipt: { ...accepted, steered: true } })!], conversation()],
+    ["it was sent while the chat showed work", [step(null, { pending: request, sending: true, conversation: conversation(undefined, "working") })!], conversation()],
+    ["its turn already showed work", [{ ...acceptedEcho, ran: true }], conversation()],
+    ["Hermes's copy is in the chat", [acceptedEcho], conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }])],
+  ])("does not show when %s", (_, echoes, shown) => {
+    expect(awaitingTurn(echoes, shown)).toBe(false);
   });
 });

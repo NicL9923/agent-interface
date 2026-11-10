@@ -660,7 +660,11 @@ its update routes refuse with a message pointing to the app. Running
 describes recovery.
 
 Conversations show an animated avatar inline after the latest message while
-Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
+Hermes thinks or uses tools. A message sent while nothing is running shows the
+assistant thinking at once, beside the message, and Hermes's own report takes over
+the same row without a second announcement. That early row goes if the send is
+refused, fails or is unconfirmed, and a message sent while the assistant works adds
+none. Stop appears once Hermes reports the turn. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning

@@ -22,6 +22,8 @@ export type SentEcho = {
   ran?: boolean;
   /** Hermes admitted it into the task that was already running. */
   steered?: boolean;
+  /** The chat showed work when it was sent, so it can only join that work or wait behind it. */
+  duringWork?: boolean;
 };
 const active = (state: string) => ["thinking", "working", "waiting", "blocked"].includes(state);
 /** Whether Hermes's own copy of the message is in the conversation. */
@@ -54,6 +56,7 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
     if (!sender) return null;
     next = {
       request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending",
+      ...(conversation?.botId === pending.botId && active(conversation.activity.state) ? { duringWork: true } : {}),
       // A live reply's row is replaced as it is saved, so it cannot anchor anything.
       after: conversation?.botId === pending.botId
         ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined,
@@ -93,6 +96,20 @@ export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
     if (created) next.push(created);
   }
   return next.length === echoes.length && next.every((echo, index) => echo === echoes[index]) ? echoes : next;
+}
+/**
+ * Whether the open chat shows its assistant thinking before Hermes reports the turn. A message sent
+ * while the chat showed no work starts a turn, so the activity row appears with its echo instead of a
+ * round trip later, and Hermes's own report takes over the same row. It ends when the send is refused,
+ * fails, is given up or comes back uncertain (the echo leaves or reads as unconfirmed), when Hermes
+ * steers it into a running task, when the chat shows the turn's work or Hermes's copy of the message,
+ * and at the latest when the echo's own patience runs out. While the chat shows work, that work's row
+ * is already there, so a message sent then never adds one.
+ */
+export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation | null): boolean {
+  if (!conversation || active(conversation.activity.state)) return false;
+  return echoes.some(echo => echo.request.botId === conversation.botId && !echo.duringWork && !echo.steered && !echo.ran
+    && (echo.status === "sending" || echo.status === "accepted") && !echoShown(echo, conversation));
 }
 /** The conversation with its echoes at the end, as the person's own messages. */
 export function withEchoes(conversation: SavedConversation | null, echoes: SentEcho[]): SavedConversation | null {

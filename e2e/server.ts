@@ -117,7 +117,9 @@ const runtime: Runtime = {
   discoverEvents: async cursor => ({ cursor, events: [] }),
   lookupSubmission: async () => null,
   // The user's message lands at once. The reply lands a beat later, each announced the way Hermes announces it.
+  // POST /admission-delay?ms=N on the control port holds each admission that long first, as a slow Hermes would.
   submit: async input => {
+    if (admissionDelay) await new Promise(resolve => setTimeout(resolve, admissionDelay));
     const thread = messages.get(input.botId)!, runId = randomUUID();
     thread.push({ id: randomUUID(), runId, role: "user", text: input.text, createdAt: new Date().toISOString(), sender: { id: input.senderId, name: input.senderId } });
     if (input.botId === STREAMING) { streamReply(thread, runId, input.text); return { requestId: input.requestId, status: "accepted", runId }; }
@@ -161,6 +163,7 @@ const { app } = await createApp(
 // Everything the worker installs is this build's files, so the release it stands for is complete.
 // With ?install=fail its worker cannot install, as when a deploy is missing a file.
 let nextRelease: "none" | "ready" | "broken" = "none";
+let admissionDelay = 0;
 const NEXT_MARK = '<meta name="release" content="next">';
 app.addHook("onRequest", async (req, reply) => {
   if (nextRelease === "none") return;
@@ -179,8 +182,10 @@ app.addHook("onRequest", async (req, reply) => {
 await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
+// POST /admission-delay?ms=N slows each send's admission.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; }
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0; }
+  if (req.method === "POST" && req.url?.startsWith("/admission-delay")) admissionDelay = Number(new URL(req.url, "http://localhost").searchParams.get("ms")) || 0;
   if (req.method === "POST" && req.url?.startsWith("/next-release")) nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));
