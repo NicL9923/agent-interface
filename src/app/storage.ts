@@ -64,6 +64,13 @@ export const approvalDecisionKey = (user: string, bot: string, approval: string)
 export const formReplyKey = (user: string, bot: string, message: string, card: string) => `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
 /** When this browser's sign-in lapses and which chats it could open. See linked-chat.ts. */
 export const signInHintKey = "agent-interface:sign-in-hint";
+/** The theme this device last showed the account the sign-in hint names, for public/boot.js. */
+export const savedThemeKey = "agent-interface:theme";
+/**
+ * Copies that belong to the account the sign-in hint names. They go with the hint, at sign-out, at a
+ * refused session and at a new sign-in, and are shown only while the hint names their account.
+ */
+export const accountKeys = [savedThemeKey];
 export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
 export function localRead<T>(key: string): T | null {
   try {

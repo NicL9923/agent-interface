@@ -1,7 +1,7 @@
 import { clearResponseCache } from "../client-api";
 import { SESSION_MAX_AGE_MS } from "../shared/session";
 import { prefetchLinkedPage } from "./conversation-page";
-import { localRead, localRemove, localSave, signInHintKey } from "./storage";
+import { accountKeys, localRead, localRemove, localSave, signInHintKey } from "./storage";
 import { initialMessage, initialView } from "./view";
 
 /**
@@ -26,8 +26,12 @@ function parseHint(value: unknown): SignInHint | null {
 }
 const readHint = () => parseHint(localRead(signInHintKey));
 
+/** The account this browser's sign-in names, once a bootstrap has said who it is. */
+export const hintedUser = () => readHint()?.user ?? null;
+
 /** This browser just signed in; its session cookie lasts the server's session lifetime from now. */
 export function rememberSignIn() {
+  forgetAccount();
   localSave(signInHintKey, { until: Date.now() + SESSION_MAX_AGE_MS - MARGIN_MS, bots: [] } satisfies SignInHint);
 }
 
@@ -45,7 +49,9 @@ export function rememberChats(user: string, ids: string[]) {
 
 export function forgetSignIn() {
   localRemove(signInHintKey);
+  forgetAccount();
 }
+const forgetAccount = () => accountKeys.forEach(localRemove);
 
 /**
  * The account a read started beside bootstrap was made for, until a bootstrap or another tab says

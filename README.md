@@ -121,6 +121,17 @@ the worker never reloads the window over the form. A chat waiting on a sheet bel
 sheet and account: if the sheet goes without closing, as when another tab signs in as someone
 else, the chat never opens.
 
+The web app's first read, its sign-in check (`/api/bootstrap`), starts before the app's code
+has downloaded. `index.html` loads `public/boot.js` first, a small script served as written,
+which starts that read and leaves it for the app, so a load reads bootstrap once and a
+returning visit no longer waits for the code before asking. The app takes the read only if it
+is the one the app would make, and judges its answer exactly as its own. If the read fails or
+is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
+before. The same script applies the theme this device last showed the signed-in person, so a
+dark theme never opens light. The browser keeps that theme with the account it belongs to, in
+`agent-interface:theme`, and uses it only while the sign-in record below names that account.
+See `src/startup-read.ts` and `src/app/saved-theme.ts`.
+
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
 within the session's seven days and that sign-in's last check named the account and listed
@@ -138,8 +149,8 @@ is joined only while it is still on its way; once finished it only fills the res
 which the chat shows while it reads again. The response cache keeps the body of the
 latest-started read of each path, so a slower, older read that finishes last never replaces
 it. The browser keeps only the lapse time, the account ID and the chat IDs, in
-`agent-interface:sign-in-hint`, and drops them at sign-out, a refused session, or a check
-that finds another account. A link to a message, Today or a group chat waits for the check
+`agent-interface:sign-in-hint`, and drops them, and the saved theme with them, at sign-out,
+a refused session, a new sign-in, or a check that finds another account. A link to a message, Today or a group chat waits for the check
 as before. See `src/app/linked-chat.ts`.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
@@ -308,6 +319,12 @@ when a release changed it.
 - A redirect, 401, 403, server error or no network changes nothing. No window reloads and
   the worker stays, so one bad answer never costs a person their work.
 - With no cached shell, as on a first visit or after storage is cleared, the network answers.
+
+`/boot.js` follows the shell: the worker installs it with the shell and serves this release's
+copy while the cached shell opens, and the server's once the shell is noted as out of date. The
+server sends it with `no-cache`, as it does the shell, and answers a missing one with a 404, not
+the shell. A `boot.js` and an app from different releases still work: the app takes the read only
+when it is the read the app would make, so the worst case is one extra bootstrap read.
 
 A release that finishes installing is offered with **Refresh**, as before; the worker never
 switches releases under an open page. The shell is not fetched with navigation preload,

@@ -82,6 +82,52 @@ test("a link to a chat shows sign-in when signed out, then reads the chat beside
   expect(heldUntil[0]).toBe(true);
 });
 
+test.describe("a returning member's load", () => {
+  // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
+  test.use({ serviceWorkers: "block" });
+
+  test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page }) => {
+    await signIn(page);
+    // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
+    const saved = await page.evaluate(async () => {
+      const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string; preferences: Record<string, unknown> };
+      return (await fetch("/api/preferences", { method: "PATCH", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken },
+        body: JSON.stringify({ ...boot.preferences, theme: "dark" }) })).status;
+    });
+    expect(saved).toBe(200);
+    await page.reload();
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+
+    // The bundle is held back, so a bootstrap that waits for the app's code comes after it.
+    const order: string[] = [];
+    let reloaded = false;
+    page.on("request", request => {
+      const path = new URL(request.url()).pathname;
+      if (reloaded && (path === "/api/bootstrap" || path === "/api/events")) order.push(path);
+    });
+    await page.route(/\/assets\/index-[^/]+\.js$/, async route => {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      order.push("bundle");
+      await route.continue();
+    });
+    await page.addInitScript(() => {
+      new MutationObserver((_changes, observer) => {
+        if (!document.body) return;
+        (window as unknown as { themeAtBody?: string }).themeAtBody = document.documentElement.dataset.theme;
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    // Counted from the new document only: the page before it may still be reading bootstrap after its own stream connected.
+    page.once("framenavigated", () => { reloaded = true; });
+    await page.reload();
+    await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+    await expect.poll(() => order.includes("/api/events")).toBe(true);
+    // Before the event stream connects (which reads bootstrap again by design), one read, sent before the bundle arrived.
+    expect(order.slice(0, order.indexOf("/api/events"))).toEqual(["/api/bootstrap", "bundle"]);
+    expect(await page.evaluate(() => (window as unknown as { themeAtBody?: string }).themeAtBody)).toBe("dark");
+  });
+});
+
 test.describe("after a deploy retires a lazy screen's file", () => {
   // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
   test.use({ serviceWorkers: "block" });

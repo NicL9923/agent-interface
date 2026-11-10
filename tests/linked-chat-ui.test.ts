@@ -2,9 +2,10 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
-import { signInHintKey } from "../src/app/storage";
+import { savedThemeKey, signInHintKey } from "../src/app/storage";
 import { SESSION_MAX_AGE_MS } from "../src/shared/session";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { quietConsoleErrors } from "./act-guard";
@@ -34,7 +35,7 @@ const page = (botId: string, text: string): Conversation => ({
 /** A refusal as the server sends it. */
 const refused = (status: number, error: string, code: string) => ({ status, body: { error, code } });
 type Answer = { status: number; body: unknown };
-type Reply = { resolve(value: unknown): void; refuse(answer: Answer): void };
+type Reply = { resolve(value: unknown): void; refuse(answer: Answer): void; fail(error: Error): void };
 
 let root: Root, container: HTMLDivElement;
 let bootstrapReplies: Reply[];
@@ -43,19 +44,26 @@ let calls: string[];
 let unexpected: string[];
 const respond = ({ status, body }: Answer) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 function held() {
-  let settle!: (answer: Answer) => void;
-  const response = new Promise<Response>(resolve => { settle = answer => resolve(respond(answer)); });
-  return { response, reply: { resolve: (body: unknown) => settle({ status: 200, body }), refuse: settle } };
+  let settle!: (answer: Answer) => void, fail!: (error: Error) => void;
+  const response = new Promise<Response>((resolve, reject) => { settle = answer => resolve(respond(answer)); fail = reject; });
+  return { response, reply: { resolve: (body: unknown) => settle({ status: 200, body }), refuse: settle, fail } };
 }
 const conversationReads = () => calls.filter(call => call.startsWith("GET /bots/") && call.includes("/conversation"));
 const hint = () => JSON.parse(localStorage.getItem(signInHintKey) ?? "null") as { until: number; user?: string; bots: string[] } | null;
 const saveHint = (value: unknown) => localStorage.setItem(signInHintKey, typeof value === "string" ? value : JSON.stringify(value));
 const transcript = () => container.querySelector(".transcript")?.textContent ?? "";
+const bootstrapReads = () => calls.filter(call => call.startsWith("GET /bootstrap"));
+const savedTheme = () => JSON.parse(localStorage.getItem(savedThemeKey) ?? "null") as unknown;
+const shownTheme = () => document.documentElement.dataset.theme;
+// index.html's first script, run as the page runs it before the bundle: it starts bootstrap through fetch.
+const runBoot = () => window.eval(readFileSync("public/boot.js", "utf8"));
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
   // Module state outlives a test: each one starts as a fresh page would, with no reads to join.
   clearResponseCache();
+  window.__wildbotsStartup = undefined;
+  document.documentElement.dataset.theme = "system";
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   stubMatchMedia();
@@ -251,13 +259,19 @@ describe("a link that names a chat", () => {
 
 describe("what this browser remembers about its sign-in", () => {
   it("starts at sign-in, learns the account and chats from bootstrap, and is forgotten when the session is refused", async () => {
+    // A theme a previous sign-in left is not the next one's.
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
     await open("/");
     await answerBootstrap(refused(401, "Sign in required", "session_expired"));
+    expect(savedTheme()).toBeNull();
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
     await act(async () => button("Enter local workspace").click());
     await advance(0);
     expect(hint()).toEqual({ until: NOW + SESSION_MAX_AGE_MS - 60_000, bots: [] });
+    expect(savedTheme()).toBeNull();
     await answerBootstrap(bootstrap);
     expect(hint()).toEqual({ until: NOW + SESSION_MAX_AGE_MS - 60_000, user: "one", bots: ["home", "ranch"] });
+    expect(savedTheme()).toEqual({ v: 1, user: "one", theme: "system" });
     // A bootstrap that cannot reach Hermes lists no chats; that is no reason to forget them.
     await act(async () => window.dispatchEvent(new Event("online")));
     await answerBootstrap({ ...bootstrap, bots: [], connection: { connected: false } });
@@ -265,13 +279,17 @@ describe("what this browser remembers about its sign-in", () => {
     await act(async () => window.dispatchEvent(new Event("online")));
     await answerBootstrap(refused(401, "Sign in required", "session_expired"));
     expect(hint()).toBeNull();
+    expect(savedTheme()).toBeNull();
   });
 
   it("is forgotten when bootstrap names an account other than the one it recorded", async () => {
     saveHint({ until: NOW + 60_000, user: "one", bots: ["home"] });
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
     await open("/");
     await answerBootstrap(two);
     expect(hint()).toBeNull();
+    // Nor is the theme kept for the second account, whose sign-in this browser did not see start.
+    expect(savedTheme()).toBeNull();
   });
 
   it("is forgotten when the person signs out", async () => {
@@ -289,12 +307,68 @@ describe("what this browser remembers about its sign-in", () => {
     expect(calls).toContain("POST /auth/logout");
     expect(container.querySelector(".sign-in")).not.toBeNull();
     expect(hint()).toBeNull();
+    expect(savedTheme()).toBeNull();
+    expect(shownTheme()).toBe("system");
   });
 
   it("does not invent a sign-in for a session this browser did not see start", async () => {
     await open("/");
     await answerBootstrap(bootstrap);
     expect(hint()).toBeNull();
+    expect(savedTheme()).toBeNull();
+  });
+});
+
+describe("the bootstrap boot.js started before the bundle", () => {
+  const rail = () => container.querySelector(".bot-rail")?.textContent ?? "";
+
+  it("is the page's only bootstrap read on a normal load", async () => {
+    runBoot();
+    await open("/");
+    await answerBootstrap(bootstrap);
+    expect(rail()).toContain("Ranch Hand");
+    expect(bootstrapReads()).toEqual(["GET /bootstrap?roster=lean"]);
+  });
+
+  it("shows sign-in, read once, when it finds the session refused", async () => {
+    runBoot();
+    await open("/");
+    await answerBootstrap(refused(401, "Sign in required", "session_expired"));
+    expect(container.querySelector(".sign-in")).not.toBeNull();
+    expect(bootstrapReads()).toHaveLength(1);
+  });
+
+  it("is read again by the app when it fails, as if it had never started", async () => {
+    runBoot();
+    await open("/");
+    await act(async () => bootstrapReplies[0].fail(new TypeError("Failed to fetch")));
+    await advance(0);
+    expect(bootstrapReads()).toHaveLength(2);
+    expect(container.textContent).not.toContain("Can't reach the app");
+    await answerBootstrap(bootstrap);
+    expect(rail()).toContain("Ranch Hand");
+  });
+});
+
+describe("the theme this device keeps", () => {
+  it("stays as boot.js applied it until bootstrap answers, then follows and saves the account's choice", async () => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    runBoot();
+    await open("/");
+    expect(shownTheme()).toBe("dark");
+    await answerBootstrap({ ...bootstrap, preferences: { ...bootstrap.preferences, theme: "light" } });
+    expect(shownTheme()).toBe("light");
+    expect(savedTheme()).toEqual({ v: 1, user: "one", theme: "light" });
+  });
+
+  it("gives way to the system's on the sign-in screen", async () => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    runBoot();
+    await open("/");
+    await answerBootstrap(refused(401, "Sign in required", "session_expired"));
+    expect([shownTheme(), savedTheme()]).toEqual(["system", null]);
   });
 });
 

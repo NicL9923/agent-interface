@@ -152,6 +152,18 @@ async function openShell(event) {
   return cached;
 }
 
+const BOOT = '/boot.js';
+// public/boot.js starts the page's first read and belongs to the shell that loads it, so it follows
+// the shell's rule: this release's copy while the cached shell opens, the server's once that shell is
+// noted as out of date. A boot.js of another release is safe, since the app takes its read only when
+// it is the read the app would make, but this keeps the two from one release.
+async function openBoot(request) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(BOOT);
+  if (cached && !await cache.match(OUTDATED)) return cached;
+  try { return await fetch(request); } catch { return cached || Response.error(); }
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -160,6 +172,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
     event.respondWith(openShell(event));
+    return;
+  }
+  if (url.pathname === BOOT) {
+    event.respondWith(openBoot(request));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {

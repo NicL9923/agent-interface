@@ -44,6 +44,7 @@ import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
+import { rememberTheme } from "./app/saved-theme";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -148,10 +149,13 @@ export function App() {
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find(echo => echo.status !== "accepted") ?? null;
+  const theme = boot?.preferences.theme || "system";
   useEffect(() => {
-    const theme = boot?.preferences.theme || "system";
-    document.documentElement.dataset.theme = theme;
-  }, [boot?.preferences.theme]);
+    // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
+    if (!userId && !session.auth) return;
+    document.documentElement.dataset.theme = userId ? theme : "system";
+    if (userId) rememberTheme(userId, theme);
+  }, [theme, userId, session.auth]);
   const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");

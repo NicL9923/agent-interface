@@ -44,7 +44,7 @@ import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type Metadata
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { installInlineUi } from "./inline-ui.js";
-import { immutableCacheControl, isHashedAsset } from "./static-cache.js";
+import { immutableCacheControl, isHashedAsset, mustRevalidate } from "./static-cache.js";
 import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
 import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
@@ -162,7 +162,7 @@ export async function createApp(
       cacheControl: true,
       maxAge: "1h",
       setHeaders: (reply, path) => {
-        if (path.endsWith("index.html") || path.endsWith("native-computer.html") || path.endsWith("native-terminal.html") || path.endsWith("sw.js"))
+        if (mustRevalidate(clientRoot, path))
           reply.header("Cache-Control", "no-cache");
         else if (isHashedAsset(clientRoot, path))
           reply.header("Cache-Control", immutableCacheControl);
@@ -178,8 +178,9 @@ export async function createApp(
       if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
       // A bundle a release retired, asked for by a page still running that release. The shell in its
       // place would reach the page as a script it cannot run; a 404 says plainly that the file is
-      // gone, and the screen offers Reload. Not kept, since a rollback can bring the file back.
-      else if (req.url.startsWith("/assets/")) reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
+      // gone, and the screen offers Reload. Not kept, since a rollback can bring the file back. A missing
+      // boot.js is the same: index.html loads it as a script, and without it the app reads for itself.
+      else if (req.url.startsWith("/assets/") || req.url.split("?")[0] === "/boot.js") reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
       else reply.type("text/html").sendFile("index.html");
     });
   }
