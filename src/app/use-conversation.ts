@@ -48,6 +48,15 @@ const editable = (target: EventTarget | null) =>
  * read of its own: the next read comes from a change notice, a wake or the poll, as on any other read.
  */
 export const DISCONNECT_GRACE_MS = 3_000;
+/**
+ * Why an action that needs the connection is refused. During the grace period the chat still looks
+ * connected, so the refused control says it here; once the chat shows it is down, the connection
+ * notice says more and the control only names what it waits for.
+ */
+export const CHECKING_CONNECTION = "Checking the connection. Try again in a moment.";
+export const WAITING_FOR_CONNECTION = "Waiting for the connection. Your draft is kept.";
+/** The composer's status line after a send it refused during the grace period. */
+export const NOT_SENT_CHECKING = `Not sent. ${CHECKING_CONNECTION}`;
 // What the server answers when Hermes itself is down: its connection diagnosis, a refused credential or maintenance.
 const hermesDown = new Set<ErrorCode>(["not_configured", "invalid_config", "connecting", "unreachable", "unauthorized", "addon_missing",
   "incompatible", "reconnecting", "closed", "hermes_unauthorized", "hermes_maintenance"]);
@@ -68,10 +77,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   const [conversation, setConversation] = useState<SavedConversation | null>(
     null,
   );
-  // The latest read failed: a fact at once, so actions that need the connection are refused.
-  const [readFailed, setReadFailed] = useState(false);
-  // The connection is down, as the chat shows it: see DISCONNECT_GRACE_MS.
-  const [disconnected, setDisconnected] = useState(false);
+  // The chat whose latest read failed: a fact at once, so actions that need the connection are refused.
+  // The chat that shows it is disconnected: see DISCONNECT_GRACE_MS. Each belongs to the chat it was
+  // read for, so a failure gates nothing once its chat closes or leaves the roster, where no read
+  // would ever clear it.
+  const [readFailedFor, setReadFailedFor] = useState("");
+  const [disconnectedFor, setDisconnectedFor] = useState("");
+  const readFailed = !!botId && readFailedFor === botId;
+  const disconnected = !!botId && disconnectedFor === botId;
   const [reviewed, setReviewed] = useState(false);
   useEffect(() => setReviewed(false), [conversation?.activity.state, conversation?.activity.runId]);
   const [atLatest, setAtLatest] = useState(true);
@@ -142,8 +155,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // A conversation opened before shows at once while it is checked again, unless it opens at a message.
     const cached = opening ? undefined : cachedResponse<SavedConversation>(firstPage(botId));
     setConversation(cached?.botId === botId ? cached : null);
-    setReadFailed(false);
-    setDisconnected(false);
+    setReadFailedFor("");
+    setDisconnectedFor("");
     setReviewed(false);
     // The window starts at its oldest loaded message so new turns never push it along.
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
@@ -199,18 +212,18 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const readOk = () => {
       failures = 0;
       stopWaiting();
-      setReadFailed(false);
-      setDisconnected(false);
+      setReadFailedFor("");
+      setDisconnectedFor("");
     };
     const readFailedWith = (error: unknown) => {
       failures++;
-      setReadFailed(true);
+      setReadFailedFor(botId);
       if (failures > 1 || provesDisconnected(error)) {
         stopWaiting();
-        setDisconnected(true);
+        setDisconnectedFor(botId);
         return;
       }
-      grace = setTimeout(() => { grace = undefined; if (live) setDisconnected(true); }, DISCONNECT_GRACE_MS);
+      grace = setTimeout(() => { grace = undefined; if (live) setDisconnectedFor(botId); }, DISCONNECT_GRACE_MS);
     };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;

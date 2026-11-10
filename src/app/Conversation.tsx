@@ -27,7 +27,7 @@ import { isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/
 import { withoutBotTag } from "../shared/event-copy";
 import type { SavedConversation } from "./storage";
 import type { SentEcho } from "./sent-echo";
-import type { useConversation } from "./use-conversation";
+import { CHECKING_CONNECTION, type useConversation } from "./use-conversation";
 import { useStableCallback } from "./use-stable-callback";
 import { useTurnRetry } from "./use-turn-retry";
 import { emptyReplyKeys, replyKeys } from "./reply-keys";
@@ -239,8 +239,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
             </p>
             <button
               className="primary"
-              disabled={!boot.capabilities.botConfiguration.supported}
-              title={boot.capabilities.botConfiguration.reason}
+              disabled={!boot.capabilities.botConfiguration.supported || connectionLost}
+              title={boot.capabilities.botConfiguration.reason ?? (connectionLost ? CHECKING_CONNECTION : undefined)}
               onClick={onCreate}
             >
               Create an assistant

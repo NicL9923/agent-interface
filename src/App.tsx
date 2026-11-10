@@ -421,7 +421,7 @@ export function App() {
             onDraft={addToDraft} onCreate={newBot} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
             state={state}
-            active={active} connectionLost={connectionLost} draft={draft} setDraft={setDraft}
+            active={active} connectionLost={connectionLost} connectionShown={connectionShown} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
