@@ -15,7 +15,16 @@ incompatible contracts. Tokens remain server-side. Remote gateways require HTTPS
 HTTP is allowed only on loopback. Redirects are refused for authenticated HTTP reads.
 
 The transport bounds opening/contract negotiation to ten seconds, reads to ten
-seconds, and mutations to 45 seconds. An opaque opening failure can add a bounded
+seconds, and mutations to 45 seconds. A read that times out fails alone and the
+socket stays open, so one slow read never drops every open chat's live state; a
+late answer to it is ignored. A timed-out handshake, mutation, or heartbeat
+liveness probe still drops the socket, because an unanswered mutation leaves its
+outcome uncertain on that socket and an unanswered probe means the socket is dead.
+The heartbeat probes after ten quiet seconds, and a read timeout probes at once,
+because steady session events can keep a socket that answers no request looking
+busy. Only one probe runs at a time and it never joins a shared read, so a dead
+socket is found within about twenty seconds either way. A timed-out image-generation probe reports image generation
+unavailable for that read only and is asked again next time. An opaque opening failure can add a bounded
 five-second native HTTP authentication check. Failed reconnects back off from one
 to 30 seconds; an explicit reconnect bypasses the delay. Identical overlapping
 reads share work. Mutations are never replayed. Socket events and pending requests
