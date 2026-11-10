@@ -70,9 +70,14 @@ afterEach(() => { Reflect.deleteProperty(navigator, 'onLine'); expect(unexpected
 
 // A change notice asks for a read, which then fails or succeeds.
 const read = async () => { await act(async () => FakeEventSource.notifyAll()); await advance(0); };
-// The household stream reports a change, so the session reads the roster again.
+// The household stream reports a change, so the session reads the roster again. It is the stream at
+// /api/events that names no group; its query, such as the ping interval it asks for, is not part of that.
+const household = (url: string) => { const at = new URL(url, 'http://app.test'); return at.pathname === '/api/events' && !at.searchParams.has('group'); };
 const rosterChanged = async () => {
-  await act(async () => { for (const stream of FakeEventSource.streams) if (stream.url === '/api/events') stream.emit('message', 'change'); });
+  const streams = [...FakeEventSource.streams].filter(stream => household(stream.url));
+  // A helper that finds no stream would leave the roster unread and the test asserting on stale state.
+  expect(streams.length).toBeGreaterThan(0);
+  await act(async () => { for (const stream of streams) stream.emit('message', 'change'); });
   await advance(0);
 };
 const shown = () => container.querySelector('[aria-label="Hermes connection"]') !== null;
