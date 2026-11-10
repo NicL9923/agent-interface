@@ -1,0 +1,63 @@
+# November 10 Return starts a new line on a touch screen
+
+Branch `composer-return-newline`, code state `e84e32e` plus this entry. It is stacked on
+`composer-keyboard-viewport` (`812cae4`) because both change the same lines of
+`src/app/Composer.tsx` and `tests/shell-ui.test.ts`. Written on NicolasLaptop (Fedora, Linux x64),
+Node 24.22.2, Playwright Chromium. No Hermes took part.
+
+## What changed
+
+Nicolas decided the behavior. On a device whose only pointer is coarse, Return in the assistant
+and group message boxes inserts a newline and the Send button sends. Enter sends wherever a mouse
+or trackpad is present (`any-pointer: fine`), on a computer with no pointer, where `matchMedia` is
+missing, and on a touch device once this tab sees a key no on-screen keyboard sends. Those keys
+are a lone modifier, Tab, Escape, a function key, or a Ctrl or Cmd chord, and the tab remembers
+them in sessionStorage. `enterkeyhint` is `send` or `enter` to match. The shortcuts dialog says
+what Return does on a touch screen. The rule is in `src/app/enter-key.ts`.
+
+## Application tests
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/shell-ui.test.ts tests/enter-key.test.ts tests/collaboration-ui.test.ts tests/keyboard-viewport.test.ts tests/transcript-ui.test.ts`:
+  5 files, 184 tests passed.
+- `npm test` on the stacked state: 177 files, 2811 tests passed. Before stacking, on `3bfd79d`, the
+  same branch passed 180 files and 2935 tests.
+- `npm run build` passed. `npm run test:e2e`: 8 passed.
+
+### Red proof
+
+Each line was broken by hand, the named test went red, and the line was restored:
+
+- `Composer.tsx`, Enter ignoring `enterSends`: "starts a new line on a touch screen, and the Send
+  button sends" failed.
+- `Composer.tsx`, `enterKeyHint="send"` always: the same test failed on the hint.
+- `GroupChats.tsx`, Enter ignoring `enterSends`: "starts a new line on Return from a touch screen,
+  and sends with the Send button" failed.
+- `enter-key.ts`, dropping `fine.matches`: "a touch-screen laptop" and "sends on Enter and starts a
+  new line on Shift+Enter with a mouse or trackpad" failed.
+- `enter-key.ts`, dropping `!coarse.matches`: "a computer driven by its keyboard alone" failed.
+- `enter-key.ts`, no `notify()` after a hardware key: "sends on Enter on a touch screen once a key
+  only a hardware keyboard has is pressed" failed.
+- `enter-key.ts`, returning `false` without `matchMedia`: "sends where the browser cannot answer a
+  media query" failed.
+- `enter-key.ts`, `/F/` for the function-key pattern: "a letter" failed.
+- `enter-key.ts`, reading sessionStorage without `try`: "stays a new line on a touch screen when
+  storage is refused" failed.
+- `ShortcutsDialog.tsx`, the touch note never shown: "says in the shortcut list what Return does on a
+  touch screen, and only there" failed.
+
+## Real browser, no device
+
+The build ran on `.agents/tools/preview-app.mjs` and was checked in Chromium with Playwright's
+`Pixel 7`, `iPhone SE (3rd gen)` and `Desktop Chrome` profiles. Both phone profiles reported
+`(any-pointer: coarse)` and not `(any-pointer: fine)`. In each, `enterkeyhint` was `enter`, and Enter
+left `feed the horses\n` with no message POST. Shift+Enter switched the hint to `send`, and the next
+Enter sent one message. On desktop the hint was `send`, Enter sent, and Shift+Enter inserted a newline.
+Playwright's keys arrive as hardware key events, and emulation shows no on-screen keyboard.
+
+## Not run on a device
+
+Not checked on a device: what Safari and Chrome on a phone report for `any-pointer`; the Return key
+label each on-screen keyboard draws for `enterkeyhint`; whether either platform's on-screen keyboard
+sends a lone Shift; an iPad with a trackpad keyboard and one without; a touch-screen laptop; and
+input-method composition on a phone.
