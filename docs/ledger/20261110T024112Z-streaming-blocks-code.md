@@ -45,9 +45,9 @@ the fix.
   definition. `origin/main` also missed the escaped bracket.
 - A seeded property renders 1,500 random replies, built from fences in and out of containers,
   definitions, split labels, HTML blocks and tables, live and saved, and requires the same
-  HTML. About one in five of them splits into blocks. Before committing, 4,000 cases at seed 7
-  and 10,000 each at seeds 11, 23 and 99 passed on the fix; the same generator found 8
-  divergences in 4,000 cases on `759b704`.
+  HTML. About one in five of them splits into blocks. Before committing, a scratch version
+  with a different random source passed 4,000 cases at seed 7 and 10,000 each at seeds 11, 23
+  and 99 on the fix, and found 8 divergences in 4,000 cases on `759b704`.
 
 Checks on the fixed tree: `npm run typecheck` and `npm run lint` passed;
 `npx vitest run tests/message-markdown.test.ts`: 32 passed; `npm test`: 169 files, 2501
