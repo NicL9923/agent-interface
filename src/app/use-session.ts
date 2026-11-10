@@ -174,23 +174,28 @@ export function useSession(events: SessionEvents) {
     // The server sends `groups` once on every connect and on each catalog change, so connecting or a
     // roster notice does not read the group catalog itself.
     const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } },
-      undefined, up => reportStream("household", up));
+      undefined, { onHealth: up => reportStream("household", up) });
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
       else stream.close();
     };
+    // The network returning, or a manual retry that reached the server, makes earlier failures stale.
+    const revive = () => {
+      if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.reconnect();
+      else stream.close();
+    };
     wake();
     const retry = setInterval(wake, 45_000);
-    window.addEventListener("online", wake);
+    window.addEventListener("online", revive);
     window.addEventListener("focus", wake);
-    window.addEventListener("agent-interface:reconnect", wake);
+    window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", wake);
     return () => {
       clearInterval(retry);
       stream.close();
-      window.removeEventListener("online", wake);
+      window.removeEventListener("online", revive);
       window.removeEventListener("focus", wake);
-      window.removeEventListener("agent-interface:reconnect", wake);
+      window.removeEventListener("agent-interface:reconnect", revive);
       document.removeEventListener("visibilitychange", wake);
     };
   }, [boot?.user.id, auth, refresh]);

@@ -17,18 +17,65 @@ phone ran.
 
 - `?ping=10` makes the server ping as the stream opens and every 10 seconds, with `data: 10` naming the
   interval. Any other value, or none, keeps `data: ping` every 25 seconds.
-- The web client adds `ping=10` to every stream. Each stream has one watchdog timer. A stream with no
-  event for two ping intervals plus 5 seconds is replaced. That is 25 seconds at a 10-second interval,
-  and 55 seconds for a server that names none. The client learns the interval from each connection's
-  pings, so a server that ignores the parameter is never mistaken for a dead one.
-- A replacement that hears nothing doubles the next wait, up to 5 minutes. Any event resets it. A
-  refused stream, which `EventSource` never retries, is retried the same way.
-- A hidden page replaces nothing; showing it calls `open`, which checks at once. A device waking from
-  sleep fires each stream's single timer once, so each stream reconnects once.
-- Events from a stream that has been replaced are ignored.
+- The web client adds `ping=10` to every stream. Each stream has one timer. A stream with no event for
+  two ping intervals plus 5 seconds counts as dead. That is 25 seconds at a 10-second interval, and 55
+  seconds for a server that names none or a connection that has not pinged yet. The client learns the
+  interval from each connection's pings, so a server that ignores the parameter is never mistaken for a
+  dead one. This health deadline never grows; the retry delay below is separate.
+- Events from a stream that has been replaced are ignored, and the replaced connection is closed.
 
 Why 25 seconds: one ping can be lost or arrive up to 15 seconds late without a reconnect. A stream that
 died just after a ping is found within 25 seconds, and one that died just before the next within 15.
+
+### One retry deadline (review fix, item 1)
+
+The first round let the owners' periodic `open` calls, every 45 seconds for the household and room
+streams and every 30 for the chat, replace a refused stream at once, and left a dropped stream to
+EventSource's own `retry: 3000`. Now every new connection after a failure waits for one deadline.
+
+- A refusal, a drop and a silent stream all close the connection and wait `retryDelay(failures)`: a
+  ceiling of 2 seconds doubling to 5 minutes, of which a random half or more is waited ("equal jitter",
+  AWS Architecture Blog, "Exponential Backoff And Jitter"). The first retry waits 1 to 2 seconds.
+- `open` never starts an attempt before that deadline, so the owners' timers add none.
+- The count resets only when a connection is heard at least half a ping interval after its headers
+  arrived, which only a ping after the greeting can be; the half allows for delivery jitter. A greeting
+  and the household `groups` notice arrive at open and prove nothing, so a server that greets and then
+  stalls keeps backing off instead of retrying every 25 seconds. The clock starts at the headers, not
+  the request: found while fixing the idle polling branch, a replacement whose headers took 28 seconds
+  counted its greeting as recovery.
+- Decision: the browser's own reconnects come under the policy. A drop closes the stream and retries in
+  1 to 2 seconds, faster than the 3 seconds before, so a brief blip costs nothing. A server that stays
+  down sees the same backoff as one that refuses.
+- `close` ends the episode, so a page shown again connects at once. `reconnect`, which the owners call
+  for the browser's `online` event and for the manual reconnect, drops the backoff and connects unless a
+  stream is open. Both are evidence that the old failures are stale. Without it, a phone back from a
+  long offline stretch could wait up to 5 minutes for a stream while its polls ran.
+- The random source is injected (`changeStream(..., { random })`), so tests pin the jitter.
+
+Attempt times in a ten-minute outage, at the middle of the jitter (each wait three quarters of its
+ceiling), from a stream that was healthy at second 0. The test runs each with the owner calling `open`
+every 45 and every 30 seconds, and the times do not change.
+
+| Server | Attempts, seconds after the outage began | Count |
+| --- | --- | --- |
+| Refuses | 1.5, 4.5, 10.5, 22.5, 46.5, 94.5, 190.5, 382.5 (next 607.5) | 8 |
+| Accepts and stays silent | 26.5, 84.5, 145.5, 212.5, 291.5, 394.5, 545.5 | 7 |
+| Greets, then stalls | 26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5 | 8 |
+
+The first round, for comparison: refusing, 0, 25, 45, 90, 135 and every 45 seconds to 585, 14 attempts;
+greeting then stalling, every 25 seconds, 24 attempts. With jitter at its extremes each wait is half
+or all of its ceiling, so a refusing server sees 10 attempts in 10 minutes at the lowest draw
+(1, 3, 7, 15, 31, 63, 127, 255, 405, 555) and 8 at the highest (2, 6, 14, 30, 62, 126, 254, 510).
+
+### Late timers (review fix, item 10)
+
+- When the timer fires, the stream's already queued events run before the verdict: the check yields
+  one zero-delay task. A busy main thread or a proxy that delivers pings in a burst can queue a ping
+  behind the timer.
+- A timer that fires more than 10 seconds late, as after a laptop sleeps or a page is frozen, restarts
+  the deadline once instead of replacing the stream. An event clears that grace. A second late timer
+  with no event between replaces it.
+- A hidden page replaces nothing. Owners close a hidden page's stream anyway.
 
 ## What old clients see
 
@@ -46,34 +93,53 @@ seconds from the cut until each stream's next request.
 | | Household stream | Chat stream |
 | --- | --- | --- |
 | `main` 39e35a6, 2 runs | 82.0, 82.0 s | 82.0, 82.0 s |
-| This branch, 2 runs | 17.0, 17.0 s | 17.0, 17.0 s |
+| First round 2e95e56, 2 runs | 17.0, 17.0 s | 17.0, 17.0 s |
+| After the review fixes, 2 runs | 18.4, 18.8 s | 18.1, 18.4 s |
+
+The second round adds the first retry's 1 to 2 seconds after the watchdog's verdict.
 
 Request counts from `node .agents/tools/count-stream-requests.mjs`, same method as the stream open
 reads entry:
 
-| Scenario | `main` 39e35a6 | This branch |
-| --- | --- | --- |
-| Cold load | 10 | 10 |
-| Wake after 70 s hidden | 12 | 12 |
-| Idle chat, 10 min | 113 | 113 |
-| Idle home, 10 min | 113 | 113 |
+| Scenario | `main` 39e35a6 | First round | After the review fixes |
+| --- | --- | --- | --- |
+| Cold load | 10 | 10 | 10 |
+| Wake after 70 s hidden | 12 | 12 | 12 |
+| Idle chat, 10 min | 113 | 113 | 113 |
+| Idle home, 10 min | 113 | 113 | 113 |
 
-The watchdog adds no request. Neither tab reopened a stream in 10 idle minutes, so no live stream was
-taken for a dead one.
+The watchdog and the retry policy add no request. Neither tab reopened a stream in 10 idle minutes,
+so no live stream was taken for a dead one.
 
 ## Checks
 
+First round: typecheck, lint, touched files, `npm test` (183 files, 3,052 tests), build and e2e (19)
+passed.
+
+After the review fixes, on the commit that adds this section:
+
 - `npm run typecheck`, `npm run lint`: passed.
-- Touched test files: `stream-watchdog` (new, 13), `group-watch`, `connection-ui`, `app-ui`,
-  `collaboration-ui` and `home-groups-ui` passed.
-- `npm test`: 183 files, 3,052 tests passed. The known flaky transcript test did not fail.
+- Touched test files: `stream-watchdog` (32 after the recovery fix), `event-stream-ping` (new, 13, real Fastify app over a
+  socket), `group-watch` (13), `connection-ui` (34), `session-preferences-ui`, `app-ui`,
+  `collaboration-ui`, `home-groups-ui` and `draft-sync-ui` passed.
+- `npm test`: 184 files, 3,077 tests passed. The known flaky transcript test did not fail.
 - `npm run build`: passed.
 - `npm run test:e2e`: 19 passed.
 
+### Review fixes, items 2 to 4
+
+- The ping table now runs through the real app and Fastify's query parser over a socket, with only
+  `setInterval` virtual. Empty, zero, negative, fractional, `1e1`, `010`, huge, a word, 5, 25 and a
+  repeated `ping` all get `retry: 3000` alone at open, nothing at 24.999 seconds and `data: ping` at 25.
+  Exactly `ping=10` gets the greeting at open and a ping at 10 and 20 seconds, not at 9.999.
+- A fast ping, `event: ping\ndata: 10\n\n`, is 22 bytes, not 24. The test asserts it.
+- The assertion that checked elapsed fake time right after advancing it is gone. The watchdog suite
+  now asserts the replaced connection is closed, so "old source is never closed" fails there.
+
 ## Red proofs
 
-A scratch script broke each line by hand, ran the protecting tests, and restored the source. All 15
-mutations went red. One stayed green on the first run, because the test counted timers only after the
+First round: a scratch script broke each line by hand, ran the protecting tests, and restored the
+source. All 15 mutations went red. One stayed green on the first run, because the test counted timers only after the
 leftover timer had fired harmlessly. The test now checks right after closing.
 
 - Server: any `ping` value made fast; no ping at open; a fast stream at the old interval.
@@ -82,7 +148,29 @@ leftover timer had fired harmlessly. The test now checks right after closing.
   counting; any number taken as an interval; the interval kept across connections; `open` replacing a
   fresh stream; a refused stream never retried; `close` leaving the timer; no `ping=10` in the URL.
 
+A later commit measured recovery from the headers with half an interval of slack and ran 4 more:
+recovery measured from the request (1 red), a whole interval required (1), exactly half refused (1),
+the greeting counted (5). All went red.
+
+After the review fixes, the same script ran 23 mutations against `stream-watchdog` and
+`event-stream-ping`. All 23 went red. One stayed green on the first run: `close` keeping the retry
+deadline, because the hidden-page test closed a stream that had never failed. A new test closes a
+stream mid-backoff and expects it to connect at once when shown.
+
+- Retry: no jitter (5 red); no ceiling (2); `open` ignoring the deadline (3); a drop left to
+  EventSource's own retry (1); the greeting counted as recovery (3); `reconnect` keeping the backoff (1);
+  `close` keeping the deadline (1, after the new test); an unappliable growth notice counted as a
+  failure (1).
+- Watchdog: the old source never closed (13); judging without a zero-delay yield (10); no grace after a
+  wake (2); grace for every late timer (1); a timer late by exactly 10 seconds forgiven (1); a replaced
+  stream's events counting (1); the interval kept across connections (3); any number taken as an
+  interval (2); a hidden page replacing (1); silence without the 5-second slack (13); no `ping=10` in
+  the URL (1).
+- Server, through the real app: a value numerically equal to 10 made fast (2); no ping at open (1); a
+  fast stream at the old interval (1); fallback pings saying 10 (12).
+
 ## Not exercised
 
-- The iOS app, real phone radios and sleeping laptops. A sleep was simulated with a pinned clock jump.
-- Battery or data cost of 10-second pings on web clients: 24 bytes per stream every 10 seconds.
+- The iOS app, Safari, Firefox, real phone radios, sleeping laptops and real Hermes: not run. A sleep
+  and a long task were simulated with a pinned clock.
+- Battery or data cost of 10-second pings on web clients: 22 bytes per stream every 10 seconds.

@@ -96,15 +96,17 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
       },
     });
     const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.close(); };
+    // The network returning makes the stream's earlier failures stale, so it connects without its backoff.
+    const revive = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.reconnect(); else stream.close(); };
     wake();
     const retry = setInterval(wake, 45_000);
-    window.addEventListener('online', wake); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', revive); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);
     // The household stream's catalog notice also covers this room leaving the person's list, which ends
     // this stream without a notice of its own.
     window.addEventListener(GROUPS_EVENT, refresh);
     return () => {
       clearInterval(retry); stream.close();
-      window.removeEventListener('online', wake); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('online', revive); window.removeEventListener('focus', wake); document.removeEventListener('visibilitychange', wake);
       window.removeEventListener(GROUPS_EVENT, refresh);
     };
   }, [roomId]);
