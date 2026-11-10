@@ -757,8 +757,9 @@ a {
  *    The message box keeps one line, and the composer keeps its row of buttons: `--composer-floor`, the form's
  *    border and padding plus 44px rows, one beside Send or two when the draft is stacked above the buttons.
  * 3. The header, cut from the top, since the conversation panel packs its content to the bottom.
- * Only a frame shorter than this area's floor, 112px with a stacked draft, can cut Send. Browsers size a box's
- * minimum to all of its content, so the floors are stated here rather than left to the layout. A squeezed notice
+ * Only a frame shorter than this area's floor, 112px with a stacked draft, can cut Send, and keyboard-viewport.ts does
+ * not fit the shell to one (`LEAST_FRAME`; change both together). Browsers size a box's minimum to all of its
+ * content, so the floors are stated here rather than left to the layout. A squeezed notice
  * dock keeps its 10px margin and a squeezed Talk panel its 28px of border, padding and margin, so they add those.
  */
 .composer-area {

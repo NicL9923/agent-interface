@@ -18,23 +18,40 @@
  * WebKit implements the meta from the iOS 27.3 beta (bug 259770), where it is reported to leave the
  * field behind the keyboard still; how this code and that beta interact is unverified.
  *
+ * The top is the larger of the visual viewport's `pageTop` and the window's `scrollY`. On iOS 27.0, on 4 of 5
+ * keyboard opens measured, Safari fired the window's scroll with `scrollY` 330 while `pageTop` still read 0, and the
+ * visual viewport's own scroll 390 to 420ms later; until then the screen showed only the composer. At rest the two
+ * agree. `scrollY + offsetTop` is not the answer there: Safari reports `offsetTop` equal to `pageTop` at rest.
+ *
  * A pinch zoom shrinks the visual viewport too. While the page is zoomed nothing changes, so a
  * zoom does not resize the shell; the next event at normal scale sets it right. A scale within
  * UNZOOMED of 1 counts as normal, so a zoom that slight is treated as a keyboard would be.
  */
 export type ViewportLike = Pick<VisualViewport, "height" | "scale" | "pageTop" | "addEventListener" | "removeEventListener">;
-type Host = { visualViewport?: ViewportLike | null; document: Pick<Document, "documentElement"> };
+type Host = Pick<Window, "scrollY" | "addEventListener" | "removeEventListener"> & {
+  visualViewport?: ViewportLike | null;
+  document: Pick<Document, "documentElement">;
+};
 
 /** Subpixel layout leaves the two viewports a fraction apart with no keyboard at all. */
 const SLACK = 1;
 /** A scale this close to 1 is the normal, unzoomed page. */
 const UNZOOMED = 0.01;
+/**
+ * The shortest visible frame the shell is fitted to. It is `.composer-area`'s floor in `src/styles.css` with the
+ * draft stacked above the buttons and the keyboard up: `--composer-floor` 98px, 6px above and 8px below. A shorter
+ * frame would cut Send off, and Safari has reported -44px, 2px and 34px in landscape on an iPhone 17e. There the
+ * shell keeps the layout viewport's height and Safari pans to the field, so a person still sees what they type.
+ */
+const LEAST_FRAME = 112;
 
 /** The visible frame the shell should fill, null for the layout viewport, undefined to leave it as it is. */
-export function keyboardFrame(layoutHeight: number, viewport: Pick<ViewportLike, "height" | "scale" | "pageTop">) {
+export function keyboardFrame(layoutHeight: number, viewport: Pick<ViewportLike, "height" | "scale" | "pageTop">, scrollY = 0) {
   if (Math.abs(viewport.scale - 1) > UNZOOMED) return undefined;
-  if (layoutHeight - viewport.height <= SLACK) return null;
-  return { height: viewport.height, top: Math.max(0, viewport.pageTop) };
+  if (layoutHeight - viewport.height <= SLACK || viewport.height < LEAST_FRAME) return null;
+  const top = Math.max(viewport.pageTop, scrollY);
+  // Safari can pan the visual viewport past the page's end; a shell placed there would make the page taller.
+  return { height: viewport.height, top: Math.max(0, Math.min(top, layoutHeight - viewport.height)) };
 }
 
 /** Follows the visual viewport until the returned function is called. Without one it does nothing. */
@@ -48,7 +65,7 @@ export function followKeyboard(host: Host = window) {
     delete root.dataset.keyboardOpen;
   };
   const update = () => {
-    const frame = keyboardFrame(root.clientHeight, viewport);
+    const frame = keyboardFrame(root.clientHeight, viewport, host.scrollY);
     if (frame === undefined) return;
     if (!frame) return clear();
     root.style.setProperty("--keyboard-height", `${frame.height}px`);
@@ -57,10 +74,12 @@ export function followKeyboard(host: Host = window) {
   };
   viewport.addEventListener("resize", update);
   viewport.addEventListener("scroll", update);
+  host.addEventListener("scroll", update, { passive: true });
   update();
   return () => {
     viewport.removeEventListener("resize", update);
     viewport.removeEventListener("scroll", update);
+    host.removeEventListener("scroll", update);
     clear();
   };
 }
