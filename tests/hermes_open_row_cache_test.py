@@ -1,7 +1,9 @@
 """Opens during a turn reuse per-row results that no later write can change.
 
 The decorated-history cache misses for the whole of a turn, so each open re-reads every row.
-RowCache keeps what one open learned about rows, by keys that cannot go stale. Hermes is a
+RowCache keeps what one open learned about rows, by keys that cannot go stale. Which row a
+compaction copy copies is asked of state.db on every open, because a restored file can change
+it under every mark the add-on could check. Hermes is a
 fake at its edges: the session table, its native history projection and a real SQLite state
 store with the columns the add-on reads. The journal is the add-on's own, in a temp directory.
 """
@@ -59,7 +61,7 @@ class TranscriptHermes(FakeHermes):
 
         def read_all(sql, params=()):
             if "json_each" in sql:
-                self.store_reads.append(json.loads(params[1]))
+                self.store_reads.append(json.loads(params[-1]))
             return connection.execute(sql, params).fetchall()
         try:
             yield types.SimpleNamespace(db_path=str(self.store_path), _read_all=read_all)
@@ -119,6 +121,13 @@ class TranscriptHermes(FakeHermes):
         self.session["history"].append(row)
         return row
 
+    def replace(self, rows):
+        """Hermes's ``replace_messages(active_only=True)``, as the gateway's /retry calls it: these rows deleted, then each stored again with its uid under a new ID."""
+        uids = [self.store.execute("SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],)).fetchone()[0] for row in rows]
+        with self.store:
+            self.store.executemany("DELETE FROM messages WHERE id=?", [(row["_row_id"],) for row in rows])
+        self.session["history"] = [{**row, "_row_id": self.stored(uid)} for row, uid in zip(rows, uids)]
+
     def compact(self, rows):
         """Hermes's in-place compaction: a handoff, then each kept row stored again under a new ID."""
         self.session["history"] = [{"role": "user", "content": "Summary of earlier work", "display_kind": "handoff", "timestamp": 0.0}]
@@ -154,6 +163,19 @@ def state_store_file(hermes, name, uids, application_id):
     with contextlib.closing(state_store(path, application_id, uids)):
         pass
     return path
+
+
+def alice_and_bob(hermes):
+    """Rows 1 to 4: Alice's message, Bob's, then two more, each uid unique; each sender's receipt bound to its row."""
+    with hermes.journal.db:
+        rows = [hermes.add("user", uid, f"Message {uid}") for uid in ("A", "B", "C", "Z")]
+        receipt(hermes.journal.db, "alice-request", rows[0]["_row_id"], 1, actor="alice")
+        receipt(hermes.journal.db, "bob-request", rows[1]["_row_id"], 2, actor="bob")
+    return rows
+
+
+def senders(value):
+    return [(message["row_id"], message.get("app_sender_id")) for message in value["messages"]]
 
 
 def tool_row(hermes, uid, call, content):
@@ -223,7 +245,7 @@ class WarmAndColdTests(unittest.TestCase):
 
 
 class ReuseTests(unittest.TestCase):
-    def test_a_warm_open_reads_and_parses_only_rows_it_has_not_seen(self):
+    def test_a_warm_open_parses_only_rows_it_has_not_seen_and_asks_the_store_about_every_row(self):
         with TranscriptHermes() as hermes:
             first_turn(hermes)
             hermes.compact(hermes.session["history"])
@@ -235,19 +257,22 @@ class ReuseTests(unittest.TestCase):
             content = hermes.session["history"][2]["content"]
             with patch.object(extension.json, "loads", wraps=json.loads) as loads:
                 warm = hermes.answer()
-            self.assertEqual(hermes.store_reads, [])
+            # Which row each copy copies is never cached: both lookups ask about every visible row.
+            visible = [row["_row_id"] for row in hermes.session["history"] if "_row_id" in row]
+            self.assertEqual(hermes.store_reads, [visible, visible])
             self.assertFalse([sql for sql in statements if "SELECT id,result" in sql])
             self.assertNotIn(content, [call.args[0] for call in loads.call_args_list if call.args])
             self.assertEqual(warm, cold)
             statements.clear()
+            hermes.store_reads.clear()
             tool_row(hermes, "t3", "read", json.dumps({"pages": 4}))
             with hermes.journal.db:
                 tool(hermes.journal.db, "first", "read", {"pages": 4})
             hermes.answer()
             hermes.journal.db.set_trace_callback(None)
-            # The new row and the new record are each read once, by themselves.
-            new_row = hermes.session["history"][-1]["_row_id"]
-            self.assertEqual(hermes.store_reads, [[new_row], [new_row]])
+            # The new record is read once, by itself.
+            visible = [*visible, hermes.session["history"][-1]["_row_id"]]
+            self.assertEqual(hermes.store_reads, [visible, visible])
             bodies = [sql for sql in statements if "SELECT id,result" in sql]
             self.assertEqual(len(bodies), 1)
             self.assertIn("json_each('[2]')", bodies[0])
@@ -302,39 +327,85 @@ class InvalidationTests(unittest.TestCase):
             copy = {**hermes.session["history"][0], "_row_id": 99}
             hermes.session["history"].append(copy)
             self.assertEqual(hermes.answer()["messages"][-1]["row_id"], 99)
-            self.assertNotIn(99, hermes.bridge.row_caches["sid"].originals)
             with hermes.store:
                 hermes.store.execute("INSERT INTO messages(id,session_id,message_uid) VALUES(99,'stored','u1')")
             value = hermes.answer()
             self.assertEqual((value["messages"][-1]["row_id"], value["messages"][-1]["app_request_id"]), (1, "first"))
 
-    def test_a_replaced_or_restored_state_database_is_read_again(self):
-        # Another file of the same stored session reuses row IDs 1 to 8. Its row 5 copies its own
-        # row 3, and its row 8 keeps this file's last message ID, so each case shows one signal alone.
-        other = ["z1", "z2", "u1", "z4", "u1", "z6", "z7", "a1"]
+    def test_a_replaced_or_restored_state_database_answers_as_a_cold_open(self):
+        # Each case starts from rows 1 to 4 (uids A, B, C, Z), a snapshot of them, and their
+        # compaction copies 5 to 8 already read by one open. Another file of the same stored
+        # session reuses row IDs 1 to 8; its row 5 copies its own row 3 and its row 8 has uid Z.
+        other = ["Y1", "Y2", "A", "Y4", "A", "Y6", "Y7", "Z"]
+
+        def compacted_again(hermes, rows):
+            # The snapshot's rows live again; one more row is written, then compaction keeps A, C and Z
+            # as rows 6 to 8, so row 6 now copies Alice's row 1 where it copied Bob's row 2 before.
+            hermes.session["history"] = list(rows)
+            hermes.add("user", "X", "Dropped by compaction")
+            hermes.compact([rows[0], rows[2], rows[3]])
+
+        def newer_after_divergence(hermes, rows, copies, snapshot):
+            # This history goes on: compaction keeps B, C and Z as rows 9 to 11, and a snapshot is taken.
+            hermes.compact(copies[2:])
+            later = hermes.session["history"]
+            newer = hermes.snapshot_store("newer.db")
+            # The older snapshot is restored and diverges: its rows 9 to 11 copy A, C and Z, and an open reads them.
+            hermes.restore_store(snapshot)
+            compacted_again(hermes, rows)
+            hermes.compact(hermes.session["history"][1:])
+            hermes.answer()
+            # The newer snapshot comes back, where row 9 copies Bob's row 2.
+            hermes.restore_store(newer)
+            hermes.session["history"] = later
+
+        def divergent_replace(hermes, rows, copies, snapshot):
+            # One history: replace_messages moves A, B, C and Z to rows 5 to 8, and compaction copies them to 9 to 12.
+            hermes.restore_store(snapshot)
+            hermes.session["history"] = list(rows)
+            hermes.replace(rows)
+            hermes.compact(hermes.session["history"])
+            hermes.answer()
+            # The other: back at the snapshot, two compactions copy them to 5 to 8, then to 9 to 12. Rows 9
+            # and 5 hold uid A in both, but here the earliest row with it is Alice's row 1.
+            hermes.restore_store(snapshot)
+            hermes.session["history"] = list(rows)
+            hermes.compact(rows)
+            hermes.compact(hermes.session["history"][1:])
+
         cases = {
-            # A new inode with the same generation stamp: only the file identity changed.
-            "replaced file": lambda hermes, snapshot: hermes.replace_store(other, application_id=1),
-            # Pages written into the same inode: only Hermes's per-file generation stamp changed.
-            "another database restored into the file": lambda hermes, snapshot: hermes.restore_store(
-                state_store_file(hermes, "other.db", other, application_id=2)),
-            # The same file's older snapshot, then new rows under the IDs it had already used.
-            "an older snapshot restored, then written again": lambda hermes, snapshot: (
+            # A new inode with the same generation stamp.
+            "replaced file": (lambda hermes, rows, copies, snapshot: hermes.replace_store(other, application_id=1),
+                              [(3, None), (6, None), (7, None), (8, None)]),
+            # Pages written into the same inode, with another generation stamp.
+            "another database restored into the file": (lambda hermes, rows, copies, snapshot: hermes.restore_store(
+                state_store_file(hermes, "other.db", other, application_id=2)), [(3, None), (6, None), (7, None), (8, None)]),
+            # An older snapshot, then new rows under the IDs the copies had.
+            "an older snapshot restored, then written again": (lambda hermes, rows, copies, snapshot: (
                 hermes.restore_store(snapshot), [hermes.stored(f"n{index}") for index in range(5, 9)]),
+                [(5, None), (6, None), (7, None), (8, None)]),
+            # The second review's sequence: same inode, stamp and newest row (8, Z) as before the restore.
+            "an older snapshot restored, then compacted again": (
+                lambda hermes, rows, copies, snapshot: (hermes.restore_store(snapshot), compacted_again(hermes, rows)),
+                [(1, "alice"), (3, None), (4, None)]),
+            "a newer snapshot of the same history restored after the file diverged": (
+                newer_after_divergence, [(2, "bob"), (3, None), (4, None)]),
+            # A copy and its recorded original both still hold their uid, yet an earlier row holds it too.
+            "a divergent history in which replace_messages had moved an earlier row": (
+                divergent_replace, [(1, "alice"), (2, "bob"), (3, None), (4, None)]),
         }
-        for name, change in cases.items():
+        for name, (change, expected) in cases.items():
             with self.subTest(name), TranscriptHermes() as hermes:
-                first_turn(hermes)
+                rows = alice_and_bob(hermes)
                 snapshot = hermes.snapshot_store("snapshot.db")
-                hermes.compact(hermes.session["history"])
-                self.assertEqual(hermes.answer()["messages"][0]["app_sender_id"], "nicolas")
-                change(hermes, snapshot)
+                hermes.compact(rows)
+                copies = hermes.session["history"]
+                self.assertEqual(senders(hermes.answer()), [(1, "alice"), (2, "bob"), (3, None), (4, None)])
+                change(hermes, rows, copies, snapshot)
                 warm = hermes.answer()
+                self.assertEqual(senders(warm), expected)
                 hermes.bridge.row_caches.clear()
                 self.assertEqual(warm, hermes.answer())
-                # No longer the copy of row 1, so not the old sender's message.
-                self.assertNotEqual(warm["messages"][0]["row_id"], 1)
-                self.assertNotIn("app_sender_id", warm["messages"][0])
 
     def test_a_restored_journal_is_read_again(self):
         with TranscriptHermes() as hermes:
@@ -368,20 +439,7 @@ class InvalidationTests(unittest.TestCase):
             # The same runtime session now stores into another session, whose rows these are not.
             hermes.session["session_key"] = "stored-2"
             self.assertEqual(hermes.answer()["messages"][0]["row_id"], 5)
-            rows = hermes.bridge.row_caches["sid"]
-            self.assertEqual((rows.scope, rows.originals), ("stored-2", {}))
-
-    def test_the_lookup_ignores_a_cache_filled_for_another_stored_session(self):
-        with TranscriptHermes() as hermes:
-            first_turn(hermes)
-            hermes.compact(hermes.session["history"])
-            hermes.answer()
-            rows = hermes.bridge.row_caches["sid"]
-            # Native activation can resume the session into another stored session after the cache was taken.
-            hermes.session["session_key"] = "stored-2"
-            messages = [{"row_id": 5}]
-            hermes.bridge.original_rows(hermes.session, messages, rows)
-            self.assertEqual(messages, [{"row_id": 5}])
+            self.assertEqual(hermes.bridge.row_caches["sid"].scope, "stored-2")
 
     def test_a_session_no_longer_canonical_loses_its_cache(self):
         with TranscriptHermes() as hermes:
@@ -408,7 +466,7 @@ class InvalidationTests(unittest.TestCase):
             value = hermes.answer()
             rows = hermes.bridge.row_caches["sid"]
             ids = [row["_row_id"] for row in hermes.session["history"][1:]]
-            self.assertEqual((list(rows.originals), list(rows.tool_results), list(rows.tool_records)), (ids[-2:], ids[-2:], [3, 4]))
+            self.assertEqual((list(rows.tool_results), list(rows.tool_records)), (ids[-2:], [3, 4]))
             # Rows evicted while this open filled the tables still answered it.
             self.assertEqual([m["row_id"] for m in value["messages"]], list(range(1, 8)))
             self.assertEqual([m.get("app_tool_result") for m in value["messages"][-3:]], [{"index": 0}, {"index": 1}, {"index": 2}])
@@ -417,20 +475,6 @@ class InvalidationTests(unittest.TestCase):
                 self.assertEqual(hermes.answer(), value)
             hermes.bridge.row_caches.clear()
             self.assertEqual(hermes.answer(), value)
-
-    def test_a_transcript_longer_than_the_cap_keeps_each_sender_on_every_open(self):
-        with TranscriptHermes() as hermes, patch.object(extension, "ROW_CACHE_LIMIT", 3):
-            with hermes.journal.db:
-                for index, actor in enumerate(["nicolas", "second-member", "nicolas", "second-member"]):
-                    user = hermes.add("user", f"u{index}", f"Question {index}")
-                    receipt(hermes.journal.db, f"r{index}", user["_row_id"], index, actor=actor)
-                    hermes.add("assistant", f"a{index}", f"Answer {index}")
-            hermes.compact(hermes.session["history"])
-            senders = [("r0", "nicolas"), None, ("r1", "second-member"), None, ("r2", "nicolas"), None, ("r3", "second-member"), None]
-            for _ in range(3):
-                value = hermes.answer()
-                self.assertEqual([m["row_id"] for m in value["messages"]], list(range(1, 9)))
-                self.assertEqual([(m["app_request_id"], m["app_sender_id"]) if "app_request_id" in m else None for m in value["messages"]], senders)
 
 
 class ConcurrencyTests(unittest.TestCase):

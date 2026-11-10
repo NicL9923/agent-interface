@@ -6,13 +6,15 @@ that grows with the transcript. This builds a synthetic canonical session in a t
 Each turn is five rows: a user message with its receipt, three tool calls with JSON outputs and
 a journal record each, and an assistant reply. One in-place compaction, a tenth of the way in,
 archives every row and stores each again, as Hermes does. The SQLite state store has Hermes's
-own messages table and every index on it, so the add-on's lookups get Hermes's query plans.
-Native projection, the session table and activation are fakes; nothing contacts Hermes.
+own messages table and every index on it, in WAL mode as Hermes opens it, so the add-on's
+lookups get Hermes's query plans. Native projection, the session table and activation are
+fakes; nothing contacts Hermes.
 
-Each measured open first appends one tool row and its journal record, as a turn does, then
-reads the latest window. ``--repo`` names another checkout, such as an export of origin/main,
-to time its add-on with the same fakes. ``--plan`` prints the query plan of every statement the
-add-on ran against the store.
+Each measured open first commits one tool row and its journal record, as a turn does, so the
+state.db WAL changes between any two opens, then reads the latest window. Besides the open and
+its phases, it times ``original_rows``, the compaction-copy lookup inside the decorate phase.
+``--repo`` names another checkout, such as an export of origin/main, to time its add-on with the
+same fakes. ``--plan`` prints the query plan of every statement the add-on ran against the store.
 
     python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30] [--plan]
 """
@@ -95,6 +97,8 @@ class Store:
     def __init__(self, path):
         self.db_path = str(path)
         self.db = sqlite3.connect(path, check_same_thread=False)
+        # Hermes opens state.db in WAL mode (hermes_state_wal.py:254), so each commit grows the WAL.
+        self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(MESSAGES_SCHEMA)
         # Hermes stamps each file's generation into the header (hermes_state.py:1180).
         self.db.execute("PRAGMA application_id=1234567")
@@ -213,24 +217,44 @@ def main():
             visible = len(transcript.history)
             tools = sum(row["role"] == "tool" for row in transcript.history)
             open_ = hermes.methods["agent-interface.open"]
+            bridge, lookups = open_.__self__, []
+            original_rows = bridge.original_rows
+
+            def timed_original_rows(*args):
+                started = time.perf_counter()
+                try:
+                    return original_rows(*args)
+                finally:
+                    lookups.append((time.perf_counter() - started) * 1000)
+            bridge.original_rows = timed_original_rows
             for _ in range(2):
                 open_("warm", {"profile": "default", "window": {"turns": 20}})
             durations, phases = [], []
+            del lookups[:]
             for _ in range(args.opens):
+                wal = Path(store.db_path + "-wal").stat()
                 with hermes.journal.db, store.db:
                     transcript.call()
+                after = Path(store.db_path + "-wal").stat()
+                if (wal.st_size, wal.st_mtime_ns) == (after.st_size, after.st_mtime_ns):
+                    sys.exit("The write before an open left the state.db WAL unchanged; this would not model a running turn.")
                 started = time.perf_counter()
                 result = open_("poll", {"profile": "default", "window": {"turns": 20}})["result"]
                 durations.append((time.perf_counter() - started) * 1000)
                 phases.append(result["app_timing"])
-            durations.sort()
+            if len(lookups) != args.opens:
+                sys.exit(f"{args.opens - len(lookups)} opens skipped the compaction-copy lookup; they did not model a running turn.")
+
+            def summary(values):
+                values = sorted(values)
+                return f"median {statistics.median(values):.1f} ms, p90 {values[int(len(values) * 0.9) - 1]:.1f} ms"
             print(f"Repository: {args.repo}")
             print(f"Python {platform.python_version()}, SQLite {sqlite3.sqlite_version} on {platform.system()} {platform.machine()}")
             print(f"Transcript: {visible} visible rows ({tools} tool rows) at the first measured open, a running turn, {args.opens} opens")
-            print(f"Open, wall: median {statistics.median(durations):.1f} ms, p90 {durations[int(len(durations) * 0.9) - 1]:.1f} ms, "
-                  f"max {durations[-1]:.1f} ms")
+            print(f"Open, wall: {summary(durations)}, max {max(durations):.1f} ms")
             for name in phases[0]:
-                print(f"  {name}: median {statistics.median(phase[name] for phase in phases):.1f} ms")
+                print(f"  {name}: {summary(phase[name] for phase in phases)}")
+            print(f"  original_rows (in decorate): {summary(lookups)}")
             if args.plan:
                 for sql, params in store.statements.items():
                     print(f"\n{sql}")
