@@ -196,6 +196,22 @@ def pause_at_fence(hermes, kind, when):
     return paused, resume
 
 
+def hold_send_jobs(hermes):
+    """Each send-lane job waits on the returned Event before it starts, as when every send worker thread is busy.
+
+    The job is already queued in its lane, so its send stays ``queued`` until the test sets the Event.
+    """
+    gate, submit = threading.Event(), hermes.bridge.sends.pool.submit
+    def held(job, *args):
+        def run():
+            if not gate.wait(10):
+                raise RuntimeError("The test never let the send's job start")
+            return job(*args)
+        return submit(run)
+    hermes.bridge.sends.pool.submit = held
+    return gate
+
+
 def tool_frames(hermes, sid, tool_id):
     for kind, payload in (("tool.start", {"tool_id": tool_id, "name": "terminal", "args": {"command": "ls"}}),
                           ("tool.complete", {"tool_id": tool_id, "name": "terminal", "result": {"exit_code": 0}})):
@@ -444,6 +460,10 @@ class SendLaneTests(unittest.TestCase):
                     reader = threading.Thread(target=lambda hermes=hermes, replies=replies: hermes.send("send", "slow", replies), daemon=True)
                     if boundary == "acquire":
                         paused, resume = pause_at_fence(hermes, "acquire", lambda reader=reader: threading.current_thread() is reader)
+                        # The send's job starts only after maintenance has looked, so the send is still waiting on
+                        # its lane, as it was at the pause, whenever maintenance gets in.
+                        started = hold_send_jobs(hermes)
+                        self.addCleanup(started.set)
                     else:
                         paused, resume = pause_at_fence(hermes, "release", lambda replies=replies: "send" in replies.answers
                                                         and threading.current_thread().name.startswith("agent-interface-send"))
@@ -468,6 +488,9 @@ class SendLaneTests(unittest.TestCase):
                         observer.start()
                         resume.set()
                         observer.join(5)
+                        self.assertFalse(observer.is_alive())
+                    if boundary == "acquire":
+                        started.set()
                     reader.join(5)
                     self.assertTrue(replies.wait("send"))
                     [(busy, acquired)] = observed
