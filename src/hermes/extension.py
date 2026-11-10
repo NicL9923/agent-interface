@@ -131,7 +131,7 @@ class Journal:
             self.db.execute("ALTER TABLE receipts ADD COLUMN input_text TEXT")
         if "steering" not in columns:
             self.db.execute("ALTER TABLE receipts ADD COLUMN steering INTEGER NOT NULL DEFAULT 0")
-        for column in ("stored_session", "attachments", "admission_response"):
+        for column in ("stored_session", "attachments", "admission_response", "turn_rows"):
             if column not in columns:
                 self.db.execute(f"ALTER TABLE receipts ADD COLUMN {column} TEXT")
         if "artifacts" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
@@ -965,16 +965,21 @@ class Bridge:
         receipt: Hermes's own answer to prompt.submit names the row whenever it staged one.
         Every other completion, such as another client's turn, a queued or redirected send's
         neighbor, a resumed turn or a goal continuation, binds nothing.
+
+        The same completion lists every committed row of the turn (``persisted_turn.row_ids``),
+        kept as the receipt's turn: a steer is bound later only to a row inside it.
         """
         claim = self.turn_claim.get()
         if claim is None or claim["sid"] != sid or claim["used"]:
             return
         claim["used"] = True
-        row_id = (payload.get("persisted_turn") or {}).get("user_row_id")
+        persisted = payload.get("persisted_turn") or {}
+        row_id, row_ids = persisted.get("user_row_id"), persisted.get("row_ids")
         if type(row_id) is not int:
             return
+        extent = json.dumps(row_ids) if isinstance(row_ids, list) else None
         with self.journal.lock, self.journal.db:
-            self.journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=? AND session_id=? AND steering=0 AND row_id IS NULL", (row_id, claim["request_id"], sid))
+            self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
@@ -1031,7 +1036,7 @@ class Bridge:
             event_kind = "approval"
         if sid and kind == "message.complete":
             # Image-only admission has no staged row. Native completion reports the turn's
-            # committed prompt row, which binds the receipt only if this turn ran its prompt.
+            # committed rows, which bind the receipt only if this turn ran its prompt.
             self.bind_turn_row(sid, payload)
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
@@ -1329,61 +1334,35 @@ class Bridge:
     def attribute(self, profile, sid, value, rows=None):
         """Bind app receipts, files and tool details to native history rows.
 
-        Returns (messages, journal mutation after binding, whether the result is cacheable).
-        App attribution follows Hermes's durable row identity, never a rewritten body.
-        Read each journal table once per poll, not once per message. Binding only fills
-        a NULL row_id, so the unbound snapshot can only overstate candidates, and only
-        a row ID bound here needs a reread. Callers hold journal.lock, which native
+        Returns (messages, journal mutation after binding). App attribution follows
+        Hermes's durable row identity, never a rewritten body. Read each journal table once
+        per poll, not once per message. The only binding made here is a steer's, from these
+        rows and the journal alone, so a later read of the same rows and journal binds
+        nothing new and the result can be cached. Callers hold journal.lock, which native
         writers also take, so none lands mid-poll. ``rows`` is the session's RowCache, or None.
         """
         journal, server = self.journal, self.server
         stored = value["canonical_stored_session_id"]
         messages = value.get("messages", [])
-        unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, stored)).fetchall()
-        steering_texts = {text for steering, text, _ in unbound if steering}
-        image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
+        self.bind_steers(profile, stored, messages)
         attributed = {}
-        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering,admission_response FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
+        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
         # Which records each call has comes from the index alone; their bodies come from the cache.
         calls = {row[0]: row[1:] for row in journal.db.execute("SELECT id,tool_id,run_id FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str])))}
         tool_records = {}
         for record_id, record in self.tool_records(list(calls), rows).items():
             tool_records.setdefault(calls[record_id], []).append(record)
-        rebound = set()
         current_run = None
         for message in messages:
             if message.get("role") == "user":
                 current_run = None
-            if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
-                # Native steering persists a correction later, without an admission row ID.
-                # Pair equal corrections in admission order within this canonical owner.
-                candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, stored, message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
-                if candidate:
-                    with journal.db:
-                        journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
-                    rebound.add(message["row_id"])
-            if message.get("role") == "user" and message.get("row_id") is not None and image_pending and message["row_id"] not in attributed and message["row_id"] not in rebound:
-                # Recovery for an image send whose turn no claim bound: one queued behind another
-                # turn, or completed before this binding hook. Bind only a row no receipt holds whose
-                # words are exactly this receipt's text with its own uploaded images, in Hermes's
-                # persisted image-ref form, within the admitted owner and time window.
-                candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, stored, float(message.get("timestamp") or time.time()) + 1)).fetchall()
-                for request_id, input_text, raw_attachments in candidates:
-                    images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
-                    if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
-                        with journal.lock, journal.db:
-                            journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
-                        rebound.add(message["row_id"])
-                        break
             if message.get("row_id") is None:
                 row = None
-            elif type(message["row_id"]) is int and message["row_id"] not in rebound:
+            elif type(message["row_id"]) is int:
                 row = attributed.get(message["row_id"])
             else:
-                row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering,admission_response FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
-            if row and self.binding_contradicted(row, message):
-                row = None
+                row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
             if row:
                 message["app_request_id"], message["app_sender_id"] = row[:2]
                 current_run = row[2]
@@ -1415,32 +1394,31 @@ class Bridge:
                     detail = tool[2]
                     if len(recorded) == 1 and isinstance(detail, dict) and detail.get("name") == message.get("name") and tool[3] == (message.get("args") or {}):
                         message["app_tool_call"] = detail
-        # Only steering and image receipts can still be bound by a later read of the same rows;
-        # any other binding is a journal write, which changes the mutation count the cache keys on.
-        return messages, journal.mutation, not steering_texts and not image_pending
+        return messages, journal.mutation
 
-    @staticmethod
-    def binding_contradicted(row, message):
-        """Whether a receipt's binding to this row is contradicted by the row's own words.
+    def bind_steers(self, profile, stored, messages):
+        """Bind each unbound steer whose row can only be its own.
 
-        Earlier add-ons bound a completed turn's prompt row to the session's oldest unbound
-        receipt, so a send Hermes queued or redirected could be bound to another client's
-        prompt. Such a binding is not trusted: the row shows as Hermes has it, unattributed.
-        The journal keeps it. Only a text-only new task is checked, the one kind whose saved row
-        holds exactly the words sent; Hermes rewrites file references and images in the row.
-        A row Hermes's own admission answer named is the receipt's whatever it now shows.
+        Hermes answers session.steer with no row and no request ID, and writes the steer later as
+        a user row holding its words, beside any other client's correction with the same words
+        (``tui_gateway/methods_session_interrupt.py:114-130`` and ``agent/agent_runtime_helpers.py:3668-3703``
+        at ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn
+        has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
+        only when exactly one user row inside those rows holds its words, no receipt holds that
+        row, and no other receipt of the run, bound or not, sent the same words.
+        Anything else leaves it unbound and its row shows unattributed. Callers hold journal.lock.
         """
-        _, _, _, attachments, text, steering, answer = row
-        if steering or not isinstance(text, str) or not text.strip() or "@" in text or json.loads(attachments or "[]"):
-            return False
-        shown = message.get("text")
-        if not isinstance(shown, str) or shown.strip() == text.strip():
-            return False
-        try:
-            named = json.loads(answer).get("userRowId") if answer else None
-        except (ValueError, TypeError, AttributeError):
-            named = None
-        return named != message.get("row_id")
+        journal = self.journal
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        for request_id, text, run_id, extent in steers:
+            extent = set(json.loads(extent))
+            found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
+                     and message["row_id"] in extent and message.get("text") == text]
+            # The root's own row is held by the root's receipt, so the second test also excludes it.
+            if len(found) != 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
+                continue
+            with journal.db:
+                journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (found[0], request_id))
 
     def unrepresented_tool_calls(self, session, messages):
         # Standard native tools flush before completion; Codex can expose
@@ -1517,7 +1495,7 @@ class Bridge:
             self.original_rows(session, value.get("messages", []))
         with journal.lock:
             if cached is None:
-                messages, bound_mutation, cacheable = self.attribute(profile, sid, value, rows)
+                messages, bound_mutation = self.attribute(profile, sid, value, rows)
         # Never acquire history_lock while holding journal.lock: native flushes
         # emit frames under history_lock and the frame hook needs journal.lock.
         after = self.history_identity(session) if not omit else None
@@ -1528,7 +1506,7 @@ class Bridge:
             if cached is None:
                 cache = self.decorated
                 with self.cache_lock:
-                    if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
+                    if not omit and identity is not None and after == identity and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
                         now = time.monotonic()
                         cache[sid] = (identity, journal.mutation, messages, now, now)
