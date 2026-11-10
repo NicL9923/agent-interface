@@ -694,3 +694,32 @@ display settled, and a pending timer does not keep a service worker alive.
 - A real display that never settles, a real late display, and real taps during one. The worker
   cases fake the browser APIs at their boundary.
 - Safari, Firefox and an installed iOS web app: not run.
+
+## Seventh review round
+
+GPT-6.1 Sol reviewed `c9e5217..b047676b` and cleared the two round 6 findings: a tap during a
+restoration starts at once, replaced attempts finish earlier taps, untagged originals leave one
+brought-back notification per chat, and an old attempt settling late cannot clear a newer entry.
+It replayed mutants S1 to S10 with the recorded results. One finding, a documentation gap:
+
+- The 10 second deadline adds a second way to end with nothing on screen that the comment and the
+  README did not name. Opening a window fails, `showNotification()` stays pending without having
+  displayed anything, and at 10,000 ms the tap ends. Neither display was rejected, so the stated
+  exception for two rejected displays did not cover it.
+
+Fixed by the orchestrating agent, as the reviewer specified: the comment above `openChat` and the
+README now name both cases, and a test pins the second, "stops waiting at the deadline for a
+display that has neither appeared nor failed". It asserts the tap is still waiting at 9,999 ms,
+has ended at 10,000 ms with nothing on screen and no further try, and that the notification
+appears when the browser finishes later, without a second call.
+
+The test describes behavior the code already had, so it passed when written. Two hand breaks
+prove it can fail:
+
+| Break | Result |
+| --- | --- |
+| `RESTORE_MS` raised to 20 seconds | failed: "ended at the deadline: expected false to be true" |
+| The wait on the display no longer raced against the deadline | failed the same way |
+
+The reviewer also noted, without a finding, that an old attempt's late retry can replace newer
+brought-back content for the same chat. One notification for that chat remains either way.

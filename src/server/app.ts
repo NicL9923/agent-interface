@@ -176,6 +176,10 @@ export async function createApp(
     app.get("/native/terminal", (_req, reply) => { reply.sendFile("native-terminal.html"); });
     app.setNotFoundHandler((req, reply) => {
       if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
+      // A bundle a release retired, asked for by a page still running that release. The shell in its
+      // place would reach the page as a script it cannot run; a 404 says plainly that the file is
+      // gone, and the screen offers Reload. Not kept, since a rollback can bring the file back.
+      else if (req.url.startsWith("/assets/")) reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
       else reply.type("text/html").sendFile("index.html");
     });
   }

@@ -271,8 +271,10 @@ function askToOpen(client, url) {
 // display never keeps the worker alive longer than the new attempt, which waits on its own display
 // for at most RESTORE_MS. Every notification brought back for a chat carries that chat's one tag,
 // so a late display and the new attempt's leave one notification, not two.
-// Bringing the notification back is retried once, and if the retry fails too, every tap on the
-// attempt ends with nothing on screen, the one case the invariant does not cover.
+// Bringing the notification back is retried once. Two cases the invariant does not cover, both
+// ending every tap on the attempt with nothing on screen: the retry fails too, or the browser has
+// neither shown the notification nor refused it by RESTORE_MS. In the second the worker only stops
+// waiting, so the notification still appears if the browser finishes later.
 const attempts = new Map();
 function openChat(notification) {
   const url = conversationUrl(notification.data?.url);

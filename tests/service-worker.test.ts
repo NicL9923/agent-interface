@@ -919,7 +919,7 @@ describe('service worker notification taps with the app open', () => {
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
     });
 
-    // The one case the invariant cannot cover: nothing is on screen, and every tap still ends cleanly.
+    // One of the two cases the invariant cannot cover: nothing is on screen, and every tap still ends cleanly.
     it('ends every tap without a rejection when the second try fails too', async () => {
       const { sw } = setUp(row);
       sw.showNotification.mockRejectedValueOnce(failed()).mockRejectedValueOnce(failed());
@@ -928,6 +928,32 @@ describe('service worker notification taps with the app open', () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
       expect(sw.shown).toEqual([]);
+    });
+
+    // The other case the invariant cannot cover: the browser neither shows the notification nor
+    // refuses it. The worker stops waiting at the deadline with nothing on screen, tries nothing
+    // more, and the notification still appears if the browser finishes later.
+    it('stops waiting at the deadline for a display that has neither appeared nor failed', async () => {
+      vi.useFakeTimers();
+      try {
+        const { sw } = setUp(row);
+        const show = sw.showNotification.getMockImplementation()!;
+        let finish!: () => void;
+        const stored = new Promise<void>(resolve => { finish = resolve; });
+        sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => { await stored; await show(...args); });
+        let ended = false;
+        void tap(sw, { ...tapped, tag: undefined }).then(() => { ended = true; });
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(ended, 'still waiting for the display').toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(ended, 'ended at the deadline').toBe(true);
+        expect(sw.shown).toEqual([]);
+        expect(sw.showNotification).toHaveBeenCalledOnce();
+        finish();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }]);
+        expect(sw.showNotification).toHaveBeenCalledOnce();
+      } finally { vi.useRealTimers(); }
     });
   });
 
