@@ -17,6 +17,7 @@ import { ownPrompts, recallStep, type Recall } from "./prompt-recall";
 import { largePasteFile } from "./large-paste";
 import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
+import { imeKey } from "./ime";
 
 /** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
 export function useStopResponse(botId: string, report: (message: string) => void) {
@@ -361,8 +362,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             setPasteStatus(`Your paste was long, so it is attached as ${pasted.name} (${formatBytes(pasted.size)}).`);
           }}
           onKeyDown={(event) => {
+            // Keys an input method is using, including the Enter that confirms a word, are its own.
+            if (imeKey(event.nativeEvent)) return;
             if ((event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey
-              && !event.nativeEvent.isComposing && !submitting && !handedOff) {
+              && !submitting && !handedOff) {
               const field = event.currentTarget;
               const collapsed = field.selectionStart === field.selectionEnd;
               const move = recallStep(recall, event.key, prompts, field.value,
@@ -378,11 +381,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               recallTo(recall.draft, null, "end");
               return;
             }
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               if (
                 !(
