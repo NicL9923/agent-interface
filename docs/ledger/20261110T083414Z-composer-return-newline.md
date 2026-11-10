@@ -132,3 +132,10 @@ Still unchecked on a device: what Safari and Chrome on a phone report for `any-p
 trackpad keyboard; the Return key label each on-screen keyboard draws for `enterkeyhint`; Ctrl+Enter and Cmd+Enter
 from an iPad or Android hardware keyboard; the `change` event when a trackpad connects; and input-method composition
 on a phone.
+
+### After merging the group composer fix
+
+`composer-keyboard-viewport` at `6b97b01` added the group composer fix and was merged here as `50c058b`. On that
+state, `npm run typecheck` and `npm run lint` passed, `npm test` passed 181 files and 2948 tests, `npm run build`
+passed, `npm run test:e2e` passed 10, and `.agents/tools/check-send-visible.mjs` kept the button whole and tappable
+in 70 of 70 cases. In a group chat, where Return now starts a new line on a phone, Send stays on screen.
