@@ -94,3 +94,20 @@ change: `dark`.
 ## Not run
 
 Safari, Firefox, an installed home-screen app and a real phone: not run. Only Chromium runs here.
+
+## Fourth round: the Grok 4.7 review, merged from `t3/account-transitions`
+
+`t3/account-transitions` merged in without a conflict, bringing `origin/main` at `e7cd5ac` with it.
+Its changes and red runs are in `20261110T191900Z-account-transitions.md`, third round: a push
+shown after its account left closes with its badge, and the address belongs to the account the
+record named when the generation started, so another tab's failed sign-in keeps it and a
+connecting screen's address goes before the next account draws.
+
+This branch needs nothing more for them. `public/boot.js` draws only the saved theme before the
+app, never an address, and its bootstrap reaches the app through `accountNamed` like any other.
+`tests/account-transitions-ui.test.ts` passes here as merged, 41 tests.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .`: pass. `npm test`: 194 files, 3300 tests.
+`npm run build`: pass. `npm run test:e2e`: 25 passed.

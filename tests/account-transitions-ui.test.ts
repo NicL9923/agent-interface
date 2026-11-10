@@ -693,11 +693,99 @@ describe("the address after a change", () => {
     expect(location.hash).toBe("");
   });
 
+  it("keeps member one's address, open chat and fragment when another tab's sign-in fails and puts the record back", async () => {
+    signedInAs("one");
+    const before = data.get(authEpochKey)!;
+    const tab = await openTab("/?bot=ranch#latest");
+    expect(tab.text()).toContain("Gate code is 4471");
+    await elsewhere({ id: "two-changing", at: NOW, changing: true, user: "one" });
+    expect(tab.text()).toContain("Connecting to your household");
+    sharedStorage.setItem(authEpochKey, before);
+    await deliver();
+    expect(tab.text()).toContain("Gate code is 4471");
+    expect(location.search).toBe("?bot=ranch");
+    expect(location.hash).toBe("#latest");
+  });
+
+  it("drops an address member one opened while still connecting, so member two never lands in a chat both can open", async () => {
+    signedInAs("one");
+    holding = ["GET /bootstrap", "GET /bots/home/"];
+    // Home is shared, so member two could open it too; the fragment names member one's message.
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Connecting to your household");
+    await elsewhere({ id: "one-leaving", at: NOW, changing: true, user: "one" });
+    cookie = null;
+    await elsewhere({ id: "one-gone", at: NOW, signedOut: true, user: "one" });
+    expect(tab.text()).toContain("Enter local workspace");
+    expect(location.search).toBe("");
+    expect(location.hash).toBe("");
+    holding = [];
+    await signInAs(tab, "two");
+    expect(tab.text()).toContain("Barn door sticks");
+    expect(tab.text()).not.toContain("Two's home chat");
+    expect(location.hash).toBe("");
+    // Member one's bootstrap and chat read never answer this tab: it let them go.
+    held = [];
+  });
+
+  it("drops a fragment alone that member one's page opened with, when they sign out before it connects", async () => {
+    signedInAs("one");
+    holding = ["GET /bootstrap"];
+    const tab = await openTab("/#ranch-1");
+    expect(tab.text()).toContain("Connecting to your household");
+    await elsewhere({ id: "one-leaving", at: NOW, changing: true, user: "one" });
+    cookie = null;
+    await elsewhere({ id: "one-gone", at: NOW, signedOut: true, user: "one" });
+    expect(tab.text()).toContain("Enter local workspace");
+    expect(location.pathname + location.search).toBe("/");
+    expect(location.hash).toBe("");
+    held = [];
+  });
+
+  it("drops member one's address from a page that opened while another tab was signing them out", async () => {
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "one-leaving", at: NOW, changing: true, user: "one" }));
+    const tab = await openTab("/?bot=ranch#ranch-1");
+    expect(tab.text()).toContain("Connecting to your household");
+    cookie = null;
+    await elsewhere({ id: "one-gone", at: NOW, signedOut: true, user: "one" });
+    expect(tab.text()).toContain("Enter local workspace");
+    expect(location.search).toBe("");
+    expect(location.hash).toBe("");
+  });
+
+  it("keeps the address of the account a bootstrap named when the record had not, once the same account is put back", async () => {
+    // A sign-in whose answer named no account leaves the record without one until bootstrap names it.
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "unnamed", at: NOW - 60_000 }));
+    const tab = await openTab("/?bot=ranch#latest");
+    expect(tab.text()).toContain("Gate code is 4471");
+    const named = data.get(authEpochKey)!;
+    expect(JSON.parse(named)).toMatchObject({ user: "one" });
+    await elsewhere({ id: "two-changing", at: NOW, changing: true, user: "one" });
+    sharedStorage.setItem(authEpochKey, named);
+    await deliver();
+    expect(tab.text()).toContain("Gate code is 4471");
+    expect(location.search).toBe("?bot=ranch");
+    expect(location.hash).toBe("#latest");
+  });
+
   it("keeps an address the person opened while signed out, which named no account's chat yet", async () => {
     const tab = await openTab("/?bot=home");
     await signInAs(tab, "two");
     expect(tab.text()).toContain("Two's home chat");
     expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+  });
+
+  it("keeps an address the person opened while signed out when another tab signs member two in", async () => {
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Enter local workspace");
+    await elsewhere({ id: "two-changing", at: NOW, changing: true });
+    cookie = "two";
+    await elsewhere({ id: "two-settled", at: NOW, user: "two" });
+    expect(tab.text()).toContain("Two's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+    expect(location.hash).toBe("#home-1");
   });
 });
 
