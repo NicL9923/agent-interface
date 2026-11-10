@@ -79,6 +79,63 @@ function midTurn(s: Setup) {
 }
 const saved = (messages: Message[]) => messages.filter(message => !message.id.endsWith("-inflight"));
 
+/**
+ * A `?inflight=1` or `?inflight=2` client through the reviewer's sequence: it reads on each change notice, as the
+ * app does, and logs every event and read with the step it arrived in, which is its timing class. A `?inflight=3`
+ * stream of another member watches beside it when `beside` is set, and never reads, so any difference is the
+ * server's own turn reads.
+ */
+async function legacyRun(mode: "1" | "2", beside: boolean) {
+  const s = await setup();
+  midTurn(s);
+  const legacy = await stream(s, s.one, mode);
+  const turns = beside ? await stream(s, s.two, "3") : undefined;
+  // Both runs go on from the same instant, so tool times match.
+  vi.setSystemTime(new Date("2026-11-10T06:00:00Z"));
+  const log: unknown[] = [];
+  let step = 0, logged = 0;
+  const read = async () => {
+    const { messages, activity } = await s.get(s.one);
+    log.push([step, "read", messages.map(message => [message.id, message.text]), activity.state]);
+  };
+  /** Runs `ms` of virtual time, logging what the legacy stream got and reading on each change notice. */
+  const run = async (ms: number) => {
+    for (let at = 0; at < ms; at += 10) {
+      await vi.advanceTimersByTimeAsync(10);
+      await new Promise(resolve => setImmediate(resolve));
+      for (const [name, data] of legacy.events().slice(logged)) {
+        logged++;
+        log.push([step, name, data]);
+        if (name === "change") await read();
+      }
+    }
+  };
+  await read();
+  const steps = [
+    // A turn's structure changes, so the change notice throttle is running when the tool finishes below.
+    () => s.hermes.frame("message.start", {}),
+    () => s.hermes.frame("message.delta", { text: "Looking." }),
+    () => {
+      s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }));
+      s.hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+      s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+      s.hermes.frame("message.delta", { text: " Found it." });
+    },
+    () => s.hermes.frame("message.delta", { text: " More." }),
+  ];
+  const durations = [200, 300, 1500, 400];
+  for (const [index, frame] of steps.entries()) {
+    step = index + 1;
+    frame();
+    await run(durations[index]);
+  }
+  // The turn stream did see the turn, so a run beside it really had the server reading turns.
+  if (turns) expect(turns.turns().map(turn => turn.message.text)).toContain("Found it.");
+  await legacy.close();
+  await turns?.close();
+  return log;
+}
+
 describe("?inflight=3 turn streams", () => {
   it("sends the turn whole after each change to its structure, and growth on top of it", async () => {
     const s = await setup();
@@ -247,5 +304,59 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("message.delta", { text: " there" });
     await events.until(() => events.turns().length === 2);
     expect(compareVersions(events.turns()[1].version, read.version)).toBeGreaterThan(0);
+  });
+});
+
+describe("?inflight=1 and ?inflight=2 beside a turn stream", () => {
+  const reset = async () => {
+    vi.useRealTimers();
+    for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
+    vi.unstubAllGlobals();
+  };
+  // The iOS app in the field reads ?inflight=1 and cannot be updated in step, so the server's own turn reads
+  // must never reach it: it gets a live reply only once its own read stored what the reply is built on.
+  it.each(["1", "2"] as const)("?inflight=%s gets the same events and reads, in the same steps, with a turn stream beside it", async mode => {
+    const alone = await legacyRun(mode, false);
+    await reset();
+    const beside = await legacyRun(mode, true);
+    expect(beside).toEqual(alone);
+    // After the tool, nothing live arrives before the change notice's read, which still shows the saved segment.
+    const afterTool = alone.filter(entry => (entry as unknown[])[0] === 3).map(entry => (entry as unknown[])[1]);
+    expect(afterTool.slice(0, 2)).toEqual(["change", "read"]);
+  });
+});
+
+describe("a steer saved inside a running turn", () => {
+  /** What a client shows of the live reply after these events, applying growth to the last whole reply. */
+  const live = (events: (readonly [string, any])[]) => {
+    let text = "";
+    for (const [name, data] of events) {
+      if (name === "inflight" || name === "turn") text = data.message.text;
+      if (name === "inflight-delta") { expect(data.baseTextLength).toBe(text.length); text += data.appendText ?? ""; }
+    }
+    return text;
+  };
+  // Hermes saved "Looking." before another member's guidance joined the turn, and its live text still holds it.
+  it.each(["1", "2", "3"])("?inflight=%s shows the segment saved before the steer once, in the read and the live reply", async mode => {
+    const s = await setup();
+    s.store.intent({ requestId: "steer-two", botId: "shared", senderId: "local-two", text: "Check the loft too", attachments: [] });
+    midTurn(s);
+    const events = await stream(s, s.one, mode);
+    await s.get(s.one);
+    s.hermes.frame("message.delta", { text: "Looking." });
+    await events.until(() => live(events.events()) === "Looking.");
+    s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }),
+      row(5, "user", "Check the loft too", { app_request_id: "steer-two", app_run_id: "run-2", app_steering: true }));
+    s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+    await events.until(() => events.events().some(([name]) => name === "change"));
+    const read = await s.get(s.one);
+    expect(read.messages.filter(message => message.text.includes("Looking.")).map(message => message.id)).toEqual(["4"]);
+    s.hermes.frame("message.delta", { text: " Loft checked." });
+    await events.until(() => live(events.events()).includes("Loft checked."));
+    s.hermes.frame("message.delta", { text: " Dry." });
+    await events.until(() => live(events.events()).endsWith("Dry."));
+    expect(live(events.events())).toBe("Loft checked. Dry.");
+    if (mode === "3") expect(events.turns().at(-1)!.messages.map(message => message.id)).toEqual(["req-2", "4", "steer-two"]);
+    await events.close();
   });
 });

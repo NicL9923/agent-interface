@@ -356,11 +356,11 @@ export interface TurnRows {
   messages: Message[];
   after?: string | null;
 }
-/** A live reply with the read it was built on, as the runtime reports it to the event stream. */
-export interface LiveInflight extends Inflight {
+/** A live reply with the read it was built on, as the runtime reports it to `?inflight=3` streams. */
+export interface LiveTurn extends Inflight {
   /** The structural version of the read whose saved messages the live reply leaves out. */
-  version?: string;
-  turn?: TurnRows;
+  version: string;
+  turn: TurnRows;
 }
 /**
  * What `event: turn` carries on a stream opened with `?inflight=3`: the running turn whole, its saved
@@ -579,13 +579,19 @@ export interface Runtime {
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
-  inflight?(botId: string): LiveInflight | undefined;
+  /** The live reply, built only on what a client's conversation read stored, for `?inflight=1` and `?inflight=2`. */
+  inflight?(botId: string): Inflight | undefined;
   /**
-   * Keeps the running turn readable for live events while the returned function is not called: after a
-   * change to the turn's structure, the runtime reads the turn itself, at most once at a time per
-   * assistant, and reports an inflight change once a live reply can be built again.
+   * The live reply with the running turn's saved messages, for `?inflight=3`, built on the latest client read
+   * or turn read (see `followTurns`).
    */
-  followTurns?(botId: string): () => void;
+  turn?(botId: string): LiveTurn | undefined;
+  /**
+   * Keeps the running turn readable for `turn` while the returned function is not called: after a change to
+   * the turn's structure, the runtime reads the turn itself, at most once at a time per assistant, and calls
+   * `restored` once a live reply can be built again. Watchers and `inflight` never see these reads.
+   */
+  followTurns?(botId: string, restored: () => void): () => void;
   /** Reports the turn events a send is timed by, in frame order. Unsubscribe with the returned function. */
   watchTurns?(watcher: TurnWatcher): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;

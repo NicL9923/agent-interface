@@ -280,17 +280,25 @@ export function historyRows(sid: string, history: Wire[], files: (row: Wire) => 
   return {messages, starts};
 }
 /**
- * The running turn's saved messages in a read's shown messages: from the last prompt a person sent to the end,
- * without the live reply `liveId`. Guidance steered into a turn belongs to that turn, so it never starts one
- * unless no other prompt is in the read. `windowStart` is where the read's own window begins, after the earlier
+ * Where the running turn starts: the index of the last prompt a person sent, at or after `from`. Guidance steered
+ * into a turn belongs to that turn, so it starts one only when no other prompt is there. -1 when no prompt is.
+ * The turn's saved messages and the live reply's removal of saved text both start here, so the live reply never
+ * repeats a segment saved before a steer.
+ */
+export function turnStart(messages: Message[], from = 0): number {
+  const prompt = (steered: boolean) => messages.findLastIndex((message, index) => index >= from && message.role === 'user' && (steered || !message.steered));
+  const start = prompt(false);
+  return start >= 0 ? start : prompt(true);
+}
+/**
+ * The running turn's saved messages in a read's shown messages: from where the turn starts (`turnStart`) to the
+ * end, without the live reply `liveId`. `windowStart` is where the read's own window begins, after the earlier
  * messages a cut window keeps for files and origins, which are never part of a turn. `after` is the message just
  * before the turn, null when the turn starts the whole history, and absent when the read began inside it.
  */
 export function turnRows(shown: Message[], liveId: string, windowStart: number, cut: boolean): TurnRows {
   const saved = shown.at(-1)?.id === liveId ? shown.slice(0, -1) : shown;
-  const prompt = (steered: boolean) => saved.findLastIndex((message, index) => index >= windowStart && message.role === 'user' && (steered || !message.steered));
-  let start = prompt(false);
-  if (start < 0) start = prompt(true);
+  let start = turnStart(saved, windowStart);
   if (start < 0) start = Math.min(windowStart, saved.length);
   const after = start > windowStart ? saved[start - 1].id : cut ? undefined : null;
   return {messages: saved.slice(start), ...(after !== undefined ? {after} : {})};
@@ -395,9 +403,11 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   // Live text and reasoning accumulate across the whole turn, while each segment
   // before a tool call is already a history row. Show only the unpersisted tail.
   // The run ID proves rows belong to this task, and queued follow-ups share it, so
-  // only rows after the latest prompt count. Without a run ID, nothing is removed.
+  // only rows after the turn's prompt count. Guidance steered into the turn does not
+  // start a new one, so segments saved before it still count. Without a run ID,
+  // nothing is removed.
   const run = active && typeof value.app_run_id === 'string' ? value.app_run_id : undefined;
-  const lastPrompt = rows.findLastIndex(row => row.role === 'user');
+  const lastPrompt = turnStart(rows);
   const lastTurn = rows.slice(lastPrompt + 1).filter(row => row.role === 'assistant');
   // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
   // the saved turn too, unless the snapshot names a newer prompt than the last saved one.

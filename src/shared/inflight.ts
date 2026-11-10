@@ -19,18 +19,22 @@ export function applyInflightDelta(held: Inflight | undefined, delta: InflightDe
   };
 }
 
+const parseVersion = (value: string | undefined) => {
+  const parts = value?.split(":") ?? [];
+  const epoch = Number(parts[1]), generation = Number(parts[2]);
+  return parts.length === 3 && parts[0] && Number.isInteger(epoch) && Number.isInteger(generation) ? { boot: parts[0], epoch, generation } : undefined;
+};
+
+/** The server process a structural version came from, or undefined for a missing or malformed version. */
+export const versionBoot = (version: string | undefined) => parseVersion(version)?.boot;
+
 /**
  * Orders two structural versions, as `boot:epoch:generation`: negative when `a` is older, zero when equal,
  * positive when newer. Undefined when either is missing or they come from different server processes,
  * whose generations restart, so neither can be called older.
  */
 export function compareVersions(a: string | undefined, b: string | undefined): number | undefined {
-  const parse = (value: string | undefined) => {
-    const parts = value?.split(":") ?? [];
-    const epoch = Number(parts[1]), generation = Number(parts[2]);
-    return parts.length === 3 && parts[0] && Number.isInteger(epoch) && Number.isInteger(generation) ? { boot: parts[0], epoch, generation } : undefined;
-  };
-  const left = parse(a), right = parse(b);
+  const left = parseVersion(a), right = parseVersion(b);
   if (!left || !right || left.boot !== right.boot) return undefined;
   return left.epoch - right.epoch || left.generation - right.generation;
 }

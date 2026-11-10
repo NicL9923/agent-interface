@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
-import { applyInflightDelta, compareVersions, withTurn } from "../shared/inflight";
+import { applyInflightDelta, compareVersions, versionBoot, withTurn } from "../shared/inflight";
 import type { Inflight, Message, TurnEvent } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
@@ -143,6 +143,20 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (live.message.text || live.message.reasoning) messages.push(live.message);
       return {...value, messages, activity: live.activity, toolCalls: live.toolCalls};
     };
+    // The server process this view follows. Versions from two processes never compare, so the view shows one
+    // process's state at a time. Once another process's response is followed, the earlier process is retired:
+    // a later response from it, or from any process other than the followed one to a request made before the
+    // follow, is older than the view and is read again instead. A request made after the follow can only be
+    // answered by that process or a newer one.
+    let boot: string | undefined, follows = 0;
+    const retired = new Set<string>();
+    const follow = (next: string) => {
+      if (boot) retired.add(boot);
+      boot = next;
+      follows++;
+      heldTurn = undefined;
+      latestInflight = undefined;
+    };
     const compose = (value: SavedConversation): SavedConversation => {
       let shown = value;
       if (heldTurn?.botId === value.botId && (compareVersions(heldTurn.version, value.version) ?? 0) > 0) shown = withTurn(value, heldTurn) ?? value;
@@ -158,7 +172,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (gone) return;
       if (loading) { again = true; return; }
       loading = true;
-      const generation = navigation;
+      const generation = navigation, followed = follows;
       const earlierPage = more;
       more = false;
       if (!start && mode.current !== "follow") start = cachedStart;
@@ -172,6 +186,16 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         const result = await joined?.catch(() => undefined)
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
+        const from = versionBoot(result.version);
+        if (from && from !== boot) {
+          // From a retired process, or asked before the view followed the current one: read again.
+          if (retired.has(from) || followed !== follows) {
+            again = true;
+            if (earlierPage) more = true;
+            return;
+          }
+          follow(from);
+        }
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {
           again = true;
@@ -237,8 +261,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
     };
     const showTurn = (turn: TurnEvent) => {
+      const from = versionBoot(turn.version);
+      if (from && retired.has(from)) return;
+      if (from && from !== boot) follow(from);
       latestInflight = { botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version };
       const held = current.current?.botId === botId ? current.current : null;
+      // A turn from another process than the conversation on screen, as the first after a restart, is never
+      // put on that conversation: it waits for a read from its own process, which it goes on top of if newer.
+      if (held && from && versionBoot(held.version) !== from) { heldTurn = turn; void load(); return; }
       // Until the first read lands, the turn waits for it.
       if (!held) { heldTurn = turn; return; }
       if (!withTurn(held, turn)) { heldTurn = undefined; void load(); return; }

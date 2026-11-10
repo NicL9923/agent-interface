@@ -122,6 +122,26 @@ describe("conversation change stream", () => {
     await events.until(() => events.notices() === 1);
     await events.close();
   });
+  // An empty tick finds no reply because a structural read is pending. On ?inflight=1, as before turn streams,
+  // it spends its quarter second; a turn stream gives it back, so the reply its server read restores goes at once.
+  it.each([["1", "inflight", 250], ["3", "turn", 0]] as const)("?inflight=%s sends the reply after an empty tick %s event at %i ms", async (mode, event, wait) => {
+    const s = await setup();
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    s.runtime.inflight = () => undefined;
+    s.runtime.turn = () => undefined;
+    s.change("shared", "inflight");
+    await pass(10);
+    const reply = { botId: "shared", message: { id: "sid-inflight", role: "assistant" as const, text: "Back" }, activity: { state: "thinking" as const, runId: "run" }, toolCalls: [] };
+    s.runtime.inflight = () => reply;
+    s.runtime.turn = () => ({ ...reply, version: "b:1:1", turn: { messages: [], after: null } });
+    s.change("shared", "inflight");
+    await pass(wait ? wait - 50 : 0);
+    expect(events.text.includes(`event: ${event}`)).toBe(!wait);
+    await pass(100);
+    expect(events.text).toContain(`event: ${event}`);
+    await events.close();
+  });
   describe("inflight growth notices", () => {
     const live = (text: string, extra: Partial<Message> = {}, id = "sid-inflight", toolCalls: ToolCall[] = [], activity: Activity = { state: "thinking", runId: "run" }) =>
       ({ botId: "shared", message: { id, role: "assistant" as const, text, ...extra }, activity, toolCalls });

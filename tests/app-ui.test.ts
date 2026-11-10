@@ -255,6 +255,88 @@ describe("conversation state", () => {
       expect(reads()).toBeGreaterThan(before);
       expect(container.textContent).not.toContain("Lost");
     });
+    describe("across a server restart", () => {
+      // Boot "a" served the transcript on screen; the server restarted as boot "z".
+      const tail = { id: "sid-inflight", role: "assistant" as const, text: "Looking in the barn. Fou" };
+      const bootA = (): Conversation => ({ ...conversation, activity: run, version: "a:1:5", messages: [...earlier, prompt, tail] });
+      /** Holds the next conversation read until the test answers it, as a slow read begun before the restart. */
+      function holdNextRead() {
+        let answer!: (value: Conversation) => void;
+        const serve = vi.mocked(api).getMockImplementation()!;
+        let held = false;
+        vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => {
+          if (held || !path.startsWith("/bots/shared/conversation?")) return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+          held = true;
+          return await new Promise<Conversation>(resolve => { answer = resolve; }) as T;
+        });
+        return async (value: Conversation) => { await act(async () => answer(value)); await advance(0); };
+      }
+      async function restartedMidRead() {
+        conversation = bootA();
+        await render();
+        const answer = holdNextRead();
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        return answer;
+      }
+      const stop = () => container.querySelector('[aria-label="Stop response"]');
+      it("keeps the newer boot's saved segment and growth when a read from the old boot lands after its turn", async () => {
+        const answer = await restartedMidRead();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        // Never put on the old boot's transcript: it waits for a read from its own boot.
+        expect(container.textContent).not.toContain("Found");
+        conversation = { ...conversation, version: "z:1:2", messages: [...earlier, prompt, saved, { id: "sid-inflight", role: "assistant", text: "Found" }] };
+        await answer(bootA());
+        await act(async () => open().emit("inflight-delta", growth(5, " it.")));
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found it.");
+        // A turn from the retired boot changes nothing.
+        await act(async () => open().emit("turn", turn("a:1:9", [prompt], "Old boot")));
+        expect(container.textContent).not.toContain("Old boot");
+        expect(container.textContent).toContain("Found it.");
+      });
+      it("never returns a reply the newer boot finished to thinking when a read from the old boot lands after it", async () => {
+        const answer = await restartedMidRead();
+        const finished = { id: "5", role: "assistant" as const, text: "All done." };
+        const done = { state: "done" as const, runId: "run-2" };
+        await act(async () => open().emit("turn", turn("z:1:3", [prompt, saved, finished], "", { activity: done })));
+        conversation = { ...conversation, version: "z:1:3", activity: done, messages: [...earlier, prompt, saved, finished] };
+        await answer(bootA());
+        expect(container.textContent).toContain("All done.");
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(stop()).toBeNull();
+      });
+      it("retires the first read when a newer boot's turn reached the view before it", async () => {
+        const answer = holdNextRead();
+        conversation = bootA();
+        await render();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        conversation = { ...conversation, version: "z:1:2", messages: [...earlier, prompt, saved, { id: "sid-inflight", role: "assistant", text: "Found" }] };
+        await answer(bootA());
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found");
+      });
+      it("takes a whole read from a new boot as it is when no turn came first", async () => {
+        conversation = bootA();
+        await render();
+        conversation = { ...conversation, version: "z:1:1", messages: [...earlier, prompt, saved, { id: "sid-inflight", role: "assistant", text: "Found" }] };
+        const before = reads();
+        await changed();
+        // One read, kept: a new boot's read is not retired, so it never reads in a loop.
+        expect(reads()).toBe(before + 1);
+        expect(container.textContent).toContain("Found");
+        expect(container.textContent).not.toContain("barn. Fou");
+        // A read asked since, answered by the retired boot, is read again.
+        const answer = holdNextRead();
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        await answer(bootA());
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found");
+      });
+    });
   });
   it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
     conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };

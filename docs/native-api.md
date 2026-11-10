@@ -175,7 +175,9 @@ synthetic assistant row whose ID ends in `-inflight`, including optional
 `reasoning` and `origin`. Replace that row, or remove it if both text and
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
 The same persisted-segment and origin rules as conversation reads apply,
-and private agent handoffs are redacted. Apply a patch only while the fetched
+and private agent handoffs are redacted. A persisted segment is any assistant row
+saved since the turn's prompt, including rows saved before guidance was steered
+into the turn, so the live reply never repeats text saved before a steer. Apply a patch only while the fetched
 conversation is active and its `activity.runId` matches the patch. A settled
 conversation or a newer run supersedes a retained live tail.
 Structural events still send `data: change`, meaning refetch. Clients fetch on
@@ -208,13 +210,16 @@ without waiting for a refetch. The web client uses it. `?inflight=1` and
 affected. A server that predates `?inflight=3` treats it as no opt-in and sends
 only change notices.
 
-On a `?inflight=2` stream, live replies stop after each change to the turn's
-structure, such as a tool finishing, a progress line or a turn starting, until a
-client's refetch lets the server rebuild the reply. On a `?inflight=3` stream the
-server reads the running turn itself after each such change: once for all of an
-assistant's `?inflight=3` streams, with at most one read on its way and one queued,
-and never while no such stream is open. Its read is the turn's own window, from the
-turn's first message.
+On `?inflight=1` and `?inflight=2` streams, live replies stop after each change to
+the turn's structure, such as a tool finishing, a progress line or a turn starting,
+until a client's refetch lets the server rebuild the reply. On a `?inflight=3`
+stream the server reads the running turn itself after each such change: once for
+all of an assistant's `?inflight=3` streams, with at most one read on its way and
+one queued, and never while no such stream is open. Its read is the turn's own
+window, from the turn's first message. Only `?inflight=3` streams see that read:
+`?inflight=1` and `?inflight=2` streams open beside them still get a live reply
+only once a client's own read has rebuilt it, and the server's read never delays
+or repeats a client's read.
 
 Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
 messages, after?, message, activity, toolCalls}`:
@@ -246,9 +251,23 @@ in `messages`, discard the event and refetch.
 
 Order turns and reads by `version`, which has the form `BOOT:EPOCH:GENERATION`.
 Two versions with the same `BOOT` compare by `EPOCH`, then `GENERATION`, as
-integers. A different `BOOT` means the server restarted, and neither is older:
-take whichever arrived last. A read can arrive after a turn event that is newer
-than it, because the read set out first. Place that turn on top of the read. A turn
+integers. A different `BOOT` means the server restarted, and the two versions do
+not compare. Arrival order cannot settle it either: a read the old process
+answered can arrive after the new process's turn event. So follow one `BOOT` at a
+time:
+
+- Once you take a read or turn event from a new `BOOT`, retire the one you followed.
+  Discard anything later that carries a retired `BOOT`.
+- A read you asked for before you began following the current `BOOT`, answered
+  with any other `BOOT`, is older than what you hold: discard it and read again.
+  A read you ask for after that can only be answered by the current process or a
+  newer one, so take one with a `BOOT` you have not retired as newer.
+- Never place a turn event on a conversation from another `BOOT`. Follow its
+  `BOOT`, hold the event, read again, and place it on that read if it is newer.
+  Until then keep showing what you hold, without the new live reply.
+
+Within one `BOOT`, a read can arrive after a turn event that is newer than it,
+because the read set out first. Place that turn on top of the read. A turn
 event older than the conversation you hold changes nothing. Show a live reply
 only beside messages of its own version: after a read newer than your last turn
 event, show the read's own `-inflight` row until a turn event of that version

@@ -242,7 +242,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         changed(); return;
       }
       livePending ??= setTimeout(() => {
-        // A tick that finds no reply to send leaves the window open, so the reply restored next goes at once.
+        // On a turn stream, a tick that finds no reply to send leaves the window open, so the reply restored next goes at once.
         const previous = liveLast;
         livePending = undefined; liveLast = Date.now();
         void (async () => {
@@ -254,17 +254,19 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
             if (store.privacyVersion !== version) { changed(); return; }
             seen = version;
           }
-          const value = runtime.inflight?.(botId);
-          // A structural read is already pending when its snapshot was invalidated. A turn stream needs
-          // the read the reply is built on, so a runtime without one sends it nothing live.
-          if (!value || !redact || turns && (!value.version || !value.turn)) { liveLast = previous; return; }
+          // A turn stream's reply carries the read it is built on, so a runtime without turns sends it nothing live.
+          const turn = turns ? runtime.turn?.(botId) : undefined;
+          const value = turns ? turn : runtime.inflight?.(botId);
+          // A structural read is already pending when its snapshot was invalidated. On a turn stream that read is
+          // the server's own, and the reply it restores goes at once.
+          if (!value || !redact) { if (turns) liveLast = previous; return; }
           const message = redact.message(value.message), toolCalls = value.toolCalls.map(redact.call);
           if (deltas) {
             const reasoning = message.reasoning ?? "";
             const next = { id: message.id, text: message.text, reasoning, tools: JSON.stringify(toolCalls),
               // Everything else about the message, which a growth notice cannot carry.
               rest: JSON.stringify({ ...message, text: "", reasoning: undefined }), activity: JSON.stringify(value.activity),
-              ...(turns ? { version: value.version } : {}) };
+              ...(turn ? { version: turn.version } : {}) };
             const base = sent;
             sent = next;
             if (base && base.id === next.id && base.rest === next.rest && base.version === next.version
@@ -280,14 +282,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
               return;
             }
           }
-          if (turns) {
-            const turn: TurnEvent = { botId: value.botId, version: value.version!, messages: shownMessages(store, botId, redact, value.turn!.messages),
-              ...(value.turn!.after !== undefined ? { after: value.turn!.after } : {}), message, activity: value.activity, toolCalls };
-            if (stream?.send(`event: turn\ndata: ${JSON.stringify(turn)}\n\n`)) timings.written(botId, value.activity.runId);
+          if (turn) {
+            const event: TurnEvent = { botId: turn.botId, version: turn.version, messages: shownMessages(store, botId, redact, turn.turn.messages),
+              ...(turn.turn.after !== undefined ? { after: turn.turn.after } : {}), message, activity: turn.activity, toolCalls };
+            if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) timings.written(botId, turn.activity.runId);
             return;
           }
-          const whole = { botId: value.botId, message, activity: value.activity, toolCalls };
-          if (stream?.send(`event: inflight\ndata: ${JSON.stringify(whole)}\n\n`)) timings.written(botId, value.activity.runId);
+          if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId, value.activity.runId);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
@@ -311,7 +312,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         watchers.set(botId, listeners.add(changed));
         if (draftNotices) draftStreams.set(ownDraft, drafts.add(draftChanged));
         unwatch = runtime.watch?.(botId, notice);
-        if (turns) unfollow = runtime.followTurns?.(botId);
+        // Only turn streams hear the server's own turn reads; ?inflight=1 and ?inflight=2 wait for a client's read.
+        if (turns) unfollow = runtime.followTurns?.(botId, () => notice("inflight"));
       },
       // Ends, sending nothing more, once the person signs out or the assistant becomes someone else's.
       allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),

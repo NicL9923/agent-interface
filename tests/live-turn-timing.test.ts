@@ -75,7 +75,10 @@ async function client(hermes: FakeHermes, mode: string) {
   return { arrivals, send, pending: () => pending, close: () => reader.cancel() };
 }
 
-/** A turn of text, then `tools` tools each followed by more text, then a final answer. */
+/**
+ * A turn of text, then `tools` tools each followed by more text, then the turn ends. Opens are counted from the
+ * send through the client's reads after the turn ended.
+ */
 async function measure(mode: string, tools: number) {
   const hermes = fakeHermes();
   hermes.history = [row(1, "user", "Fence?"), row(2, "assistant", "Fixed.")];
@@ -137,7 +140,12 @@ async function measure(mode: string, tools: number) {
     await tokens(["checked ", "post ", `${tool}. `, "Next ", "one. "]);
   }
   t += 50;
-  await until(t + 1500);
+  await until(t);
+  hermes.history.push(row(100, "assistant", reply.trim(), { app_run_id: "run-2" }));
+  Object.assign(hermes, { running: false, runId: undefined, inflight: {} });
+  hermes.frame("message.complete", { status: "complete" });
+  await until(t + 2500);
+  if (watching.pending() || hermes.delayed) throw new Error("A read was still on its way when opens were counted.");
   const gaps = structural.map(({ name, at, token }) => {
     const shown = watching.arrivals.find(arrival => arrival.at >= at && arrival.text.includes(token));
     return { name, ms: shown ? shown.at - at : Infinity };
@@ -149,7 +157,7 @@ async function measure(mode: string, tools: number) {
 }
 
 describe("live text after a change to the turn's structure", () => {
-  it("resumes within one Hermes read on a turn stream, where a growth stream waits for the client's read", { timeout: 60_000 }, async () => {
+  it("resumes within one Hermes read on a turn stream, where a growth stream waits for the client's read, for one more open per frame", { timeout: 60_000 }, async () => {
     const modes = (process.env.MEASURE_MODES ?? "2,3").split(",");
     const results = new Map<string, Awaited<ReturnType<typeof measure>>>();
     for (const mode of modes) {
@@ -167,9 +175,18 @@ describe("live text after a change to the turn's structure", () => {
       for (const [mode, { gaps, opens }] of results)
         console.info(`?inflight=${mode}: ${gaps.map(gap => `${gap.name} ${gap.ms} ms`).join(", ")}; Hermes opens ${opens}; ten-tool turn opens ${ten.get(mode)}`);
     }
-    const turn = results.get("3");
-    if (!turn) return;
-    // The token right after each frame shows once the server's own read lands, plus a step of measuring slack.
-    for (const gap of turn.gaps) expect(gap.ms, gap.name).toBeLessThanOrEqual(HERMES_MS + 3 * STEP_MS);
+    // The ledger and the PR quote these figures, so a change that moves them fails here until they are updated.
+    // ?inflight=2 is the baseline origin/main measured the same: after each tool its text waits for a throttled
+    // change notice and the client's read. On ?inflight=3 the token right after each frame shows once the server's
+    // own read lands, one Hermes read and a measuring step later, for one more open per structural frame.
+    const expected: Record<string, { ms: number[]; opens: number; ten: number }> = {
+      "2": { ms: [105, 445, 745], opens: 6, ten: 14 },
+      "3": { ms: [61, 61, 61], opens: 10, ten: 26 },
+    };
+    for (const mode of modes) {
+      const { gaps, opens } = results.get(mode)!;
+      expect({ ms: gaps.map(gap => gap.ms), opens, ten: ten.get(mode) }, `?inflight=${mode}`).toEqual(expected[mode]);
+    }
+    for (const gap of results.get("3")?.gaps ?? []) expect(gap.ms, gap.name).toBeLessThanOrEqual(HERMES_MS + 3 * STEP_MS);
   });
 });

@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { botFixture, capabilitiesFixture, conversationFixture, experienceRequester } from "../tests/helpers/runtime-fixtures.js";
-import type { Message, Runtime } from "../src/shared/types.js";
+import type { Activity, LiveTurn, Message, Runtime, ToolCall } from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
 
 /**
@@ -25,7 +25,51 @@ const seedMessages = () => new Map<string, Message[]>([
 // Replaced between tests, so no test sees what another sent. A reply still pending from before holds its old thread.
 let messages = seedMessages();
 const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
-const notify = (botId: string) => { for (const changed of watchers.get(botId) ?? []) changed(); };
+const notify = (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); };
+
+/**
+ * The Trail Cook streams its reply through a tool call, as Hermes does: words arrive as live growth, the reply so
+ * far is saved as a segment before the tool, and after each change to the turn's structure a read must land
+ * before live text resumes. A read is a client's conversation read or, for `?inflight=3` streams, the server's
+ * own turn read, which takes TURN_READ_MS. The real runtime's turn reads are covered in tests/live-turn-*.test.ts.
+ */
+const STREAMING = "trail", TURN_READ_MS = 60;
+type Running = { thread: Message[]; prompt: number; runId: string; tail: string; tools: ToolCall[]; done: boolean };
+let running: Running | undefined, generation = 0, readAt = -1;
+const followers = new Set<() => void>();
+const activityOf = (turn: Running): Activity => ({ runId: turn.runId,
+  state: turn.done ? "done" : turn.tools.some(tool => tool.status === "running") ? "working" : "thinking" });
+function structural(botId: string) {
+  const asked = ++generation;
+  notify(botId);
+  if (followers.size) setTimeout(() => {
+    if (generation !== asked) return;
+    readAt = asked;
+    for (const follower of [...followers]) follower();
+  }, TURN_READ_MS);
+}
+function streamReply(thread: Message[], runId: string) {
+  const turn: Running = running = { thread, prompt: thread.length - 1, runId, tail: "", tools: [], done: false };
+  structural(STREAMING);
+  const steps: (() => void)[] = [];
+  const words = (text: string) => { for (const word of text.split(/(?<= )/)) steps.push(() => { turn.tail += word; notify(STREAMING, "inflight"); }); };
+  const save = () => { thread.push({ id: randomUUID(), runId, role: "assistant", text: turn.tail.trim(), createdAt: new Date().toISOString() }); turn.tail = ""; };
+  words("Looking at the north fence.");
+  // The tool starts and ends within a second, so the change notice for its end waits out the stream's
+  // one-a-second throttle, and the chat reads again only after several more words. Only a turn read brings
+  // the first of them.
+  steps.push(() => { save(); turn.tools = [{ id: "t1", name: "terminal", status: "running" }]; structural(STREAMING); });
+  steps.push(() => { turn.tools = [{ id: "t1", name: "terminal", status: "completed" }]; structural(STREAMING); });
+  words("Post two is loose, so I tightened the wire and checked the gate.");
+  steps.push(() => { save(); turn.done = true; structural(STREAMING); });
+  let step = 0;
+  const next = () => {
+    if (running !== turn) return;
+    steps[step++]();
+    if (step < steps.length) setTimeout(next, 200);
+  };
+  setTimeout(next, 300);
+}
 
 // Both assistants run on one ChatGPT account with a used-up session; the Ranch Hand falls back to OpenRouter.
 const chatgpt = "c".repeat(32), openrouter = "b".repeat(32);
@@ -56,7 +100,14 @@ const runtime: Runtime = {
   listBots: async () => bots,
   experienceRequest,
   botDetail: async botId => bots.find(bot => bot.id === botId)!,
-  conversation: async botId => conversationFixture({ botId, messages: [...messages.get(botId) ?? []] }),
+  conversation: async botId => {
+    const thread = [...messages.get(botId) ?? []];
+    const turn = botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
+    if (!turn) return conversationFixture({ botId, messages: thread });
+    readAt = generation;
+    return conversationFixture({ botId, version: `e2e:0:${generation}`, activity: activityOf(turn), toolCalls: turn.tools,
+      messages: [...thread, ...turn.tail ? [{ id: `${botId}-inflight`, role: "assistant" as const, text: turn.tail }] : []] });
+  },
   routines: async () => [],
   discoverEvents: async cursor => ({ cursor, events: [] }),
   lookupSubmission: async () => null,
@@ -64,12 +115,25 @@ const runtime: Runtime = {
   submit: async input => {
     const thread = messages.get(input.botId)!, runId = randomUUID();
     thread.push({ id: randomUUID(), runId, role: "user", text: input.text, createdAt: new Date().toISOString(), sender: { id: input.senderId, name: input.senderId } });
+    if (input.botId === STREAMING) { streamReply(thread, runId); return { requestId: input.requestId, status: "accepted", runId }; }
     notify(input.botId);
     setTimeout(() => {
       thread.push({ id: randomUUID(), runId, role: "assistant", text: `Howdy, partner. You said: ${input.text}`, createdAt: new Date().toISOString() });
       notify(input.botId);
     }, 150);
     return { requestId: input.requestId, status: "accepted", runId };
+  },
+  turn(botId): LiveTurn | undefined {
+    const turn = botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
+    if (!turn || readAt !== generation) return undefined;
+    const saved = turn.thread.slice(turn.prompt);
+    return { botId, version: `e2e:0:${generation}`, message: { id: `${botId}-inflight`, role: "assistant", text: turn.tail },
+      activity: activityOf(turn), toolCalls: turn.tools, turn: { messages: saved, after: turn.thread[turn.prompt - 1]?.id ?? null } };
+  },
+  followTurns(_botId, restored) {
+    const follower = () => restored();
+    followers.add(follower);
+    return () => { followers.delete(follower); };
   },
   watch(botId, changed) {
     const set = watchers.get(botId) ?? new Set();
@@ -91,7 +155,7 @@ await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); }
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; }
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));
 });
