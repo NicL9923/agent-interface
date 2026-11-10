@@ -1,4 +1,4 @@
-import { shouldStackComposer } from "./composer-layout";
+import { cssSizesField, shouldStackComposer, textWidth, type ComposerSlot } from "./composer-layout";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ActivityState, Bootstrap, Bot, Message, SubmissionReceipt } from "../shared/types";
@@ -50,30 +50,34 @@ export function useOwnPrompts(messages: readonly Message[] | undefined, userId: 
 // Fits on mount too, so a restored multi-line draft is sized when returning from another view.
 function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
   const composerInput = useRef<HTMLTextAreaElement>(null);
+  // Where CSS grows the field with its text, a keystroke reads no layout at all.
+  const [cssSized] = useState(cssSizesField);
+  // Changes with the window, the controls beside the field, and the assistant, never with typing.
+  const slot = useRef<ComposerSlot | null>(null);
   const fitComposer = useCallback(() => {
-    // Grow the composer with its draft up to the CSS max-height, then scroll.
     const input = composerInput.current;
     if (!input) return;
     const form = input.closest<HTMLFormElement>("form");
     if (form) {
-      const lead = form.querySelector<HTMLElement>(".composer-tools");
-      const voice = form.querySelector<HTMLElement>(".voice-actions");
-      const send = form.querySelector<HTMLElement>(".send-button");
-      const measure = form.querySelector<HTMLElement>(".composer-measure");
-      const style = getComputedStyle(input);
-      if (measure) { measure.style.font = style.font; measure.style.letterSpacing = style.letterSpacing; measure.textContent = input.value.slice(0, 201); }
-      const available = form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12;
-      form.dataset.layout = shouldStackComposer(input.value, available, measure?.getBoundingClientRect().width ?? 0) ? "stacked" : "inline";
+      const measured = slot.current ??= readSlot(form, input);
+      const layout = shouldStackComposer(input.value, measured.available,
+        () => textWidth(input.value, measured, form.querySelector<HTMLElement>(".composer-measure"))) ? "stacked" : "inline";
+      if (form.dataset.layout !== layout) form.dataset.layout = layout;
     }
+    if (cssSized) return;
+    // Grow the composer with its draft up to the CSS max-height, then scroll.
     input.style.height = input.value ? "auto" : "";
     if (input.value) input.style.height = `${input.scrollHeight}px`;
-  }, []);
+  }, [cssSized]);
+  const refit = useCallback(() => { slot.current = null; fitComposer(); }, [fitComposer]);
+  // Another assistant or a voice state change can resize the controls, so the slot is read again first.
+  useLayoutEffect(() => { slot.current = null; }, [botId, voiceState]);
   useLayoutEffect(fitComposer, [text, botId, voiceState, fitComposer]);
   const ref = useCallback((input: HTMLTextAreaElement | null) => {
     composerInput.current = input;
     if (!input || typeof ResizeObserver === "undefined") return;
     // Observe the fixed controls and form, not the textarea width that stacking itself changes.
-    const observer = new ResizeObserver(fitComposer);
+    const observer = new ResizeObserver(refit);
     const form = input.closest("form");
     if (form) {
       observer.observe(form);
@@ -83,8 +87,20 @@ function useComposerInput(text: string, botId: string, voiceState: VoiceState) {
       observer.disconnect();
       composerInput.current = null;
     };
-  }, [fitComposer]);
+  }, [refit]);
   return { ref };
+}
+/** The width the inline slot leaves for the field, and the field's font. Reading these forces a layout. */
+function readSlot(form: HTMLFormElement, input: HTMLTextAreaElement): ComposerSlot {
+  const lead = form.querySelector<HTMLElement>(".composer-tools");
+  const voice = form.querySelector<HTMLElement>(".voice-actions");
+  const send = form.querySelector<HTMLElement>(".send-button");
+  const style = getComputedStyle(input);
+  return {
+    available: form.clientWidth - 8 - (lead?.offsetWidth ?? 0) - (voice?.offsetWidth ?? 0) - (send?.offsetWidth ?? 44) - 12,
+    font: `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`,
+    letterSpacing: style.letterSpacing,
+  };
 }
 // The whole conversation accepts dropped files. Drops elsewhere are refused so the browser never navigates away to the file.
 function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files: File[]) => void) {

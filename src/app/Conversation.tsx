@@ -50,7 +50,11 @@ import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
 const activeStates: ActivityState[] = ["thinking", "working", "waiting", "blocked"];
-export function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
+/**
+ * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
+ * does not re-render the transcript, its decisions, or its activity avatar.
+ */
+export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -340,7 +344,7 @@ export function Conversation({ boot, selected, botId, conversation, canonical, e
     </ExchangeBots.Provider></TranscriptTools.Provider>
     </DraftRevisions.Provider>
   );
-}
+});
 /** The last line of reasoning in the running turn, after the person's latest message. */
 function latestReasoning(messages: Message[]) {
   const start = messages.findLastIndex(isHumanMessage) + 1;

@@ -85,6 +85,87 @@ Conversation reads carry a `Server-Timing` header that splits the time between t
 Hermes read, the add-on's phases and this server. It is diagnostic only and never part
 of the body or its ETag.
 
+`POST /api/bots/:id/messages` and `/steer` answer with `Server-Timing` too. Each
+metric is a duration in milliseconds:
+
+- `prepare`: from the request's arrival, before sign-in and body parsing, to the
+  call that asks Hermes to admit it. Capability checks and the conversation read
+  that decides between a new turn and steering land here.
+- `hermes`: Hermes's admission answer, the `agent-interface.submit` round trip.
+- `total`: the whole request. The rest after `prepare` and `hermes` is recording
+  the receipt and writing the response.
+
+A send answered from its recorded receipt never reaches Hermes and carries only
+`total`. One that Hermes did not answer carries `prepare` and `total`.
+
+Streamed text arrives after the response, so the server logs it instead. For each
+send Hermes accepts, including a spoken Talk request, it writes exactly one `info`
+line. Its `sendTiming` field holds `route` (`messages`, `steer` or `talk`), `botId`,
+`requestId`, `steered`, `ended`, and moments counted from the request's arrival:
+`prepareMs` (the admission call began), `admissionMs` (Hermes answered),
+`firstFrameMs` (the first `message.delta` or `reasoning.delta` of the send's run
+after it arrived, which can come before `admissionMs`) and `firstLiveMs` (the first
+`inflight` or `inflight-delta` event of that run written to any open event stream).
+Subtract neighbours for the time each stage took; `firstLiveMs` is what a person
+watching an open chat waited.
+
+A moment is recorded only when it is tied to the send's run by identity, never by
+the order events arrived in. Hermes's admission answer names the run: the send's
+own request ID for a new task, or the running task's root for a steer. A live event
+carries the run of the conversation read it was built from. Session frames carry
+only a session ID, so a frame's turn is taken to be the run that a read names when
+it lands while the turn runs, with no turn starting or ending on that session
+during the read. The read names the session's open app run, which is the running
+turn's run except in the sequence below. Open chats make that read after each turn
+starts. A steer is measured by its run's next growth after it arrived, across turns
+of that run, because Hermes's native steering answers the same way when it queues
+the text for the next turn.
+
+One sequence breaks that identity, and the server does not detect it. A new
+message preempts an idle compaction, an unrelated native turn starts on the
+session before the add-on reads its state, and the add-on queues the message as a
+new task behind that turn. A read during the native turn names the new task's run,
+so that turn's text and live events are recorded as the message's, and the line
+can end `measured` with `steered: false` and moments that are too early. Hermes's
+answer is the same as for a message that started its own turn, so nothing in this
+server tells the two apart. In that sequence `measured` is not a guarantee.
+
+`ended` says why the line was written. Only `measured` carries both moments; any
+other value leaves out what could not be tied to the send's run:
+
+- `measured`: both `firstFrameMs` and `firstLiveMs` were recorded. A tool or
+  status event written first does not end it; the line waits for text. The
+  preempted-compaction sequence above can produce a wrong `measured` line.
+- `uncorrelated`: Hermes's answer named no run; or an earlier turn of the run's
+  session streamed text after the send arrived and ended before any read
+  identified it, so the run's later text may not be its first; or more turns or
+  runs streamed at once, before they were identified, than a send holds (8); or
+  turns on more sessions than that ended unidentified while the send was open.
+- `next-run`: a read found another run running for the assistant, so the send's
+  run ended without the missing moment, as a run that only ran a tool or failed.
+- `deadline`: two minutes passed after the send arrived, with `gaveUpAfterMs`.
+- `disconnected`: the Hermes socket dropped while the send was being measured,
+  so frames may have been missed.
+
+A send Hermes answered after its deadline or a disconnect is logged at the answer
+with that `ended` value and no moments. A send Hermes did not accept logs nothing.
+Sends whose turn finishes before any read lands in it, which is a reply shorter
+than an open chat's read, have no `firstFrameMs`; with no chat open, no live event
+is written and `firstLiveMs` is missing too. Count each kind of unmeasured send by
+grouping on `ended`, and count missing moments separately:
+
+```sh
+journalctl -u <app service> -o cat | jq -r 'select(.sendTiming) | .sendTiming.ended' | sort | uniq -c
+journalctl -u <app service> -o cat | jq -c 'select(.sendTiming) | .sendTiming
+  | {ended, frame: (.firstFrameMs != null), live: (.firstLiveMs != null)}' | sort | uniq -c
+```
+
+The message names the `ended` value: `Send timing` when measured, otherwise
+`Send timing:` and the reason. The line never carries message text. The app logs
+at `info` by default ([Hosting](Hosting.md#logs-and-health)).
+Read the lines on the host with
+`journalctl -u <app service> -o cat | jq -c 'select(.sendTiming) | .sendTiming'`.
+
 Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
 status and tool-start frames then send `event: inflight` at most four times a
 second, with JSON `{botId, message, activity, toolCalls}`. `message` is the
