@@ -175,3 +175,25 @@ deadlocks, because the turn cannot start while the add-on is inside `image.attac
 native turn can take an app send's staged image is a question for the send-lanes staging order.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Merge of the send-lanes fourth review round
+
+`t3/send-lanes` at `a561fba` is merged in with a normal merge commit, without conflicts. It carries the binding rule's
+fourth round (`4a88ab3`) and the send-lanes fourth review round: the turn fake now runs Hermes's `_invoke_agent` after
+the image snapshot, the queued-image test waits on the native turn's snapshot instead of racing it, a native turn that
+takes a member's photo between staging and her `prompt.submit` is recorded as a known defect with a test of what the
+add-on still guarantees, and a test proves the lane fake's guard. See that entry. This branch's admission code is
+unchanged by the merge. The flaky queued-image test noted above is fixed by that round.
+
+Source fingerprint sha256:233d80cc08b8498eccfbc586ffd5627e9a8c07ddc15cab98f5edd450332548a0 (1688 source files); `src/hermes` alone sha256:10a423d30f77a5d1784a04132fdc11f8d301610599ff7934912b1c064f7e4391 (20 source files). Same host and versions.
+
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (Python 3.14.10, 201 s). `tests/hermes_turn_binding_test.py`:
+  29 tests; `tests/hermes_send_lanes_test.py`: 11 tests.
+- `npm run lint:py` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- The queued-image test alone, 50 runs in fresh processes: 50 passed.
+- Red proof on the merged source: the four mutants of the send-lanes fourth round (the lane fake's guard removed, its
+  record dropped, its exit check removed, and `main`'s completion hook restored) each turn their test red here too.
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
