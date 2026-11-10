@@ -158,3 +158,22 @@ describe("the stream watchdog", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+
+// Owners report each stream's health, so polls that stand in for it run only while it is down and the
+// connection notice can say when live updates stopped.
+describe("stream health", () => {
+  it("is down from each connect or failure until an event, and gone once closed, never closed by a replacement", () => {
+    const heard: (boolean | undefined)[] = [];
+    const stream = changeStream("/events", vi.fn(), undefined, {}, undefined, up => heard.push(up));
+    stream.open();
+    live().connect();
+    live().emit("ping", "10");
+    live().drop();
+    live().emit("ping", "10");
+    vi.advanceTimersByTime(25_000);
+    expect(opened()).toBe(2);
+    stream.close();
+    // Connect, open, ping, drop, ping; the replacement reports down again, without a close between.
+    expect(heard).toEqual([false, true, true, false, true, false, undefined]);
+  });
+});

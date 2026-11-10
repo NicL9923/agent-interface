@@ -290,11 +290,13 @@ describe('draft sync across devices',()=>{
       await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
       expect(textarea().value).toBe('Fix the gate');
       expect(reads()).toBe(before+1);
-      // Without a notice, as when the stream failed unnoticed, the slow poll still catches up.
+      // While the stream is live, its notices stand in for the poll: a change it never announced waits.
       phone.edit('shared','Oil the hinge');
-      await advance(DRAFT_POLL_MS-1000);
+      await advance(DRAFT_POLL_MS);
       expect(textarea().value).toBe('Fix the gate');
-      await advance(1000);
+      // Once it drops, the poll catches up at its next tick.
+      await act(async()=>stream.drop());
+      await advance(DRAFT_POLL_MS);
       expect(textarea().value).toBe('Oil the hinge');
       expect(draftPuts('shared')).toEqual([]);
     }finally{vi.unstubAllGlobals();stubMatchMedia();}

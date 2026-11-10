@@ -528,20 +528,27 @@ describe('pushed conversation updates',()=>{
     expect(reads()).toBe(before+1);
     return stream;
   };
-  it('refetches on each change notice and otherwise polls only every 30 seconds',async()=>{
+  it('refetches on each change notice, and polls every 30 seconds only while the stream is down',async()=>{
     const stream=await opened();
     const first=reads();
-    await advance(29_000);
-    expect(reads()).toBe(first);
     conversation={...conversation,messages:[...conversation.messages,{id:'answer-two',role:'assistant',text:'Pushed answer'}]};
     await act(async()=>stream.emit('message','change'));await advance(20);
     expect(reads()).toBe(first+1);
     expect(container.textContent).toContain('Pushed answer');
-    // Pings only show the stream is alive.
-    await act(async()=>stream.emit('ping','ping'));await advance(20);
+    // A live stream stands in for the poll: pings only show it is alive, and a minute passes with no read.
+    for(let tick=0;tick<6;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
     expect(reads()).toBe(first+1);
-    await advance(1_000);
+    // A drop, which EventSource retries itself: the poll reads at its next tick until the stream is back.
+    await act(async()=>stream.drop());
+    await advance(30_000);
     expect(reads()).toBe(first+2);
+    // The watchdog replaced the silent stream meanwhile; its replacement connects.
+    const replacement=[...FakeEventSource.streams].find(item=>item.url.includes('/bots/'))!;
+    expect(replacement).not.toBe(stream);
+    await act(async()=>replacement.connect());await advance(20);
+    expect(reads(),'connecting reads, as notices sent meanwhile are lost').toBe(first+3);
+    for(let tick=0;tick<6;tick++){await act(async()=>replacement.emit('ping','10'));await advance(10_000);}
+    expect(reads()).toBe(first+3);
   });
   it('reloads after a dropped stream reconnects, replaces a refused one at the next poll, and a silent one within 25 seconds',async()=>{
     const stream=await opened();
@@ -580,5 +587,71 @@ describe('pushed conversation updates',()=>{
       expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
       expect(FakeEventSource.streams.size).toBe(2);
     }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
+});
+
+// While the streams are live they stand in for the polls. When one has been down for 20 seconds, the
+// connection notice says live updates stopped, in the one place the app shows connection state.
+describe('live updates and the connection notice',()=>{
+  const stream=(match:(url:string)=>boolean)=>[...FakeEventSource.streams].find(item=>match(item.url))!;
+  const household=()=>stream(url=>url.startsWith('/api/events'));
+  const chat=()=>stream(url=>url.includes('/bots/'));
+  const panels=()=>[...container.querySelectorAll('section[aria-label="Hermes connection"]')];
+  const notice=()=>panels().map(panel=>panel.querySelector('h2')?.textContent);
+  /** Keeps every stream but `except` alive, as a server that pings every 10 seconds does. */
+  const pinging=async(ms:number,except?:FakeEventSource)=>{
+    for(let waited=0;waited<ms;waited+=1_000){
+      if(waited%10_000===0)await act(async()=>{for(const item of FakeEventSource.streams)if(item!==except&&item.readyState===FakeEventSource.OPEN)item.emit('ping','10');});
+      await advance(1_000);
+    }
+  };
+  const live=async()=>{
+    await renderApp();await advance(20);
+    // A `?ping=10` server pings as each stream opens.
+    await act(async()=>{for(const item of FakeEventSource.streams){item.connect();item.emit('ping','10');}});await advance(20);
+  };
+  it('shows one quiet notice 20 seconds into an outage, keeps it through the watchdog replacing the stream, and clears it once the stream is back',async()=>{
+    await live();
+    const cut=household();
+    await act(async()=>cut.drop());
+    await pinging(19_000,cut);
+    expect(panels()).toEqual([]);
+    await pinging(1_000,cut);
+    expect(notice()).toEqual(['Reconnecting live updates']);
+    // The watchdog replaces the silent stream at 25 seconds; the outage goes on, and so does the notice.
+    await pinging(10_000,cut);
+    expect(FakeEventSource.created.filter(url=>url.startsWith('/api/events'))).toHaveLength(2);
+    expect(notice()).toEqual(['Reconnecting live updates']);
+    await act(async()=>household().connect());await advance(20);
+    expect(panels()).toEqual([]);
+  });
+  it('never shows for a brief drop',async()=>{
+    await live();
+    await act(async()=>chat().drop());
+    await pinging(5_000,chat());
+    await act(async()=>chat().connect());
+    await pinging(60_000);
+    expect(panels()).toEqual([]);
+  });
+  it('says offline in the same single notice when the device is offline too',async()=>{
+    await live();
+    Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>false});
+    await act(async()=>{window.dispatchEvent(new Event('offline'));chat().drop();});
+    await pinging(25_000,chat());
+    expect(notice()).toEqual(["You're offline"]);
+  });
+  it('reads bootstrap every 5 minutes while the household stream is live, and every 45 seconds while it is down',async()=>{
+    const bootstraps=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;
+    await live();
+    const before=bootstraps();
+    await pinging(4*60_000);
+    expect(bootstraps(),'a live stream announces roster changes').toBe(before);
+    await pinging(90_000);
+    expect(bootstraps()).toBe(before+1);
+    const cut=household();
+    await act(async()=>cut.drop());
+    const down=bootstraps();
+    await pinging(90_000,cut);
+    expect(bootstraps()).toBe(down+2);
   });
 });

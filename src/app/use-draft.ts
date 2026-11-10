@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { chatStream, streamUp } from "./stream-health";
 import type { RefObject } from "react";
 import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
@@ -148,8 +149,10 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       if (!Number.isSafeInteger(revision) || draftLoaded && revision <= (shown.baseRevision ?? 0)) return;
       wake();
     };
-    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
-    const stopPolling = pollWhileVisible(wake, DRAFT_POLL_MS);
+    // The chat's stream announces each revision. While it is down, or no chat follows this assistant,
+    // this poll reads every 30 seconds instead. Showing the page reads too: a hidden page closed the
+    // stream, so it is not up then.
+    const stopPolling = pollWhileVisible(() => { if (!streamUp(chatStream(botId))) wake(); }, DRAFT_POLL_MS);
     window.addEventListener(DRAFT_EVENT, announced);
     window.addEventListener("online", wake);
     window.addEventListener("agent-interface:reconnect", wake);

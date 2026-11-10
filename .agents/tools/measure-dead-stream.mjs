@@ -3,16 +3,21 @@
 // against e2e/server.ts through a TCP proxy on port 4180. At the cut, the proxy stops forwarding every
 // open connection without closing it, as a proxy, a sleeping laptop or a phone's radio can. New
 // connections pass, so a reconnect works. Prints JSON: seconds from the cut to each stream's next open.
+// With --blackout, new connections hang too, for --blackout-ms, then the network returns: it reports
+// when the connection notice showed, how many showed at once and their titles, saves a screenshot to
+// --screenshot, and reports how long the notice took to clear once the network returned.
 // Run `npm run build` first; ports 4173, 4174 and 4180 must be free.
-//   node .agents/tools/measure-dead-stream.mjs [--give-up-ms 180000]
+//   node .agents/tools/measure-dead-stream.mjs [--give-up-ms 180000] [--blackout --blackout-ms 60000 --screenshot FILE]
 import { spawn } from "node:child_process";
 import { createServer, connect } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 
 const args = process.argv.slice(2);
-const at = args.indexOf("--give-up-ms");
-const GIVE_UP_MS = at < 0 ? 180_000 : Number(args[at + 1]);
+const flag = (name, fallback) => { const at = args.indexOf(name); return at < 0 ? fallback : args[at + 1]; };
+const GIVE_UP_MS = Number(flag("--give-up-ms", 180_000));
+const BLACKOUT = args.includes("--blackout"), BLACKOUT_MS = Number(flag("--blackout-ms", 60_000));
+const SCREENSHOT = flag("--screenshot", undefined);
 const PROXY = 4180, APP = 4173;
 
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true });
@@ -25,8 +30,11 @@ for (let tries = 0; ; tries++) {
 }
 
 // Each connection forwards both ways until the cut, which stops the bytes and leaves the sockets open.
-const open = new Set();
+const open = new Set(), held = new Set();
+let dark = false;
 const proxy = createServer(client => {
+  // During a blackout a new connection is accepted and then hears nothing, as on a dead network.
+  if (dark) { held.add(client); client.on("error", () => {}); client.pause(); return; }
   const upstream = connect(APP, "127.0.0.1");
   const pair = { client, upstream };
   open.add(pair);
@@ -65,11 +73,36 @@ page.on("request", request => {
   for (const [name, pattern] of Object.entries(streams))
     if (!(name in reopened) && pattern.test(url.pathname + url.search)) reopened[name] = (Date.now() - cutAt) / 1000;
 });
-cut();
-cutAt = Date.now();
-while (Object.keys(reopened).length < Object.keys(streams).length && Date.now() - cutAt < GIVE_UP_MS) await sleep(250);
-for (const name of Object.keys(streams)) reopened[name] ??= null;
-console.log(JSON.stringify({ secondsToReopen: reopened, gaveUpAfterSeconds: GIVE_UP_MS / 1000 }, null, 2));
+const panels = () => page.locator('section[aria-label="Hermes connection"] h2').allTextContents();
+if (BLACKOUT) {
+  dark = true;
+  cut();
+  cutAt = Date.now();
+  let shownAt = null, most = 0, titles = [];
+  while (Date.now() - cutAt < BLACKOUT_MS) {
+    const now = await panels();
+    if (now.length && shownAt === null) shownAt = (Date.now() - cutAt) / 1000;
+    if (now.length >= most) { most = now.length; titles = now; }
+    await sleep(250);
+  }
+  if (SCREENSHOT) await page.screenshot({ path: SCREENSHOT });
+  dark = false;
+  for (const client of held) client.destroy();
+  held.clear();
+  const back = Date.now();
+  let clearedAfter = null;
+  while (Date.now() - back < GIVE_UP_MS) {
+    if (!(await panels()).length) { clearedAfter = (Date.now() - back) / 1000; break; }
+    await sleep(250);
+  }
+  console.log(JSON.stringify({ noticeShownAfterSeconds: shownAt, mostNoticesAtOnce: most, titles, clearedSecondsAfterNetworkReturned: clearedAfter }, null, 2));
+} else {
+  cut();
+  cutAt = Date.now();
+  while (Object.keys(reopened).length < Object.keys(streams).length && Date.now() - cutAt < GIVE_UP_MS) await sleep(250);
+  for (const name of Object.keys(streams)) reopened[name] ??= null;
+  console.log(JSON.stringify({ secondsToReopen: reopened, gaveUpAfterSeconds: GIVE_UP_MS / 1000 }, null, 2));
+}
 await browser.close();
 proxy.close();
 stop();

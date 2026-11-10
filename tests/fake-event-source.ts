@@ -37,6 +37,11 @@ export class FakeEventSource extends EventTarget {
     if (type === "message") this.onmessage?.(event);
     this.dispatchEvent(event);
   }
+  /** A dropped connection, which EventSource retries itself. */
+  drop() {
+    this.readyState = FakeEventSource.CONNECTING;
+    this.onerror?.(new Event("error"));
+  }
   /** A refusal, which EventSource never retries. */
   fail() {
     this.readyState = FakeEventSource.CLOSED;

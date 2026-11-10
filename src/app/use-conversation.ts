@@ -9,6 +9,7 @@ import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 import { DRAFT_EVENT } from "./use-draft";
+import { chatStream, reportStream, streamUp } from "./stream-health";
 import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
@@ -328,15 +329,17 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
       showInflight(value);
       return true;
-    });
+    }, up => reportStream(chatStream(botId), up));
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
       if (navigator.onLine === false || document.visibilityState === "hidden") return;
       stream.open();
       void load();
     };
-    // Change notices drive updates. This slow poll covers a stream that fails unnoticed.
-    const stopPolling = pollWhileVisible(wake, 30_000);
+    // Change notices drive updates. While the stream is down, as from a cut until its watchdog reconnects
+    // it, this poll reads every 30 seconds instead. Showing the page reads too: a hidden page closed the
+    // stream, so it is not up then.
+    const stopPolling = pollWhileVisible(() => { if (!streamUp(chatStream(botId))) wake(); }, 30_000);
     // A hidden page holds no stream; showing it again reloads and reopens one.
     const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
     window.addEventListener("online", wake);

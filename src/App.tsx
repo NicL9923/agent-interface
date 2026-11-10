@@ -9,6 +9,7 @@ import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
 import type { Panel, View } from "./app/view";
+import { chatStream, STREAM_NOTICE_MS, useStreamsDown } from "./app/stream-health";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
 import { useDraft, useDraftPersistence } from "./app/use-draft";
 import { useConversation } from "./app/use-conversation";
@@ -85,8 +86,10 @@ export function App() {
   // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    // A server that never sends `groups` notices gets the 30-second poll home always had.
-    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had, unless its catalog
+    // says group chats are unsupported: that changes only with the server, so the slow poll is enough.
+    deps: [userId], pollMs: session.groupsNotified || groupsHeld.current?.value.catalog?.supported === false
+      ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
     load: async (path, signal) => {
       const catalog = await api<GroupCatalog>(path, { signal });
       const json = JSON.stringify([userId, catalog]);
@@ -344,16 +347,20 @@ export function App() {
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
+  // Live updates stopped for long enough to matter: the household stream or this chat's has been down for
+  // STREAM_NOTICE_MS without a break. The polls stand in meanwhile, so the notice is a quiet one.
+  const liveDown = useStreamsDown(useMemo(() => ["household", ...botId ? [chatStream(botId)] : []], [botId]), STREAM_NOTICE_MS);
   // Notices from the rest of the app, rebuilt only when one of them changes.
   const dock = useMemo(() => {
     const items: DockItem[] = [];
     if (!boot) return items;
-    if (connectionLost) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
-      appUnavailable={appUnavailable} busy={checkingConnection} retry={reconnect} /> });
+    // One notice either way: a lost connection says so, and otherwise a stopped stream says updates are late.
+    if (connectionLost || liveDown) items.push({ id: "connection", kind: "connection", node: <ConnectionPanel compact connection={boot.connection} offline={offline}
+      appUnavailable={appUnavailable} liveOnly={!connectionLost} busy={checkingConnection} retry={reconnect} /> });
     if (decisions) items.push({ id: "decisions", kind: "decisions", node: <DecisionsNotice disconnected={connectionLost} count={decisions} onReview={() => reviewFirstDecision()} /> });
     if (mobile && update) items.push({ id: "update", kind: "update", node: <UpdateNotice update={update} /> });
     return items;
-  }, [boot, connectionLost, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
+  }, [boot, connectionLost, liveDown, offline, appUnavailable, checkingConnection, reconnect, decisions, mobile, update]);
   const liveBot = boot?.bots.find(bot => bot.id === botId);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
   const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported

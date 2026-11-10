@@ -192,10 +192,11 @@ const withPing = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ping
  * and silent. A watchdog replaces a stream silent past `streamSilence`, and `open` replaces a
  * closed or silent one at once. A hidden page's late timers replace nothing: showing the page
  * calls `open`, which checks then. `named` handles other named events by their data, such as
- * group chat notices.
+ * group chat notices. `onHealth` hears whether the stream is live: false from each connect or failure
+ * until an event arrives, true once one does, and undefined once it is closed.
  */
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
-  onInflightDelta?: (value: InflightDelta) => boolean) {
+  onInflightDelta?: (value: InflightDelta) => boolean, onHealth?: (up: boolean | undefined) => void) {
   let source: EventSource | undefined, heard = 0, pingMs = DEFAULT_PING_MS, misses = 0;
   let watchdog: ReturnType<typeof setTimeout> | undefined, due = 0;
   const silence = () => streamSilence(pingMs, misses);
@@ -207,6 +208,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   const alive = () => {
     heard = Date.now();
     misses = 0;
+    onHealth?.(true);
     if (source && heard + silence() < due) watch();
   };
   // One timer per stream, set for when silence would begin. A device waking from sleep fires it once, late.
@@ -223,17 +225,19 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     else if (source.readyState === EventSource.CLOSED || silent()) replace();
     else watch();
   };
-  const close = () => {
+  /** `replacing` keeps the stream reported down, so an outage's time counts from when it began. */
+  const close = (replacing = false) => {
     clearTimeout(watchdog);
     watchdog = undefined;
     source?.close();
     source = undefined;
     misses = 0;
+    if (!replacing) onHealth?.(undefined);
   };
   const replace = () => {
     // A stream that failed or went silent counts against the next one's patience.
     const failed = source ? misses + 1 : 0;
-    close();
+    close(true);
     misses = failed;
     connect();
   };
@@ -247,6 +251,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     heard = Date.now();
     // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
     pingMs = DEFAULT_PING_MS;
+    onHealth?.(false);
     watch();
     // Only the stream this one opened last speaks for it: a replaced one's late events change nothing.
     const on = (name: string, handle: (data: string) => void) =>
@@ -254,8 +259,11 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     current.onopen = () => {
       if (current !== source) return;
       heard = Date.now();
+      onHealth?.(true);
       onChange();
     };
+    // A drop, which EventSource retries itself, or a refusal, which only the watchdog retries.
+    current.onerror = () => { if (current === source) onHealth?.(false); };
     if (onInflight) on("inflight", data => {
       alive();
       try { onInflight(JSON.parse(data) as Inflight); } catch { onChange(); }
@@ -268,7 +276,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       try { applied = onInflightDelta(JSON.parse(data) as InflightDelta); } catch { /* Reloads below. */ }
       if (applied) return;
       onChange();
-      close();
+      close(true);
       open();
     });
     on("roster", () => { alive(); onChange(); });
@@ -284,7 +292,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       onChange();
     });
   };
-  return { open, close };
+  return { open, close: () => close() };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {

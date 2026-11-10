@@ -31,16 +31,19 @@ export function SetupCommand() {
   </div>;
 }
 
-export function ConnectionPanel({ connection, offline = false, appUnavailable = false, busy, retry, compact = false }: {
+export function ConnectionPanel({ connection, offline = false, appUnavailable = false, liveOnly = false, busy, retry, compact = false }: {
   connection: RuntimeStatus;
   offline?: boolean;
   appUnavailable?: boolean;
+  /** The app and Hermes answer, but live updates stopped: replies and changes show late until they return. */
+  liveOnly?: boolean;
   busy: boolean;
   retry: () => void;
   compact?: boolean;
 }) {
   const copy = offline ? { title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online." }
     : appUnavailable ? { title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically." }
+    : liveOnly ? { title: "Reconnecting live updates", detail: "New replies and changes may take up to 30 seconds to show until then. Messages still send." }
     : explanations[connection.code || "unreachable"] || explanations.unreachable!;
   return <section className={compact ? "connection-panel compact" : "connection-panel setup"} aria-label="Hermes connection">
     {!compact && <Avatar size={84} state="disconnected" offline={offline} />}

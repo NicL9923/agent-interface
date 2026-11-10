@@ -401,7 +401,14 @@ rechecks the connection automatically, and refreshes when the browser comes back
 online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
 and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
 cut it without closing it. Replacements that stay silent wait longer each time, up to 5 minutes, and
-start over once one hears anything. A hidden tab replaces nothing; showing it checks at once. Manual reconnect checks immediately. The transport bounds
+start over once one hears anything. A hidden tab replaces nothing; showing it checks at once.
+
+While its streams are live, an idle tab polls nothing they announce. The open chat's conversation and
+draft are read every 30 seconds only while the chat's stream is down, and bootstrap every 45 seconds
+only while the household stream is down, otherwise every 5 minutes for what no stream announces, such
+as preferences saved on another device. Today, chat presence and device activity keep their own
+intervals. When the household stream or the open chat's has been down for 20 seconds, the connection
+notice says live updates are reconnecting, and it clears once the stream hears from the server again. Manual reconnect checks immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
@@ -502,7 +509,8 @@ Hermes profile; a run with only a saved preview says so.
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
 the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
-says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback,
+as it does for a catalog that says group chats are unsupported.
 While any household stream is open, the server checks the catalog once for everyone at most every
 30 seconds, and right away after a group or assistant change made in the app, and tells only the people
 whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log
