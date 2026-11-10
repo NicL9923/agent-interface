@@ -4,7 +4,7 @@ import type { ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
-import { MessageMarkdown, StreamingMarkdown } from "../components/MessageMarkdown";
+import { LiveMarkdown, MessageMarkdown } from "../components/MessageMarkdown";
 import { ConnectionPanel } from "../components/ConnectionPanel";
 import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
@@ -539,7 +539,7 @@ const TurnView = memo(function TurnView({ block, advanced, disconnected, name, b
       {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
       {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
         streaming
-          ? <StreamingMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
+          ? <LiveMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant"} />
           : <MessageMarkdown text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={disconnected} inlineUi={message.role === "assistant" && !progress} />
       ) : message.role !== "tool" && (
         own ? <div className="message-bubble"><div className="message-text">{message.text}</div>{files}</div> : <div className="message-text">{message.text}</div>

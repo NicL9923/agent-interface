@@ -1,4 +1,4 @@
-import { Children, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -9,6 +9,7 @@ import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import { streamingHoldBack } from "./streaming-hold-back";
+import { useRevealed } from "./streaming-reveal";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -265,3 +266,65 @@ export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageM
   if (!blocks) return <MessageMarkdown {...props} text={whole} />;
   return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });
+
+/**
+ * A reply still arriving, as the transcript's live row shows it. Its text is revealed at a steady
+ * pace (see streaming-reveal.ts), then split and held back as StreamingMarkdown does. Revealing
+ * comes first so the hold-back judges the end a person actually sees: a cut the reveal makes
+ * inside `**bold**` is held back like one the stream made. Both keep a prefix, so the result is a
+ * prefix of what arrived. A caret follows the last character until the row is saved.
+ */
+export const LiveMarkdown = memo(function LiveMarkdown(props: MessageMarkdownProps) {
+  const text = useRevealed(props.text);
+  return <>
+    <StreamingMarkdown {...props} text={text} />
+    <StreamingCaret text={text} />
+  </>;
+});
+
+// Text a person reads in the reply, not a control's label or a status line.
+const notReplyText = "button, [role=status], [aria-hidden=true], .markdown-code-header";
+/** The reply's last visible character, skipping trailing space and the labels of copy controls. */
+function lastCharacter(box: Element): Range | undefined {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+  });
+  const node = walker.lastChild() as Text | null;
+  if (!node) return undefined;
+  // The last non-space code unit; a low surrogate is measured with its pair.
+  const end = node.data.search(/\S\s*$/) + 1;
+  const start = end > 1 && /[\udc00-\udfff]/.test(node.data[end - 1]) ? end - 2 : end - 1;
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  return range;
+}
+/**
+ * Puts the caret just after the reply's last character. It is absolutely positioned against its
+ * containing block, so it never moves the text, and it has no text of its own to select or read.
+ */
+function placeCaret(caret: HTMLElement) {
+  const box = caret.previousElementSibling, parent = caret.offsetParent;
+  if (!box || !(parent instanceof HTMLElement)) return;
+  const area = box.getBoundingClientRect(), base = parent.getBoundingClientRect();
+  const rects = lastCharacter(box)?.getClientRects?.();
+  const end = rects?.length ? rects[rects.length - 1] : undefined;
+  // A wide code block or table scrolls inside the reply; the caret stays at the reply's edge.
+  const x = Math.min(end ? end.right : area.left, area.right) - base.left - parent.clientLeft + parent.scrollLeft;
+  const y = (end ? end.top : area.top) - base.top - parent.clientTop + parent.scrollTop;
+  caret.style.transform = `translate(${x}px, ${y}px)`;
+  caret.style.height = end ? `${end.height}px` : "";
+}
+function StreamingCaret({ text }: { text: string }) {
+  const caret = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => { if (caret.current) placeCaret(caret.current); }, [text]);
+  // A narrower window or a late image moves the text without changing it.
+  useEffect(() => {
+    const element = caret.current, box = element?.previousElementSibling;
+    if (!element || !box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => placeCaret(element));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
+  return <span ref={caret} className="streaming-caret" aria-hidden="true" />;
+}

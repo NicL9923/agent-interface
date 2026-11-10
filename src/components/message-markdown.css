@@ -224,3 +224,17 @@
   text-underline-offset: 3px;
   cursor: help;
 }
+/* The caret after a live reply's last character, placed by script. It is out of the flow, so it
+   never moves the text as it appears, moves or leaves, and it has no text to select or read. */
+.streaming-caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2px;
+  height: 1.2em;
+  margin-left: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+  user-select: none;
+}

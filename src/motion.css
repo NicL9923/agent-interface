@@ -248,6 +248,8 @@
   .toast { animation: toast-in 420ms var(--ease-spring); }
   .jump-latest { animation: jump-latest-in 420ms var(--ease-spring); }
   .message-outgoing { animation: message-send 460ms var(--ease-spring) both; }
+  /* A live reply's caret pulses while more text is coming. Under reduced motion it stays lit. */
+  .streaming-caret { animation: caret-pulse 1.1s ease-in-out infinite; }
 
   .work-tape-step, .work-tape-more { animation: tape-in 420ms var(--ease-spring) both; }
   .work-tape-step.is-running::after {
@@ -280,6 +282,7 @@
   .season-ambience { display: none; }
 }
 
+@keyframes caret-pulse { 50% { opacity: 0.2; } }
 @keyframes tape-in { from { opacity: 0; transform: scale(0.4); } }
 @keyframes tape-settle { 40% { transform: scale(1.18); } }
 @keyframes tape-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }

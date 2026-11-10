@@ -102,3 +102,6 @@ The notification capture also exercises account-scoped Following and equal-time 
 
 - `capture-composer.js` captures idle, typed and multiline composer layouts at desktop and 390/320 phone widths in the loopback fixture preview, recording their rendered heights for before/after comparison.
 - `capture-composer-states.js` exercises voice and upload retries, long paste, IME composition and offline layouts with explicit media fixtures in the loopback preview.
+
+- `npx vitest run --config .agents/tools/streaming-parse-bench.config.ts --silent=false` counts and times how often a live reply's last block re-parses while the last 1,000 of about 20,000 characters stream, once at each server update and once paced on animation frames, for a prose reply and for one open code block. It runs in jsdom, so its times are an upper bound for a browser; the counts are exact.
+- `npm run build && npx tsx .agents/tools/streaming-preview.ts [port]` serves the built client on loopback port 4190 over a scripted assistant that streams like Hermes: each send streams a short segment, runs a tool that saves it, then streams a long Markdown answer at `STREAM_CHARS` characters every 40 ms and saves it. Sign in with "Enter local workspace" and open Ranch Hand to watch a live reply.
