@@ -79,3 +79,78 @@ copies deleted.
 Safari, Firefox, an installed home-screen app and a real phone: not run. Only Chromium runs here.
 The first-load measurement was not repeated; on the load path only the theme step and `boot.js`'s
 reading of the account record changed.
+
+## Fourth round: the Grok 4.7 review
+
+`t3/early-bootstrap` merged in without a conflict, bringing `t3/account-transitions`' third round
+and `origin/main` at `e7cd5ac`. Their changes and red runs are in
+`20261110T191900Z-account-transitions.md`.
+
+### Changes on this branch
+
+- The saved home counts as drawing the account its copy names (`drawingAccount` in
+  `src/app/account-epoch.ts`, called from `AccountApp` before paint). The address belongs to that
+  account even where no record names it, as on a browser signed in before the record existed, so
+  the next sign-out or account clears it. A bootstrap that names another account than the saved
+  home drew ends the generation, as one after an earlier bootstrap does; before, member two took
+  over member one's saved-home generation with its address and any chat chosen there.
+- The offline sign-out ends this browser's push subscription once its record has stuck
+  (`signOutHere`, through `endPushSubscription`). It does not when storage refuses the record,
+  since the person is still signed in.
+
+How the address resolves on this branch, the saved home included:
+
+| Case | Address |
+| --- | --- |
+| Same account put back by another tab's failed sign-in | kept, with its chat and fragment |
+| Another account settles | reset before it draws |
+| Sign-out, online or offline, from any screen | reset before sign-in draws |
+| Address opened while signed out | kept for the next sign-in |
+| Connecting screen under a record that names an account | reset at the next account or sign-out |
+| Saved home, with or without a record naming its account | reset at the next account or sign-out |
+| Saved home drawn, bootstrap names another account | the generation ends and the address resets |
+
+### Finding 4, the push subscription at sign-out
+
+- The server's `POST /api/auth/logout` deletes the session and nothing else
+  (`src/server/auth.ts:218`). Subscriptions are keyed by endpoint and user
+  (`src/server/store-notifications.ts:200`), so a sign-out the server takes leaves them.
+- The online sign-out calls `notifications.disable()` before `signOutOf` (`src/App.tsx`, `signOut`;
+  the same on `main`), which sends `DELETE /push/subscriptions` and unsubscribes the browser. That
+  path already stops pushes.
+- The app never subscribes without a person's action: `refresh` only reads
+  (`src/components/use-device-notifications.ts:61-75`), and `pushManager.subscribe` runs only in
+  `enable`, from the Settings switch or the one-time prompt. So unsubscribing turns notifications
+  off until the person turns them on again, which the online sign-out already does today.
+- Only the offline sign-out kept the subscription, with the server still sending member one's
+  pushes to it. Ending it in the browser matches the online sign-out; the server drops the
+  endpoint at its next push, when the push service answers 404 or 410.
+
+### Tests
+
+`tests/saved-roster-ui.test.ts` finds the rail by its label, rows and the sign-out confirmation by
+their text, the connecting screen by its heading, sign-in by its button and the conversation by
+its region label. Two class queries stay: `.home-scroll`, whose node identity is the check that
+the swap keeps scroll, has no role or label; `order()` reads `.pinned-name, .bot-row-name strong`,
+the names alone, which a row's text mixes with its description.
+
+### Red runs
+
+| Mutation | Result |
+| --- | --- |
+| The saved home does not mark its account | failed: the bootstrap-as-someone-else test and the no-record sign-out test |
+| `accountNamed` ignores the saved home's account | failed: the bootstrap-as-someone-else test |
+| The offline sign-out keeps the subscription | failed: the offline sign-out test; the next test failed after it, since the first stopped before ending the server's session |
+| The subscription ends before the record sticks | failed: the refused-storage test |
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .`: pass. `npm test`: 195 files, 3378 tests.
+`npm run build`: pass. `npm run test:e2e`: 34 passed.
+
+### Not exercised
+
+- A real push service answering for an ended subscription, and Chrome's background notice for a
+  dropped push: not run.
+- A session the server refuses, or a lapsed sign-in hint, still leaves the subscription with the
+  server; see the follow-up in the account transitions ledger.
