@@ -4,6 +4,7 @@ import { Input } from "../components/ui/input";
 import { NativeSelect } from "../components/ui/native-select";
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
+import { useCloseRequest, type CloseRequest } from "./close-request";
 import type { Bootstrap, Bot, Preferences } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { Icon } from "../components/Icon";
@@ -25,7 +26,7 @@ type Commit = (edit: (value: Preferences) => Preferences) => void;
 const assistants = (count: number) => count === 1 ? "1 assistant" : `${count} assistants`;
 
 /** Account and app settings as grouped rows, opened from the home screen's account button. */
-export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, destination, onClose, onSignOut, onComputer, onIntegrations, onUpgrade, onShortcuts }: {
+export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, destination, onClose, onSignOut, onComputer, onIntegrations, onUpgrade, onShortcuts, closer }: {
   boot: Bootstrap;
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
@@ -40,6 +41,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   onIntegrations(): void;
   onUpgrade(): void;
   onShortcuts(): void;
+  /** Where this sheet offers its own close to the app. See close-request.ts. */
+  closer?: RefObject<CloseRequest | null>;
 }) {
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);
   const finePointer = useFinePointer();
@@ -66,6 +69,9 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   const opener = useRef<string | null>(null);
   const beforeLeave = useRef<(() => boolean) | null>(null);
   const close = () => { if (beforeLeave.current?.() !== false) onClose(); };
+  // The app closes the sheet the same way, as when a notification is tapped: a section name being
+  // typed is kept, and one that cannot be kept stays on screen with its reason.
+  useCloseRequest(closer, onStay => { if (beforeLeave.current?.() === false) onStay(); else onClose(); });
   const go = (next: Page) => {
     if (beforeLeave.current?.() === false) return;
     opener.current = next.kind === "main" ? page.kind === "section" ? `section:${page.id}` : page.kind : null;

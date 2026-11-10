@@ -602,9 +602,10 @@ describe('service worker app shell', () => {
 
 describe('service worker notification taps with the app open', () => {
   const url = 'https://app.example/?bot=ranch';
-  async function tap(sw: ReturnType<typeof worker>) {
+  const tapped = { title: 'Ranch Hand', body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'bot:ranch', actions: [] as { action: string; title: string }[], data: { url: '/?bot=ranch' } as Record<string, unknown> };
+  async function tap(sw: ReturnType<typeof worker>, notification: Partial<typeof tapped> & { data: Record<string, unknown> } = tapped) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.notificationclick({ notification: { data: { url: '/?bot=ranch' }, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.notificationclick({ notification: { ...tapped, ...notification, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
     return done!;
   }
 
@@ -631,7 +632,9 @@ describe('service worker notification taps with the app open', () => {
       const window = openWindowOf({ answers: false });
       const sw = worker({ windows: [window] });
       const done = tap(sw);
-      await vi.advanceTimersByTimeAsync(999);
+      // A live page answers in a few milliseconds; the wait ends well inside the second Firefox
+      // gives a tap to open a window, so the fallbacks below still run inside it.
+      await vi.advanceTimersByTimeAsync(249);
       expect(window.navigate).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await done;
@@ -648,10 +651,36 @@ describe('service worker notification taps with the app open', () => {
       window.navigate.mockRejectedValue(new TypeError('not controlled'));
       const sw = worker({ windows: [window] });
       const done = tap(sw);
-      await vi.advanceTimersByTimeAsync(1000);
-      await done;
+      await vi.advanceTimersByTimeAsync(250);
+      // Opened a quarter second after the tap, well inside Firefox's second.
       expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
+      await done;
     } finally { vi.useRealTimers(); }
+  });
+
+  it('shows the notification again, quietly, when no way of opening the chat works', async () => {
+    const sw = worker();
+    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    await tap(sw);
+    expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', {
+      body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'bot:ranch', actions: [], silent: true,
+      data: { url: '/?bot=ranch', reshown: true },
+    });
+  });
+
+  it('keeps an approval\'s actions on the notification it shows again', async () => {
+    const sw = worker();
+    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    const actions = [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }];
+    await tap(sw, { tag: 'approval-1', actions, data: { url: '/?bot=ranch', declineToken: 'single-use' } });
+    expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ actions, data: { url: '/?bot=ranch', declineToken: 'single-use', reshown: true } }));
+  });
+
+  it('shows a notification again only once, so failing taps never chain', async () => {
+    const sw = worker();
+    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    await expect(tap(sw, { data: { url: '/?bot=ranch', reshown: true } })).resolves.toBeUndefined();
+    expect(sw.showNotification).not.toHaveBeenCalled();
   });
 
   it('opens a new window beside one this worker does not control, which it can neither ask nor navigate', async () => {

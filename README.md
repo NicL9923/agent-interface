@@ -80,8 +80,16 @@ device gets it as before. Security alerts always reach every device. See
 Tapping a web notification while the app is open in a window switches that window to the
 chat, as choosing it there would, and brings the window forward without reloading it. The
 worker asks the page with an `OPEN_CHAT` message and loads the chat's address into the
-window only if the page has not answered within a second. A window the worker does not
-control, or one that cannot be loaded, gets a new window instead.
+window only if the page has not answered within 250 ms. A window the worker does not
+control, or one that cannot be loaded, gets a new window instead. All of that ends well
+inside the one second Firefox allows a worker to open a window after a tap. If every way
+fails, the notification comes back quietly to be tapped again, once.
+
+An open assistant settings sheet or Settings closes the way its close button does before the
+chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
+if the person discards them. A section name being typed in Settings is saved, or, if it
+cannot be, Settings stays open with the reason. The page answers the worker either way, so
+the worker never reloads the window over the form.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web

@@ -43,6 +43,7 @@ import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
+import type { CloseRequest } from "./app/close-request";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -288,14 +289,36 @@ export function App() {
     history.openAt(id, messageId);
     selectBot(id);
   });
-  // A notification tapped while this window is open switches it in place, as a click here would.
-  const openFromWorker = useStableCallback((destination: Destination) => {
-    setOverlay(null);
-    setPanel(null);
+  const goTo = (destination: Destination) => {
     if ("view" in destination) return showView(destination.view);
     if (destination.messageId) return openMessage(destination.botId, destination.messageId);
     selectBot(destination.botId);
     if (destination.routineId) setPanel({ kind: "routine", botId: destination.botId, routineId: destination.routineId });
+  };
+  // The open sheet's own close, when it is one that can hold unsaved work. See close-request.ts.
+  const panelClose = useRef<CloseRequest | null>(null);
+  // Where a tapped notification goes once that sheet has closed.
+  const leaving = useRef<Destination | null>(null);
+  /** A sheet with its own close closed; a notification waiting on it opens now. */
+  const sheetClosed = (kind: Panel["kind"]) => {
+    closePanels(kind);
+    const next = leaving.current;
+    leaving.current = null;
+    if (next) goTo(next);
+  };
+  // A notification tapped while this window is open switches it in place, as a click here would.
+  // The palette, shortcuts and the stop question hold nothing to lose. Assistant settings and
+  // Settings close the way their close buttons do, so an edited form asks first, and the chat opens
+  // only once the sheet has closed: not at all if the person keeps editing.
+  const openFromWorker = useStableCallback((destination: Destination) => {
+    setOverlay(null);
+    const close = panelClose.current;
+    if (!close) {
+      setPanel(null);
+      return goTo(destination);
+    }
+    leaving.current = destination;
+    close(() => { if (leaving.current === destination) leaving.current = null; });
   });
   useWorkerOpens(openFromWorker);
   const { stopping, stop } = useStopResponse(botId, setError);
@@ -411,7 +434,7 @@ export function App() {
           <BotSettings
             bot={panel.bot}
             bootstrap={boot}
-            onClose={() => closePanels("settings")}
+            onClose={() => sheetClosed("settings")} closer={panelClose}
             onDeleted={id => { deleted.current = id; }}
             onOpenRoutine={(botId, routineId) => { selectBot(botId); setPanel({ kind: "routine", botId, routineId }); }}
             editPreferences={session.editPreferences}
@@ -440,7 +463,7 @@ export function App() {
         <Loading>
           <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionLost} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
-            onClose={() => closePanels("preferences")} onSignOut={signOut}
+            onClose={() => sheetClosed("preferences")} closer={panelClose} onSignOut={signOut}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
             onUpgrade={() => open({ kind: "upgrade" })} onShortcuts={showShortcuts} />
         </Loading>

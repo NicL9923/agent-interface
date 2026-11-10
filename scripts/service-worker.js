@@ -225,9 +225,12 @@ self.addEventListener('push', (event) => {
   ]));
 });
 
-// How long an open window has to say it switched to the chat before the worker loads the chat into
-// it instead. A page answers in milliseconds; a backgrounded one wakes as it is focused.
-const OPEN_ACK_MS = 1000;
+// How long an open window has to say it switched to the chat before the worker loads the chat into it
+// instead. A live page answers within a few milliseconds (at most 2.1 ms over 30 tries in Chromium),
+// or after the task it is busy with, so this allows a quarter-second stall. It must stay well under a
+// second: Firefox lets a worker open or focus a window for one second after a tap, and the fallbacks
+// below, the last of which opens a new window, run after this wait.
+const OPEN_ACK_MS = 250;
 
 // Asks an open window to switch to the chat in place, as a click in it would, without reloading the
 // app. Resolves true once the page says it did. src/app/worker-opens.ts answers it.
@@ -277,11 +280,27 @@ async function decline(notification) {
   });
 }
 
+// Every way of opening the chat failed, as when the browser no longer allows opening a window. The
+// notification is already closed, so it comes back, quietly, for the person to tap again. A tap on one
+// that came back is not shown a third time, so a browser that always refuses cannot chain them.
+async function showAgain(notification) {
+  if (notification.data?.reshown) return;
+  await self.registration.showNotification(notification.title, {
+    body: notification.body,
+    icon: notification.icon,
+    badge: notification.badge,
+    tag: notification.tag,
+    actions: notification.actions,
+    silent: true,
+    data: { ...notification.data, reshown: true },
+  });
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   if (event.action === 'decline' && event.notification.data?.declineToken) {
     event.waitUntil(decline(event.notification));
     return;
   }
-  event.waitUntil(openChat(conversationUrl(event.notification.data?.url)));
+  event.waitUntil(openChat(conversationUrl(event.notification.data?.url)).catch(() => showAgain(event.notification)));
 });
