@@ -1268,10 +1268,15 @@ describe("form replies", () => {
   const saved = "agent-interface:form-reply:one:shared:a:trip";
   // The ID every tab and device derives for this person's attempt at this form.
   const formId = (attempt: number) => formRequestId("form-key-one", "shared", "a", "trip", attempt);
+  /**
+   * A form first looks up whether its answers already went, with its fields and Send disabled. The
+   * lookup derives its ID with Web Crypto, which settles in real time, outside the pinned clock, so
+   * a test waits for Send to be enabled, as the person does. Text still lands in a disabled field
+   * in jsdom, but clicks don't: a click before then does nothing, and filling sends other answers.
+   */
+  const ready = () => waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
   const fill = async () => {
-    // A form first looks up whether its answers already went, with its fields disabled. Text still
-    // lands in a disabled field but clicks don't, so filling before then sends other answers.
-    await waitForUi(() => expect(card().querySelector(".form-reply")?.getAttribute("aria-busy")).toBe("false"));
+    await ready();
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
     await act(async () => field("Packed").querySelector("input")!.click());
     await act(async () => field("Bringing the dog").querySelector("input")!.click());
@@ -1314,7 +1319,7 @@ describe("form replies", () => {
   it("starts over from the card's suggestions when the saved answers are malformed", async () => {
     localStorage.setItem(saved, JSON.stringify({ attempt: -1, answers: { city: "Marfa" }, state: "sent" }));
     await render();
-    await waitForUi(() => expect(buttonText("Send answers")?.disabled).toBe(false));
+    await ready();
     expect(card().querySelector<HTMLInputElement>('input[type="text"]')!.value).toBe("");
     expect(field("Relaxed").querySelector("input")!.checked).toBe(true);
   });
@@ -1330,6 +1335,7 @@ describe("form replies", () => {
 
   it("names a required field left empty and sends nothing", async () => {
     await render();
+    await ready();
     await send();
     expect(messagesWritten()).toHaveLength(0);
     const input = card().querySelector<HTMLInputElement>('input[type="text"]')!;
@@ -1708,6 +1714,7 @@ describe("form replies", () => {
       { id: "__proto__", label: "Destination", kind: "text", required: true }, { id: "constructor", label: "Notes", kind: "text" },
     ] })] };
     await render();
+    await ready();
     await send();
     expect(messagesWritten()).toHaveLength(0);
     await typeInto(card().querySelector<HTMLInputElement>('input[type="text"]')!, "Marfa");
@@ -1719,6 +1726,7 @@ describe("form replies", () => {
   it("refuses answers longer than a message can be, saying by how much", async () => {
     conversation = { ...conversation, messages: [prompt("q", "Plan"), reply({ ...form, fields: Array.from({ length: 20 }, (_, i) => ({ id: `f${i}`, label: `Field ${i}`, kind: "textarea" })) })] };
     await render();
+    await ready();
     for (const area of card().querySelectorAll("textarea")) await typeInto(area, "x".repeat(3000));
     await send();
     expect(messagesWritten()).toHaveLength(0);

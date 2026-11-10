@@ -335,7 +335,9 @@ describe("a live reply's row when it is saved", () => {
     await save([], { state: "failed" });
     expect(failed.isConnected).toBe(false);
     await act(async () => mount.container.querySelector<HTMLButtonElement>("button.retry-turn")!.click());
-    await advance(0);
+    // The retry's ID is derived with Web Crypto, which settles in real time, outside the pinned
+    // clock. Retry leaves once the server takes the retry, as the person sees it.
+    await waitForUi(() => expect(mount.container.querySelector("button.retry-turn")).toBeNull());
     expect(retries).toEqual([question.id]);
     await save([], { state: "working", runId: "run-2" });
     await send("inflight", { ...live("The gate is latched."), activity: { state: "working", runId: "run-2" } });
