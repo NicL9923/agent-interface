@@ -146,3 +146,32 @@ its root's finished turn. See
 | The 15 mutants of the binding entry's second round | each its own test, on this merged source |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Merge of the binding rule's third round
+
+`t3/send-lanes` at `26c4eb3` is merged in with a normal merge commit, without conflicts, carrying
+`t3/receipt-turn-binding` at `064593c`: a turn's `row_ids` are stored only as a list of positive row IDs and checked
+again when read, a receipt keeps the row Hermes's admission named, and the test fake joins waiting steers into one
+row and can hand later steers to the next turn. The steering rule is unchanged; its known limit is in that entry.
+`test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row` passes under the new fake in all three
+cases: a redirected send is a correction delivered as a row of its own, and it is not a steering receipt.
+
+Source fingerprint sha256:6c913b191f3a90caec07321762bf9d16d9b9b555859c15d732b2c62019b35ebc (1688 source files); `src/hermes` alone sha256:9cdcb4ebd74c727bfdce6ad82862274df9f683effb89f1bc4ecfb8f302b95bf6 (20 source files). Same host and versions.
+
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (Python 3.14.10, 212 s). `tests/hermes_turn_binding_test.py`:
+  27 tests.
+- `npm run lint:py` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- Red proof on the merged source: the 11 mutants of the binding entry's third round each turn the same tests red as
+  on `t3/receipt-turn-binding`.
+
+Flaky, not caused by this merge: `test_a_queued_image_send_stays_unbound_beside_an_older_row_with_its_words_and_file`
+failed 2 of 60 isolated runs at `origin/t3/send-lanes` (`aba9af0`) and at `origin/t3/admission-turn` (`a10b127`), and
+0 of 60 at `t3/receipt-turn-binding`. When it fails, Alice's queued turn runs with no image: the racing native turn's
+thread took the session's attached images after the add-on had attached her photo. Upstream also takes them on the
+turn's own thread (`tui_gateway/prompt_turn.py:150` at `ed1afb0`). Making the race wait for that turn to start
+deadlocks, because the turn cannot start while the add-on is inside `image.attach`. Not fixed here; whether a real
+native turn can take an app send's staged image is a question for the send-lanes staging order.
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
