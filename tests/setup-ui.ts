@@ -12,12 +12,9 @@ if (typeof document !== "undefined") {
   console.error = (...args: unknown[]) => { if (!recordActWarning(args)) logError.apply(console, args); };
   beforeEach(() => { takeActWarnings(); });
   const { unmountAll } = await import("./ui-harness");
-  const { flushLocalSaves } = await import("../src/app/storage");
   afterEach(async () => {
     await unmountAll();
     document.body.replaceChildren();
-    // A deferred draft save must not land in the next test's storage, nor wait on a fake timer that is gone.
-    flushLocalSaves();
     localStorage.clear();
     sessionStorage.clear();
     vi.useRealTimers();

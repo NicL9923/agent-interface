@@ -64,7 +64,6 @@ export const approvalDecisionKey = (user: string, bot: string, approval: string)
 export const formReplyKey = (user: string, bot: string, message: string, card: string) => `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
 export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
 export function localRead<T>(key: string): T | null {
-  writeWaiting(key);
   try {
     return JSON.parse(localStorage.getItem(key) || "null");
   } catch {
@@ -72,56 +71,16 @@ export function localRead<T>(key: string): T | null {
   }
 }
 export function localRemove(key: string) {
-  waiting.delete(key);
   try {
     localStorage.removeItem(key);
   } catch {}
 }
 export function localSave(key: string, value: unknown) {
-  writeWaiting(key);
-  store(key, value);
-}
-function store(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
     /* Server persistence still applies when browser storage is full. */
   }
-}
-/** How long a deferred save may wait. A crash, which runs no page events, loses at most this much typing. */
-export const LOCAL_SAVE_WAIT_MS = 250;
-// Saves made with localSaveSoon, by key, holding the newest value for each.
-const waiting = new Map<string, unknown>();
-let waitTimer: ReturnType<typeof setTimeout> | undefined;
-let watchingPage = false;
-/**
- * Saves soon instead of now, so a keystroke does not serialize and store its draft at once. Rapid
- * saves to one key write only the newest, at most LOCAL_SAVE_WAIT_MS after the first. A hidden or
- * closing page writes everything at once, and any read, save or removal of the same key writes or
- * drops what waits first, so callers see the same order as with localSave.
- */
-export function localSaveSoon(key: string, value: unknown) {
-  waiting.set(key, value);
-  if (!watchingPage) {
-    watchingPage = true;
-    window.addEventListener("pagehide", flushLocalSaves);
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushLocalSaves(); });
-  }
-  waitTimer ??= setTimeout(flushLocalSaves, LOCAL_SAVE_WAIT_MS);
-}
-/** Writes every deferred save now. */
-export function flushLocalSaves() {
-  clearTimeout(waitTimer);
-  waitTimer = undefined;
-  const entries = [...waiting];
-  waiting.clear();
-  for (const [key, value] of entries) store(key, value);
-}
-function writeWaiting(key: string) {
-  if (!waiting.has(key)) return;
-  const value = waiting.get(key);
-  waiting.delete(key);
-  store(key, value);
 }
 /** Draft content in a fixed field order: uploads and the server's validation order file fields differently. */
 export const draftContent = (draft: Pick<Draft, "text" | "attachments">) =>

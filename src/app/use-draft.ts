@@ -4,7 +4,7 @@ import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
 import { ApiError, pollWhileVisible, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
-import { draftKey, isSentCopy, localRead, localSave, localSaveSoon, sameDraft } from "./storage";
+import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
 /** Dispatched on window by the open chat's event stream when the person's draft gets a new revision. */
@@ -310,8 +310,7 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
     )
       return;
     const user = userId;
-    // Off the keystroke: written within a moment, and at once if the page is hidden or closed.
-    localSaveSoon(draftKey(user, botId), draft);
+    localSave(draftKey(user, botId), draft);
     if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId && isSentCopy(draft) && sameDraft(pending, draft)) return;
     const epoch = identityEpoch.current;
     let saved = false;

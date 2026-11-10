@@ -173,9 +173,8 @@ The rest of this section is web-only. The avatar conductor and pose math that iO
 ### Crash reports
 
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
-Reload instead of a blank screen. Group drafts are written to the device on every edit.
-A chat draft is written within a quarter second of an edit, off the keystroke itself, and at
-once when the page is hidden, closed or reloaded, so a reload keeps both. While someone is signed in, the web client sends
+Reload instead of a blank screen. Chat and group drafts are written to the device on
+every edit, so a reload keeps them. While someone is signed in, the web client sends
 that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
 distinct report once, at most five per page load, and never chunk-load failures the
 screens already handle. The server logs each one as a `Client error` warning with the
