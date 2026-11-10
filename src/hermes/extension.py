@@ -371,31 +371,41 @@ def routine_run_body(home, job_id, execution, executions=()):
 
 
 class ReadQueue:
-    """Runs add-on reads on threads of its own, one at a time per key, in arrival order.
+    """Runs add-on reads on threads of its own, one job at a time per key, in arrival order.
 
     Waiting work holds no thread, so one slow assistant can take at most one worker
-    and never any of Hermes's native RPC pool, which its long handlers need.
+    and never any of Hermes's native RPC pool, which its long handlers need. A request
+    whose ``merge`` key equals that of a job still waiting in its lane joins that job,
+    and one run answers both. A job takes no one once it starts, so every request is
+    answered by a computation that began after it arrived.
     """
 
     def __init__(self, workers):
         self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-interface-read")
         atexit.register(lambda: self.pool.shutdown(wait=False, cancel_futures=True))
         self.lock = threading.Lock()
+        # Each lane holds only waiting jobs: (merge key, run, requests). run_next takes one out before it runs.
         self.queues = {}
 
-    def submit(self, key, job):
+    def submit(self, key, run, request, merge=None):
+        """Queue ``request`` for a job that calls ``run(requests)`` with every request merged into it."""
         with self.lock:
-            if key in self.queues:
-                self.queues[key].append(job)
+            lane = self.queues.get(key)
+            if lane is not None:
+                waiting = next((job for job in lane if merge is not None and job[0] == merge), None)
+                if waiting is not None:
+                    waiting[2].append(request)
+                else:
+                    lane.append((merge, run, [request]))
                 return
-            self.queues[key] = collections.deque([job])
+            self.queues[key] = collections.deque([(merge, run, [request])])
         self.pool.submit(self.run_next, key)
 
     def run_next(self, key):
         with self.lock:
-            job = self.queues[key].popleft()
+            _, run, requests = self.queues[key].popleft()
         try:
-            job()
+            run(requests)
         except Exception:
             logging.getLogger(__name__).exception("Add-on read failed")
         finally:
@@ -406,6 +416,24 @@ class ReadQueue:
             # Requeue behind other keys' work instead of looping, so keys share workers fairly.
             if more:
                 self.pool.submit(self.run_next, key)
+
+
+def answered(response, rid, queued):
+    """One queued request's answer from its job's response: its own ID and, for an open, its own wait.
+
+    ``queued`` is the seconds the request waited before its job started. ``app_timing`` reports
+    it as ``queued`` and counts it in ``total``, so the app server's ``transit``, Hermes's
+    round trip less the add-on's total, stays the time outside the add-on.
+    """
+    if response is None:
+        return None
+    reply = {**response, "id": rid}
+    result = response.get("result")
+    timing = result.get("app_timing") if isinstance(result, dict) else None
+    if isinstance(timing, dict):
+        waited = round(queued * 1000, 1)
+        reply["result"] = {**result, "app_timing": {"queued": waited, **timing, "total": round(timing.get("total", 0) + waited, 1)}}
+    return reply
 
 
 class Keeper:
@@ -473,6 +501,11 @@ INSERT_REJECTED = "INSERT INTO receipts(request_id,digest,profile,session_id,sto
 # Reads the app polls. They run on the add-on's own read queue instead of the
 # connection's serial lane, so one slow history read never queues every other RPC.
 QUEUED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
+# Queued reads whose waiting requests may share one computation when their connection and
+# parameters are identical. Each answer depends only on its parameters and state read after
+# every merged request arrived, and the effects are idempotent: an open activates the session
+# and binds receipts to rows; discovery records each routine run once, by its unique event key.
+MERGED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
 # Distinct assistants read at once; a busy assistant's later reads wait without a thread.
 READ_WORKERS = 4
 # Decorated history is keyed on exact history identity, journal mutation and native
@@ -684,6 +717,7 @@ class Bridge:
         the connection's transport, release once answered. Direct handle_request calls stay
         synchronous, and a request without a connection transport keeps native dispatch.
         """
+        arrived = time.perf_counter()
         transport = args[0] if args else kwargs.get("transport")
         method = request.get("method") if isinstance(request, dict) else None
         if method not in QUEUED_READS or transport is None or "id" not in request:
@@ -693,22 +727,35 @@ class Bridge:
         if not retirement.acquire():
             return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
         context = contextvars.copy_context()
-        def answer():
+        def answer(requests):
+            # Each merged request holds its own admission reservation until it is answered.
+            started = time.perf_counter()
             try:
-                # Native activation attaches the session to the transport bound here.
+                # Native activation attaches the session to the transport bound here, which
+                # every merged request shares.
                 bind_transport(transport)
                 try:
                     response = self.original_handle(request)
                 except Exception as exc:
                     response = server._err(request["id"], -32000, f"handler error: {exc}")
-                if response is not None:
-                    transport.write(response)
+                for each, arrival in requests:
+                    reply = answered(response, each["id"], started - arrival)
+                    if reply is not None:
+                        transport.write(reply)
             finally:
-                retirement.release()
+                for _ in requests:
+                    retirement.release()
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        merge = None
+        if method in MERGED_READS:
+            try:
+                # Native activation binds the session to its caller's connection, so only one connection's requests merge.
+                merge = (id(transport), json.dumps(request.get("params"), sort_keys=True))
+            except (TypeError, ValueError):
+                merge = None
         try:
             self.reads.submit((method, params.get("profile", "default") if method == "agent-interface.open" else None),
-                              lambda: context.run(answer))
+                              lambda requests: context.run(answer, requests), (request, arrived), merge)
         except BaseException:
             retirement.release()
             raise
