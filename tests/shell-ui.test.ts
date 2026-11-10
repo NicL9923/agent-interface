@@ -93,6 +93,9 @@ describe("command palette", () => {
     await key({ key: "ArrowDown" }, paletteInput());
     expect(activeOption()).toBe('Search messages for "kitch"');
     await key({ key: "ArrowUp" }, paletteInput());
+    // Safari's Enter that confirms an IME word reports isComposing false and keyCode 229. It only confirms the word.
+    await key({ key: "Enter", keyCode: 229 }, paletteInput());
+    expect(palette()?.open).toBe(true);
     await key({ key: "Enter" }, paletteInput());
     expect(palette()).toBeNull();
     expect(new URL(location.href).searchParams.get("bot")).toBe("kitchen");
@@ -324,6 +327,24 @@ describe("composer", () => {
     await typeInto(field(), "Half a thought");
     await arrow("ArrowUp");
     expect(field().value).toBe("Half a thought");
+  });
+
+  it("lets the Enter that confirms an IME word in Safari confirm it without sending", async () => {
+    conversation = { ...conversation, messages: [mine("1", "Plan dinner")] };
+    await render();
+    const press = (init: KeyboardEventInit) => act(async () => {
+      field().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    });
+    const sends = () => vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages");
+    // Safari ends the composition first, so this keydown has isComposing false and only keyCode 229 gives it away.
+    await press({ key: "ArrowUp", isComposing: false, keyCode: 229 });
+    expect(field().value).toBe("");
+    await typeInto(field(), "こんにちは");
+    await press({ key: "Enter", isComposing: false, keyCode: 229 });
+    expect(sends()).toEqual([]);
+    expect(field().value).toBe("こんにちは");
+    await press({ key: "Enter", keyCode: 13 });
+    expect(sends().map(([, body]) => (body as { text: string }).text)).toEqual(["こんにちは"]);
   });
 
   it("never recalls into a draft while its send is in flight", async () => {

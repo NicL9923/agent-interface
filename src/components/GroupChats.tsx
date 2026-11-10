@@ -15,6 +15,7 @@ import { MessageMarkdown } from './MessageMarkdown';
 import { Icon } from './Icon';
 import { Avatar } from './Avatar';
 import { When } from './When';
+import { imeKey } from '../app/ime';
 import './collaboration.css';
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
@@ -245,7 +246,8 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
             onChange={event => { saveDraft(event.target.value); findMention(event.target); }}
             onSelect={event => findMention(event.currentTarget)} onBlur={() => setMention(null)}
             onKeyDown={event => {
-              if (suggesting && !event.nativeEvent.isComposing) {
+              if (imeKey(event.nativeEvent)) return;
+              if (suggesting) {
                 if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                   event.preventDefault();
                   setMentionIndex(index => (Math.min(index, suggestions.length - 1) + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length);
@@ -254,7 +256,7 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
                 if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
                 if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
               }
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
+              if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
             }} />
           <div className="composer-tools"><span id="group-status" role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>
