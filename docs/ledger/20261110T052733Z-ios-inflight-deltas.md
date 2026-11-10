@@ -1,6 +1,6 @@
 # November 10 iOS live reply growth notices
 
-Branch `t3/ios-inflight-deltas` over `da00a26`, written on NicolasLaptop (Fedora, Linux x64),
+Branch `t3/ios-inflight-deltas` over `114c4b4`, written on NicolasLaptop (Fedora, Linux x64),
 Node 24.22.2. The iOS app's conversation stream moves from `?inflight=1` to `?inflight=2`. No
 server code changed; the server still serves `?inflight=1` to installed builds.
 
