@@ -562,6 +562,14 @@ message, moves a find, or picks a palette entry. Pasting 32 KB of text or more a
 or moving an assistant on home shows Undo for five seconds. Web text follows the
 browser's text size setting.
 
+On a phone, the message box sits directly above the on-screen keyboard and the latest
+message stays in view as the keyboard opens and closes. Android browsers resize the page
+for the keyboard through the viewport's `interactive-widget=resizes-content`. Safari on
+iPhone and iPad and the installed iOS web app ignore it, so `src/app/keyboard-viewport.ts`
+sizes the app to the visible area while the keyboard is up; a pinch zoom never resizes it.
+Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
+messages. Attach and Talk switch to the file picker or your voice, so they let it close.
+
 ## Hermes updates and activity
 
 Open Hermes and updates in web Settings, or Hermes updates in iOS

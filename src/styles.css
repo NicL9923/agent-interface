@@ -215,9 +215,11 @@ a {
   white-space: nowrap;
   border: 0;
 }
+/* An on-screen keyboard that the browser lays out over the page sets the visible frame here. See keyboard-viewport.ts. */
 .app-shell {
   display: flex;
-  height: 100dvh;
+  height: var(--keyboard-height, 100dvh);
+  margin-top: var(--keyboard-top, 0px);
   min-height: 0;
   overflow: hidden;
 }
@@ -746,9 +748,12 @@ a {
   margin: 18px 0;
 }
 .composer-area {
+  --composer-bottom-inset: env(safe-area-inset-bottom);
   flex-shrink: 0;
-  padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, env(safe-area-inset-bottom));
+  padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, var(--composer-bottom-inset));
 }
+/* The home indicator's inset stays reported under an iOS keyboard, which covers it, so the composer sits on the keyboard. */
+:root[data-keyboard-open] .composer-area { --composer-bottom-inset: 0px; }
 .activity-status {
   display: flex;
   gap: 7px;
@@ -1176,7 +1181,7 @@ a {
     padding: 26px 28px 12px;
   }
   .composer-area {
-    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
+    padding: 6px 12px max(8px, var(--composer-bottom-inset));
   }
 }
 @media (max-width: 620px) {
@@ -1270,7 +1275,7 @@ a {
     font-size: 1.5625rem;
   }
   .composer-area {
-    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
+    padding: 6px 12px max(8px, var(--composer-bottom-inset));
   }
   .composer {
     padding: 4px;

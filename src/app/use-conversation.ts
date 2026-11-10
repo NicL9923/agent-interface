@@ -437,6 +437,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // Browser scroll anchoring is off, so late images above the reader are offset here too.
     const observer = new ResizeObserver(() => placeLatest.current());
     observer.observe(node);
+    // The view shrinks when a phone's keyboard opens or the composer grows, which moves no content,
+    // so a follower would otherwise end up with the latest message under the composer.
+    if (element) observer.observe(element);
     return () => { observer.disconnect(); stop?.(); };
   }, []);
   const jumpToLatest = useCallback(() => {

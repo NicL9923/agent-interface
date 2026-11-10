@@ -356,6 +356,23 @@ describe("composer", () => {
     expect(sends().map(([, body]) => (body as { text: string }).text)).toEqual(["こんにちは"]);
   });
 
+  it("keeps focus in the message box when Send is pressed, so a phone's keyboard stays up, and still sends", async () => {
+    await render();
+    const sendButton = () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!;
+    await typeInto(field(), "Feed the horses");
+    field().focus();
+    // jsdom has no focusing steps, so a press does what the HTML spec has a browser do on mousedown,
+    // which a tap also fires: focus the pressed button unless the page prevented that default.
+    await act(async () => {
+      const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      if (sendButton().dispatchEvent(press)) sendButton().focus();
+    });
+    expect(document.activeElement).toBe(field());
+    await act(async () => sendButton().click());
+    const sent = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages");
+    expect(sent.map(([, body]) => (body as { text: string }).text)).toEqual(["Feed the horses"]);
+  });
+
   it("never recalls into a draft while its send is in flight", async () => {
     conversation = { ...conversation, messages: [mine("1", "Plan dinner")] };
     vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => path === "/bots/shared/messages"

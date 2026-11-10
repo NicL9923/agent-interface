@@ -1,0 +1,89 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from "vitest";
+import { followKeyboard } from "../src/app/keyboard-viewport";
+
+/** A visual viewport at the browser's edge: the sizes a phone reports, and the events it fires. */
+class FakeViewport extends EventTarget {
+  height = 800;
+  scale = 1;
+  pageTop = 0;
+  set(next: Partial<Pick<FakeViewport, "height" | "scale" | "pageTop">>, event: "resize" | "scroll" = "resize") {
+    Object.assign(this, next);
+    this.dispatchEvent(new Event(event));
+  }
+}
+const root = document.documentElement;
+const shell = () => ({
+  height: root.style.getPropertyValue("--keyboard-height"),
+  top: root.style.getPropertyValue("--keyboard-top"),
+  open: root.hasAttribute("data-keyboard-open"),
+});
+const full = { height: "", top: "", open: false };
+let stop = () => {};
+const follow = (viewport: FakeViewport | null, innerHeight = 800) => {
+  const host = { innerHeight, visualViewport: viewport, document };
+  stop = followKeyboard(host);
+  return host;
+};
+afterEach(() => { stop(); stop = () => {}; });
+
+describe("following an on-screen keyboard", () => {
+  it("fits the shell to what is visible while an iOS keyboard is up, and gives the space back when it closes", () => {
+    const viewport = new FakeViewport();
+    follow(viewport);
+    expect(shell()).toEqual(full);
+    // Safari shrinks only the visual viewport and pans it down to the field.
+    viewport.set({ height: 460, pageTop: 120 });
+    expect(shell()).toEqual({ height: "460px", top: "120px", open: true });
+    viewport.set({ pageTop: 60 }, "scroll");
+    expect(shell().top).toBe("60px");
+    viewport.set({ height: 800, pageTop: 0 });
+    expect(shell()).toEqual(full);
+  });
+
+  it("does nothing where the keyboard already shrinks the layout viewport, as the meta asks of Android", () => {
+    const viewport = new FakeViewport();
+    const host = follow(viewport);
+    host.innerHeight = 470;
+    viewport.set({ height: 470 });
+    expect(shell()).toEqual(full);
+    // A fraction of a pixel between the two is layout rounding, not a keyboard.
+    viewport.set({ height: 469.4 });
+    expect(shell()).toEqual(full);
+  });
+
+  it("never resizes the shell for a pinch zoom", () => {
+    const viewport = new FakeViewport();
+    follow(viewport);
+    viewport.set({ scale: 2, height: 400, pageTop: 200 });
+    expect(shell()).toEqual(full);
+    viewport.set({ scale: 2, pageTop: 350 }, "scroll");
+    expect(shell()).toEqual(full);
+  });
+
+  it("holds the keyboard's frame through a zoom and settles once the zoom ends", () => {
+    const viewport = new FakeViewport();
+    follow(viewport);
+    viewport.set({ height: 460, pageTop: 0 });
+    viewport.set({ scale: 1.5, height: 306 });
+    expect(shell()).toEqual({ height: "460px", top: "0px", open: true });
+    // The keyboard closed while zoomed; back at normal scale the full height returns.
+    viewport.set({ scale: 1, height: 800 });
+    expect(shell()).toEqual(full);
+  });
+
+  it("stops listening and restores the full height when stopped", () => {
+    const viewport = new FakeViewport();
+    follow(viewport);
+    viewport.set({ height: 460 });
+    stop();
+    expect(shell()).toEqual(full);
+    viewport.set({ height: 300 });
+    expect(shell()).toEqual(full);
+  });
+
+  it("leaves the CSS height alone in a browser without a visual viewport", () => {
+    follow(null);
+    expect(shell()).toEqual(full);
+  });
+});
