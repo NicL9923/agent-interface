@@ -21,6 +21,8 @@ const cases = [
   { chat: 'group', draft: 'Plan Saturday', button: 'Send to group' },
   { chat: 'group', draft: long, button: 'Send to group' },
   { chat: 'group', draft: long, thread: true, button: 'Send to group' },
+  // A send the server refuses shows an error above the conversation and a retry button in Send's place.
+  { chat: 'group', draft: long, fail: true, button: 'Retry same saved message' },
 ];
 
 const browser = await chromium.launch();
@@ -45,6 +47,11 @@ for (const [width, height, frames] of views) for (const frame of frames) for (co
   await field.focus();
   if (frame) await page.evaluate(visible => window.openKeyboard(visible), frame);
   await field.fill(item.draft);
+  if (item.fail) {
+    await page.route('**/groups/*/messages', route => route.request().method() === 'POST' ? route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"Hermes is unavailable."}' }) : route.fallback());
+    await page.getByRole('button', { name: 'Send to group' }).click();
+    await page.getByRole('button', { name: item.button }).waitFor();
+  }
   await page.waitForTimeout(250);
   const seen = await page.getByRole('button', { name: item.button }).evaluate(button => {
     const box = button.getBoundingClientRect();
@@ -55,11 +62,11 @@ for (const [width, height, frames] of views) for (const frame of frames) for (co
   const visible = frame ?? height;
   const ok = seen.top >= 0 && seen.bottom <= visible && seen.tappable && seen.shellScrolled === 0;
   rows.push({ width, height, frame, chat: item.chat, draft: item.draft === long ? 'long' : item.draft ? 'short' : 'empty',
-    attach: !!item.attach, thread: !!item.thread, button: String(item.button), ...seen, ok });
+    attach: !!item.attach, thread: !!item.thread, failed: !!item.fail, button: String(item.button), ...seen, ok });
   await context.close();
 }
 await browser.close();
-for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}`);
+for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}`);
 const failed = rows.filter(row => !row.ok).length;
 console.log(`${rows.length - failed} of ${rows.length} cases keep the button whole and tappable.`);
 if (report) writeFileSync(report, JSON.stringify(rows, null, 1));

@@ -201,12 +201,18 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
     // Include pending decisions and paging controls after the messages.
     view.scrollTop = view.scrollHeight;
   }, [events, state]);
-  return <div className="group-panel" ref={panel}>
+  // Errors and notes sit inside the conversation's section. The composer sticks to the bottom of the panel only
+  // within that section, so a note above the section would push the section down and the composer's buttons with
+  // it, off a short screen.
+  const notes = <>
     {room.error && <FormMessage tone="error">{room.error} <button onClick={() => void room.reload()}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {notice && <p className="capability-note" role="status">{notice}</p>}
     {reason && !canSend && !gone && <p className="capability-note">{reason}</p>}
-    {!gone && <section aria-label="Group conversation">{state ? <><div className="group-heading"><div>
+  </>;
+  return <div className="group-panel" ref={panel}>
+    {gone && notes}
+    {!gone && <section aria-label="Group conversation">{notes}{state ? <><div className="group-heading"><div>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p>
         {context?.purpose && <p className="group-purpose">{context.purpose}</p>}</div>
         <div className="group-heading-actions">
