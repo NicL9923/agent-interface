@@ -378,7 +378,9 @@ and [internal testers and build expiry](https://developer.apple.com/help/app-sto
 The server owns execution and notification delivery while the app is closed.
 The foreground client follows the event stream of the conversation on screen, including the iPad
 detail pane, and reads it on each change notice, polling every 30 seconds while the stream is live and every
-1.5 seconds without one, with backoff. Home, Today and Search leave the conversation alone; it is read
+1.5 seconds without one, with backoff. A streaming reply arrives whole once and then as what it grew by
+(`?inflight=2`, see [native-api.md](../docs/native-api.md)); growth that does not continue the reply the app
+holds reloads the conversation and reconnects the stream. Home, Today and Search leave the conversation alone; it is read
 again as soon as it returns to the screen. Bootstrap refreshes every 45 seconds and on roster notices. Reads keep the last response and its ETag in memory, so an unchanged
 response arrives as an empty 304 and is not decoded or applied again; sign-out and identity changes clear them. Today,
 home's group chat rows (every 5 minutes) and an open group poll only while the app is active, and refresh once on return. A `groups`

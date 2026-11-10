@@ -291,8 +291,9 @@ extension Data {
     config.httpCookieStorage = session.configuration.httpCookieStorage
     return URLSession(configuration: config, delegate: APISessionDelegate(origin: baseURL), delegateQueue: nil)
   }()
-  /// The lines of a server event stream. Anything but an open stream throws.
-  func events(_ path: String) async throws -> AsyncLineSequence<URLSession.AsyncBytes> {
+  /// An open server event stream; read its `lines`. Anything but an open stream throws. A reader
+  /// that stops before the stream ends cancels its `task`, so the connection closes with it.
+  func events(_ path: String) async throws -> URLSession.AsyncBytes {
     let route = token != nil ? activeRoute : nil
     let sentToken = token
     let pinning = route.map { DirectTaskDelegate(pin: $0.certificateSha256) }
@@ -322,7 +323,7 @@ extension Data {
       bytes.task.cancel()
       throw APIError(message: "The change stream is unavailable.", status: http?.statusCode ?? 0)
     }
-    return bytes.lines
+    return bytes
   }
   func get<T: Decodable & SendableMetatype>(_ path: String) async throws -> T {
     let body = try await data(path: "/api" + path)

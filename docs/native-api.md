@@ -77,7 +77,9 @@ so treat a truncated body as a failed download.
 every file. With `turns` or `start`, it returns that window, `earlier` messages
 before it, and only the window's `files`; `earlierFiles` counts files that only
 earlier messages carry, and `GET /api/bots/:id/files?before=MESSAGE_ID` lists
-those messages with their files. `GET /api/bots/:id/events` is a server-sent
+those messages with their files. Every read also returns `version`, the
+structural version of the conversation when the read began, which orders it
+against `?inflight=3` turn events (below). `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the
 conversation may have changed, so refetch it, and refetch after any reconnect.
 It sends a `ping` event every 25 seconds and ends when the session does.
@@ -105,7 +107,7 @@ line. Its `sendTiming` field holds `route` (`messages`, `steer` or `talk`), `bot
 `prepareMs` (the admission call began), `admissionMs` (Hermes answered),
 `firstFrameMs` (the first `message.delta` or `reasoning.delta` of the send's run
 after it arrived, which can come before `admissionMs`) and `firstLiveMs` (the first
-`inflight` or `inflight-delta` event of that run written to any open event stream).
+`inflight`, `inflight-delta` or `turn` event of that run written to any open event stream).
 Subtract neighbours for the time each stage took; `firstLiveMs` is what a person
 watching an open chat waited.
 
@@ -173,17 +175,50 @@ synthetic assistant row whose ID ends in `-inflight`, including optional
 `reasoning` and `origin`. Replace that row, or remove it if both text and
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
 The same persisted-segment and origin rules as conversation reads apply,
-and private agent handoffs are redacted. Apply a patch only while the fetched
-conversation is active and its `activity.runId` matches the patch. A settled
-conversation or a newer run supersedes a retained live tail.
+and private agent handoffs are redacted. A persisted segment is any assistant row
+saved since the prompt of the Hermes turn that is running, the prompt Hermes
+reports for it. Guidance steered into that turn keeps the segments saved before
+it, so the live reply never repeats them. Guidance Hermes queued instead starts a
+turn of its own, so only that turn's segments count. Only steered guidance follows
+a running turn's prompt, so the reported prompt is looked for only among the
+trailing prompts: the last shown prompt and, while the prompts before it are
+steered guidance, those, back to and including the first prompt that is not
+guidance. The last of them with the reported text is the turn's prompt, and an
+older prompt worded the same is never reached. The reported prompt is compared
+trimmed and without its trailing file references, as the saved prompt shows it,
+so a file sent alone is matched by its empty text, and an image sent alone, which
+Hermes reports as an empty prompt, too. When no trailing prompt has the reported
+text, as for a hidden prompt such as a goal continuation or one Hermes has not
+saved yet, the segments count from the last shown prompt, as before turn events
+existed. So the segments counted are the same as before except where guidance was
+steered into the running turn.
+
+Two known gaps remain, each needing prompts worded exactly alike. Guidance steered
+into the running turn and worded exactly like its prompt is taken as the turn's
+start, so a segment the turn saved before the guidance shows again in the live
+reply, as it did before turn events existed. And a turn whose prompt is not shown
+yet, that repeats word for word a trailing prompt other than the last, such as the
+run's first prompt after queued guidance, and whose live text starts with what
+that prompt's turn saved first, loses those words from its live reply, which
+showed them before turn events existed. Rows and text cannot tell that turn from
+guidance steered into the earlier one. It clears when Hermes saves the prompt,
+which is then the last one with its text. A hidden prompt is never shown, so for
+one worded like a person's prompt it lasts the turn. A marker from the Hermes
+add-on for where a native turn starts would close both.
+
+Apply a patch only while the fetched conversation is active and its
+`activity.runId` matches the patch. A settled conversation or a newer run
+supersedes a retained live tail.
 Structural events still send `data: change`, meaning refetch. Clients fetch on
 stream open and reconnect; the server sends no initial notice. Streams without the parameter retain their
 one-change-per-second streaming cadence.
 
 `?inflight=2` opts in to the same stream with growth sent as deltas, so a long
-reply is not resent whole every 250 ms. `?inflight=1` is unchanged, and the iOS
-app and cached web bundles keep using it. A `?inflight=2` stream sends the first
-`event: inflight` whole and then, while the same reply only grows, `event:
+reply is not resent whole every 250 ms. The iOS app uses it, and so do web bundles
+cached from before the web client moved to `?inflight=3`. `?inflight=1` is unchanged
+and stays served, because iOS builds released before the iOS app moved to
+`?inflight=2` and older cached web bundles still use it. A `?inflight=2` stream
+sends the first `event: inflight` whole and then, while the same reply only grows, `event:
 inflight-delta` with JSON `{botId, messageId, baseTextLength, baseReasoningLength,
 appendText?, appendReasoning?, activity, toolCalls?}`. The lengths count UTF-16
 code units of the `message.text` and `message.reasoning` the stream last sent, an
@@ -197,8 +232,99 @@ of that reply may be sent as deltas on the whole event's text and reasoning. Del
 computed on the redacted reply, so redaction applies exactly as for `?inflight=1`.
 If a delta's `messageId` or base lengths do not match the reply you hold, or you
 hold none, discard it, refetch the conversation and reconnect the stream, which
-restarts from a whole event. A server that predates `?inflight=2` treats it as no
-opt-in and sends only change notices, which clients already handle.
+restarts from a whole event. Swift's `String.count` counts characters, so the iOS
+app compares `utf16.count`. The iOS app also drops the reply it holds when it cannot
+decode a whole event, so the next delta reconnects. Its first reconnect after a
+refused delta is immediate; while no delta applies between refusals, each further
+one waits 3 seconds longer, up to 30. A server that predates `?inflight=2` treats it
+as no opt-in and sends only change notices, which clients already handle.
+
+`?inflight=3` opts in to turn events, so a reply keeps streaming across tool calls
+without waiting for a refetch. The web client uses it. `?inflight=1` and
+`?inflight=2` are unchanged, so the iOS app and cached web bundles are not
+affected. A server that predates `?inflight=3` treats it as no opt-in and sends
+only change notices.
+
+On `?inflight=1` and `?inflight=2` streams, live replies stop after each change to
+the turn's structure, such as a tool finishing, a progress line or a turn starting,
+until a client's refetch lets the server rebuild the reply. On a `?inflight=3`
+stream the server reads the running turn itself after each such change: once for
+all of an assistant's `?inflight=3` streams, with at most one read on its way and
+one queued, and never while no such stream is open. Its read is the turn's own
+window, from the turn's first message. Only `?inflight=3` streams see that read:
+`?inflight=1` and `?inflight=2` streams open beside them still get a live reply
+only once a client's own read has rebuilt it, and the server's read never delays
+or repeats a client's read.
+
+Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
+messages, after?, message, activity, toolCalls}`:
+
+- `messages`: the running Hermes turn's saved messages, from its prompt, exactly as
+  `GET /api/bots/:id/conversation` shows them to the same person: sender names,
+  private-assistant redaction, file references and progress lines. Guidance steered
+  into the turn belongs to it. Guidance Hermes queued instead of steering in starts
+  a turn of its own under the same run, so that turn's events start at the
+  guidance, and the earlier turn's messages stay above it as the client holds them.
+  A finished turn is sent once more with its final messages and settled `activity`.
+- `after`: the ID of the message just before `messages[0]`, `null` when the turn
+  starts the conversation, and absent when the server's read did not include it.
+- `message`, `activity` and `toolCalls`: the live reply, as in `inflight`, built
+  on the same read as `messages`, so it leaves out exactly the text in `messages`.
+- `version`: that read's structural version.
+
+Growth of that reply arrives as `inflight-delta`, as on `?inflight=2`, based on the
+last `turn` event's `message`. The server sends a whole `turn` event instead
+whenever the read the reply is built on changed, in every case where `?inflight=2`
+sends a whole `inflight` except after a `data: change` notice, and on a new stream.
+`data: change` notices still follow every structural change at most once a second.
+Keep refetching on them: approvals, requests, files, the draft and the read
+position come only from the read.
+
+Place a turn in the conversation you hold: keep everything before `messages[0]`,
+or through the message `after` names, or nothing when `after` is `null`, and replace
+the rest with `messages` followed by `message` as the live row. Drop any
+`-inflight` row you held. If you hold neither message, or a kept message is also
+in `messages`, discard the event and refetch.
+
+Order turns and reads by `version`, which has the form `BOOT:EPOCH:GENERATION`.
+Two versions with the same `BOOT` compare by `EPOCH`, then `GENERATION`, as
+integers. A different `BOOT` means the server restarted, and the two versions do
+not compare. Arrival order cannot settle it either: a turn event the old process
+buffered can arrive after a read the new one answered. So only a read you asked
+for decides which `BOOT` your view shows, and the newest read asked wins:
+
+- Take the answer to the most recent read you asked for, whatever its `BOOT`. Its
+  `BOOT` becomes the view's.
+- Drop the answer to an older read when its `BOOT` differs from the view's. The
+  newer read is already asked, so do not read again for it. An older read's answer
+  with the view's `BOOT` orders by version as below.
+- Never let a turn event from another `BOOT` change the view's `BOOT`, and never
+  place it on a conversation from another `BOOT`. Hold it and read once; turn
+  events from another `BOOT` that arrive meanwhile replace the held one and share
+  that read. Place the held event on the first read you take that you asked after
+  it, if that read has the event's `BOOT` and is older; otherwise drop the event.
+  Never let settling it replace or drop a turn event you already placed from the
+  read's `BOOT`: keep whichever of the two is newer, and keep growing that one's
+  live reply. Apply each `inflight-delta` to the turn event whose live reply it
+  continues, wherever you keep that event, held or placed, so whichever turn you
+  keep brings back its live reply with the growth it already received. If the read is older than the held event and holds neither its first
+  message nor `after`, read once more. A read that fails leaves the event held for
+  the next read you take. Until then, keep showing what you hold, without the new
+  live reply.
+
+No response, whatever its `BOOT`, should make you read again by itself, apart from
+that one read for a held event it cannot place, so two processes that disagree,
+such as two behind one address, cost one read per change notice and at most two
+per turn event they hold, never a loop. Merge asks made while a read is
+on its way into one read.
+
+Within one `BOOT`, a read can arrive after a turn event that is newer than it,
+because the read set out first. Place that turn on top of the read. A turn
+event older than the conversation you hold changes nothing. Show a live reply
+only beside messages of its own version: after a read newer than your last turn
+event, show the read's own `-inflight` row until a turn event of that version
+arrives, and keep applying growth to the older reply meanwhile so its base lengths
+still match.
 
 `GET /api/bootstrap?roster=lean` and `GET /api/bots?roster=lean` opt in to
 roster fields only: `id`,

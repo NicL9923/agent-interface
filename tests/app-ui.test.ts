@@ -145,21 +145,21 @@ describe("conversation state", () => {
     await render();
     const reads = vi.mocked(api).mock.calls.length;
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=3")) stream.emit("inflight", JSON.stringify({botId:"shared",message:{id:"sid-inflight",role:"assistant",text:"Growing reply"},activity:{state:"thinking",runId:"run"},toolCalls:[]}));
     });
     expect(container.textContent).toContain("Growing reply");
     expect(vi.mocked(api).mock.calls).toHaveLength(reads);
   });
   describe("inflight growth notices", () => {
     const run = { state: "thinking" as const, runId: "run" };
-    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=2"))!;
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=3"))!;
     const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
     const whole = (text: string) => JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [] });
     const growth = (changes: object) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: 7, baseReasoningLength: 0, activity: run, ...changes });
     it("opts in to growth notices and applies one that continues the reply it holds", async () => {
       conversation = { ...conversation, activity: run, messages: [{ id: "u", role: "user", text: "Hello" }] };
       await render();
-      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=2&drafts=1");
+      expect(FakeEventSource.created).toContain("/api/bots/shared/events?inflight=3&drafts=1");
       await act(async () => open().emit("inflight", whole("Growing")));
       const before = vi.mocked(api).mock.calls.length;
       await act(async () => open().emit("inflight-delta", growth({ appendText: " reply" })));
@@ -192,11 +192,394 @@ describe("conversation state", () => {
       expect(reads()).toBeGreaterThan(before);
     });
   });
+  describe("turn events", () => {
+    const run = { state: "thinking" as const, runId: "run-2" };
+    const open = () => [...FakeEventSource.streams].find(stream => stream.url.includes("inflight=3"))!;
+    const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/bots/shared/conversation?")).length;
+    const prompt = { id: "req-2", role: "user" as const, text: "Check the barn" };
+    const earlier = [{ id: "u1", role: "user" as const, text: "Fence?" }, { id: "a1", role: "assistant" as const, text: "Fixed." }];
+    const saved = { id: "4", role: "assistant" as const, text: "Looking in the barn." };
+    const turn = (version: string, messages: object[], text: string, extra: object = {}) => JSON.stringify({ botId: "shared", version, messages,
+      message: { id: "sid-inflight", role: "assistant", text }, activity: run, toolCalls: [], ...extra });
+    const growth = (base: number, appendText: string) => JSON.stringify({ botId: "shared", messageId: "sid-inflight", baseTextLength: base, baseReasoningLength: 0, appendText, activity: run });
+    const count = (text: string) => container.textContent!.split(text).length - 1;
+    async function opened() {
+      conversation = { ...conversation, activity: run, messages: [...earlier, prompt], version: "b:1:5" };
+      await render();
+      await act(async () => open().emit("turn", turn("b:1:6", [prompt, saved], "Found")));
+    }
+    it("shows a saved segment and the live reply from one event, without a read, and grows the reply", async () => {
+      await opened();
+      const before = reads();
+      expect(count("Looking in the barn.")).toBe(1);
+      expect(container.textContent).toContain("Found");
+      await act(async () => open().emit("inflight-delta", growth(5, " it.")));
+      expect(container.textContent).toContain("Found it.");
+      expect(reads()).toBe(before);
+    });
+    it("puts the turn back on top of a read that set out before it", async () => {
+      await opened();
+      // The read began before Hermes saved the segment: it still holds that text as its own live tail.
+      conversation = { ...conversation, version: "b:1:5", messages: [...earlier, prompt, { id: "sid-inflight", role: "assistant", text: "Looking in the barn. Fou" }] };
+      await changed();
+      // Once: the read's own live tail, which repeats the saved segment, is not shown beside the turn.
+      expect(count("Looking in the barn.")).toBe(1);
+      expect(container.textContent).toContain("Found");
+    });
+    it("lets a newer read stand, and shows no live reply built on an older one until its own turn arrives", async () => {
+      await opened();
+      conversation = { ...conversation, version: "b:1:7", messages: [...earlier, prompt, saved, { id: "5", role: "assistant", text: "Found the leak." },
+        { id: "sid-inflight", role: "assistant", text: "Checking the gate" }] };
+      await changed();
+      await act(async () => open().emit("inflight-delta", growth(5, " stale")));
+      expect(container.textContent).toContain("Found the leak.");
+      expect(container.textContent).toContain("Checking the gate");
+      expect(container.textContent).not.toContain("Found stale");
+      await act(async () => open().emit("turn", turn("b:1:7", [prompt, saved, { id: "5", role: "assistant", text: "Found the leak." }], "Checking the gate and fence")));
+      expect(container.textContent).toContain("Checking the gate and fence");
+      expect(count("Found the leak.")).toBe(1);
+    });
+    it("never brings back a reply a newer read already finished", async () => {
+      await opened();
+      conversation = { ...conversation, activity: { state: "done", runId: "run-2" }, version: "b:1:9", messages: [...earlier, prompt, saved, { id: "5", role: "assistant", text: "All done." }] };
+      await changed();
+      await act(async () => open().emit("turn", turn("b:1:8", [prompt, saved], "stale tail")));
+      expect(container.textContent).toContain("All done.");
+      expect(container.textContent).not.toContain("stale tail");
+    });
+    it("reads the conversation for a turn it cannot place", async () => {
+      await opened();
+      const before = reads();
+      await act(async () => open().emit("turn", turn("b:1:7", [{ id: "u9", role: "user", text: "Elsewhere" }], "Lost")));
+      await advance(0);
+      expect(reads()).toBeGreaterThan(before);
+      expect(container.textContent).not.toContain("Lost");
+    });
+    describe("across a server restart", () => {
+      // Boot "a" served the transcript on screen; the server restarted as boot "z".
+      const tail = { id: "sid-inflight", role: "assistant" as const, text: "Looking in the barn. Fou" };
+      const bootA = (): Conversation => ({ ...conversation, activity: run, version: "a:1:5", messages: [...earlier, prompt, tail] });
+      const at = (version: string, text: string, extra: Partial<Conversation> = {}): Conversation =>
+        ({ ...conversation, activity: run, version, messages: [...earlier, prompt, saved, { id: "sid-inflight", role: "assistant", text }], ...extra });
+      /** Holds the next conversation read until the test answers it, as a slow read begun before the restart. */
+      function holdNextRead() {
+        let answer!: (value: Conversation) => void;
+        const serve = vi.mocked(api).getMockImplementation()!;
+        let held = false;
+        vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => {
+          if (held || !path.startsWith("/bots/shared/conversation?")) return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+          held = true;
+          return await new Promise<Conversation>(resolve => { answer = resolve; }) as T;
+        });
+        return async (value: Conversation) => { await act(async () => answer(value)); await advance(0); };
+      }
+      /** Fails the next conversation read, as a server between processes does. */
+      function failNextRead() {
+        const serve = vi.mocked(api).getMockImplementation()!;
+        let failed = false;
+        vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => {
+          if (failed || !path.startsWith("/bots/shared/conversation?")) return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+          failed = true;
+          throw new Error("Hermes is restarting.");
+        });
+      }
+      /** Answers at most `limit` more conversation reads and holds the rest, so a read loop shows as a count instead of hanging. */
+      function limitReads(limit: number) {
+        const serve = vi.mocked(api).getMockImplementation()!;
+        let left = limit;
+        vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => {
+          if (!path.startsWith("/bots/shared/conversation?")) return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+          if (left-- <= 0) return await new Promise<T>(() => {});
+          return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+        });
+      }
+      // A read loop shows as a count against this limit instead of exhausting the worker.
+      beforeEach(() => limitReads(60));
+      async function restartedMidRead() {
+        conversation = bootA();
+        await render();
+        const answer = holdNextRead();
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        return answer;
+      }
+      const stop = () => container.querySelector('[aria-label="Stop response"]');
+      // Round 1's first order: a read the old boot answered lands after the new boot's turn.
+      it("keeps the newer boot's saved segment and growth when a read from the old boot lands after its turn", async () => {
+        const answer = await restartedMidRead();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        // Never put on the old boot's transcript: it waits for a read from its own boot.
+        expect(container.textContent).not.toContain("Found");
+        conversation = at("z:1:2", "Found");
+        await answer(bootA());
+        await act(async () => open().emit("inflight-delta", growth(5, " it.")));
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found it.");
+        // A turn from another boot than the view's never decides it: one read does, here answered by "z".
+        conversation = at("z:1:2", "Found it.");
+        const before = reads();
+        await act(async () => open().emit("turn", turn("a:1:9", [prompt], "Old boot")));
+        await advance(0);
+        expect(reads()).toBe(before + 1);
+        expect(container.textContent).not.toContain("Old boot");
+        expect(container.textContent).toContain("Found it.");
+      });
+      // Round 1's second order: the new boot finished the reply before the old boot's read landed.
+      it("never returns a reply the newer boot finished to thinking when a read from the old boot lands after it", async () => {
+        const answer = await restartedMidRead();
+        const finished = { id: "5", role: "assistant" as const, text: "All done." };
+        const done = { state: "done" as const, runId: "run-2" };
+        await act(async () => open().emit("turn", turn("z:1:3", [prompt, saved, finished], "", { activity: done })));
+        conversation = { ...conversation, version: "z:1:3", activity: done, messages: [...earlier, prompt, saved, finished] };
+        await answer(bootA());
+        expect(container.textContent).toContain("All done.");
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(stop()).toBeNull();
+      });
+      it("drops the first read when a newer boot's turn asked for another before it was answered", async () => {
+        const answer = holdNextRead();
+        conversation = bootA();
+        await render();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        conversation = at("z:1:2", "Found");
+        await answer(bootA());
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found");
+      });
+      it("takes the newest read as it is, whichever boot answers it, with one read for each change", async () => {
+        conversation = bootA();
+        await render();
+        conversation = at("z:1:1", "Found");
+        const before = reads();
+        await changed();
+        expect(reads()).toBe(before + 1);
+        expect(container.textContent).toContain("Found");
+        expect(container.textContent).not.toContain("barn. Fou");
+        // Answered by "a" again, as by a second process behind one address: still the newest read asked, so it shows.
+        conversation = bootA();
+        await changed();
+        expect(reads()).toBe(before + 2);
+        expect(container.textContent).toContain("barn. Fou");
+      });
+      // The reviewer's order: the view follows "a", boot "b" opens the stream, a read from boot "c" lands, then b's first turn.
+      it("keeps the boot of the newest read when an earlier boot's buffered turn arrives after it, and goes on reading it once per change", async () => {
+        conversation = bootA();
+        await render();
+        conversation = at("c:1:4", "Found");
+        await changed();
+        const before = reads();
+        await act(async () => open().emit("turn", turn("b:1:2", [prompt], "From b")));
+        await advance(0);
+        expect(reads()).toBe(before + 1);
+        expect(container.textContent).not.toContain("From b");
+        expect(container.textContent).toContain("Found");
+        // Boot "c" goes on: its turn events and reads are taken, each read once.
+        await act(async () => open().emit("turn", turn("c:1:5", [prompt, saved], "Found it")));
+        expect(container.textContent).toContain("Found it");
+        conversation = at("c:1:6", "Checking the gate", { messages: [...earlier, prompt, saved, { id: "5", role: "assistant", text: "Found the leak." },
+          { id: "sid-inflight", role: "assistant", text: "Checking the gate" }] });
+        await changed();
+        expect(container.textContent).toContain("Found the leak.");
+        await act(async () => open().emit("turn", turn("c:1:7", [prompt, saved, { id: "5", role: "assistant", text: "Found the leak." }], "Checking the gate and fence")));
+        expect(container.textContent).toContain("Checking the gate and fence");
+        expect(reads()).toBe(before + 2);
+      });
+      it("reads once per change and once per other-boot turn while two boots answer in turn, for ten rounds", async () => {
+        conversation = bootA();
+        await render();
+        const before = reads();
+        for (let round = 0; round < 10; round++) {
+          const [answering, streaming] = round % 2 ? ["a", "z"] : ["z", "a"];
+          conversation = at(`${answering}:1:${10 + round}`, `Round ${round}`);
+          await changed();
+          expect(container.textContent).toContain(`Round ${round}`);
+          // The other process's stream delivers a turn: it asks one read, which the first process answers, so the turn is dropped.
+          await act(async () => open().emit("turn", turn(`${streaming}:1:${30 + round}`, [prompt, saved], `Turn ${round}`)));
+          await advance(0);
+          expect(container.textContent).not.toContain(`Turn ${round}`);
+        }
+        await advance(5000);
+        expect(reads()).toBe(before + 20);
+      });
+      it("keeps a turn whose read failed for the next read, without reading again for it", async () => {
+        conversation = bootA();
+        await render();
+        failNextRead();
+        const before = reads();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        await advance(0);
+        // Another turn from that boot shares the read already asked.
+        await act(async () => open().emit("turn", turn("z:1:3", [prompt, saved], "Found it")));
+        await advance(5000);
+        expect(reads()).toBe(before + 1);
+        expect(container.textContent).not.toContain("Found");
+        expect(container.textContent).toContain("barn. Fou");
+        // The next read, from the turn's boot and older than it, takes the turn on top.
+        conversation = at("z:1:1", "Looking in the");
+        await changed();
+        expect(reads()).toBe(before + 2);
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).toContain("Found it");
+      });
+      /** Holds every conversation read from now on; each call answers the oldest one still held. */
+      function holdReads() {
+        const waiting: ((value: Conversation) => void)[] = [];
+        const serve = vi.mocked(api).getMockImplementation()!;
+        vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => !path.startsWith("/bots/shared/conversation?")
+          ? (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest)
+          : await new Promise<Conversation>(resolve => waiting.push(resolve)) as T);
+        return { held: () => waiting.length, answer: async (value: Conversation) => { await act(async () => waiting.shift()!(value)); await advance(0); } };
+      }
+      it("takes an older read from the view's boot, and drops one from another boot once a newer read is asked", async () => {
+        conversation = at("z:1:4", "Found");
+        await render();
+        const reads = holdReads();
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        // A second change while the first read is on its way: one more read, asked.
+        await changed();
+        expect(reads.held()).toBe(1);
+        await reads.answer(at("z:1:5", "Found it"));
+        expect(container.textContent).toContain("Found it");
+        expect(reads.held()).toBe(1);
+        await changed();
+        // Another process answered the older read: dropped, and the read asked since is the one that decides.
+        await reads.answer(bootA());
+        expect(container.textContent).not.toContain("barn. Fou");
+        expect(container.textContent).toContain("Found it");
+        expect(reads.held()).toBe(1);
+        await reads.answer(at("z:1:6", "Found it."));
+        expect(container.textContent).toContain("Found it.");
+        expect(reads.held()).toBe(0);
+      });
+      it("puts a new boot's turn on the first read of its boot asked after it, even when an older read lands first", async () => {
+        conversation = bootA();
+        await render();
+        const reads = holdReads();
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        await act(async () => open().emit("turn", turn("z:1:3", [prompt, saved], "Found it")));
+        // The read asked before the turn, answered by the view's own boot: taken, and the turn still waits.
+        await reads.answer(bootA());
+        expect(container.textContent).toContain("barn. Fou");
+        expect(container.textContent).not.toContain("Found it");
+        // Its own read, from its boot and older than it: the turn goes on top.
+        await reads.answer(at("z:1:2", "Found"));
+        expect(count("Looking in the barn.")).toBe(1);
+        expect(container.textContent).toContain("Found it");
+        expect(reads.held()).toBe(0);
+      });
+      // A turn from another boot waits for a read while a turn from the view's boot arrives and shows. Resolving the waiting
+      // turn never replaces or drops a held turn from the boot the read confirms, and the live reply follows that boot.
+      it.each([
+        // The reviewer's order: the read confirms the view's boot, whose newer turn already shows.
+        { name: "the read confirms the view's boot", first: "b", read: "a", shows: "A current", gone: ["B current", "A old"] },
+        // The mirror: the read confirms the other boot, whose waiting turn goes on top with its own live reply.
+        { name: "the read confirms the waiting turn's boot", first: "b", read: "b", shows: "B current", gone: ["A current", "A old"] },
+        // The view's turn arrived first, so the last live reply heard is the waiting turn's.
+        { name: "the view's turn came first and the read confirms its boot", first: "a", read: "a", shows: "A current", gone: ["B current", "A old"] },
+      ])("keeps the turn of the boot a read confirms when $name", async ({ first, read, shows, gone }) => {
+        conversation = at("a:1:9", "A old");
+        await render();
+        const answer = holdNextRead();
+        const events = { a: turn("a:1:10", [prompt, saved], "A current"), b: turn("b:1:10", [prompt, saved], "B current") };
+        for (const boot of first === "b" ? ["b", "a"] as const : ["a", "b"] as const) {
+          await act(async () => open().emit("turn", events[boot]));
+          await advance(0);
+        }
+        expect(container.textContent).toContain("A current");
+        const before = reads();
+        await answer(read === "a" ? at("a:1:9", "A old") : at("b:1:9", "B old"));
+        expect(container.textContent).toContain(shows);
+        for (const text of gone) expect(container.textContent).not.toContain(text);
+        // Growth of the turn shown goes on showing, with no read for it.
+        await act(async () => open().emit("inflight-delta", growth(shows.length, " and more")));
+        expect(container.textContent).toContain(`${shows} and more`);
+        await advance(5000);
+        expect(reads()).toBe(before);
+      });
+      // Growth extends the turn it continues wherever that turn is kept, held or waiting, so settling restores the grown reply.
+      it.each([
+        // The reviewer's order: the view's turn grew before the other boot's turn arrived, and the read confirms the view's boot.
+        { name: "a held turn grew and the read confirms its boot", order: ["a", "grow", "b"], read: "a", shows: "A current and more", gone: "B current" },
+        // The mirror: the waiting turn grew before the view's turn arrived, and the read confirms the waiting turn's boot.
+        { name: "a waiting turn grew and the read confirms its boot", order: ["b", "grow", "a"], read: "b", shows: "B current and more", gone: "A current" },
+        // Growth after both arrived extends only the last turn heard, never the other one kept beside it.
+        { name: "the waiting turn grew last and the read confirms the held turn's boot", order: ["a", "b", "grow"], read: "a", shows: "A current", gone: "and more" },
+        { name: "the held turn grew last and the read confirms the waiting turn's boot", order: ["b", "a", "grow"], read: "b", shows: "B current", gone: "and more" },
+      ])("keeps each turn's own growth when $name", async ({ order, read, shows, gone }) => {
+        conversation = at("a:1:9", "A old");
+        await render();
+        const answer = holdNextRead();
+        const events = { a: turn("a:1:10", [prompt, saved], "A current"), b: turn("b:1:10", [prompt, saved], "B current") };
+        for (const step of order) {
+          await act(async () => open().emit(step === "grow" ? "inflight-delta" : "turn", step === "grow" ? growth(9, " and more") : events[step as "a" | "b"]));
+          await advance(0);
+        }
+        const before = reads();
+        await answer(read === "a" ? at("a:1:9", "A old") : at("b:1:9", "B old"));
+        expect(container.textContent).toContain(shows);
+        expect(container.textContent).not.toContain(gone);
+        // Further growth continues the restored reply, with no read for it.
+        await act(async () => open().emit("inflight-delta", growth(shows.length, ", still")));
+        expect(container.textContent).toContain(`${shows}, still`);
+        await advance(5000);
+        expect(reads()).toBe(before);
+      });
+      // The read asked for a turn from another boot can be older than the turn and hold neither its first message nor `after`,
+      // as when it joins the first page's prefetch that set out before. One more read, asked after the turn, places it.
+      it("reads once more for another boot's turn that the first read of its boot cannot place", async () => {
+        conversation = bootA();
+        await render();
+        const answer = holdNextRead();
+        const before = reads();
+        const gate = { id: "u9", role: "user" as const, text: "And the gate" };
+        await act(async () => open().emit("turn", turn("z:1:3", [gate], "Gate shut")));
+        await advance(0);
+        conversation = { ...at("z:1:4", "Gate shut."), messages: [...earlier, prompt, saved, gate, { id: "sid-inflight", role: "assistant", text: "Gate shut." }] };
+        await answer(at("z:1:2", "Found"));
+        expect(reads()).toBe(before + 2);
+        expect(container.textContent).toContain("Gate shut.");
+        await advance(5000);
+        expect(reads()).toBe(before + 2);
+      });
+      it("leaves a held turn behind when the person switches chats", async () => {
+        const other = { ...bootstrap.bots[0], id: "other", name: "Other" };
+        bootstrap.bots.push(other);
+        try {
+          const serve = vi.mocked(api).getMockImplementation()!;
+          vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => path.startsWith("/bots/other/conversation?")
+            ? { ...conversation, botId: "other", activity: { state: "idle" }, version: "z:1:9", messages: [{ id: "o1", role: "assistant", text: "Other chat" }] } as T
+            : (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest));
+          conversation = bootA();
+          await render();
+          const answer = holdNextRead();
+          await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+          await advance(0);
+          await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Other"))!.click());
+          await advance(0);
+          conversation = at("z:1:1", "Looking in the");
+          await answer(conversation);
+          expect(container.textContent).toContain("Other chat");
+          expect(container.textContent).not.toContain("Found");
+          // Back in the first chat, its own read shows as it is: the turn held before the switch is gone with that view.
+          const before = reads();
+          await act(async () => [...container.querySelectorAll<HTMLButtonElement>(".bot-item")].find(button => button.textContent?.includes("Shared"))!.click());
+          await advance(0);
+          expect(reads()).toBe(before + 1);
+          expect(container.textContent).toContain("Looking in the");
+          expect(container.textContent).not.toContain("Found");
+        } finally { bootstrap.bots.pop(); }
+      });
+    });
+  });
   it.each(["done", "new-run"])("does not reapply an old live tail over a %s fetch", async mode => {
     conversation = { ...conversation, activity: { state: "thinking", runId: "run" }, messages: [] };
     await render();
     await act(async () => {
-      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=2")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
+      for (const stream of FakeEventSource.streams) if (stream.url.includes("inflight=3")) stream.emit("inflight", JSON.stringify({ botId: "shared", message: { id: "sid-inflight", role: "assistant", text: "Old tail" }, activity: { state: "thinking", runId: "run" }, toolCalls: [] }));
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };
