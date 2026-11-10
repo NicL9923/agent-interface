@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 
 // Every order of the worker's account steps, not only the ones a review named. Each run takes a few
 // ACCOUNT messages, a push for each of two members and a worker restart, holds every asynchronous
-// step the worker takes for them open (the saved account's read, its write, the account's hash,
+// step the worker takes for them open (each read and write of Cache Storage, the account's hash,
 // showNotification and getNotifications), and releases them in an order a seeded random walk picks.
 // Then it checks the invariants written at the top of the worker's account code. The worker is the
 // real script; only Cache Storage, notifications, the badge and the hash are fakes.
@@ -39,13 +39,6 @@ type Browser = {
   latestSaid: boolean;
   /** Whether the badge showed the latest account's count and was then cleared, after the latest message arrived. */
   latestBadgeCleared: boolean;
-  /** Whether the badge was set while no page had yet named an account. */
-  badgeSetUnsaid: boolean;
-  /**
-   * Whether no worker can know whose push set the badge: it was set while no page had named an
-   * account, and the worker that set it has stopped since. The next word clears it, whoever's it was.
-   */
-  badgeOwnerLost: boolean;
   /** Counts of another account set after the latest message arrived, even if cleared again later. */
   otherBadgeUnderLatest: number[];
   /** Notifications of the latest account closed after it arrived. */
@@ -90,11 +83,9 @@ function startWorker(browser: Browser) {
       setAppBadge: async (count: number) => {
         if (browser.latestSaid && (!browser.latest || count !== COUNT[browser.latest])) browser.otherBadgeUnderLatest.push(count);
         browser.badge = count;
-        browser.badgeSetUnsaid = !browser.saved.has('/account');
-        browser.badgeOwnerLost = false;
       },
       clearAppBadge: async () => {
-        if (browser.latestSaid && browser.latest && browser.badge === COUNT[browser.latest] && !browser.badgeOwnerLost) browser.latestBadgeCleared = true;
+        if (browser.latestSaid && browser.latest && browser.badge === COUNT[browser.latest]) browser.latestBadgeCleared = true;
         browser.badge = 0;
       },
     },
@@ -137,10 +128,13 @@ type Event = { label: string; run(worker: ReturnType<typeof startWorker>): void 
 async function walk(seed: number) {
   const next = random(seed);
   const initial = pick(next, [undefined, 'one', 'two', null] as const);
-  const browser: Browser = { saved: new Map(), listed: [], badge: undefined, latestSaid: false, latestBadgeCleared: false, badgeOwnerLost: false, badgeSetUnsaid: false, otherBadgeUnderLatest: [], closedUnderLatest: [], latest: null, held: [], waits: [], counts: new Map() };
+  const browser: Browser = { saved: new Map(), listed: [], badge: undefined, latestSaid: false, latestBadgeCleared: false, otherBadgeUnderLatest: [], closedUnderLatest: [], latest: null, held: [], waits: [], counts: new Map() };
   if (initial !== undefined) browser.saved.set('/account', new FakeResponse(JSON.stringify(stateOf(initial))));
-  // A badge the saved account's push set before the browser stopped the worker.
-  if (initial) browser.badge = COUNT[initial];
+  // A badge the saved account's push set before the browser stopped the worker, as the worker recorded it.
+  if (initial) {
+    browser.badge = COUNT[initial];
+    browser.saved.set('/badge', new FakeResponse(JSON.stringify({ named: marker(initial) })));
+  }
   const words = pick(next, SEQUENCES);
   browser.latest = words.at(-1)!;
   const events: Event[] = words.map((word, index) => ({ label: `ACCOUNT#${index + 1}`, run: worker => worker.account(word) }));
@@ -175,10 +169,7 @@ async function walk(seed: number) {
     trace.push(fail ? `${chosen}(refused)` : chosen);
     if (chosen === events[0]?.label) {
       const event = events.shift()!;
-      if (!('run' in event)) {
-        if (browser.badgeSetUnsaid) browser.badgeOwnerLost = true;
-        worker = startWorker(browser);
-      }
+      if (!('run' in event)) worker = startWorker(browser);
       else {
         const before = browser.waits.length;
         event.run(worker);

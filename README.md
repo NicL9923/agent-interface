@@ -185,7 +185,8 @@ change is under way or after a sign-out. A notification for another account offe
 Decline, and a tap on it opens the app without its chat. A push that names no account, from a
 server before this change, shows as before while someone is signed in. The worker sets the app
 badge from a push only once its notification is on screen and its account is still the one
-signed in, and clears a badge another account's push set when the account changes. Its account
+signed in, and clears a badge another account's push set when the account changes; it records
+in Cache Storage whose push set the badge, and never changes a badge the page set. Its account
 steps run one at a time, so a late step for an earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:
@@ -193,7 +194,7 @@ What the browser keeps, in localStorage unless noted:
 | Record | Holds | Removed |
 | --- | --- | --- |
 | `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
-| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may | Never; each change replaces it |
+| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push set the app badge | Never; each change replaces it |
 | `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
 | `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
 | `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |

@@ -132,7 +132,9 @@ self.addEventListener('message', (event) => {
 // - No notification of its account was closed after it arrived: a step for an older word stops first.
 // - The badge is unset or was set by a push for that account. A push sets it only on the chain while
 //   its account is the latest, and a step for a new word clears a badge a push of another account
-//   set, so no push of a departed account can set the badge or clear the latest account's.
+//   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
+//   latest account's. The worker changes the badge only for a push: a badge the page set is the
+//   page's (src/app/badge.ts).
 const ACCOUNT_CACHE = 'wildbots-account';
 const ACCOUNT_KEY = '/account';
 let generation = 0;
@@ -173,16 +175,23 @@ function mayShow(state, named) {
   return typeof named !== 'string' || named === state.marker;
 }
 
-// The account whose push set the badge, as { named }, or undefined when no push of this worker's did.
-// A worker started again does not know, so until its first step it takes the badge to be the saved
-// account's, whose pushes were the ones shown before it stopped, or, before any page said, any
-// account's: no marker is '', so that badge goes at any word but none.
-const FROM_SAVED = {};
-let badgeFor = FROM_SAVED;
-const savedBadge = (previous) => !previous ? { named: '' } : previous.signedOut ? undefined : { named: previous.marker };
+// The account whose push set the badge, as { named }, or null when no push set one that is still up.
+// It is kept beside the account, so a worker started again clears only a badge a push of its set, and
+// a page's own badge is the page's to change.
+const BADGE_KEY = '/badge';
+let badgeFor;
+const readBadge = () => badgeFor ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(BADGE_KEY))
+  .then((found) => found ? found.json() : null).catch(() => null);
+// Recorded once the badge changed, in the same step, so the next step reads the owner of the badge
+// on screen. The browser keeps the worker running until the step ends.
+async function keepBadgeFor(owner) {
+  badgeFor = Promise.resolve(owner);
+  const cache = await caches.open(ACCOUNT_CACHE);
+  await cache.put(BADGE_KEY, new Response(JSON.stringify(owner)));
+}
 function clearBadge() {
-  badgeFor = undefined;
-  return self.navigator?.clearAppBadge?.().catch(() => {});
+  void self.navigator?.clearAppBadge?.().catch(() => {});
+  return keepBadgeFor(null);
 }
 
 function setAccount(user) {
@@ -198,8 +207,8 @@ function setAccount(user) {
 async function settleAccount(at) {
   const state = await loadAccount();
   const previous = await readSaved();
+  const owner = await readBadge();
   if (at !== generation) return;
-  if (badgeFor === FROM_SAVED) badgeFor = savedBadge(previous);
   if (JSON.stringify(previous) !== JSON.stringify(state)) {
     const cache = await caches.open(ACCOUNT_CACHE);
     if (at !== generation) return;
@@ -207,7 +216,10 @@ async function settleAccount(at) {
     saved = Promise.resolve(state);
     if (at !== generation) return;
   }
-  if (badgeFor && !mayShow(state, badgeFor.named)) void clearBadge();
+  if (owner && !mayShow(state, owner.named)) {
+    await clearBadge();
+    if (at !== generation) return;
+  }
   const shown = await self.registration.getNotifications();
   if (at !== generation) return;
   // Notifications on screen for another account, or any once signed out, close.
@@ -227,8 +239,9 @@ function settlePush(named, count) {
     // The server counts the badge with the push; a payload without one leaves the badge alone.
     if (!Number.isInteger(count) || count < 0 || !self.navigator?.setAppBadge) return;
     if (!count) return clearBadge();
-    badgeFor = { named };
-    return self.navigator.setAppBadge(count).catch(() => {});
+    // No await between the check above and the call.
+    void self.navigator.setAppBadge(count).catch(() => {});
+    return keepBadgeFor({ named });
   });
 }
 
