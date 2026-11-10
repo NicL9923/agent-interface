@@ -354,6 +354,28 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(value.message.origin?.kind).toBe('scheduled');
     expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(opens);
   });
+  it('reports streamed text and reasoning frames by assistant, including one that arrives while it opens', async () => {
+    const text = vi.fn(), changes = vi.fn();
+    const stop = runtime.watchStreamedText!(text);
+    runtime.watch!('shared', changes);
+    // Hermes attaches the socket before it answers a first open, so this frame names no assistant yet.
+    beforeSend=(request,socket)=>{if(request.method==='agent-interface.open'){beforeSend=undefined;socket.receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{text:'early'}}});}};
+    await runtime.conversation('shared');
+    expect(text.mock.calls).toEqual([['shared']]);
+    const event=(type:string,session='live-one')=>sockets.at(-1)!.receive({method:'event',params:{session_id:session,type,payload:{text:'x'}}});
+    event('reasoning.delta'); event('message.delta');
+    // Other live frames are not text, and another client's session belongs to no assistant here.
+    event('status.update'); event('thinking.delta'); event('message.delta','another-client');
+    expect(text.mock.calls).toEqual([['shared'],['shared'],['shared']]);
+    // A listener that throws never stops frame processing.
+    text.mockImplementation(() => { throw new Error('listener failed'); });
+    changes.mockClear();
+    event('message.delta');
+    expect(changes).toHaveBeenCalledWith('inflight');
+    stop();
+    event('message.delta');
+    expect(text).toHaveBeenCalledTimes(4);
+  });
   it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
     snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
     const conversation=await runtime.conversation('shared');

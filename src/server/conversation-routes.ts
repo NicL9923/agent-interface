@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
@@ -16,6 +16,7 @@ import type { Config } from "./config.js";
 import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
+import { SendTimings, sendTimingHeader, type SendPhases } from "./send-timing.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
 import { nameRequesters } from "./vault.js";
@@ -115,6 +116,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   requireCapability: (key: CapabilityKey) => Promise<void>;
 }) {
   const { config, runtime, store, roster, streams, requireCapability } = collaborators;
+  // Each admitted send is timed to its first streamed text and its first live event on a stream.
+  const timings = new SendTimings(app.log);
+  const unwatchText = runtime.watchStreamedText?.(botId => timings.frame(botId));
+  app.addHook("onClose", async () => { unwatchText?.(); timings.close(); });
   apiRoute(app, "GET /bots/:id/conversation", {}, async (req, _body, reply) => {
     const started = performance.now(), timing: ReadTiming = {};
     // Without a window, as for the native app, the whole history is returned.
@@ -271,11 +276,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
                 baseTextLength: base.text.length, baseReasoningLength: base.reasoning.length,
                 ...(appendText ? { appendText } : {}), ...(appendReasoning ? { appendReasoning } : {}),
                 activity: value.activity, ...(toolsChanged ? { toolCalls } : {}) };
-              stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`);
+              if (stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`)) timings.written(botId);
               return;
             }
           }
-          stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`);
+          if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
@@ -322,7 +327,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       message: "A retry is not written on a draft",
     });
   // Shared with live Talk, whose spoken requests are ordinary messages from the person speaking.
-  const submit = async (target: { botId: string; requesterId: string }, body: z.output<typeof message>, explicitSteering = false, voice = false): Promise<SubmissionReceipt> => {
+  // phases records when the request reached Hermes and was admitted, for Server-Timing and the send's timing log.
+  const submit = async (target: { botId: string; requesterId: string }, body: z.output<typeof message>, explicitSteering = false, voice = false,
+    phases: SendPhases = { arrival: performance.now() }): Promise<SubmissionReceipt> => {
     const { reviewedInterruption, reviewedUncertain, ...message } = body;
     if (message.retryOf !== undefined && explicitSteering) throw httpError(400, "Retry a message by sending it, not by steering");
     const { requesterId } = target;
@@ -401,9 +408,14 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     try {
       // The voice mark goes only to Hermes. It is not part of the recorded request, so asking again
       // with the same ID never conflicts with a request recorded before Talk carried it.
+      phases.hermesStart = performance.now();
       const receipt = await (steering
         ? runtime.steer({ ...input, reviewedInterruption })
         : runtime.submit({ ...input, reviewedInterruption, ...(voice ? { voice: true } : {}) }));
+      phases.admitted = performance.now();
+      if (receipt.status === "accepted")
+        timings.admitted(voice ? "talk" : explicitSteering ? "steer" : "messages", input.botId, input.requestId,
+          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted });
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
@@ -416,8 +428,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     }
   };
   const sender = (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">) => ({ botId: req.params.id, requesterId: signedIn(req).id });
-  apiRoute(app, "POST /bots/:id/messages", { body: message }, async (req, body) => submit(sender(req), body));
-  apiRoute(app, "POST /bots/:id/steer", { body: message }, async (req, body) => submit(sender(req), body, true));
+  // Fastify's elapsed time starts when the request arrived, before sign-in and body parsing.
+  const timedSend = (steer: boolean) => async (req: ApiRequest<"POST /bots/:id/messages" | "POST /bots/:id/steer">, body: z.output<typeof message>, reply: FastifyReply) => {
+    const phases: SendPhases = { arrival: performance.now() - reply.elapsedTime };
+    const receipt = await submit(sender(req), body, steer, false, phases);
+    reply.header("Server-Timing", sendTimingHeader(phases, performance.now()));
+    return receipt;
+  };
+  apiRoute(app, "POST /bots/:id/messages", { body: message }, timedSend(false));
+  apiRoute(app, "POST /bots/:id/steer", { body: message }, timedSend(true));
   apiRoute(app, "GET /submissions/:id", {}, async req => {
     const requestId = z.string().uuid().parse(req.params.id);
     const recorded = store.submission(requestId);

@@ -104,6 +104,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
   };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  // An array, not a Set, so calling them on every token allocates no iterator.
+  const textListeners: ((botId: string) => void)[] = [];
   const structuralGenerations = new Map<string, number>();
   const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
@@ -205,6 +207,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Opening a conversation attaches this socket to its session, so its frames arrive here.
     const botId = owners.get(sid);
     const delta = frame.method === "event" && deltaEvents.includes(params.type);
+    const text = delta && (params.type === 'message.delta' || params.type === 'reasoning.delta');
+    if (text && textListeners.length) {
+      if (botId !== undefined) streamedText(botId);
+      else for (const pending of opening.keys()) streamedText(pending);
+    }
     if (botId !== undefined) {
       if (delta && state.state !== previousActivity) rosterChanged();
       if (!delta) snapshots.delete(botId);
@@ -213,6 +220,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
     else for (const pending of opening.keys()) changed(pending, delta && params.type !== 'tool.start' ? "inflight" : undefined);
+  }
+  function streamedText(botId: string): void {
+    for (let index = 0; index < textListeners.length; index++) {
+      try { textListeners[index](botId); } catch { /* A listener never stops frame processing. */ }
+    }
   }
   async function voiceReply(path: string, payload: Wire): Promise<Wire> {
     const response = await http(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
@@ -1073,6 +1085,13 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         : ["idle", "disconnected"].includes(state.state) ? saved.activity.state
         : state.state;
       return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools};
+    },
+    watchStreamedText(listener) {
+      textListeners.push(listener);
+      return () => {
+        const index = textListeners.indexOf(listener);
+        if (index >= 0) textListeners.splice(index, 1);
+      };
     },
     watch(botId, listener) {
       const listeners = watchers.get(botId) ?? new Set();

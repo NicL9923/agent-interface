@@ -55,6 +55,7 @@ function runtimeDouble(calls: string[]) {
     integrationRequest: async (input: { profile: string }) => ({ profile: input.profile, connections: [{ id: "workspace", name: "Google Workspace", profile: input.profile, botIds: [input.profile] }] }),
     modelOptions: async () => ({ provider: "", model: "", providers: [] }),
     watch: () => () => {},
+    watchStreamedText: () => () => {},
     // Like Hermes, only a genuine signature names the file's assistant.
     fileBotId: (id: string) => id.endsWith(".signature") ? JSON.parse(Buffer.from(id.split(".")[0], "base64url").toString()).botId : undefined,
     saveRoutine: async (input: { botId: string }) => { calls.push("saveRoutine"); return { ...input, id: "r-new" }; },

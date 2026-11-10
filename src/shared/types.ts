@@ -536,6 +536,12 @@ export interface Runtime {
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
   inflight?(botId: string): Inflight | undefined;
+  /**
+   * Calls the listener with the assistant's ID for each streamed text or reasoning frame, so a send can
+   * be timed to its first live text. It runs on every token, so a listener must stay cheap. Unsubscribe
+   * with the returned function.
+   */
+  watchStreamedText?(listener: (botId: string) => void): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

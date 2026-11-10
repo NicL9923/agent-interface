@@ -85,6 +85,38 @@ Conversation reads carry a `Server-Timing` header that splits the time between t
 Hermes read, the add-on's phases and this server. It is diagnostic only and never part
 of the body or its ETag.
 
+`POST /api/bots/:id/messages` and `/steer` answer with `Server-Timing` too. Each
+metric is a duration in milliseconds:
+
+- `prepare`: from the request's arrival, before sign-in and body parsing, to the
+  call that asks Hermes to admit it. Capability checks and the conversation read
+  that decides between a new turn and steering land here.
+- `hermes`: Hermes's admission answer, the `agent-interface.submit` round trip.
+- `total`: the whole request. The rest after `prepare` and `hermes` is recording
+  the receipt and writing the response.
+
+A send answered from its recorded receipt never reaches Hermes and carries only
+`total`. One that Hermes did not answer carries `prepare` and `total`.
+
+Streamed text arrives after the response, so the server logs it instead. For each
+send Hermes accepts, including a spoken Talk request, it writes one `info` line,
+`Send timing`, once the first `inflight` or `inflight-delta` event for that
+assistant is written to any open event stream. Its `sendTiming` field holds
+`route` (`messages`, `steer` or `talk`), `botId`, `requestId`, `steered`, and
+moments counted from the request's arrival: `prepareMs` (the admission call
+began), `admissionMs` (Hermes answered), `firstFrameMs` (the first
+`message.delta` or `reasoning.delta` from Hermes after admission) and
+`firstLiveMs` (the first live event written). Subtract neighbours for the time
+each stage took; `firstLiveMs` is what a person watching an open chat waited.
+A missing `firstFrameMs` means the first live event was a tool or status change.
+With no open stream, or no live event within two minutes, the line is
+`Send timing: no live event before the deadline`, with `firstLiveMs` absent and
+`gaveUpAfterMs`. A steer joins a running reply, so its frame and live event are the
+next growth of that reply, not an answer to the steer. The line never carries
+message text. The app logs at `info` by default ([Hosting](Hosting.md#logs-and-health)).
+Read the lines on the host with
+`journalctl -u <app service> -o cat | jq -c 'select(.sendTiming) | .sendTiming'`.
+
 Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
 status and tool-start frames then send `event: inflight` at most four times a
 second, with JSON `{botId, message, activity, toolCalls}`. `message` is the
