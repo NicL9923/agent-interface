@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
-import { api, write } from "./client-api";
+import { api } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
@@ -46,7 +46,58 @@ import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from 
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
+import { signOutOf } from "./app/account-change";
+
+/**
+ * The app for one account generation at a time (see account-epoch.ts). A sign-in, sign-out, refused
+ * session, another account or a lapsed sign-in hint, in this tab or another, unmounts everything the
+ * previous generation held, its streams, timers and reads included, before anything draws again.
+ * While another tab's sign-in or sign-out is on its way this shows the connecting screen and asks
+ * nothing; then the new generation starts from bootstrap, or from sign-in after a sign-out.
+ */
 export function App() {
+  const [changes, setChanges] = useState(0);
+  useEffect(() => watchAccount(() => setChanges(value => value + 1)), []);
+  // Read once per change: it also makes the stored record the one this tab acts under, and ends the
+  // generation first if the record changed unheard, as when storage was cleared.
+  const { start, generation } = useMemo(() => ({ start: accountStart(), generation: accountGeneration() }), [changes]);
+  const wait = "wait" in start ? start.wait : undefined;
+  useEffect(() => {
+    if (wait === undefined) return;
+    // A tab that closed mid-request never settles its mark; once it is stale, bootstrap decides.
+    const timer = setTimeout(() => setChanges(value => value + 1), Math.max(0, wait - Date.now()));
+    return () => clearTimeout(timer);
+  }, [wait]);
+  useEffect(() => {
+    const until = hintUntil();
+    if (until === undefined) return;
+    const timer = setTimeout(checkHintExpiry, Math.max(0, until - Date.now()));
+    return () => clearTimeout(timer);
+  }, [changes, generation]);
+  if ("wait" in start) return <Connecting />;
+  // An address that named the last account's chat or panel opens nothing of it for the next.
+  if (start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+  return <AccountApp key={generation} start={start.start} />;
+}
+
+function Connecting({ unavailable = false, retry }: { unavailable?: boolean; retry?: () => void }) {
+  return (
+    <main className="welcome">
+      <p className="eyebrow">WildBots</p>
+      <AvatarTrio />
+      <h1>
+        Your assistants,
+        <br />
+        in one familiar place.
+      </h1>
+      <p role="status">{unavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+      {unavailable && retry && <button onClick={retry}>Try again</button>}
+    </main>
+  );
+}
+
+function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [view, setView] = useState<View>(initialView);
   // The group chat open in the main pane when the view is "group".
   const [roomId, setRoomId] = useState(initialRoom);
@@ -67,15 +118,10 @@ export function App() {
     setRailOpen(mobile);
   };
   const session = useSession({
-    onIdentityChange: () => {
-      reset(); clearUploads(); toast.dismiss();
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage", "computer"); setError("");
-      setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
-    },
     onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
     onBotGone: gone,
-  });
+  }, start);
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
@@ -113,8 +159,8 @@ export function App() {
   }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload } = useDraft({ botId, userId, identityEpoch, setError });
+  const { conversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
@@ -129,7 +175,7 @@ export function App() {
   // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
   const connectionLost = session.disconnected || conversationReadFailed || offline;
   const connectionShown = session.disconnected || conversationDisconnected || offline;
-  const { pending, receipt, sending, send, retry, discard, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, discard } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
@@ -192,17 +238,12 @@ export function App() {
     setRailOpen(false);
     setError("");
   });
+  // A sign-out that the server takes starts the app again at sign-in, in every tab.
   const signOut = async () => {
+    if (!userId) return;
     try {
       await notifications.disable();
-      await write("/auth/logout", {});
-      session.signedOut();
-      setConversation(null);
-      setDraft({ text: "", attachments: [] });
-      // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); clearUploads(); toast.dismiss();
-      setRailOpen(mobile);
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage");
+      await signOutOf(userId);
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -386,21 +427,8 @@ export function App() {
     undo: () => toast.undo(),
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
-  if (session.auth) return <SignIn onSuccess={session.signedIn} />;
-  if (!boot)
-    return (
-      <main className="welcome">
-        <p className="eyebrow">WildBots</p>
-        <AvatarTrio />
-        <h1>
-          Your assistants,
-          <br />
-          in one familiar place.
-        </h1>
-        <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
-        {appUnavailable && <button onClick={() => void session.refresh()}>Try again</button>}
-      </main>
-    );
+  if (session.auth) return <SignIn />;
+  if (!boot) return <Connecting unavailable={appUnavailable} retry={refreshSession} />;
   const selected = boot.bots.find((bot) => bot.id === botId);
   const state: ActivityState = connectionShown
     ? "disconnected"
