@@ -221,6 +221,15 @@ class Journal:
 PAGE_TURNS = 20
 
 
+def detached(value):
+    """A copy of a JSON value: every dict and list new, so a reader of one cannot change another."""
+    if type(value) is dict:
+        return {key: detached(item) for key, item in value.items()}
+    if type(value) is list:
+        return [detached(item) for item in value]
+    return value
+
+
 def history_window(messages, sid, start=None, turns=0):
     """The app's history window, cut here so earlier rows never cross the socket.
 
@@ -509,6 +518,19 @@ DECORATED_LIMIT = 32
 ROW_CACHE_LIMIT = 20000
 
 
+def file_identity(path):
+    """``(st_dev, st_ino)`` of ``path``, or None; Hermes's test for a replaced state.db.
+
+    Mirrors ``stat_db_file_identity`` (``hermes_state_common.py:338`` at ed1afb0): an inode of 0
+    names no file, so it counts as unknown.
+    """
+    try:
+        info = os.stat(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return (info.st_dev, info.st_ino) if info.st_dev and info.st_ino else None
+
+
 class RowCache:
     """Per-row results an open computed for one canonical session that no later write can change.
 
@@ -524,13 +546,25 @@ class RowCache:
     prune rewrites a row's content under the same ID, so a hit needs the same content.
     ``tool_records``: a journal ``tools.id`` -> its parsed record. The add-on only inserts them.
 
+    Those rules hold only within one database file's history. ``store`` is the state.db
+    generation ``originals`` describe: Hermes's own test for a replaced file, its inode and the
+    generation stamp it writes to the header's application_id. ``newest`` is the highest row
+    that table learned, with its uid: a snapshot of the same file restored in place keeps both,
+    and then still holds that row only if it also holds every row below it. ``journal`` is the
+    ``PRAGMA data_version`` of the journal connection ``tool_records`` came from; only another
+    connection's commit, such as a restore, moves it. That connection stays on the file it opened
+    for the life of the process, so a journal replaced by rename is never read until a restart,
+    which starts every cache empty. A changed mark empties its table before the table answers.
+
     Callers hold the session's profile lock. ``scope`` is the stored session the tables
-    describe; a changed one starts a new cache.
+    describe; a changed one starts a new cache. Values are parsed JSON shared by every open, so
+    nothing that reads them may change them; a response gets copies.
     """
 
     def __init__(self, scope):
         self.scope = scope
         self.originals, self.tool_results, self.tool_records = {}, {}, {}
+        self.store = self.newest = self.journal = None
 
     @staticmethod
     def keep(table, key, value):
@@ -1204,26 +1238,40 @@ class Bridge:
         ``rows`` is the session's RowCache, or None; the store is asked only about rows it lacks.
         """
         key = session.get("session_key")
+        visible = [m["row_id"] for m in messages if type(m.get("row_id")) is int]
+        if not visible or not key or not callable(getattr(self.server, "_session_db", None)):
+            return
         # A cache filled for another stored session is not this one's.
-        known = rows.originals if rows is not None and rows.scope == key else {}
-        ids = [m["row_id"] for m in messages if type(m.get("row_id")) is int and m["row_id"] not in known]
-        found = {}
-        if ids and key and callable(getattr(self.server, "_session_db", None)):
-            with self.server._session_db(session) as db:
-                if db is not None:
-                    visible = json.dumps(ids)
-                    # The session index finds every copy; a uid join instead takes seconds on a long chat.
-                    first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
-                                              "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, visible)))
-                    uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, visible)))
-                    for row_id, uid in uids.items():
-                        original = first.get(uid)
-                        found[row_id] = original if type(original) is int and original < row_id else row_id
-        # Only rows the store returned are kept: one it cannot read yet is asked again next open.
-        for row_id, original in found.items():
-            RowCache.keep(known, row_id, original)
+        cache = rows if rows is not None and rows.scope == key else RowCache(key)
+        with self.server._session_db(session) as db:
+            if db is None:
+                return
+            # Proves the file still holds what the cache learned from it, in one read.
+            newest = cache.newest[0] if cache.newest else None
+            stamp, uid = db._read_all("SELECT (SELECT application_id FROM pragma_application_id()),(SELECT message_uid FROM messages WHERE id=?)", (newest,))[0]
+            store = (file_identity(getattr(db, "db_path", None)), stamp)
+            if cache.store != store or (cache.newest and cache.newest[1] != uid):
+                cache.originals.clear()
+                cache.store, cache.newest = store, None
+            known = cache.originals
+            # This open's answer, taken before filling the table can evict any of it.
+            answer = {row_id: known[row_id] for row_id in visible if row_id in known}
+            missing = [row_id for row_id in visible if row_id not in answer]
+            if missing:
+                ids = json.dumps(missing)
+                # The session index finds every copy; a uid join instead takes seconds on a long chat.
+                first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
+                                          "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, ids)))
+                uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, ids)))
+                # Only rows the store returned are kept: one it cannot read yet is asked again next open.
+                for row_id, uid in uids.items():
+                    original = first.get(uid)
+                    answer[row_id] = original if type(original) is int and original < row_id else row_id
+                    RowCache.keep(known, row_id, answer[row_id])
+                    if cache.newest is None or row_id > cache.newest[0]:
+                        cache.newest = (row_id, uid)
         for message in messages:
-            original = found.get(message.get("row_id"), known.get(message.get("row_id")))
+            original = answer.get(message.get("row_id"))
             if type(original) is int and original < message["row_id"]:
                 message["row_id"] = original
 
@@ -1234,6 +1282,11 @@ class Bridge:
         the session's RowCache are not read again. Callers hold journal.lock.
         """
         known = rows.tool_records if rows is not None else {}
+        if rows is not None:
+            journal = self.journal.db.execute("PRAGMA data_version").fetchone()[0]
+            if rows.journal != journal:
+                known.clear()
+                rows.journal = journal
         missing = [record_id for record_id in ids if record_id not in known]
         found = {}
         if missing:
@@ -1441,6 +1494,10 @@ class Bridge:
             value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
             if cut:
                 value["app_window"] = cut
+        # The caches hold these rows and their parsed results for later opens. Only the rows that
+        # leave are copied, after the window has cut a long chat down to them.
+        if "messages" in value:
+            value["messages"] = detached(value["messages"])
         phases["window"] += time.perf_counter() - mark
         return server._ok(rid, value)
 
