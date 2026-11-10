@@ -226,14 +226,18 @@ describe("where the caret goes", () => {
   });
 
   // The caret's gap and width come to 4 px. "o" ends at 50 where an Arabic letter's trailing edge
-  // touches it, as in "helloمرحبا"; the line runs from 0 to 90.
+  // touches it, as in "helloمرحبا"; the line runs from 0 to 90. `last` is the reply's final grapheme.
   it.each([
-    ["stays past the logical end when nothing lies there", 50, "left", [at(10), at(70)], "ltr", { x: 50, side: "left" }],
-    ["stays past the logical end when a space's width lies between it and the next glyph", 50, "right", [at(55)], "ltr", { x: 50, side: "right" }],
-    ["moves past the line's right end when a glyph touches the logical end", 50, "left", [at(40), at(80)], "ltr", { x: 90, side: "right" }],
-    ["moves past the line's left end in a right-to-left paragraph", 50, "right", [at(0), at(50)], "rtl", { x: 0, side: "left" }],
-  ] as const)("%s", (_name, x, side, line, direction, spot) => {
-    expect(clearEnd(x, side, [...line], direction, 4)).toEqual(spot);
+    ["stays past the logical end when nothing lies there", at(50), "left", [at(10), at(70)], "ltr", { x: 50, side: "left" }],
+    ["stays past the logical end when a space's width lies between it and the next glyph", at(40), "right", [at(55)], "ltr", { x: 50, side: "right" }],
+    ["moves past the line's right end when a glyph touches the logical end", at(50), "left", [at(40), at(80)], "ltr", { x: 90, side: "right" }],
+    ["moves past the line's left end in a right-to-left paragraph", at(40), "right", [at(0), at(50)], "rtl", { x: 0, side: "left" }],
+    // "helloم": the final letter is itself the line's right end, so the caret clears it too.
+    ["moves past the final grapheme when it ends the line, left to right", at(50), "left", [at(40)], "ltr", { x: 60, side: "right" }],
+    // "مرحباA" in a right-to-left paragraph: "A" is the line's left end.
+    ["moves past the final grapheme when it ends the line, right to left", at(40), "right", [at(50)], "rtl", { x: 40, side: "left" }],
+  ] as const)("%s", (_name, last, side, line, direction, spot) => {
+    expect(clearEnd(last, side, [...line], direction, 4)).toEqual(spot);
   });
 
   it("places the caret again once a frame while a code block in the reply scrolls sideways", async () => {

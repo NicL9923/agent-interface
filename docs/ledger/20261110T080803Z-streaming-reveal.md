@@ -177,3 +177,26 @@ digits with a space, Latin alone, the wrapped line. Safari and Firefox: not run.
   82 tests passed.
 - `npm test`: 181 files, 2939 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 17 passed in Chromium.
+
+## Review round 3
+
+GPT-6.1 Sol reviewed `da17e8c..84e23ec` and left one P2: when the reply's final grapheme is itself
+the end of its line, as in `helloم` or `helloש`, the move to the line's end measured the line
+without that grapheme and put the caret inside it. `clearEnd` now takes the final grapheme's box
+and counts it whole when it finds the line's end. The orchestrator made this fix; no reviewer has
+read it.
+
+### Red proof
+
+- With `clearEnd` taking the box but still using only the logical edge, the two new unit cases
+  fail: "moves past the final grapheme when it ends the line, left to right" got x 50 for 60, and
+  "… right to left" got x 50 for 40.
+- The same break in a production build fails both new browser cases, "Latin followed by one Arabic
+  letter" and "… one Hebrew letter": the caret at 483.8 to 485.8 inside `م` at 481.8 to 489.8, the
+  reviewer's numbers.
+
+### Checks, after merging `origin/main` at `5d74731`
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npm test`: 181 files, 2941 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 19 passed in Chromium. Safari and Firefox: not run.
