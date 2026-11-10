@@ -84,3 +84,68 @@ Each line was then broken with a scripted text replacement, the test run, and th
 | An answered send never removed | the same three cases, at the idle check after the answers |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production. The release tool itself was not run.
+
+## Review round
+
+`t3/send-lanes` at `19bca48`, its fifth review round, is merged in with a normal merge commit. Both branches changed the
+same lines of `route` and the same capability-matrix paragraph; the merge keeps both changes: the one-shot `Reservation`
+and the refused-schedule path from send-lanes, and this branch's listing. GPT-6.1 Sol reviewed `bcc4e17`: no P1.
+
+- P2, `status` idle while `acquire` refuses. The send's reservation was taken and then its entry added, and on the way out
+  the entry was removed and then the reservation released, so `status` between the two answered `active: false, busy: []`
+  and the `acquire` after it answered 409. Now `route` lists the send and takes its reservation in one hold of the
+  maintenance `RLock`, which `status` and `acquire` read under, and a refused reservation unlists it in that same hold.
+  `Reservation.release` releases and then unlists in one hold of it. The lock covers only the listing and the native
+  fence call, never staging or Hermes's admission call. The order alone already keeps a reservation from ever existing
+  unlisted; the lock also keeps maintenance from seeing a listing whose reservation is not yet taken or already gone.
+- P3, the refused-submission cleanup untested. The cleanup now lives in `Reservation.release`, the one place a send's
+  reservation ends, and a new test makes the executor refuse the submission and checks zero reservations, an empty `busy`
+  and a successful `acquire`.
+- Recorded, not changed: the release tool's window. Between `.agents/tools/deploy-guarded-app-release.py`'s `status`
+  check (line 71) and its `acquire` (line 89) it runs gateway readiness and state checks (lines 72-74), a native status
+  call (line 75, 10-second timeout), Google verification (line 76; `deploy_common.py:114` allows 90 seconds), app
+  readiness requests, two state writes and the app stop (line 82; service commands allow 120 seconds,
+  `deploy_common.py:72`). A send can arrive anywhere in that window of minutes. This branch makes `status` truthful at the
+  moment it answers; it does not make the release sequence safe against a send arriving after it. Acquiring before
+  stopping the app is a separate change and the tool is unchanged here.
+
+## Review round checks
+
+Source fingerprint sha256:2407c764fdf881a573497b774855cae30323ff6ce5d3ca488e8b4ac227e28c95 (1697 source files); `src/hermes` alone sha256:6ee032a194cd9433af9a2f3085720f874304814c11aa74b1ac826d1285c2ae6d (20 source files). Same host and versions (Python 3.14.10).
+
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (195 s). `tests/hermes_send_lanes_test.py`: 16 tests, 2 new,
+  and the maintenance test now also checks that a send refused at the fence is not listed.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- `tests/hermes_send_lanes_test.py` 30 times in a row, each in a fresh process: 30 passed, 0 failed.
+
+## Review round red proof
+
+`test_maintenance_sees_a_send_listed_whenever_its_reservation_is_held` pauses the send at the native fence, just after its
+reservation is taken and just before it is released after its answer, then has maintenance look. Maintenance looks at
+once when nothing holds the lock it reads under, or else after the send resumes. Its first version, which checked only
+that `status` and `acquire` agree, went red on the merged code before the fix, at both boundaries, for the reviewer's
+reason: `([], False)`, `busy` empty and `acquire` refused. The final version also reads `busy_sessions()` at the pause and
+goes red there on the same code: `[] != [('slow', 'queued')]` and `[] != [('slow', 'admitting')]`.
+
+`test_a_send_the_executor_refuses_leaves_maintenance_free` went red on that pre-fix merge with the reviewer's mutant,
+the registry cleanup removed from the enqueue-exception handler.
+
+Each line was then broken with a scripted text replacement, the test run, and the source restored and checked. The script
+runs tests without writing bytecode and deletes the source's `__pycache__` after restoring:
+
+| Broken | Red |
+| --- | --- |
+| The send listed after the lock and its reservation | the boundary test, acquire case |
+| The send unlisted before the lock and its release | the boundary test, release case |
+| The release outside the maintenance lock | the boundary test, release case: maintenance saw the send listed mid-release |
+| A send refused at the fence left listed | `test_maintenance_treats_queued_and_running_sends_as_active_work` |
+| The refused-submission path releasing without unlisting | `test_a_send_the_executor_refuses_leaves_maintenance_free` |
+
+Survives, equivalent: listing and reserving without the maintenance lock. Because the send is listed before its
+reservation is taken, no moment exists in which `acquire` counts it and `status` does not list it, and a maintenance
+request in between refuses for the listing, as `status` would. The lock there costs nothing, since `guarded_acquire`
+already takes it, and is kept so both transitions read the same way.
+
+Not run: real Hermes, the qualification run, `npm test`, iOS, production, and the release tool.

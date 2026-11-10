@@ -431,17 +431,23 @@ class LaneQueue:
 
 
 class Reservation:
-    """One admission reservation, released at most once, so a second release cannot free another request's."""
+    """One admission reservation, released at most once, so a second release cannot free another request's.
 
-    def __init__(self, retirement):
-        self.retirement, self.lock, self.held = retirement, threading.Lock(), True
+    ``unlist`` runs just after the release, both under ``lock``, so a reader holding ``lock`` sees the
+    reservation and what lists it go together, and nothing is unlisted while its reservation is held.
+    """
+
+    def __init__(self, retirement, lock, unlist=None):
+        self.retirement, self.lock, self.unlist, self.held = retirement, lock, unlist, True
 
     def release(self):
         with self.lock:
             held, self.held = self.held, False
-        if held:
-            self.retirement.release()
-        else:
+            if held:
+                self.retirement.release()
+                if self.unlist is not None:
+                    self.unlist()
+        if not held:
             logging.getLogger(__name__).error("An admission reservation was released twice; the second release was ignored", stack_info=True)
 
 
@@ -801,16 +807,23 @@ class Bridge:
             return self.original_dispatch(request, *args, **kwargs)
         from tui_gateway.transport import bind_transport
         server, retirement = self.server, self.retirement
-        if not retirement.acquire():
-            return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
-        reservation = Reservation(retirement)
         params = request.get("params") if isinstance(request.get("params"), dict) else {}
         profile = params.get("profile", "default")
-        # Listed while its reservation is held, so maintenance status and acquire agree about it.
+        # Listed whenever its reservation is held, so maintenance status and acquire agree about it. Maintenance
+        # reads both under maintenance_lock, so listing and reserving are one step to it, and so are releasing
+        # and unlisting in Reservation.release. Neither step waits on anything but the native fence.
         send = [profile if isinstance(profile, str) else None, "queued"] if method in QUEUED_SENDS else None
-        if send is not None:
+        def unlist():
             with self.sends_in_flight_lock:
-                self.sends_in_flight[id(send)] = send
+                self.sends_in_flight.pop(id(send), None)
+        with self.maintenance_lock:
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    self.sends_in_flight[id(send)] = send
+            if not retirement.acquire():
+                unlist()
+                return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        reservation = Reservation(retirement, self.maintenance_lock, unlist if send is not None else None)
         context = contextvars.copy_context()
         def answer(requests):
             # Each merged request holds its own admission reservation until it is answered.
@@ -831,9 +844,6 @@ class Bridge:
                     if reply is not None:
                         transport.write(reply)
             finally:
-                if send is not None:
-                    with self.sends_in_flight_lock:
-                        self.sends_in_flight.pop(id(send), None)
                 for *_, held in requests:
                     held.release()
         # A profile that is not a name still gets its handler's answer, from a lane of its own.
@@ -849,9 +859,6 @@ class Bridge:
             (self.sends if method in QUEUED_SENDS else self.reads).submit(
                 lane, lambda requests: context.run(answer, requests), (request, arrived, reservation), merge)
         except BaseException:
-            if send is not None:
-                with self.sends_in_flight_lock:
-                    self.sends_in_flight.pop(id(send), None)
             # Nothing was queued, so native dispatch answers the raise and nothing else ever will.
             reservation.release()
             raise
