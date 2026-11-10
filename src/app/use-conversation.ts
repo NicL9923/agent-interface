@@ -76,7 +76,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
    * this person's first message after those `known` when they sent stands in as `guess`, which a
    * named copy replaces. Once a receipt names the copy, nothing else stands in for it.
    */
-  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string; guess?: string; filled?: Element } | null>(null);
+  const sendAnchor = useRef<{ known: Set<string>; requestId?: string; messageId?: string; id?: string; guess?: string; filled?: Element; content?: number } | null>(null);
   // Where a scroll event last left the transcript, so reading upward can be told from growth.
   const lastTop = useRef(0);
   // A smooth jump reports positions short of the end until it lands.
@@ -399,16 +399,19 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // Keeps enough space at the end for the sent message to reach the top of the view. It never moves
   // what is above it, and it shrinks as the reply grows into it. Once what follows the message has
   // filled the view, the space is never reserved again for it: a request card or tool rows that
-  // later fold or leave must not turn into a blank screen below the finished reply.
+  // later fold or leave must not turn into a blank screen below the finished reply. Only content
+  // growing into the space fills it. A view that shrinks, as when a phone's keyboard opens, needs
+  // less space for now, and gets it back when it grows again.
   const reserveEnd = () => {
     const element = scroll.current, space = endSpace.current, sent = sentMessage(), anchor = sendAnchor.current;
     if (!element || !space) return;
-    const reserve = space.offsetHeight;
+    const reserve = space.offsetHeight, content = element.scrollHeight - reserve;
     const next = sent && anchor?.filled !== sent ? endReserve({
       offset: sent.getBoundingClientRect().top - element.getBoundingClientRect().top + element.scrollTop,
       scrollHeight: element.scrollHeight, clientHeight: element.clientHeight, reserve,
     }) : 0;
-    if (sent && anchor && next === 0) anchor.filled = sent;
+    if (sent && anchor && next === 0 && content > (anchor.content ?? Infinity)) anchor.filled = sent;
+    if (anchor) anchor.content = content;
     if (next !== reserve) space.style.height = next ? `${next}px` : "";
   };
   // Brings the opened message into view, a little below the top, and marks it briefly.
@@ -524,6 +527,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // Browser scroll anchoring is off, so late images above the reader are offset here too.
     const observer = new ResizeObserver(() => placeLatest.current());
     observer.observe(node);
+    // The view shrinks when a phone's keyboard opens or the composer grows, which moves no content,
+    // so a follower would otherwise end up with the latest message under the composer.
+    if (element) observer.observe(element);
     return () => { observer.disconnect(); stop?.(); };
   }, []);
   const jumpToLatest = useCallback(() => {
