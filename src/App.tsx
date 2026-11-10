@@ -16,7 +16,7 @@ import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useDeviceActivity } from "./app/use-device-activity";
 import { useSubmission } from "./app/use-submission";
-import { sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
+import { awaitingTurn, sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
 import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
@@ -442,10 +442,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   if (session.auth) return <SignIn />;
   if (!boot) return <Connecting unavailable={appUnavailable} retry={refreshSession} />;
   const selected = boot.bots.find((bot) => bot.id === botId);
-  const state: ActivityState = connectionShown
+  const reported: ActivityState = connectionShown
     ? "disconnected"
     : conversation?.activity.state || selected?.activity || "idle";
-  const active = ["thinking", "working", "waiting", "blocked"].includes(state);
+  // A message that starts a turn shows the assistant thinking from the moment it is sent; Hermes's
+  // report takes over the same row. Stop and the message box follow only what Hermes reports. The row's bounds
+  // are read from the clock here, so a render never paints a bound that passed while another chat was open.
+  const state: ActivityState = !connectionShown && conversation?.botId === botId && awaitingTurn(echoes, conversation, Date.now()) ? "thinking" : reported;
+  const active = ["thinking", "working", "waiting", "blocked"].includes(reported);
   const showActivity = state !== "idle" && state !== "done";
   const avatarState = state === "done" ? "idle" : state;
   const open = openPanel;
@@ -475,7 +479,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             onRoutineResults={openRoutineRun} onHideRoutineRuns={hideRoutineRuns} computerOpen={panel?.kind === "computer"} reviewed={reviewed}
             onDraft={addToDraft} onCreate={newBot} />
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
-            state={state}
+            state={reported}
             active={active} connectionLost={connectionLost} connectionShown={connectionShown} draft={draft} setDraft={setDraft}
             draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}

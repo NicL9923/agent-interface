@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
+import { assistants, conversation, deployNextRelease, expect, signIn, slowAdmission, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -199,6 +199,29 @@ test("a new release whose worker cannot install still reaches the person on thei
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
 
+test("the assistant shows it is thinking from the moment a message is sent, in the one row its reply's work keeps", async ({ page }) => {
+  await slowAdmission(800);
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Trail Cook/ }).click();
+  await page.getByRole("textbox", { name: "Message Trail Cook" }).fill("Echo: howdy partner");
+  // Every activity row node the page inserts, the status line's words each time they change, and whether the row
+  // showed while the message still read as sending, before Hermes answered.
+  await page.evaluate(() => {
+    const marks = { rows: 0, said: [] as string[], whileSending: false };
+    (window as unknown as { marks: typeof marks }).marks = marks;
+    new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes) if (node instanceof HTMLElement && node.matches(".conversation-activity")) marks.rows++;
+      const said = document.querySelector('.conversation-activity [role="status"] .activity-shimmer')?.firstChild?.textContent;
+      if (said && marks.said.at(-1) !== said) marks.said.push(said);
+      if (said && document.querySelector(".message-sending")) marks.whileSending = true;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator('[data-message-id="trail-inflight"] .message-markdown')).toContainText("partner");
+  expect(await page.evaluate(() => (window as unknown as { marks: unknown }).marks))
+    .toEqual({ rows: 1, said: ["Trail Cook is thinking..."], whileSending: true });
+});
+
 test("a reply keeps growing across a tool call, and its saved segment never disappears or doubles", async ({ page }) => {
   const saved = "Looking at the north fence.", after = "Post two is loose, so I tightened the wire and checked the gate.";
   const reads: number[] = [];
@@ -301,3 +324,67 @@ test.describe("on a phone held sideways with its on-screen keyboard up", () => {
     await expect(field).toBeFocused();
   });
 });
+
+test("a transcript image that fails to load keeps the space it held while loading", async ({ page, allowConsoleError }) => {
+  // Chromium logs the image's 404. Nothing else is excused.
+  allowConsoleError.push(/status of 404/);
+  let fail = () => {};
+  const failing = new Promise<void>(resolve => { fail = resolve; });
+  await page.route("**/api/files/*", async route => { await failing; await route.fulfill({ status: 404 }); });
+  // Read whole every time, so the image's message is in each read.
+  await page.route("**/api/bots/ranch/conversation*", async route => {
+    const headers = { ...route.request().headers() };
+    delete headers["if-none-match"];
+    const response = await route.fetch({ headers }), body = await response.json();
+    body.messages.push({ id: "photo", role: "assistant", text: "The gate.", createdAt: "2026-11-05T14:00:00Z",
+      files: [{ id: "missing-gate", name: "gate.png", mime: "image/png" }] });
+    await route.fulfill({ status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" }, json: body });
+  });
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  const link = conversation(page).locator('[data-message-id="photo"] .file-link');
+  await expect(link).toBeVisible();
+  const loading = (await link.boundingBox())!;
+  fail();
+  await expect.poll(() => link.evaluate(item => {
+    const image = item.querySelector("img");
+    return !image || (image.complete && image.naturalWidth === 0);
+  })).toBe(true);
+  expect((await link.boundingBox())!.height).toBe(loading.height);
+  await expect(link.getByText("Couldn't load this image")).toBeVisible();
+});
+
+// A tall screenshot hits the 400 px height cap; its frame narrows to keep the image's ratio, so no bars show beside it.
+for (const [width, height] of [[1280, 800], [390, 844]]) {
+  test(`a transcript image fills a frame of its own ratio within the caps, ${width} px wide`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    const shapes = { tall: [1170, 2532], panorama: [2520, 1080], photo: [1800, 1200] } as Record<string, [number, number]>;
+    await page.route("**/api/files/*", route => {
+      const [w, h] = shapes[decodeURIComponent(route.request().url().split("/").pop()!)];
+      return route.fulfill({ status: 200, contentType: "image/svg+xml",
+        body: `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#4a7"/></svg>` });
+    });
+    await page.route("**/api/bots/ranch/conversation*", async route => {
+      const headers = { ...route.request().headers() };
+      delete headers["if-none-match"];
+      const response = await route.fetch({ headers }), body = await response.json();
+      body.messages.push(...Object.keys(shapes).map((id, index) => ({ id: `photo-${id}`, role: "assistant", text: `The ${id}.`,
+        createdAt: `2026-11-05T14:0${index}:00Z`, files: [{ id, name: `${id}.svg`, mime: "image/svg+xml" }] })));
+      await route.fulfill({ status: 200, headers: { "content-type": "application/json", "cache-control": "no-store" }, json: body });
+    });
+    await signIn(page);
+    await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+    const frames = conversation(page).locator(".file-frame");
+    await expect(frames).toHaveCount(3);
+    await expect.poll(() => frames.evaluateAll(items => items.every(item => (item.querySelector("img") as HTMLImageElement).complete))).toBe(true);
+    for (const [id, [w, h]] of Object.entries(shapes)) {
+      const frame = conversation(page).locator(`[data-message-id="photo-${id}"] .file-frame`);
+      // The reshape is a state update after load; its frame takes the ratio on the next render.
+      await expect.poll(async () => { const box = (await frame.boundingBox())!; return Math.abs(box.width / box.height / (w / h) - 1); }).toBeLessThan(0.01);
+      const box = (await frame.boundingBox())!, link = (await conversation(page).locator(`[data-message-id="photo-${id}"] .file-link`).boundingBox())!;
+      expect(box.height).toBeLessThanOrEqual(400.5);
+      // The frame fills its card, so the card shows no space beside the image either.
+      expect(Math.abs(link.width - box.width)).toBeLessThanOrEqual(2);
+    }
+  });
+}

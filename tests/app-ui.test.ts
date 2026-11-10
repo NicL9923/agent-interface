@@ -775,13 +775,14 @@ describe("conversation state", () => {
     const image = () => container.querySelector<HTMLImageElement>(".file-link img")!;
     expect(image().getAttribute("loading")).toBe("lazy");
     expect(image().getAttribute("decoding")).toBe("async");
-    expect(image().hasAttribute("width")).toBe(false);
+    const frame = () => container.querySelector<HTMLElement>(".file-frame")!;
+    expect(frame().style.aspectRatio).toBe("");
     Object.defineProperty(image(), "naturalWidth", { value: 800 });
     Object.defineProperty(image(), "naturalHeight", { value: 600 });
     await act(async () => image().dispatchEvent(new Event("load")));
     await act(async () => root.unmount());
     await render();
-    expect([image().getAttribute("width"), image().getAttribute("height")]).toEqual(["800", "600"]);
+    expect(frame().style.aspectRatio).toBe("800 / 600");
   });
 
   it("keeps the transcript from re-rendering while typing", async () => {
