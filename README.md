@@ -146,11 +146,20 @@ chat names its members, and no row is marked unread or busy. Account, Search, Ne
 the main assistant suggestion wait for bootstrap. A tap on an assistant opens its chat once
 bootstrap answers, and starts reading it at the tap as a linked chat does; Today and group chats
 open once bootstrap answers. Bootstrap's answer redraws the same rows in place, so scroll and
-focus stay, and the saved group chats stay until the group list answers. The copy belongs to one
-account: it is drawn only while the sign-in record names that account, removed with that record,
-and a sign-in shows the sign-in screen until its own bootstrap answers, so a second member never
-sees the first's home. A copy this release cannot read, or storage that fails, falls back to the
-welcome screen. See `src/app/saved-roster.ts`.
+focus stay, and the saved group chats stay until the group list answers, except a group chat with
+an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
+fails. The copy belongs to one account: it is drawn only while the sign-in record names that
+account, read once per account generation (see Accounts in one browser below), so every change
+of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
+off the page, and it is removed with the sign-in record, so a second member never sees the
+first's home. Every field is checked as the server would accept it, and every name and list has
+a bound; a copy past one, a stored value over 200,000 characters, one this release cannot read,
+or storage that fails falls back to the welcome screen. When the first check fails, the saved
+home offers **Sign out of this device**: it signs out at once in every tab, removes this device's
+copy, sign-in record and theme, and shows sign-in. Since the server could not be reached, the
+account record notes that the server's session may still be live; until it is ended there, which
+the sign-in screen does as soon as the server answers, nothing reads as that account. See
+`src/app/saved-roster.ts`.
 
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
@@ -225,8 +234,9 @@ open the profile can read its storage.
 
 One change is out of a browser's sight: a session revoked from another device, or a member
 removed from the household, while this browser is offline or has not yet asked the server.
-This browser keeps showing what it already shows until its first answer from the server, which
-refuses the session and so becomes the refused-session change above.
+This browser keeps showing what it already shows, the saved home included, until its first
+answer from the server, which refuses the session and so becomes the refused-session change
+above: the saved home, the sign-in record and the theme go, and sign-in shows.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
