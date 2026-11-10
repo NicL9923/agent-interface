@@ -83,5 +83,71 @@ selector form as above, and the line was restored with `git checkout`. Queued ti
 No real Hermes reply streamed to the app, and no phone or simulator watched one. The iOS docs name
 no scripted server. The only live route is `validate-ios.sh live` against an isolated Hermes runtime
 and app server on `127.0.0.1:3004`, and none was running or set up for this task. Nothing measured the bytes a
-long reply costs on either mode. The backoff after repeated refusals has no test; it needs a
-server that keeps sending deltas the app cannot apply.
+long reply costs on either mode. The backoff after repeated refusals is now tested; see the review round below.
+
+## Review round 1: GPT-6.1 Sol
+
+GPT-6.1 Sol reviewed head `0976055` and found no production defect. It asked for tests of two
+recovery paths and a fix to one stale comment. Commit `5c3482e`, written and run on the Mac mini.
+
+### Seam
+
+`AppStore.resyncPause: (Duration) async throws -> Void`, defaulting to `Task.sleep(for:)`, in the
+style of `TalkController.sleep`. The refusal backoff in `watchConversation` calls it in place of
+`Task.sleep`; the delay, the `try?` and the cancellation behavior are unchanged. No other sleep uses
+it. The tests substitute `ResyncPauses`, which records each wait and either returns at once or holds
+in a real `Task.sleep` that only cancellation ends, so no test waits real seconds for the backoff.
+
+### New tests
+
+All in `NativeContractTests`, with the network faked at the API client boundary as before.
+
+- `testAnUnreadableNoticeOrAWholeReplyForAnotherAssistantDropsTheHeldReplyAndReconnectsOnce`: three
+  cases, each holding "Howdy" first. An `inflight-delta` with truncated JSON; a truncated whole
+  `inflight` followed by growth based on "Howdy"; and a whole `inflight` for assistant `family`
+  followed by the same growth. Each must drop the held reply, reconnect once and read the
+  conversation once, then grow a new whole reply correctly. The growth after the whole events keeps
+  base lengths 5 and 0, so a whole event that failed to drop "Howdy" would let it apply.
+- `testRepeatedRefusalsWaitThreeSecondsMoreEachTimeUpToThirtyAndAnAppliedNoticeResetsThem`: twelve
+  refusals in a row reconnect at once, then wait 3, 6, 9 ... 27, 30, 30 seconds. An applied growth
+  notice makes the next refusal immediate again, and the one after waits 3 seconds.
+- `testPollingReadsTheConversationDuringTheBackoffAndSwitchingChatsEndsItWithoutReconnecting`: during
+  a held 3-second wait, a poll pass reads the conversation and leaves the stream alone. Switching to
+  another chat cancels the wait, the old stream loop ends, the old chat does not reconnect, and the
+  new chat opens its own stream.
+
+### Red proof
+
+Each line in `AppStore+Polling.swift` was broken by script, the one test that protects it was run with
+`IOS_VALIDATION_FRESH=1`, and the file was restored with `git checkout`. Every build compiled, and
+every failure was an assertion, not a build error.
+
+| Line broken | Test | Result | Queued | Run |
+| --- | --- | --- | --- | --- |
+| Delta decode split into its own `guard` that skips an unreadable notice | unreadable or foreign | Red, unreadable growth case: no reconnect, "Howdy" kept, 1 stream, 2 reads | 0.18 s | 39 s |
+| Whole-reply `else` changed to `else if patch != nil` | unreadable or foreign | Red, unreadable whole case only: "Howdy partner" applied, no reconnect | 0.17 s | 45 s |
+| Whole-reply `else` changed to `else if patch == nil` | unreadable or foreign | Red, other assistant case only: "Howdy partner" applied, no reconnect | 0.17 s | 39 s |
+| `if refused > 1` changed to `if refused > 0` | backoff | Red: the first refusal waited 0 s, and the waits after a reset were `[0, 3]` | 0.17 s | 28 s |
+| `min(30, ...)` removed | backoff | Red: the twelfth refusal waited 33 s | 0.17 s | 28 s |
+| `refused = 0` on an applied notice removed | backoff | Red: the refusals after an applied notice waited 30 s and 30 s | 0.16 s | 28 s |
+| `self.streamHeardAt = nil` before the resync branch removed | poll and switch | Red: the poll during the wait read nothing | 0.17 s | 29 s |
+| `while !Task.isCancelled` of the stream loop changed to `while true` | poll and switch | Red: the left chat opened a third stream after the cancelled wait | 0.18 s | 28 s |
+
+### Mac validation
+
+Same Mac, Xcode, simulator and lock as above. Source state `5c3482e`.
+
+| Command | Result | Queued | Run |
+| --- | --- | --- | --- |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test` with the three new tests and `FixedWaitRuleTests` | 5 unit tests passed, 0 failed | 0.17 s | 31 s |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests` | 748 unit tests: 746 passed, 2 skipped (the two evidence renderers), 0 failed | 0.16 s | 80 s |
+
+An earlier run with the existing refusal test also selected passed it. The UI target was not run
+again; its two `ShellFlowTests` failures also fail on `main`.
+
+### Comment
+
+`src/server/conversation-routes.ts` now says mode 1 serves older installed iOS builds and cached web
+bundles, and that the web and iOS apps read mode 2. No server code changed. `npm run lint` and
+`npm run typecheck` were not run: this checkout has no installed `node_modules`, and the change is a
+comment.
