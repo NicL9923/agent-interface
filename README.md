@@ -77,6 +77,50 @@ device gets it as before. Security alerts always reach every device. See
 [Device activity](docs/native-api.md#device-activity).
 <!-- END device activity -->
 
+Tapping a web notification while the app is open in a window switches that window to the
+chat, as choosing it there would, and brings the window forward without reloading it. Every
+tap ends one of two ways: a window known to be in front shows the chat, or the notification
+is back on screen, quietly, to tap again. A window counts as in front only when it was focused
+already, it came forward when asked, or the worker just opened it; a browser covered by
+another application still reports itself visible. The worker follows four rules:
+
+1. No window the worker controls: it opens a new one. If the browser refuses, the
+   notification comes back.
+2. The page answers its `OPEN_CHAT` message within 250 ms: the chat is open there. If the
+   window is in front, that is all; if not, the notification comes back. No second window
+   opens, so the chat never shows twice.
+3. The page does not answer in time, on a first tap: it may be busy with something a reload
+   would lose, such as an edited settings form, so the window is left as it is and asked to
+   come forward, and the notification comes back marked as having come back. If the page
+   opens the chat late after all, the notification simply stays until it is dismissed or
+   tapped; a tap then gets a prompt answer.
+4. The page does not answer in time, on a tap of a notification that came back: that is the
+   person asking again, so the worker loads the chat's address into the window, or opens a
+   new window when that fails. Unless a window is then known to be in front, the
+   notification comes back again.
+
+A window running a release from before pages answered gets the notification back on the
+first tap and the chat on the second, as taps always did. A notification comes back only
+because of a tap, so it never loops on its own. A second tap on the same chat while the
+first is still being handled joins it, so nothing opens, loads or comes back twice. A tap
+while the notification is coming back may be a tap on that notification, so it starts a new
+try at once, and later taps join that one. A notification that comes back is tagged with its
+chat, so it replaces one already back for that chat and never a new notification. The worker
+waits at most 10 seconds for the browser to say a notification is back. Two cases the rules
+cannot cover leave nothing on screen: the browser refuses to show the notification again and
+refuses the worker's one further try, or it has neither shown nor refused it after those 10
+seconds, when the worker stops waiting and the notification still appears if the browser
+finishes later. Each fallback ends well
+inside the one second Firefox allows a worker to open a window after a tap.
+
+An open assistant settings sheet or Settings closes the way its close button does before the
+chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
+if the person discards them. A section name being typed in Settings is saved, or, if it
+cannot be, Settings stays open with the reason. The page answers the worker either way, so
+the worker never reloads the window over the form. A chat waiting on a sheet belongs to that
+sheet and account: if the sheet goes without closing, as when another tab signs in as someone
+else, the chat never opens.
+
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
 within the session's seven days and that sign-in's last check named the account and listed
@@ -613,7 +657,8 @@ network. It covers sign-in, sending a message and receiving the reply over the l
 stream, the service worker opening the app offline and recovering, a deploy whose new shell
 reaches the next load and whose release is offered until taken, a deploy whose worker cannot
 install still reaching the next load, a lazy screen whose file a deploy retired offering
-Reload without reloading on its own, and no page errors,
+Reload without reloading on its own, a notification's chat opening in the open window
+without a reload, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.

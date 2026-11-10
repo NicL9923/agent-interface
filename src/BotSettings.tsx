@@ -4,7 +4,8 @@ import { Dialog } from "./components/ui/dialog";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
+import { useCloseRequest, type SheetClose } from "./app/close-request";
 import type {
   Avatar as AvatarConfig,
   Bootstrap,
@@ -87,8 +88,11 @@ function LoadedBotSettings({
   onOpenRoutine,
   editPreferences,
   loading,
+  closer,
 }: {
   loading?: { error: string; retry(): void };
+  /** Where this sheet offers its own close to the app. See close-request.ts. */
+  closer?: RefObject<SheetClose | null>;
   bot: Bot | "new";
   bootstrap: Bootstrap;
   onClose: () => void;
@@ -170,6 +174,21 @@ function LoadedBotSettings({
   useEffect(() => { if (!unsaved) setConfirmDiscard(false); }, [unsaved]);
   // Escape and the close button both land here, so nothing is discarded without asking.
   const requestClose = () => memorySaving ? undefined : unsaved ? setConfirmDiscard(true) : onClose();
+  // The app asks too, as when a notification is tapped: the same question, and if the person keeps
+  // editing, whatever asked does not go ahead. Saving clears the question the same way.
+  const stay = useRef<(() => void) | null>(null);
+  useCloseRequest(closer, onStay => {
+    if (memorySaving) return onStay();
+    if (!unsaved) return onClose();
+    stay.current = onStay;
+    setConfirmDiscard(true);
+  });
+  useEffect(() => {
+    if (confirmDiscard || !stay.current) return;
+    const kept = stay.current;
+    stay.current = null;
+    kept();
+  }, [confirmDiscard]);
   const routinesResource = useResource(existing && section === "automation" && bootstrap.capabilities.routines.supported ? routeUrl("GET /routines", {}) : null, { load: (_, signal) => request("GET /routines", { signal }) });
   const routines = (routinesResource.data || []).filter(routine => routine.botId === existing?.id);
   const confirmModel = confirmation?.kind === "model" ? confirmation.message : null;

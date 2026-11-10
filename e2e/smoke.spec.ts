@@ -172,3 +172,18 @@ test("a new release whose worker cannot install still reaches the person on thei
   expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
+
+test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
+
+  // The worker's own tap handler, minus the notification: Playwright cannot click one.
+  const [worker] = context.serviceWorkers();
+  await worker.evaluate(() => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: "/?bot=trail" } }));
+  await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
+});
