@@ -580,7 +580,8 @@ When the visible area is too short for everything, the transcript gives up its s
 then the notices, the Talk panel, the attachment tray and the message box, which scroll inside
 their own boxes down to one line of text, and last the header, cut from the top. Send and Stop
 stay on screen whenever the area is at least as tall as one line of text and the row of
-buttons, about 112 pixels.
+buttons, about 112 pixels. A group chat's composer stays at the bottom of the chat as it
+scrolls and follows the same order. `.agents/tools/check-send-visible.mjs` checks both in Chromium.
 Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
 messages. Attach and Talk switch to the file picker or your voice, so they let it close.
 
