@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MessageMarkdown, StreamingMarkdown, streamingBlocks } from "../src/components/MessageMarkdown";
+import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 let container: HTMLDivElement;
@@ -237,8 +238,27 @@ describe("streaming Markdown", () => {
   });
 
   it("parses the whole reply when a rule spans it", () => {
-    for (const text of ["Cards\n\n```agent-ui\n{}\n```", "See [docs][1].\n\n[1]: https://example.test",
-      "Note[^1]\n\n[^1]: Footnote", "<!--\n\nhidden\n-->"]) expect(streamingBlocks(text)).toBeNull();
+    expect(streamingBlocks("Cards\n\n```agent-ui\n{}\n```")).toBeNull();
+  });
+
+  // Outside a fence each line ties blocks together; inside one it is code and the blocks hold.
+  it.each([
+    ["a reference-link definition", "[1]: https://example.test"],
+    ["a footnote definition", "[^1]: Footnote"],
+    ["a footnote definition in a quote", "> [^1]: Footnote"],
+    ["an HTML comment", "<!--\n\nhidden\n-->"],
+    ["a raw script block", "<script>\n\nlet x = 1;\n</script>"],
+  ])("keeps blocks for %s inside a fence and parses whole outside one", (_rule, line) => {
+    expect(streamingBlocks(`See [docs][1].\n\n${line}`)).toBeNull();
+    const code = "```\n" + line + "\n```";
+    expect(streamingBlocks(`Sample:\n\n${code}\n\nDone`)).toEqual(["Sample:", code, "Done"]);
+    // A fence still open at the end holds the rest of the reply.
+    expect(streamingBlocks(`Sample:\n\n~~~\n${line}`)).toEqual(["Sample:", `~~~\n${line}`]);
+  });
+
+  it("keeps blocks for a footnote-shaped regex with no definition, and treats an inline ``` line as prose", () => {
+    expect(streamingBlocks("Match `/[^a-z]/` once.\n\nThen [^b] again.")).toEqual(["Match `/[^a-z]/` once.", "Then [^b] again."]);
+    expect(streamingBlocks("```js``` is inline.\n\n[1]: https://example.test")).toBeNull();
   });
 
   it("renders a growing reply the same as the saved reply", async () => {
@@ -248,6 +268,155 @@ describe("streaming Markdown", () => {
       "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
       "- Beans\n\n- Cornbread\n\n* Greens",
       "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+      // Code that looks like a definition, comment or footnote keeps its blocks and renders the same.
+      "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
     ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+  });
+
+  it("holds a half-written strong marker back until it closes, while the saved reply shows it as typed", async () => {
+    await renderAs(StreamingMarkdown, "Feed the **bo");
+    expect(container.textContent).toBe("Feed the");
+    await renderAs(StreamingMarkdown, "Feed the **bold**");
+    expect(container.querySelector("strong")?.textContent).toBe("bold");
+    await renderAs(MessageMarkdown, "Feed the **bo");
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).toBe("Feed the **bo");
+  });
+
+  /** What the live view shows: the reply less what the hold-back keeps from its last block. */
+  const shownPrefix = (text: string) => {
+    const last = streamingBlocks(text)?.at(-1) ?? text;
+    return text.slice(0, text.length - last.length + streamingHoldBack(last).length);
+  };
+  // React Markdown took about 80 seconds to render this live and saved in jsdom, so only its prefix is checked.
+  const slowToRender = "*a ".repeat(16000) + "b_ ".repeat(16000);
+  // Inputs from both review rounds where the old repair invented content. The live view must now be
+  // exactly what the reply's own prefix renders.
+  it.each([
+    "![".repeat(20000) + "[a](b)".repeat(10000),
+    "- Code:\n\n    ```\n\n  **literal",
+    "[---](https://x.test",
+    "[# Heading](https://x.test",
+    "[r]: https://x.test\n\nRun `[r]",
+    "Intro\r\r    **code",
+    "Compute 2 **3",
+    "Pass **kwargs",
+    "Exclude **test.ts",
+    "[a ".repeat(8000),
+    "See [docs][r].\n\n[r]: https://example.test/_private",
+    "https://example.test/a_[b",
+    "- ```\n  **literal",
+    "> ~~~\n> **literal",
+    "| this is a paragraph",
+    "    | literal code",
+    "Use *.ts files",
+    slowToRender,
+    // The same shape, short enough for the hold-back to read and for React Markdown to render.
+    "*a ".repeat(200) + "b_ ".repeat(200),
+  ])("renders a reviewed input live as its own prefix: %#", async text => {
+    const shown = shownPrefix(text);
+    expect(text.startsWith(shown)).toBe(true);
+    expect(text.length - shown.length).toBeLessThanOrEqual(HOLD_LIMIT);
+    if (text !== slowToRender) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, shown));
+  });
+
+  it("clears copy feedback when a growing code block changes, even mid-copy", async () => {
+    const status = () => container.querySelector('[role="status"]')?.textContent;
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1;");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1;\n");
+    expect(status()).toBe("Code copied.");
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 123;");
+    expect(status()).toBe("");
+    // A copy still pending when the code changes copied the older text, so it must not claim
+    // success, nor end a newer copy's wait.
+    const finish: Array<() => void> = [];
+    writeText.mockImplementation(() => new Promise<void>(resolve => { finish.push(resolve); }));
+    await copy();
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1234;");
+    expect(status()).toBe("");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1234;\n");
+    await act(async () => finish[0]());
+    expect(container.querySelector("button")?.textContent).toBe("Copying…");
+    await act(async () => finish[1]());
+    expect(status()).toBe("Code copied.");
+  });
+
+  it("keeps an unfinished code block's node across updates", async () => {
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')");
+    const code = container.querySelector("pre code")!;
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')\nprint('oats')");
+    expect(container.querySelector("pre code")).toBe(code);
+    expect(code.textContent).toBe("print('hay')\nprint('oats')\n");
+  });
+
+  // Each case is a fence or definition the per-line splitter cannot follow, so it must parse whole.
+  it.each([
+    ["a fence opened behind a list marker hides a later footnote", "Note[^a]\n\nHere:\n\n- ```\n  code\n  ```\n\n[^a]: footnote"],
+    ["a list item's fence closes on a line that the tracker reads as an opener", "See [docs][a].\n\nSteps:\n\n- ```\n  code\n  ```\n  [a]: https://example.test\n  ```"],
+    ["a list item's fence ends at a line left of it", "See [docs][a].\n\nSteps:\n\n- Run:\n\n  ```\n[a]: https://example.test\n  ```"],
+    ["an HTML block holds a fence-shaped line", "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test"],
+    ["a definition label spans two lines", "See [docs][a b].\n\n[a\nb]: https://example.test"],
+    ["a definition label holds an escaped bracket", "See [docs][a\\]b].\n\n[a\\]b]: https://example.test"],
+    ["a list item's fence sits four spaces in and the item ends at a quote", "- Code:\n\n    ```\n    x\n\n> Next"],
+  ])("renders the same as the saved reply when %s", async (_case, text) => {
+    expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+    expect(streamingBlocks(text)).toBeNull();
+  });
+
+  // Seeded replies built from lines the splitter must follow: fences in and out of containers,
+  // definitions, multi-line labels, HTML blocks and tables. Live and saved must render alike.
+  it("renders seeded random replies the same live and saved", async () => {
+    const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "[a", "b]: https://example.test/b",
+      "- ```", "  ```", "```", "~~~", "   ```", "    ```", "\t```", "> ```", "  code", "code", "    indented", "> text", ">", "- item", "1. item",
+      "  - nested", "- [ ] task", "<div>", "</div>", "<!--", "-->", "| a | b |", "| - | - |", "Text **bold**", "Title", "===", "* * *", "", ""];
+    let seed = 7;
+    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const diverged: string[] = [];
+    for (let run = 0; run < 1500 && diverged.length < 3; run++) {
+      const body = Array.from({ length: 3 + pick(12) }, () => lines[pick(lines.length)] + (pick(3) ? "\n" : "\n\n")).join("");
+      const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
+      if (await renderAs(StreamingMarkdown, text) !== await renderAs(MessageMarkdown, text)) diverged.push(text);
+    }
+    expect(diverged).toEqual([]);
+  }, 60_000);
+
+  // Three code-heavy replies of the kind assistants write. No prefix ending at a line break may fall
+  // back to a whole parse; a later broadening of the fallbacks that costs ordinary replies their
+  // blocks fails here.
+  it.each([
+    ["a tutorial with fenced code between paragraphs", [
+      "## Set up the worker", "", "Install the queue client first:", "", "```bash", "npm install bullmq ioredis", "```", "",
+      "Then create `worker.ts`:", "", "```ts", "import { Worker } from \"bullmq\";", "", "// One connection per process.",
+      "const connection = { host: \"localhost\", port: 6379 };", "", "export const worker = new Worker(\"email\", async job => {",
+      "  const { to, subject } = job.data;", "", "  await send(to, subject);", "}, { connection });", "```", "",
+      "A few notes:", "", "- `concurrency` defaults to **1**.", "- Failed jobs retry with `attempts` and `backoff`.", "",
+      "| Option | Default |", "| --- | --- |", "| `attempts` | 1 |", "| `backoff` | none |", "", "That is the whole worker.",
+    ]],
+    ["numbered steps with code in each item", [
+      "Here is how to rotate the key:", "", "1. Create the new key:", "", "   ```sh", "   az keyvault key create --name app-key", "",
+      "   az keyvault key show --name app-key", "   ```", "", "2. Update the app setting:", "", "   ```json", "   {", "     \"KeyName\": \"app-key\"",
+      "   }", "   ```", "", "   - Restart the app after saving.", "   - Watch the logs for `KeyNotFound`.", "",
+      "3. Delete the old key once traffic is clean.", "", "> **Note:** keep the old key for 24 hours in case you roll back.", "", "Done.",
+    ]],
+    ["a fix with a diff, Python and a Markdown sample", [
+      "The error comes from the decorator:", "", "> TypeError: wrapper() got an unexpected keyword argument 'retry'", "",
+      "Pass the keyword arguments through:", "", "```diff", "-def wrapper(*args):", "-    return fn(*args)", "+def wrapper(*args, **kwargs):",
+      "+    return fn(*args, **kwargs)", "```", "", "The full decorator:", "", "```python", "def logged(fn):", "    @wraps(fn)",
+      "    def wrapper(*args, **kwargs):", "        log.info(\"calling %s\", fn.__name__)", "", "        return fn(*args, **kwargs)", "",
+      "    return wrapper", "```", "", "If the docs use reference links, keep the definitions at the bottom:", "", "```md",
+      "See [the guide][g].", "", "[g]: https://example.test/guide", "<!-- end -->", "```", "", "That should clear it.",
+    ]],
+  ])("keeps blocks at every line of %s", (_reply, lines) => {
+    const prefixes = lines.map((_line, index) => lines.slice(0, index + 1).join("\n"));
+    expect(prefixes.filter(prefix => streamingBlocks(prefix) === null)).toEqual([]);
+  });
+
+  it("keeps blocks for a fence in a list item whose lines stay indented", () => {
+    const item = "1. Install:\n\n   ```sh\n   npm i\n\n   npm test\n   ```";
+    expect(streamingBlocks(`${item}\n\nDone`)).toEqual([item, "Done"]);
+    // With no list above it, a fence indented four spaces is indented code and splits as usual.
+    expect(streamingBlocks("Example:\n\n    ```\n    code\n\nDone")).toEqual(["Example:\n\n    ```\n    code", "Done"]);
   });
 });
