@@ -119,6 +119,15 @@ describe('a failed conversation read', () => {
     expect(announced()).toBe('');
   });
 
+  // The notice above the composer is rebuilt when the roster is read again. It follows what the chat shows
+  // then too, not the failed read that is still inside its grace period.
+  it('keeps the notice away through a roster refresh during the grace period', async () => {
+    await opened();
+    failure = blip(); await read();
+    await rosterChanged();
+    expect(shown()).toBe(false);
+  });
+
   it('shows the connection is down on a second failure in a row', async () => {
     await opened();
     failure = blip(); await read();
