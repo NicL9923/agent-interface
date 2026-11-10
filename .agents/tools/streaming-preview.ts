@@ -6,9 +6,10 @@
  *   npm run build && npx tsx .agents/tools/streaming-preview.ts [port]
  *
  * Open http://127.0.0.1:4190, choose "Enter local workspace" and then Ranch Hand. STREAM_CHARS
- * sets how many characters arrive every 40 ms (default 6, about 150 a second). SAVE_DELAY_MS holds the
- * finished answer live that long before saving it (default 0), to select text before the hand-off.
- * Nothing leaves the machine.
+ * sets how many characters arrive every 40 ms (default 6, about 150 a second). With CODE_BLOCK=1 the
+ * answer is one open code block that starts at 20,000 characters and keeps growing, the case where
+ * each paint re-parses the most. SAVE_DELAY_MS holds the finished answer live that long before
+ * saving it (default 0), to select text before the hand-off. Nothing leaves the machine.
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -22,7 +23,8 @@ const port = Number(process.argv[2] ?? 4190);
 const step = Number(process.env.STREAM_CHARS ?? 6);
 const saveDelay = Number(process.env.SAVE_DELAY_MS ?? 0);
 const first = "Let me check the gate log before I answer.";
-const answer = [
+const codeBlock = process.env.CODE_BLOCK === "1";
+const prose = [
   "## North pasture", "",
   "The north gate is **latched**, and the chain runs through the second post where the mare cannot reach it. "
     + "I checked the [gate log](https://example.test/gates) and the last entry is from this morning.", "",
@@ -37,6 +39,9 @@ const answer = [
     + "is found while there is still light to fix it.\n"),
   "That is everything for today.",
 ].join("\n");
+const answer = codeBlock ? "```ts\n" + Array.from({ length: 700 }, (_, index) => `const post${index} = check("fence", ${index});`).join("\n") : prose;
+// Where the answer's stream starts: a code block arrives 20,000 characters long, then grows.
+const answerStart = codeBlock ? 20_000 : 0;
 
 const bot = botFixture({ id: "ranch", name: "Ranch Hand" });
 const thread: Message[] = [{ id: "seed-1", role: "assistant", text: "Morning. The north fence is fixed.", createdAt: new Date().toISOString() }];
@@ -60,8 +65,8 @@ function structural() {
   }, 60);
 }
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function stream(text: string) {
-  for (let at = 0; at < text.length; at += step) {
+async function stream(text: string, from = 0) {
+  for (let at = from; at < text.length; at += step) {
     turn!.live = text.slice(0, at + step);
     notify("inflight");
     await pause(40);
@@ -82,7 +87,7 @@ async function run(runId: string) {
   turn.calls = [{ ...call, status: "completed", completedAt: new Date().toISOString() }];
   thread.push({ id: randomUUID(), runId, role: "tool", text: "", toolCall: turn.calls[0], createdAt: new Date().toISOString() });
   structural();
-  await stream(answer);
+  await stream(answer, answerStart);
   await pause(saveDelay);
   thread.push({ id: randomUUID(), runId, role: "assistant", text: answer, createdAt: new Date().toISOString() });
   turn.live = "";

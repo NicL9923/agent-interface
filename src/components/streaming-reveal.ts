@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { prefersReducedMotion } from "../app/reduced-motion";
 
 /**
@@ -8,9 +8,10 @@ import { prefersReducedMotion } from "../app/reduced-motion";
  *
  * Contract:
  * - What is shown is always a prefix of the text that arrived, cut between graphemes.
- * - Every character shows within CATCH_UP_MS of arriving, however much arrived at once. On each
- *   update the reveal speeds up to clear the whole backlog in CATCH_UP_MS, and never slows down
- *   while text it already had is still hidden.
+ * - Every character shows within CATCH_UP_MS of arriving, however much arrived at once, plus the
+ *   wait for the next paced paint, under MIN_FRAME_MS and a frame. On each update the reveal speeds up to clear the whole
+ *   backlog in CATCH_UP_MS, and never slows down while text it already had is still hidden.
+ * - Paced paints are at least MIN_FRAME_MS apart, across updates as well as frames.
  * - Text that does not continue what is shown, a row's first text, a hidden tab and reduced motion
  *   show at once, with no pacing.
  */
@@ -66,40 +67,57 @@ export const visibleLength = (pace: Pace, now: number) => graphemeCut(pace.text,
 const hidden = () => typeof document !== "undefined" && document.visibilityState === "hidden";
 const instant = () => hidden() || prefersReducedMotion();
 
+/** What the hook shows: `length` characters of `pace.text`, painted at `at`. */
+type Shown = { pace: Pace; length: number; at: number };
+
 /**
- * The part of a live reply's `text` to show now. Re-renders on animation frames, at most once per
- * MIN_FRAME_MS, until the reveal catches up. When `live` is false, as once the reply is saved,
- * all of it shows at once.
+ * The part of a live reply's `text` to show now. Re-renders on animation frames until the reveal
+ * catches up. Every paced paint, whether an arrival or a frame makes it, is at least MIN_FRAME_MS
+ * after the last one, so the cap holds however often text arrives. When `live` is false, as once
+ * the reply is saved, all of it shows at once.
  */
 export function useRevealed(text: string, live = true): string {
-  const [state, setState] = useState(() => ({ pace: settledPace(text), length: text.length }));
+  const [state, setState] = useState<Shown>(() => ({ pace: settledPace(text), length: text.length, at: -Infinity }));
+  // What the last commit showed and when it was painted, for the frame loop. It outlives each update's loop.
+  const painted = useRef({ length: state.length, at: state.at });
   let current = state;
   // New text is taken in during render, so the frame that shows it never paints a stale cut.
   if (state.pace.text !== text || !live && state.length < text.length) {
     const now = performance.now();
     const pace = arrive(state.pace, text, now, !live || instant());
-    current = { pace, length: visibleLength(pace, now) };
+    const paced = pace.shown < pace.text.length;
+    const shown = state.pace.text.slice(0, state.length);
+    // Text that continues what shows, arriving within MIN_FRAME_MS of the last paint, waits for the
+    // next paced frame. The cut is taken again, since new text can extend the last grapheme.
+    current = paced && now - state.at < MIN_FRAME_MS - 1 && text.startsWith(shown)
+      ? { pace, length: graphemeCut(text, state.length), at: state.at }
+      : { pace, length: visibleLength(pace, now), at: now };
     setState(current);
   }
-  const { pace, length } = current;
+  const { pace, length, at } = current;
   const done = length >= pace.text.length;
+  useLayoutEffect(() => { painted.current = { length, at }; }, [length, at]);
   useEffect(() => {
     if (done) return;
-    let frame = 0, last = -Infinity;
-    const step = (time: number) => {
+    let frame = 0;
+    const step = () => {
       frame = 0;
-      if (instant()) { setState(previous => previous.pace === pace ? { pace, length: pace.text.length } : previous); return; }
-      if (time - last >= MIN_FRAME_MS - 1) {
-        last = time;
-        const next = visibleLength(pace, performance.now());
-        setState(previous => previous.pace === pace && previous.length !== next ? { pace, length: next } : previous);
+      const now = performance.now();
+      if (instant()) { setState(previous => previous.pace === pace ? { pace, length: pace.text.length, at: now } : previous); return; }
+      // The 1 ms allows for frame-time jitter, so a 60 Hz screen paints every second frame.
+      if (now - painted.current.at >= MIN_FRAME_MS - 1) {
+        const next = visibleLength(pace, now);
+        if (next !== painted.current.length) {
+          painted.current = { length: next, at: now };
+          setState(previous => previous.pace === pace ? { pace, length: next, at: now } : previous);
+        }
         if (next >= pace.text.length) return;
       }
       frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
     // A hidden tab runs no frames, so the text shows whole at once instead of waiting.
-    const show = () => { if (hidden()) setState(previous => previous.pace === pace ? { pace, length: pace.text.length } : previous); };
+    const show = () => { if (hidden()) setState(previous => previous.pace === pace ? { pace, length: pace.text.length, at: performance.now() } : previous); };
     document.addEventListener("visibilitychange", show);
     return () => {
       cancelAnimationFrame(frame);
