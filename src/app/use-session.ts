@@ -31,6 +31,10 @@ export function useSession(events: SessionEvents) {
   const [auth, setAuth] = useState(false);
   /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
   const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
+  /** The `version` of the group catalog home last read, which the household stream names when it opens. */
+  const catalogVersion = useRef<{ userId: string; version?: string } | null>(null);
+  /** The account whose first catalog read has settled, after which its household stream may open. */
+  const [catalogSettledFor, setCatalogSettledFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(
     () => new URLSearchParams(location.search).get("bot") || "",
   );
@@ -160,15 +164,31 @@ export function useSession(events: SessionEvents) {
       document.removeEventListener("visibilitychange", returned);
     };
   }, [refresh]);
+  const catalogSettled = !!boot?.user.id && catalogSettledFor === boot.user.id;
   useEffect(() => {
-    if (!boot?.user.id || auth) return;
+    if (!boot?.user.id || auth || !catalogSettled) return;
     const userId = boot.user.id;
-    // The server sends `groups` once on every connect and on each catalog change, so connecting or a
-    // roster notice does not read the group catalog itself.
-    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } });
+    let live = true;
+    // The server sends `groups` on each catalog change and on connect, so connecting or a roster notice does
+    // not read the group catalog itself. The stream opens after the reads it follows settle, bootstrap and
+    // home's first catalog read, and names their versions: the server sends either notice at open only if it
+    // changed since, so connecting reads nothing. A server that predates `rosterVersion` gets a bootstrap read
+    // on every connect, as before.
+    const stream = changeStream(() => {
+      const held = bootRef.current?.user.id === userId ? bootRef.current.rosterVersion : undefined;
+      const catalog = catalogVersion.current?.userId === userId ? catalogVersion.current.version : undefined;
+      const query = new URLSearchParams();
+      if (held !== undefined) query.set("roster", held);
+      if (catalog !== undefined) query.set("groups", catalog);
+      return { path: `/events${query.size ? `?${query}` : ""}`, vouched: held !== undefined };
+    }, () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } });
+    const awake = () => document.visibilityState !== "hidden" && navigator.onLine !== false;
     const wake = () => {
-      if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
-      else stream.close();
+      if (!awake()) { stream.close(); return; }
+      // After the bootstrap this wake started, if any, so a reopened stream names the roster that read showed.
+      const reading = bootstrapRequest.current;
+      if (reading) void reading.finally(() => { if (live && awake()) stream.open(); });
+      else stream.open();
     };
     wake();
     const retry = setInterval(wake, 45_000);
@@ -177,6 +197,7 @@ export function useSession(events: SessionEvents) {
     window.addEventListener("agent-interface:reconnect", wake);
     document.addEventListener("visibilitychange", wake);
     return () => {
+      live = false;
       clearInterval(retry);
       stream.close();
       window.removeEventListener("online", wake);
@@ -184,7 +205,7 @@ export function useSession(events: SessionEvents) {
       window.removeEventListener("agent-interface:reconnect", wake);
       document.removeEventListener("visibilitychange", wake);
     };
-  }, [boot?.user.id, auth, refresh]);
+  }, [boot?.user.id, auth, refresh, catalogSettled]);
   const preferences = useRef<ReturnType<typeof preferenceQueue> | null>(null);
   preferences.current ??= preferenceQueue({
     // Model stars have their own endpoint; leaving them out keeps the server's current list.
@@ -216,6 +237,17 @@ export function useSession(events: SessionEvents) {
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
     identityEpoch, refresh, reconnect, savePreferences, editPreferences, applyPreferences, signedIn, signedOut,
+    /**
+     * Notes that a catalog read for this account settled, with the catalog when it succeeded, for the household
+     * stream to name its version. The stream opens only after the first one. A catalog that names its version
+     * comes from a server whose household stream sends `groups` notices, which may now skip the connect notice
+     * that would otherwise prove it.
+     */
+    catalogRead: (forUser: string, read?: { version?: string }) => {
+      if (read) catalogVersion.current = { userId: forUser, version: read.version };
+      if (read?.version !== undefined) setGroupsNotifiedFor(current => current === forUser ? current : forUser);
+      setCatalogSettledFor(current => current === forUser ? current : forUser);
+    },
     /** This server sends `groups` notices, so a slow fallback poll is enough. */
     // Per account, so another account starts unproven in the same render that switches to it.
     groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,

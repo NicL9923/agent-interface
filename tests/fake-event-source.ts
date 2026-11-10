@@ -19,9 +19,12 @@ export class FakeEventSource extends EventTarget {
     FakeEventSource.streams.clear();
     FakeEventSource.created = [];
   }
-  /** Sends a change notice on every open conversation stream. */
+  /** Sends a change notice on every open stream but the household one, whatever versions its URL names. */
   static notifyAll() {
-    for (const stream of FakeEventSource.streams) if (stream.url !== "/api/events") stream.emit("message", "change");
+    for (const stream of FakeEventSource.streams) {
+      const url = new URL(stream.url, "http://localhost");
+      if (url.pathname !== "/api/events" || url.searchParams.has("group")) stream.emit("message", "change");
+    }
   }
   connect() {
     this.readyState = FakeEventSource.OPEN;

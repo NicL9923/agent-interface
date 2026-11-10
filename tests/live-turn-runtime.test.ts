@@ -331,6 +331,24 @@ describe("turn reads for streams that follow turns", () => {
     expect(compareVersions(superseded.version, second.version)).toBeGreaterThan(0);
     expect(compareVersions(superseded.version, now.version)).toBeLessThan(0);
   });
+
+  // A stream opened with `?since=` trusts this to say whether the client's read is still current: it must equal
+  // the version a read starting now carries, and move on every change a watcher hears without a kind.
+  it("reports the version a read starting now would carry, moved by every change a watcher hears", async () => {
+    midTurn();
+    const read = await runtime.conversation("shared", { history: false });
+    expect(runtime.version!("shared")).toBe(read.version);
+    const heard: (string | undefined)[] = [];
+    runtime.watch!("shared", kind => heard.push(kind));
+    // Live growth alone is not a change a client must read for: the stream sends it whole at open.
+    hermes.frame("message.delta", { text: "Looking. " });
+    expect(heard).toEqual(["inflight"]);
+    expect(runtime.version!("shared")).toBe(read.version);
+    hermes.frame("tool.complete", { tool_id: "a" });
+    expect(heard).toEqual(["inflight", undefined]);
+    expect(compareVersions(runtime.version!("shared"), read.version)).toBeGreaterThan(0);
+    expect((await runtime.conversation("shared", { history: false })).version).toBe(runtime.version!("shared"));
+  });
 });
 
 describe("the live reply's saved text", () => {

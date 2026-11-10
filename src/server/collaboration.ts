@@ -14,6 +14,7 @@ import { routineRun, runTime, type RoutineRun, type RoutineRunPage } from '../sh
 export const RUNS_CACHE_MS = 5_000;
 import { GroupLatestCache, previewOf } from './group-latest.js';
 import type { CatalogRead } from './group-catalog-watch.js';
+import { stateVersion } from './event-stream.js';
 import type { DeliveryRooms } from './delivery-targets.js';
 import { mentionsRoom, presentations, redactRooms, roomLeaks, type Presentation } from './routine-delivery.js';
 const uuid = z.string().uuid();
@@ -222,6 +223,9 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
   }
   // Home previews each room's newest message. One cache serves everyone, since the log is the same; only the author wording is per viewer.
   const latest = new GroupLatestCache((roomId, since) => request({ operation: 'log', roomId, since }) as Promise<GroupPage>);
+  // What home shows of a catalog: everything but each room's `latest_seq`, which also moves for driver
+  // notices that change no row. The stream compares it, and `GET /api/groups` names its version.
+  const homeCatalog = (catalog: GroupCatalog) => JSON.stringify({ ...catalog, rooms: catalog.rooms.map(({ latest_seq: _, ...room }) => room) });
   // One person's catalog: the rooms they may open, each with its newest message worded for them.
   function present(userId: string, value: GroupCatalog, rooms: GroupRoom[]): GroupCatalog {
     return { ...value, rooms: rooms.map(room => {
@@ -239,7 +243,9 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const value = await request({ operation: 'list' }) as GroupCatalog;
     const rooms = value.rooms.filter(room => accessible(room, allowed));
     await latest.refresh(rooms, value.rooms);
-    return present(userId, value, rooms);
+    const catalog = present(userId, value, rooms);
+    // The household stream opened with `?groups=` this sends its connect notice only if the catalog changed.
+    return { ...catalog, version: stateVersion(homeCatalog(catalog)) };
   });
   /**
    * One read of the roster and the room catalog for everyone watching, for the household stream's
@@ -251,10 +257,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const allowedFor = (userId: string) => new Set(roster.filter(bot => visible({ ...bot, ...store.presentation(bot.id) }, userId)).map(bot => bot.id));
     const roomsFor = (userId: string) => { const allowed = allowedFor(userId); return value.rooms.filter(room => accessible(room, allowed)); };
     await latest.refresh([...new Map(userIds.flatMap(roomsFor).map(room => [room.room_id, room])).values()], value.rooms);
-    return userId => {
-      const catalog = present(userId, value, roomsFor(userId));
-      return JSON.stringify({ ...catalog, rooms: catalog.rooms.map(({ latest_seq: _, ...room }) => room) });
-    };
+    return userId => homeCatalog(present(userId, value, roomsFor(userId)));
   } : undefined;
   app.post('/api/groups', async req => {
     const body = z.object({ requestId: uuid, name: z.string().trim().min(1).max(100), botIds: z.array(id).min(2).max(6).refine(ids => new Set(ids).size === ids.length) }).strict().parse(req.body);

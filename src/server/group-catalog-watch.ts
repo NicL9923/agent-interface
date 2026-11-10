@@ -1,3 +1,5 @@
+import { stateVersion } from "./event-stream.js";
+
 /** How often open household streams have Hermes's room catalog checked, at most. */
 export const GROUP_CATALOG_POLL_MS = 30_000;
 /** The soonest a write through the app checks again after the last check, so a burst of sends shares one. */
@@ -9,8 +11,11 @@ export const GROUP_CATALOG_WRITE_FLOOR_MS = 1_000;
  * watching later.
  */
 export type CatalogRead = (userIds: string[]) => Promise<(userId: string) => string>;
-/** `fresh` until the first check that covers it: its client's own read may predate that check's. */
-type Viewer = { userId: string; changed: () => void; fresh: boolean };
+/**
+ * `fresh` until the first check that covers it: its client's own read may predate that check's.
+ * `since` is the catalog `version` its client read, if it named one.
+ */
+type Viewer = { userId: string; changed: () => void; fresh: boolean; since?: string };
 
 /**
  * Tells open household streams when a person's visible group catalog changes: a room added,
@@ -40,9 +45,13 @@ export class GroupCatalogWatch {
 
   get watching() { return this.viewers.size; }
 
-  /** Calls `changed` whenever this person's catalog changes, until the returned function runs. */
-  watch(userId: string, changed: () => void): () => void {
-    const viewer: Viewer = { userId, changed, fresh: false };
+  /**
+   * Calls `changed` whenever this person's catalog changes, until the returned function runs. `since`
+   * is the catalog `version` the client read: the notice every stream hears once is then left out
+   * when the catalog is still that one.
+   */
+  watch(userId: string, changed: () => void, since?: string): () => void {
+    const viewer: Viewer = { userId, changed, fresh: false, since };
     this.viewers.add(viewer);
     if (!this.seen.has(userId) && this.project) {
       try { this.seen.set(userId, this.project(userId)); } catch { /* The next read sets it. */ }
@@ -53,7 +62,7 @@ export class GroupCatalogWatch {
     // change the client's read missed and must not silently start from it.
     viewer.fresh = !this.seen.has(userId);
     // After the caller's stream has opened, which finishes synchronously after this returns.
-    if (!viewer.fresh) queueMicrotask(() => { if (this.viewers.has(viewer)) viewer.changed(); });
+    if (!viewer.fresh && this.stale(viewer, this.seen.get(userId)!)) queueMicrotask(() => { if (this.viewers.has(viewer)) viewer.changed(); });
     // The first viewer starts the checks.
     if (this.viewers.size === 1) this.schedule(0);
     let ended = false;
@@ -77,6 +86,11 @@ export class GroupCatalogWatch {
   close() {
     this.viewers.clear();
     this.stop();
+  }
+
+  /** Whether a viewer's client may not have read `catalog`: it named no version, or another one. */
+  private stale(viewer: Viewer, catalog: string) {
+    return viewer.since === undefined || stateVersion(catalog) !== viewer.since;
   }
 
   private stop() {
@@ -130,7 +144,7 @@ export class GroupCatalogWatch {
         const value = next.get(viewer.userId);
         if (value === undefined) continue;
         const before = this.seen.get(viewer.userId);
-        if (viewer.fresh) { viewer.fresh = false; tell.push(viewer); }
+        if (viewer.fresh) { viewer.fresh = false; if (this.stale(viewer, value)) tell.push(viewer); }
         else if (before !== undefined && before !== value) tell.push(viewer);
       }
       // Recorded before anyone hears: a listener that ends the last stream clears it all, and nothing

@@ -85,10 +85,14 @@ export function App() {
   // A read that finds nothing new returns the copy already held, so home does not redraw for it.
   const groupsHeld = useRef<{ json: string; value: { userId: string; catalog: GroupCatalog } }>(undefined);
   const groupLoad = useResource<{ userId: string; catalog: GroupCatalog }>(userId ? "/groups" : null, {
-    // A server that never sends `groups` notices gets the 30-second poll home always had.
-    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: true,
+    // A server that never sends `groups` notices gets the 30-second poll home always had, and a read on every
+    // wake. One that does reopens the household stream on wake, which brings a notice if the catalog changed.
+    deps: [userId], pollMs: session.groupsNotified ? GROUP_FALLBACK_POLL_MS : GROUP_UNNOTIFIED_POLL_MS, wake: () => !session.groupsNotified,
     load: async (path, signal) => {
-      const catalog = await api<GroupCatalog>(path, { signal });
+      let catalog: GroupCatalog | undefined;
+      // Settled either way: the household stream waits for the first read, to name the catalog it showed.
+      try { catalog = await api<GroupCatalog>(path, { signal }); }
+      finally { if (userId) session.catalogRead(userId, catalog ? { version: catalog.version } : undefined); }
       const json = JSON.stringify([userId, catalog]);
       if (groupsHeld.current?.json === json) return groupsHeld.current.value;
       groupsHeld.current = { json, value: { userId: userId!, catalog } };

@@ -3,11 +3,11 @@ import { z } from "zod";
 import type { Bot, Runtime } from "../shared/types.js";
 import type { GroupState } from "../shared/collaboration.js";
 import { signedIn, stillSignedIn } from "./auth.js";
-import { visible, visibleTo, type Roster } from "./bot-access.js";
+import { visibleTo, type Roster } from "./bot-access.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { roomAccessible } from "./collaboration.js";
 import type { Config } from "./config.js";
-import { eventStreamConnection, type EventStream } from "./event-stream.js";
+import { eventStreamConnection, sinceParam, stateVersion, type EventStream } from "./event-stream.js";
 import type { GroupCatalogWatch } from "./group-catalog-watch.js";
 import type { GroupWatch } from "./group-watch.js";
 import { routePattern } from "./route-path.js";
@@ -18,7 +18,9 @@ import type { Store } from "./store.js";
 /**
  * The household change stream, `GET /api/events`: a roster notice when this person's visible
  * assistants change, a groups notice when their visible group catalog changes, and with
- * `?group=<roomId>` a notice for each change to that group chat.
+ * `?group=<roomId>` a notice for each change to that group chat. `?roster=` names the bootstrap's
+ * `rosterVersion` and `?groups=` the catalog's `version`: each notice then also goes at open, and
+ * only then, if what the client read is no longer current, so the client need not read on open.
  */
 export function installEventRoutes(app: FastifyInstance, collaborators: {
   config: Config;
@@ -42,10 +44,7 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
   let rosterPending: ReturnType<typeof setTimeout> | undefined;
   let rosterEvaluating = false, rosterAgain = false, rosterLast = 0;
   let unwatchRoster: (() => void) | undefined;
-  const rosterProjection = (bots: Bot[], userId: string, nativeAvatar: boolean) => JSON.stringify(
-    directory.lean(bots.map(bot => directory.decorate(bot, nativeAvatar)).filter(bot => visible(bot, userId)))
-      .sort((a, b) => a.id.localeCompare(b.id)),
-  );
+  const rosterProjection = (bots: Bot[], userId: string, nativeAvatar: boolean) => directory.projection(bots, userId, nativeAvatar);
   const evaluateRoster = () => {
     if (!rosterListeners.size) return;
     if (rosterEvaluating) { rosterAgain = true; return; }
@@ -82,6 +81,7 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
     // Followed before the first await, so a client that leaves during setup never holds a watch.
     const connection = eventStreamConnection(reply);
     const { group } = z.object({ group: id.optional() }).parse(req.query);
+    const rosterSince = sinceParam(req.query, "roster"), groupsSince = sinceParam(req.query, "groups");
     const userId = signedIn(req).id;
     if (group !== undefined) await room(userId, group);
     if (connection.closed) return connection.abandon();
@@ -122,10 +122,12 @@ export function installEventRoutes(app: FastifyInstance, collaborators: {
         unwatchCatalog = catalogs?.watch(userId, () => {
           if (!stillSignedIn(store, config, req)) { stream?.end(); return; }
           stream?.send("event: groups\ndata: groups\n\n");
-        });
+        }, groupsSince);
       },
       allowed: () => stillSignedIn(store, config, req),
       teardown,
     });
+    // Compared once the roster listener is in place, so a change after this point sends its own notice.
+    if (rosterSince !== undefined && stateVersion(projection) !== rosterSince) stream.send("event: roster\ndata: roster\n\n");
   });
 }

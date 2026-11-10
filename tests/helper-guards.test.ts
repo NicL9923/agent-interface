@@ -30,6 +30,7 @@ describe("web data loads", () => {
     "src/app/use-receipt-check.ts": { count: 1, reason: "Checks a request's receipt by its ID on a backing-off timer until it settles, for a retry or a form's answers." },
     "src/components/FormReplyCard.tsx": { count: 2, reason: "On open, looks up each attempt's receipt in order, skipping refusals, until one says where the form stands; and derives the ID of a saved request whose ID was lost." },
     "src/app/use-browser.ts": { count: 1, reason: "Registers the service worker; it makes no API request." },
+    "src/app/use-session.ts": { count: 1, reason: "Reopens the household stream once the bootstrap a wake started settles; it makes no API request." },
     "src/components/google-identity.ts": { count: 1, reason: "Loads Google's sign-in script; it makes no API request." },
   };
   const flag = /\blet\s+(?:live|current|active|alive|mounted|cancell?ed|stale|ignore|disposed)\s*=\s*(?:true|false)\b/g;

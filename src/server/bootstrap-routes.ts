@@ -8,6 +8,7 @@ import { mainEligible } from "../shared/main-assistant.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
+import { stateVersion } from "./event-stream.js";
 import type { RuntimeSnapshots } from "./runtime-snapshot.js";
 import { id, modelFavoriteList, preferences } from "./schemas.js";
 import type { Store } from "./store.js";
@@ -52,6 +53,8 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
     ...await snapshot.read().then(async value => ({ ...value, connection: dated(value.connection),
       bots: await directory.rosterFor(signedIn(req).id, value.bots, value.capabilities.avatarMetadata.supported,
         (req.query as { roster?: string }).roster === "lean"),
+      // The household stream opened with `?roster=` this sends a roster notice at once only if it differs.
+      rosterVersion: stateVersion(directory.projection(value.bots, signedIn(req).id, value.capabilities.avatarMetadata.supported)),
     })),
     csrfToken: req.csrfToken,
     formKey: store.formKey(signedIn(req).id),

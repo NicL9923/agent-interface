@@ -484,3 +484,84 @@ describe("roster compatibility and household events", () => {
     await events.until(() => events.done);
   });
 });
+
+// A client that read a version opens its stream naming it, and the stream sends the notice it would have sent
+// for a change at open only if that read is no longer current. Without one, the stream sends nothing at open,
+// since such a client, an older bundle or the iOS app, reads on open itself.
+describe("a stream opened with the version of the client's read", () => {
+  const notices = (text: string) => text.split("data: change\n\n").length - 1;
+  const current = (): string => "b:0:3";
+  it.each([
+    ["names no version, as older clients", "", current, 0],
+    ["names the current version", "&since=b%3A0%3A3", current, 0],
+    ["names an older version", "&since=b%3A0%3A2", current, 1],
+    ["names a version from another boot", "&since=a%3A0%3A3", current, 1],
+    ["names a version the runtime cannot vouch for", "&since=b%3A0%3A3", undefined, 1],
+    ["names two versions", "&since=b%3A0%3A3&since=b%3A0%3A3", current, 1],
+  ] as const)("sends %s %i change notices at open", async (_name, query, version, expected) => {
+    const s = await setup();
+    if (version) s.runtime.version = version;
+    else delete s.runtime.version;
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=3${query}`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    await pass(1100);
+    expect(notices(events.text)).toBe(expected);
+    await events.close();
+  });
+
+  it("sends the live reply whole at open when the read is current, and a later change its own notice", async () => {
+    const s = await setup();
+    s.runtime.version = () => "b:0:3";
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=1&since=b%3A0%3A3`, s.cookie);
+    await events.until(() => events.text.includes("event: inflight"));
+    expect(notices(events.text)).toBe(0);
+    expect(events.text).toContain('"text":"Live reply"');
+    // A change right after the comparison is the watch's to report.
+    s.change("shared");
+    await events.until(() => notices(events.text) === 1);
+    await events.close();
+  });
+
+  it("compares after the watch is in place, so a change made as the stream opens is never lost", async () => {
+    const s = await setup();
+    let current = 3;
+    s.runtime.version = () => `b:0:${current}`;
+    // Hermes reports a change while the stream sets up, before its watch exists: the version moves.
+    const watch = s.runtime.watch!;
+    s.runtime.watch = (botId, changed) => { current++; return watch(botId, changed); };
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=3&since=b%3A0%3A3`, s.cookie);
+    await events.until(() => notices(events.text) === 1);
+    await events.close();
+  });
+});
+
+describe("a household stream opened with the roster version bootstrap named", () => {
+  const rosterNotices = (text: string) => text.split("event: roster\ndata: roster\n\n").length - 1;
+  const rosterVersion = async (s: { base: string; cookie: string }): Promise<string> =>
+    (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { rosterVersion: string }).rosterVersion;
+  it.each([
+    ["the roster bootstrap showed", (version: string) => version, 0],
+    ["a version that is not one", () => "x".repeat(300), 1],
+  ] as const)("sends a roster notice at open only for a stream naming something other than %s", async (_name, named, expected) => {
+    const s = await setup();
+    const version = await rosterVersion(s);
+    expect(version).toMatch(/^[\w-]{22}$/);
+    const events = await stream(`${s.base}/api/events?roster=${encodeURIComponent(named(version))}`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    await pass(50);
+    expect(rosterNotices(events.text)).toBe(expected);
+    await events.close();
+  });
+
+  it("sends a roster notice at open for a roster that changed after bootstrap read it", async () => {
+    const s = await setup();
+    const version = await rosterVersion(s);
+    s.bots.push({ ...s.bots[0], id: "barn", name: "Barn" });
+    // Past the shared snapshot's hold, so the stream reads the roster afresh.
+    await pass(2000);
+    const events = await stream(`${s.base}/api/events?roster=${version}`, s.cookie);
+    await events.until(() => rosterNotices(events.text) === 1);
+    expect(await rosterVersion(s)).not.toBe(version);
+    await events.close();
+  });
+});

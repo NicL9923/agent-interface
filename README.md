@@ -133,7 +133,9 @@ and the chat shows it only if the sign-in check answers as that same account and
 tab has signed out or in meanwhile; otherwise the chat reads again. The early read answers
 only the first chat load after the page loads, once, whether it has finished or not; nothing a
 person does can come before that load. Every later open of any chat, however soon, reads
-fresh, and the chat's change stream reads fresh as it connects. A row's hover or press read
+fresh. The chat's change stream opens once that read settles and names the read's version, and
+the server sends a change notice at once only if the chat changed since, so opening a chat,
+switching to one, or waking the page costs one conversation read, not two. A row's hover or press read
 is joined only while it is still on its way; once finished it only fills the response cache,
 which the chat shows while it reads again. The response cache keeps the body of the
 latest-started read of each path, so a slower, older read that finishes last never replaces
@@ -478,7 +480,10 @@ Hermes profile; a run with only a saved preview says so.
 in the home list beside the assistants, with overlapping member faces, the last
 message and who said it, and its time. Rooms follow the assistants, newest message first, because assistant rows keep
 the roster's order and do not jump. Home reads Hermes's room catalog when the household event stream
-says this person's rooms changed, when it reconnects or the page wakes, and every 5 minutes as a fallback.
+says this person's rooms changed and every 5 minutes as a fallback. The household stream opens after
+bootstrap and home's first catalog read, and names the versions both returned. On load, reconnect or
+wake the server then sends a roster or rooms notice at open only if either changed, so opening the
+stream costs no read of its own. A wake still reads bootstrap once, for the connection state.
 While any household stream is open, the server checks the catalog once for everyone at most every
 30 seconds, and right away after a group or assistant change made in the app, and tells only the people
 whose visible rooms changed. It adds each room's newest message to the catalog and re-reads a room's log

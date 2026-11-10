@@ -8,8 +8,11 @@ export type ResourceOptions<T> = {
   enabled?: boolean | ((data: T | null) => boolean);
   /** Refreshes quietly every pollMs while the page is visible. */
   pollMs?: number;
-  /** Refreshes quietly when the window regains focus, the network returns, or the page is shown. */
-  wake?: boolean;
+  /**
+   * Refreshes quietly when the window regains focus, the network returns, or the page is shown. A function
+   * decides at each of those moments, so a change in its answer never reloads by itself.
+   */
+  wake?: boolean | (() => boolean);
   /** Turns a failure into the text shown. Defaults to the error's message. It runs only for a current load. */
   errorMessage?: (cause: unknown) => string;
   /** Returns text to show instead of making the request, such as while offline. */
@@ -45,7 +48,8 @@ export type Resource<T> = {
  * Quiet refreshes (poll, wake) never stack and never raise `loading`.
  */
 export function useResource<T>(path: string | null, options: ResourceOptions<T> = {}): Resource<T> {
-  const { deps = [], enabled = true, pollMs, wake } = options;
+  const { deps = [], enabled = true, pollMs } = options;
+  const wake = !!options.wake;
   const [data, setData] = useState<T | null>(null);
   const active = path !== null && (typeof enabled === "function" ? enabled(data) : enabled);
   const [error, setError] = useState("");
@@ -99,7 +103,10 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
     const quiet = () => void load(true);
     const stops: (() => void)[] = [];
     if (wake) {
-      const woken = () => { if (document.visibilityState !== "hidden") quiet(); };
+      const woken = () => {
+        const asked = latest.current.wake;
+        if (document.visibilityState !== "hidden" && (typeof asked !== "function" || asked())) quiet();
+      };
       window.addEventListener("focus", woken);
       window.addEventListener("online", woken);
       document.addEventListener("visibilitychange", woken);
@@ -119,7 +126,9 @@ export function useResource<T>(path: string | null, options: ResourceOptions<T> 
   // interval later, never at once, and the load above does not run again.
   useEffect(() => {
     if (!active || !pollMs) return;
-    return pollWhileVisible(() => void load(true), pollMs);
+    // Showing the page is a wake: a `wake` function decides whether it reads, as for focus.
+    const shown = () => { const asked = latest.current.wake; if (typeof asked !== "function" || asked()) void load(true); };
+    return pollWhileVisible(() => void load(true), pollMs, shown);
   }, [load, active, pollMs, ...deps]);
   return { data, error, loading, reload, setData: replace, invalidate };
 }

@@ -280,6 +280,17 @@ sends a whole `inflight` except after a `data: change` notice, and on a new stre
 Keep refetching on them: approvals, requests, files, the draft and the read
 position come only from the read.
 
+A client that holds a conversation read may open any of these streams with
+`&since=VERSION`, naming that read's `version`. Once the stream is watching, the
+server compares it with the version a read starting then would carry. If they
+differ, or the runtime keeps no versions, it sends one `data: change` notice at
+once. If they match, it sends no notice, and on a stream that opted in to live
+replies it sends the running reply whole. Such a client does not refetch on open.
+A browser reconnects on the URL it first opened, so a reconnect names an older
+version and gets a notice whenever anything changed meanwhile. Without `since`,
+the server sends nothing at open, so refetch on open, as the iOS app and older
+web bundles do. A `since` that is not a single value counts as a stale version.
+
 Place a turn in the conversation you hold: keep everything before `messages[0]`,
 or through the message `after` names, or nothing when `after` is `null`, and replace
 the rest with `messages` followed by `message` as the live row. Drop any
@@ -349,7 +360,10 @@ with `data: roster` means refresh bootstrap. It carries no assistant IDs or
 previews. The server evaluates the cheap roster at most once per second and
 notifies each viewer only when their visible roster changes. Private activity
 does not notify other household members. Clients fetch on open; there is no
-initial roster notice. The stream pings every 25 seconds and ends on sign-out. Refresh on
+initial roster notice, unless the client names a roster: bootstrap names the one
+it shows as `rosterVersion`, and a stream opened with `?roster=ROSTER_VERSION`
+sends `event: roster` at once if this person's roster is no longer that one, and
+nothing otherwise, so such a client need not fetch on open. The stream pings every 25 seconds and ends on sign-out. Refresh on
 reconnect and foreground as well. A 45-second bootstrap poll covers missed
 notices and changes made outside this app. The server shares one read of the
 assistant list, capabilities and connection status among bootstraps for 1.5
@@ -371,7 +385,9 @@ checks within about a second instead. Every connection also gets one `groups` no
 once its catalog is known: at once when the server already has a starting point, or
 when its first check lands. Fetch on that notice rather than on connect, which would
 read twice. Notices sent while disconnected are lost, and the connect notice covers
-them. Fetch on foreground as well. A fallback
+them. `GET /api/groups` names what it returned as `version`; a stream opened with
+`?groups=VERSION` gets the connect notice only if that person's catalog is no longer
+that one. A catalog with a `version` comes from a server that sends `groups` notices. Fetch on foreground as well. A fallback
 poll of about 5 minutes covers a missed notice; older servers send no `groups`
 events, so keep a 30-second poll for them.
 

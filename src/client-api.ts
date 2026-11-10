@@ -148,9 +148,10 @@ export function request<K extends ApiRoute>(route: K, ...[options]: {} extends R
 }
 /**
  * Runs refresh every intervalMs while the page is visible. A hidden page pauses it,
- * and showing the page again refreshes at once. Returns a function that stops it.
+ * and showing the page again calls `shown`, which refreshes at once unless the caller says
+ * otherwise. Returns a function that stops it.
  */
-export function pollWhileVisible(refresh: () => void, intervalMs: number) {
+export function pollWhileVisible(refresh: () => void, intervalMs: number, shown = refresh) {
   let timer: ReturnType<typeof setInterval> | undefined;
   const start = () => { timer ??= setInterval(refresh, intervalMs); };
   const changed = () => {
@@ -158,7 +159,7 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
       clearInterval(timer);
       timer = undefined;
     } else if (!timer) {
-      refresh();
+      shown();
       start();
     }
   };
@@ -172,12 +173,19 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
 /** Server pings keep a stream this fresh; a quieter one may be a dead connection. */
 const STREAM_SILENCE = 60_000;
 /**
- * Calls onChange for each change notice on a server event stream, and each time it
- * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
- * named events by their data, such as group chat notices.
+ * Where a stream connects, worked out each time it opens. `vouched` says the path names the version
+ * of the caller's last read, such as `?since=`: the server then sends a change notice at open if
+ * that read is no longer current, so connecting reads nothing itself.
  */
-export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
+export type StreamPath = string | (() => { path: string; vouched: boolean });
+/**
+ * Calls onChange for each change notice on a server event stream, and each time it connects
+ * unless its path vouched for the caller's last read, since notices sent before the subscription
+ * are lost. EventSource retries a drop itself, on the URL it opened with, but never a refusal, so
+ * `open` replaces a closed or silent stream. `named` handles other named events by their data,
+ * such as group chat notices.
+ */
+export function changeStream(path: StreamPath, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
   onInflightDelta?: (value: InflightDelta) => boolean) {
   let source: EventSource | undefined, heard = 0;
   const close = () => {
@@ -188,11 +196,14 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (typeof EventSource === "undefined") return;
     if (source && source.readyState !== EventSource.CLOSED && Date.now() - heard < STREAM_SILENCE) return;
     close();
-    const current = source = new EventSource(`/api${path}`);
+    const target = typeof path === "string" ? { path, vouched: false } : path();
+    const current = source = new EventSource(`/api${target.path}`);
     heard = Date.now();
     current.onopen = () => {
       heard = Date.now();
-      onChange();
+      // A reconnect EventSource makes itself reuses this URL. Its version is then older than the
+      // caller's, so the server finds it stale and sends a notice: never a missed change.
+      if (!target.vouched) onChange();
     };
     if (onInflight) current.addEventListener("inflight", event => {
       heard = Date.now();

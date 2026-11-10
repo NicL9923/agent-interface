@@ -454,6 +454,11 @@ export interface Bootstrap {
   vapidPublicKey?: string;
   /** The newest distributed iOS build, when the host advertises one. */
   nativeApp?: { latestBuild: number; updateUrl: string };
+  /**
+   * Names the roster this bootstrap shows. The household stream opened with `?roster=` it sends a
+   * roster notice at once only if this person's roster is no longer it. Absent from an older server.
+   */
+  rosterVersion?: string;
 }
 export interface Submission {
   reviewedInterruption?: boolean;
@@ -579,6 +584,11 @@ export interface Runtime {
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
+  /**
+   * The structural version a conversation read starting now would carry. Every change a `watch` listener
+   * hears without a kind advances it, so a stream can tell at open whether a client's read is still current.
+   */
+  version?(botId: string): string;
   /** The live reply, built only on what a client's conversation read stored, for `?inflight=1` and `?inflight=2`. */
   inflight?(botId: string): Inflight | undefined;
   /**

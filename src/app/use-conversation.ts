@@ -173,6 +173,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       return patch(shown, latestInflight);
     };
     let loading = false, again = false, more = false, gone = false;
+    // The structural version of the latest read shown. The change stream opens naming it, so the server
+    // says at open whether anything changed since, and opening reads nothing itself.
+    let shownVersion: string | undefined;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
@@ -245,6 +248,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
         }
         setConversation(compose(result));
+        shownVersion = result.version;
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
@@ -260,7 +264,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         if (again && live) {
           again = false;
           void load();
-        }
+        } else connect();
       }
     };
     requestEarlier.current = () => {
@@ -277,7 +281,6 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       start = messageId;
       void load();
     };
-    void load();
     const showInflight = (value: Inflight) => {
       latestInflight = value;
       holdPlace();
@@ -307,7 +310,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     };
     // A turn stream: the server sends each whole live reply with its turn's saved messages, versioned, so a
     // change notice's read no longer gates the reply. A server that predates it sends change notices only.
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=3&drafts=1`, () => void load(), value => {
+    const streamPath = () => ({ vouched: shownVersion !== undefined,
+      path: `/bots/${encodeURIComponent(botId)}/events?inflight=3&drafts=1${shownVersion === undefined ? "" : `&since=${encodeURIComponent(shownVersion)}`}` });
+    const stream = changeStream(streamPath, () => void load(), value => {
       if (!live || value.botId !== botId) return;
       showInflight(value);
     }, {
@@ -329,10 +334,15 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       showInflight(value);
       return true;
     });
-    if (document.visibilityState !== "hidden") stream.open();
+    // The stream opens once a read settles, naming that read's version when it has one, so on load, on wake
+    // and after a chat switch one read covers everything up to the subscription. A read that failed, or a
+    // runtime without versions, leaves the stream to read on open as it always did.
+    function connect() {
+      if (live && !gone && navigator.onLine !== false && document.visibilityState !== "hidden") stream.open();
+    }
+    void load();
     const wake = () => {
       if (navigator.onLine === false || document.visibilityState === "hidden") return;
-      stream.open();
       void load();
     };
     // Change notices drive updates. This slow poll covers a stream that fails unnoticed.

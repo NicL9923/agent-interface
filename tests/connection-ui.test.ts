@@ -520,7 +520,7 @@ describe('pushed conversation updates',()=>{
   const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).startsWith('/bots/shared/conversation?')).length;
   const opened=async()=>{
     await renderApp();await advance(20);
-    expect(FakeEventSource.created).toEqual(['/api/events','/api/bots/shared/events?inflight=3&drafts=1']);
+    expect([...FakeEventSource.created].sort()).toEqual(['/api/bots/shared/events?inflight=3&drafts=1','/api/events']);
     const stream=[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
     // A change between the first read and the subscription would be lost, so connecting reloads.
     const before=reads();
@@ -562,6 +562,68 @@ describe('pushed conversation updates',()=>{
     expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(3);
     expect(FakeEventSource.streams.size).toBe(2);
   });
+  // A read that carries a version lets the stream open naming it: the server sends a change notice at open
+  // only if the conversation moved on, so each open costs one read, not two. The count is the behavior.
+  describe('a stream that names the version of the read it follows',()=>{
+    const chatStreams=()=>FakeEventSource.created.filter(url=>url.includes('/bots/'));
+    const chatStream=()=>[...FakeEventSource.streams].find(stream=>stream.url.includes('/bots/'))!;
+    const since=(version:string)=>`/api/bots/shared/events?inflight=3&drafts=1&since=${encodeURIComponent(version)}`;
+    it('reads once on load and once on wake, and leaves a change before the subscription to the server',async()=>{
+      let visibility:DocumentVisibilityState='visible';
+      Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
+      try{
+        conversation={...conversation,version:'boot:0:7'};
+        await renderApp();await advance(20);
+        expect(chatStreams(),'opened after the first read, naming its version').toEqual([since('boot:0:7')]);
+        await act(async()=>chatStream().connect());await advance(20);
+        expect(reads(),'connecting reads nothing').toBe(1);
+        // EventSource reconnects a drop itself, on the URL it opened with. The server finds that version
+        // current or sends a notice, so the reconnect reads nothing on its own.
+        await act(async()=>chatStream().connect());await advance(20);
+        expect(reads()).toBe(1);
+        // A change that landed between the read and the subscription: the server's notice at open reads it.
+        conversation={...conversation,version:'boot:0:8',messages:[...conversation.messages,{id:'answer-two',role:'assistant',text:'Missed answer'}]};
+        await act(async()=>chatStream().emit('message','change'));await advance(1500);
+        expect(reads()).toBe(2);
+        expect(container.textContent).toContain('Missed answer');
+        const shown=async(state:DocumentVisibilityState)=>{visibility=state;await act(async()=>document.dispatchEvent(new Event('visibilitychange')));};
+        await shown('hidden');
+        expect(FakeEventSource.streams.size).toBe(0);
+        conversation={...conversation,version:'boot:0:9'};
+        await advance(3_600_000);
+        await shown('visible');await advance(20);
+        expect(reads(),'a wake reads once').toBe(3);
+        expect(chatStreams().at(-1),'and reopens naming the newer read').toBe(since('boot:0:9'));
+        await act(async()=>chatStream().connect());await advance(20);
+        expect(reads()).toBe(3);
+      }finally{Reflect.deleteProperty(document,'visibilityState');}
+    });
+    it('reads on open when the first read failed, since there is no version to name',async()=>{
+      hermesDown=true;
+      await renderApp();await advance(20);
+      expect(chatStreams()).toEqual(['/api/bots/shared/events?inflight=3&drafts=1']);
+      hermesDown=false;conversation={...conversation,version:'boot:0:7'};
+      const before=reads();
+      await act(async()=>chatStream().connect());await advance(20);
+      expect(reads()).toBe(before+1);
+      expect(container.textContent).toContain('Existing canonical answer');
+    });
+    it('reopens a refused stream naming the newest read, and a growth notice it cannot apply costs one read',async()=>{
+      conversation={...conversation,version:'boot:0:7'};
+      await renderApp();await advance(20);
+      await act(async()=>chatStream().connect());await advance(20);
+      conversation={...conversation,version:'boot:0:8'};
+      await act(async()=>chatStream().emit('message','change'));await advance(1500);
+      expect(reads()).toBe(2);
+      // Growth for a reply this page never held: the stream reloads and reconnects at once.
+      await act(async()=>chatStream().emit('inflight-delta',JSON.stringify({botId:'shared',messageId:'other',baseTextLength:4,baseReasoningLength:0,appendText:'more',activity:{state:'thinking'}})));
+      await advance(20);
+      expect(reads(),'one read, not one for the notice and one for the reconnect').toBe(3);
+      expect(chatStreams().at(-1)).toBe(since('boot:0:8'));
+      await act(async()=>chatStream().connect());await advance(20);
+      expect(reads()).toBe(3);
+    });
+  });
   it('closes the stream and stops polling while hidden, then refreshes at once when shown',async()=>{
     let visibility:DocumentVisibilityState='visible';
     Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
@@ -578,5 +640,51 @@ describe('pushed conversation updates',()=>{
       expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
       expect(FakeEventSource.streams.size).toBe(2);
     }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
+});
+
+// Bootstrap names the roster it shows. The household stream opens naming it, and the server sends a roster
+// notice at open only if the roster changed since, so connecting reads bootstrap only for a server without it.
+describe('the household stream and the roster version',()=>{
+  const bootstrapReads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bootstrap?roster=lean').length;
+  const household=()=>[...FakeEventSource.streams].find(stream=>stream.url.startsWith('/api/events'))!;
+  it.each([
+    ['names it and reads nothing on connect','r1','/api/events?roster=r1',0],
+    ['reads on connect for a server that sends none',undefined,'/api/events',1],
+  ] as const)('%s',async(_name,rosterVersion,url,onConnect)=>{
+    boot={...boot,...rosterVersion===undefined?{}:{rosterVersion}};
+    await renderApp();await advance(20);
+    expect(household().url).toBe(url);
+    const before=bootstrapReads();
+    await act(async()=>household().connect());await advance(20);
+    expect(bootstrapReads()).toBe(before+onConnect);
+    // A roster notice, at open or later, always reads.
+    await act(async()=>household().emit('roster','roster'));await advance(20);
+    expect(bootstrapReads()).toBe(before+onConnect+1);
+  });
+  it('reopens on wake after the bootstrap the wake started, naming the roster that read showed',async()=>{
+    let visibility:DocumentVisibilityState='visible';
+    Object.defineProperty(document,'visibilityState',{configurable:true,get:()=>visibility});
+    try{
+      boot={...boot,rosterVersion:'r1'};
+      await renderApp();await advance(20);
+      const shown=async(state:DocumentVisibilityState)=>{visibility=state;await act(async()=>document.dispatchEvent(new Event('visibilitychange')));await advance(20);};
+      await shown('hidden');
+      await advance(60_000);
+      boot={...boot,rosterVersion:'r2'};
+      const before=bootstrapReads();
+      await shown('visible');
+      expect(bootstrapReads()).toBe(before+1);
+      expect(FakeEventSource.created.filter(url=>url.startsWith('/api/events')).at(-1)).toBe('/api/events?roster=r2');
+    }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
+  it('names the newest bootstrap when it reopens',async()=>{
+    boot={...boot,rosterVersion:'r1'};
+    await renderApp();await advance(20);
+    boot={...boot,rosterVersion:'r2'};
+    await act(async()=>household().emit('roster','roster'));await advance(20);
+    await act(async()=>household().fail());
+    await advance(45_000);
+    expect(FakeEventSource.created.filter(url=>url.startsWith('/api/events'))).toEqual(['/api/events?roster=r1','/api/events?roster=r2']);
   });
 });

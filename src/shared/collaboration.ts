@@ -70,6 +70,11 @@ export interface GroupCatalog {
   settings?: boolean;
   /** Routines can post their results in a group chat. Older servers omit it. */
   routineDelivery?: boolean;
+  /**
+   * Names what home shows of this catalog. The household stream opened with `?groups=` sends its
+   * connect notice only if this person's catalog is no longer it. Older servers omit it.
+   */
+  version?: string;
 }
 export type GroupRequest =
   | { operation: 'list' }

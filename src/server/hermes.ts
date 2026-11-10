@@ -1218,6 +1218,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       for (const event of result.events ?? []) if (typeof event.botId === 'string') changed(event.botId);
       return result;
     },
+    version: botId => versionOf(structuralGenerationOf(botId)),
     inflight(botId): Inflight | undefined {
       return liveReply(botId, snapshots.get(botId));
     },

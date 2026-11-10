@@ -13,7 +13,7 @@ import { apiRoute, type ApiRequest } from "./api-route.js";
 import { signedIn, stillSignedIn } from "./auth.js";
 import { redactAgents, visibleTo, type Roster } from "./bot-access.js";
 import type { Config } from "./config.js";
-import { eventStreamConnection, type EventStream } from "./event-stream.js";
+import { eventStreamConnection, sinceParam, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
 import { SendTimings, sendTimingHeader, type SendPhases } from "./send-timing.js";
@@ -215,6 +215,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     // ?drafts=1 adds `event: draft` notices. Without it none are sent: the iOS app reads any
     // unnamed or unknown data line as a conversation change and would refetch on every draft save.
     const draftNotices = (req.query as { drafts?: string }).drafts === "1";
+    // ?since=<version> names the structural version of the conversation read the client holds. The stream
+    // then sends a change notice at open only if the conversation has moved on, and otherwise the live reply
+    // whole, so the client need not read again on open. Without it, the client reads on open, as before.
+    const since = sinceParam(req.query, "since");
     // The privacy version the redaction below was built for. Every change to who owns or shares an
     // assistant advances it, so comparing versions replaces re-reading and comparing the private list.
     let seen = store.privacyVersion;
@@ -321,6 +325,13 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       allowed: () => stillSignedIn(store, config, req) && visibleTo(store, botId, req.user?.id),
       teardown,
     });
+    // Compared once the watch is in place: a change before it moved the version, and one after sends its own
+    // notice. A runtime that keeps no version cannot vouch for the read, so the client reads.
+    if (since !== undefined) {
+      if (since !== runtime.version?.(botId)) changed();
+      // The read already holds the reply as it was; growth since then goes whole.
+      else if (optedIn) notice("inflight");
+    }
   });
   const message = z
     .object({

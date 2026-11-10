@@ -39,6 +39,14 @@ export class BotDirectory {
   lean(bots: Bot[]): Bot[] {
     return bots.map(({ instructions, enabledMcpServers, availableMcpServers, enabledTools, enabledSkills, ...bot }) => bot);
   }
+  /**
+   * The roster this person may see, as the household stream compares it for its roster notice: lean
+   * rows without unread marks, in ID order. Bootstrap names its `stateVersion` as `rosterVersion`.
+   */
+  projection(bots: Bot[], userId: string, nativeAvatar: boolean) {
+    return JSON.stringify(this.lean(bots.map(bot => this.decorate(bot, nativeAvatar)).filter(bot => visible(bot, userId)))
+      .sort((a, b) => a.id.localeCompare(b.id)));
+  }
   /** The roster this person may see, lean or with each assistant's writable configuration. */
   async rosterFor(userId: string, bots: Bot[], nativeAvatar: boolean, lean: boolean) {
     const ids = new Set(bots.map(bot => bot.id));

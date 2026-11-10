@@ -150,6 +150,65 @@ describe("group chats on home", () => {
     expect(catalogReads()).toBe(before + 1);
   });
 
+  // A catalog that names its version lets the household stream name it too: the server then sends its
+  // connect notice only if the catalog changed, so home reads the catalog once per open, not twice.
+  it("names the catalog's version on the household stream and polls only every 5 minutes without a notice", async () => {
+    catalog = { ...catalog, version: "c1" };
+    await render();
+    const catalogReads = () => reads(path => path === "/groups");
+    expect(catalogReads()).toBe(1);
+    const household = [...FakeEventSource.streams].find(stream => stream.url.startsWith("/api/events"))!;
+    expect(household.url).toBe("/api/events?groups=c1");
+    await act(async () => household.connect());
+    await advance(20);
+    expect(catalogReads(), "connecting reads nothing").toBe(1);
+    // No groups notice came, since the catalog is current, yet the versioned catalog shows this server pushes changes.
+    await advance(GROUP_FALLBACK_POLL_MS - 1000);
+    expect(catalogReads()).toBe(1);
+    await advance(1000);
+    expect(catalogReads()).toBe(2);
+    // A notice at open, for a catalog that changed meanwhile, reads it.
+    await act(async () => household.emit("groups", "groups"));
+    await advance(20);
+    expect(catalogReads()).toBe(3);
+  });
+
+  // The household stream opens after home's first catalog read settles, so it can name what that read showed.
+  it("opens the household stream only after the first catalog read settles, even when it fails", async () => {
+    let fail!: (error: Error) => void;
+    const serve = vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => path === "/groups"
+      ? await new Promise<T>((_, reject) => { fail = reject; })
+      : (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest));
+    await render();
+    expect(FakeEventSource.created.filter(url => url.startsWith("/api/events"))).toEqual([]);
+    await act(async () => fail(new Error("Hermes is restarting.")));
+    await advance(20);
+    expect(FakeEventSource.created.filter(url => url.startsWith("/api/events"))).toEqual(["/api/events"]);
+  });
+
+  // A wake reopens the household stream, which names the catalog's version: a server that pushes catalog changes
+  // sends a notice only if it changed, so home reads on wake only for a server that never sends notices.
+  it.each([
+    ["names its version", "c1", 0, "/api/events?groups=c1"],
+    ["names none", undefined, 1, "/api/events"],
+  ] as const)("on wake, reads the catalog for a server whose catalog %s only if it never sends notices", async (_name, version, wakeReads, url) => {
+    catalog = { ...catalog, ...version === undefined ? {} : { version } };
+    let visibility: DocumentVisibilityState = "visible";
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    try {
+      await render();
+      const catalogReads = () => reads(path => path === "/groups");
+      const shown = async (state: DocumentVisibilityState) => { visibility = state; await act(async () => document.dispatchEvent(new Event("visibilitychange"))); await advance(20); };
+      await shown("hidden");
+      expect(FakeEventSource.streams.size).toBe(0);
+      const before = catalogReads();
+      await shown("visible");
+      expect(catalogReads()).toBe(before + wakeReads);
+      expect(FakeEventSource.created.filter(created => created.startsWith("/api/events")).at(-1)).toBe(url);
+    } finally { Reflect.deleteProperty(document, "visibilityState"); }
+  });
+
   it("keeps the 30-second catalog poll for a server that never sends groups notices", async () => {
     await render();
     const catalogReads = () => reads(path => path === "/groups");

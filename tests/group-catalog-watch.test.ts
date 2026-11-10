@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { GROUP_CATALOG_POLL_MS, GROUP_CATALOG_WRITE_FLOOR_MS, GroupCatalogWatch } from "../src/server/group-catalog-watch.js";
+import { stateVersion } from "../src/server/event-stream.js";
 import type { GroupEvent, GroupRequest, GroupRoom } from "../src/shared/collaboration.js";
 import type { Runtime } from "../src/shared/types.js";
 import { botFixture } from "./helpers/runtime-fixtures.js";
@@ -194,6 +195,25 @@ describe("group catalog watch", () => {
     watch.close();
   });
 
+  // A stream that names the catalog version its client read skips the notice every stream hears once, but
+  // only while the catalog is still that one: a change before the open is told, and so is one after it.
+  it.each([
+    ["first check", "a", 0], ["first check", "stale", 1], ["first check", "", 1],
+    ["later viewer", "a", 0], ["later viewer", "stale", 1],
+  ] as const)("on a %s, a stream naming version %j hears %i joining notices", async (when, named, told) => {
+    vi.useFakeTimers();
+    const { catalogs, watch } = setup();
+    if (when === "later viewer") { watch.watch("two", vi.fn()); await vi.advanceTimersByTimeAsync(0); }
+    const one = vi.fn();
+    watch.watch("one", one, named === "a" ? stateVersion("a") : named);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(one).toHaveBeenCalledTimes(told);
+    catalogs.set("one", "a2");
+    await vi.advanceTimersByTimeAsync(GROUP_CATALOG_POLL_MS);
+    expect(one, "a later change is told either way").toHaveBeenCalledTimes(told + 1);
+    watch.close();
+  });
+
   it("keeps what it saw when Hermes fails, and tries again at the next check", async () => {
     vi.useFakeTimers();
     const { catalogs, read, watch } = setup();
@@ -295,6 +315,26 @@ describe("groups notices on the household stream", () => {
       const reads = s.lists();
       await wait(3 * GROUP_CATALOG_POLL_MS);
       expect(s.lists(), "no stream, no checks").toBe(reads);
+    } finally { vi.useRealTimers(); await s.app.close(); }
+  });
+
+  // GET /api/groups names the version the stream compares, so a client that read the catalog and opens naming it
+  // hears no connect notice until the catalog changes. A change Hermes made before the open, which no check has
+  // seen yet, reaches it at the next check, as it reaches every open stream.
+  it("sends the connect notice only when the catalog the client names is no longer current", async () => {
+    const s = await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const read = await (await fetch(`${s.base}/api/groups`, { headers: { cookie: s.one.cookie } })).json() as { version?: string };
+      expect(read.version).toMatch(/^[\w-]{22}$/);
+      const current = await listen(s.base, `/api/events?groups=${read.version}`, s.one);
+      await wait(GROUP_CATALOG_WRITE_FLOOR_MS);
+      expect(notices(current), "nothing changed since the read").toBe(0);
+      s.post("shared", "The smoker is free Sunday.");
+      const stale = await listen(s.base, `/api/events?groups=${read.version}`, s.one);
+      await wait(GROUP_CATALOG_POLL_MS);
+      expect([notices(current), notices(stale)]).toEqual([1, 1]);
+      await Promise.all([current.close(), stale.close()]);
     } finally { vi.useRealTimers(); await s.app.close(); }
   });
 

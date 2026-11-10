@@ -25,7 +25,15 @@ const seedMessages = () => new Map<string, Message[]>([
 // Replaced between tests, so no test sees what another sent. A reply still pending from before holds its old thread.
 let messages = seedMessages();
 const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
-const notify = (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); };
+// As Hermes does, every change a watcher hears without a kind moves the structural version that reads carry,
+// so a stream opened with `?since=` can tell whether the client's read is still current. One counter serves
+// every assistant: a needless notice costs a read, never a missed change.
+let generation = 0;
+const version = () => `e2e:0:${generation}`;
+const notify = (botId: string, kind?: "inflight") => {
+  if (!kind) generation++;
+  for (const changed of watchers.get(botId) ?? []) changed(kind);
+};
 
 /**
  * The Trail Cook streams its reply through a tool call, as Hermes does: words arrive as live growth, the reply so
@@ -35,13 +43,13 @@ const notify = (botId: string, kind?: "inflight") => { for (const changed of wat
  */
 const STREAMING = "trail", TURN_READ_MS = 60;
 type Running = { thread: Message[]; prompt: number; runId: string; tail: string; tools: ToolCall[]; done: boolean };
-let running: Running | undefined, generation = 0, readAt = -1;
+let running: Running | undefined, readAt = -1;
 const followers = new Set<() => void>();
 const activityOf = (turn: Running): Activity => ({ runId: turn.runId,
   state: turn.done ? "done" : turn.tools.some(tool => tool.status === "running") ? "working" : "thinking" });
 function structural(botId: string) {
-  const asked = ++generation;
   notify(botId);
+  const asked = generation;
   if (followers.size) setTimeout(() => {
     if (generation !== asked) return;
     readAt = asked;
@@ -103,9 +111,9 @@ const runtime: Runtime = {
   conversation: async botId => {
     const thread = [...messages.get(botId) ?? []];
     const turn = botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
-    if (!turn) return conversationFixture({ botId, messages: thread });
+    if (!turn) return conversationFixture({ botId, version: version(), messages: thread });
     readAt = generation;
-    return conversationFixture({ botId, version: `e2e:0:${generation}`, activity: activityOf(turn), toolCalls: turn.tools,
+    return conversationFixture({ botId, version: version(), activity: activityOf(turn), toolCalls: turn.tools,
       messages: [...thread, ...turn.tail ? [{ id: `${botId}-inflight`, role: "assistant" as const, text: turn.tail }] : []] });
   },
   routines: async () => [],
@@ -127,7 +135,7 @@ const runtime: Runtime = {
     const turn = botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
     if (!turn || readAt !== generation) return undefined;
     const saved = turn.thread.slice(turn.prompt);
-    return { botId, version: `e2e:0:${generation}`, message: { id: `${botId}-inflight`, role: "assistant", text: turn.tail },
+    return { botId, version: version(), message: { id: `${botId}-inflight`, role: "assistant", text: turn.tail },
       activity: activityOf(turn), toolCalls: turn.tools, turn: { messages: saved, after: turn.thread[turn.prompt - 1]?.id ?? null } };
   },
   followTurns(_botId, restored) {
@@ -135,6 +143,7 @@ const runtime: Runtime = {
     followers.add(follower);
     return () => { followers.delete(follower); };
   },
+  version,
   watch(botId, changed) {
     const set = watchers.get(botId) ?? new Set();
     watchers.set(botId, set.add(changed));
@@ -175,7 +184,7 @@ await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; }
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; generation++; }
   if (req.method === "POST" && req.url?.startsWith("/next-release")) nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));

@@ -202,15 +202,17 @@ describe("opening a chat after a prefetch", () => {
     expect(conversationReads().at(-1)).toBe("/api/bots/barn/conversation?start=barn-1");
   });
 
-  // A notice that arrives while the first load waits on a hover read is about something newer than
-  // that read. An empty chat has no window to start from, so the load the notice queues asks for the
+  // A load asked while the first load waits on a hover read, such as a reconnect's, is about something
+  // newer than that read. (The change stream opens only once the first read settles, so its notices
+  // cannot come first.) An empty chat has no window to start from, so the queued load asks for the
   // same first page, and must not be handed the read it was queued behind.
-  it("reads fresh for a notice that arrived while an empty chat's first load waited on a prefetch", async () => {
+  it("reads fresh for a load asked while an empty chat's first load waited on a prefetch", async () => {
     respond = path => path.includes("/conversation") ? hold() : json({});
     const { prefetchFirstPage } = await import("../src/app/conversation-page");
     prefetchFirstPage("barn");
     const container = await open();
-    await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
+    expect(FakeEventSource.created, "no stream before the first read settles").toEqual([]);
+    await act(async () => { window.dispatchEvent(new Event("agent-interface:reconnect")); await vi.advanceTimersByTimeAsync(0); });
     expect(conversationReads()).toHaveLength(1);
     await act(async () => { held[0](new Response(JSON.stringify({ ...page("barn"), messages: [] }), { status: 200 })); await vi.advanceTimersByTimeAsync(0); });
     expect(conversationReads()).toEqual(["/api/bots/barn/conversation?turns=20", "/api/bots/barn/conversation?turns=20"]);

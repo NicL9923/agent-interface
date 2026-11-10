@@ -1,4 +1,22 @@
+import { createHash } from "node:crypto";
 import type { FastifyReply } from "fastify";
+
+/**
+ * A short, stable name for some state a client read, such as one person's roster. A client opens a
+ * stream with the name its read carried, and the stream sends a notice at once only if it differs.
+ */
+export const stateVersion = (text: string) => createHash("sha256").update(text).digest("base64url").slice(0, 22);
+
+/**
+ * The version a client says its last read showed, from a stream's query parameter `name`: undefined
+ * when it sent none, as older clients do, and "" for a value that cannot be a version, which then
+ * matches nothing, so the stream sends its notice and the client reads.
+ */
+export function sinceParam(query: unknown, name: string): string | undefined {
+  const value = (query as Record<string, unknown> | undefined)?.[name];
+  if (value === undefined) return undefined;
+  return typeof value === "string" && value.length <= 200 ? value : "";
+}
 
 /** An open server-sent event stream. */
 /** send reports whether the text was written: false once the stream ended or the viewer lost access. */
@@ -89,7 +107,7 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   heartbeat = setInterval(() => send("event: ping\ndata: ping\n\n"), 25_000);
   streams.add(end);
   response.on("close", end);
-  // Clients refetch on open; an initial notice would duplicate that read.
+  // Clients read on open, or name the version they read so the route sends a notice only if it changed.
   response.write("retry: 3000\n\n");
   return { send, end };
 }

@@ -337,13 +337,20 @@ describe("conversation state", () => {
         expect(container.textContent).not.toContain("barn. Fou");
         expect(stop()).toBeNull();
       });
-      it("drops the first read when a newer boot's turn asked for another before it was answered", async () => {
+      // The stream opens once the first read settles, so no turn can race that read. A newer boot's turn on
+      // the stream it opens then asks one read, which places it.
+      it("opens the stream after the first read, naming its version, and a newer boot's turn then asks one read", async () => {
         const answer = holdNextRead();
         conversation = bootA();
         await render();
-        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
-        conversation = at("z:1:2", "Found");
+        expect(FakeEventSource.created.filter(url => url.includes("/bots/")), "no chat stream while the first read is on its way").toEqual([]);
         await answer(bootA());
+        expect(FakeEventSource.created.filter(url => url.includes("/bots/"))).toEqual(["/api/bots/shared/events?inflight=3&drafts=1&since=a%3A1%3A5"]);
+        conversation = at("z:1:2", "Found");
+        const before = reads();
+        await act(async () => open().emit("turn", turn("z:1:2", [prompt, saved], "Found")));
+        await advance(0);
+        expect(reads()).toBe(before + 1);
         expect(count("Looking in the barn.")).toBe(1);
         expect(container.textContent).not.toContain("barn. Fou");
         expect(container.textContent).toContain("Found");
