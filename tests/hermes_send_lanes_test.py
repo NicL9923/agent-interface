@@ -341,6 +341,51 @@ class SendLaneTests(unittest.TestCase):
                 self.assertIsNone(hermes.journal.receipt("retiring"))
                 self.assertEqual([call[2] for call in hermes.calls], ["Message running", "Message waiting"])
 
+    def test_maintenance_status_lists_sends_that_hold_or_wait_for_a_lane_as_acquire_counts_them(self):
+        photo = {"attachments": [{"path": "/photo.png", "mime": "image/png"}]}
+        # (case, each send to "slow" as (the Hermes call it is held in, or None to wait behind the ones before it, its
+        # parameters), what status lists). Neither held send has marked the session running.
+        cases = (
+            ("idle", [], []),
+            ("staging", [("image.attach", photo)], [("sid-slow", "slow", "admitting")]),
+            ("in Hermes's admission call", [("prompt.submit", {})], [("sid-slow", "slow", "admitting")]),
+            ("staging, with another waiting on its lane", [("image.attach", photo), (None, {})],
+             [("sid-slow", "slow", "admitting"), ("sid-slow", "slow", "queued")]),
+        )
+        for name, sends, listed in cases:
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                lease = Path(directory) / "maintenance.json"
+                with LaneHermes({"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
+                    replies, server = Replies(), hermes.server
+                    maintenance = lambda action: server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
+                        "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
+                    gates = []
+                    for index, (held, params) in enumerate(sends):
+                        if held:
+                            gates.append(hermes.hold(held, "slow"))
+                        hermes.send(f"send-{index}", "slow", replies, **params)
+                        if held:
+                            self.assertTrue(hermes.reached(held, "slow"))
+                    status = maintenance("status")["result"]
+                    self.assertEqual(sorted((each["sessionId"], each["profile"], each["state"]) for each in status["busy"]), listed)
+                    self.assertFalse(status["active"])
+                    # Acquire agrees: it refuses exactly when status lists work, and takes no lease then.
+                    acquired = maintenance("acquire")
+                    if listed:
+                        self.assertEqual((acquired["error"]["code"], lease.exists()), (409, False))
+                        self.assertIn("active work", acquired["error"]["message"])
+                    else:
+                        self.assertEqual(acquired["result"], {"active": True, "operationId": "operation-1", "busy": []})
+                        self.assertFalse(maintenance("release")["result"]["active"])
+                    for gate in gates:
+                        gate.set()
+                    self.assertTrue(replies.wait(*(f"send-{index}" for index in range(len(sends)))))
+                    self.assertEqual(hermes.settled(), 0)
+                    # Answered sends leave the list; their turn ends, and both agree the gateway is idle.
+                    server._sessions["sid-slow"]["running"] = False
+                    self.assertEqual(maintenance("status")["result"]["busy"], [])
+                    self.assertEqual(maintenance("acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
+
     def test_a_failure_in_a_queued_send_answers_its_caller_and_leaves_no_lock_held(self):
         with LaneHermes() as hermes:
             replies = Replies()

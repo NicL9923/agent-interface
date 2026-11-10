@@ -601,6 +601,10 @@ class Bridge:
         self.submission_lock = threading.RLock()
         self.reads = LaneQueue(READ_WORKERS, "read")
         self.sends = LaneQueue(SEND_WORKERS, "send")
+        # Each queued app send, from its reservation until it is answered: [profile, "queued" or "admitting"].
+        # Maintenance status lists them as active work, as acquire already counts their reservations.
+        self.sends_in_flight = {}
+        self.sends_in_flight_lock = threading.Lock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
@@ -666,14 +670,23 @@ class Bridge:
         return json.loads(path.read_text())
 
     def busy_sessions(self):
+        """Active work for maintenance: busy sessions, then app sends that wait for or hold a lane.
+
+        A send staging images or inside Hermes's admission call has not marked its session running,
+        and one waiting on its lane has not reached Hermes at all. Each holds an admission
+        reservation, so acquire refuses; status lists them so its callers refuse first.
+        """
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
         # native reservations cover work queued after this snapshot.
         sessions = self.server._sessions.copy()
+        with self.sends_in_flight_lock:
+            sends = [tuple(send) for send in self.sends_in_flight.values()]
         return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
                 for sid, session in sessions.items()
                 if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
-                or session.get("pending_steer") or session.get("_auto_continue_scheduled")]
+                or session.get("pending_steer") or session.get("_auto_continue_scheduled")] + [
+            {"sessionId": self.canonical.get(profile), "profile": profile, "state": state} for profile, state in sends]
 
     def maintenance(self, rid, params):
         server = self.server
@@ -764,10 +777,20 @@ class Bridge:
         server, retirement = self.server, self.retirement
         if not retirement.acquire():
             return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        profile = params.get("profile", "default")
+        # Listed while its reservation is held, so maintenance status and acquire agree about it.
+        send = [profile if isinstance(profile, str) else None, "queued"] if method in QUEUED_SENDS else None
+        if send is not None:
+            with self.sends_in_flight_lock:
+                self.sends_in_flight[id(send)] = send
         context = contextvars.copy_context()
         def answer(requests):
             # Each merged request holds its own admission reservation until it is answered.
             started = time.perf_counter()
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    send[1] = "admitting"
             try:
                 # Native activation and admission attach the session to the transport bound here,
                 # the caller's, which every merged request shares.
@@ -781,10 +804,11 @@ class Bridge:
                     if reply is not None:
                         transport.write(reply)
             finally:
+                if send is not None:
+                    with self.sends_in_flight_lock:
+                        self.sends_in_flight.pop(id(send), None)
                 for _ in requests:
                     retirement.release()
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
-        profile = params.get("profile", "default")
         # A profile that is not a name still gets its handler's answer, from a lane of its own.
         lane = (method, profile if method in PROFILE_LANES and isinstance(profile, str) else None)
         merge = None
@@ -798,6 +822,9 @@ class Bridge:
             (self.sends if method in QUEUED_SENDS else self.reads).submit(
                 lane, lambda requests: context.run(answer, requests), (request, arrived), merge)
         except BaseException:
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    self.sends_in_flight.pop(id(send), None)
             retirement.release()
             raise
         return None
