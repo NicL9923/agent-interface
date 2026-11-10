@@ -4,6 +4,7 @@ Each tool builds one Deployment for its operation, with the private configuratio
 audit directory, command log and, once held, the native update claim. Recovery pins
 this file's SHA256 as deployFunctionsSha256 in its checked configuration.
 """
+import contextlib
 import datetime
 import json
 import os
@@ -34,6 +35,33 @@ OPTIMIZED_REFUSAL = """
 if not __debug__:
     raise SystemExit("Host programs need their assert guards. Run python3 without -O or PYTHONOPTIMIZE.")
 """
+
+
+class Refused(Exception):
+    """Hermes refused maintenance while the app still ran. Nothing was stopped, no lease is
+    held and the saved update status is back, so the operation can simply run again."""
+
+
+# The add-on's answer to an acquire while it sees active work. Its handler returns this before it
+# writes any lease (src/hermes/extension.py, maintenance), so it is the one finished refusal.
+BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+# How long the maintenance RPC waits for each WebSocket message. Before it decides, acquire
+# preempts each canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py
+# PREEMPT_WAIT). One compaction runs at a time, so the usual wait is one preempt; another can
+# start as the first ends, and nothing caps the chain. 120 s covers three full waits. A longer
+# chain misses the wait and is held for review like any unanswered acquire. Other actions answer at once.
+MAINTENANCE_WAIT = {"acquire": 120}
+DEFAULT_MAINTENANCE_WAIT = 15
+# Beyond the wait: up to 10 s for the service ticket, 10 s to open the socket and 5 s to close it.
+MAINTENANCE_OVERHEAD = 25
+
+
+class Answered(RuntimeError):
+    """The add-on answered a maintenance RPC with this JSON-RPC error, so its handler returned."""
+
+    def __init__(self, error):
+        super().__init__("Hermes answered maintenance with an error: " + json.dumps(error))
+        self.error = error
 
 
 def tripped(error):
@@ -69,12 +97,37 @@ class Deployment:
         self.atomic(self.ops / "phase.json", (json.dumps({"operationId": self.operation, "phase": phase,
             "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat()}) + "\n").encode())
 
-    def run(self, argv, *, cwd=None, input=None, timeout=120):
+    def execute(self, argv, *, cwd=None, input=None, timeout=120):
+        """Run a command under the held claim and keep its output in the private log."""
         if self.claim: self.claim.validate()
         result = subprocess.run(argv, cwd=cwd, input=input, text=True, capture_output=True, timeout=timeout)
         self.log.write(result.stdout + result.stderr); self.log.flush()
+        return result
+
+    def run(self, argv, *, cwd=None, input=None, timeout=120):
+        result = self.execute(argv, cwd=cwd, input=input, timeout=timeout)
         if result.returncode: raise RuntimeError("A deployment command failed; private log retained")
         return result.stdout
+
+    def maintenance_rpc(self, argv, request):
+        """Run the release helper's NATIVE maintenance RPC (scripts/hermes-upgrade-linux.py).
+
+        Returns the add-on's result. Raises Answered when the add-on answered with an error, which
+        NATIVE prints as its last stdout line before it fails. Any other failure, such as a timeout or
+        a dropped socket, raises as before: no answer arrived, so the handler may still be running.
+        """
+        wait = MAINTENANCE_WAIT.get(request["method"], DEFAULT_MAINTENANCE_WAIT)
+        result = self.execute(argv, input=json.dumps(dict(request, wait=wait)), timeout=wait + MAINTENANCE_OVERHEAD)
+        if not result.returncode:
+            return json.loads(result.stdout)
+        lines = result.stdout.splitlines()
+        try:
+            answer = json.loads(lines[-1]) if lines else None
+        except ValueError:
+            answer = None
+        if isinstance(answer, dict) and list(answer) == ["answeredError"] and isinstance(answer["answeredError"], dict):
+            raise Answered(answer["answeredError"])
+        raise RuntimeError("A deployment command failed; private log retained")
 
     def system(self, action, *names):
         return self.run([self.systemctl, "--user", action, *names])
@@ -102,6 +155,67 @@ class Deployment:
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try: os.fsync(directory)
         finally: os.close(directory)
+
+    def requests_complete(self):
+        """Whether every Hermes update request the app admitted has finished."""
+        return all(json.loads(path.read_text()).get("status") == "complete"
+                   for path in (Path(self.c["upgradeStateDir"]) / "requests").glob("*.json"))
+
+    def acquire_then_stop_app(self, rpc, blocked, previous):
+        """Close the app's gate, take the maintenance lease while the app still runs, then stop it.
+
+        ``rpc`` calls the add-on's maintenance RPC through maintenance_rpc. ``blocked`` is this
+        operation's blocked update status and ``previous`` the status it replaces. The app refuses
+        sends, update checks and installs once the blocked status is written, telling the sender the
+        draft is saved, so no one meets Hermes's own refusal. Work that arrived since the caller's
+        status check makes acquire refuse here, before anything stops.
+
+        Raises Refused only after the add-on's acquire handler returned: its busy refusal, or an
+        answer that fails the checks below. A release then proves no lease remains, the saved status
+        is restored and the app never stopped. With no answer the handler may still be running and
+        write the lease later, so that fails at a fence with the blocked status kept for review. Any
+        other failure propagates the same way.
+        """
+        status = Path(self.c["upgradeStateDir"]) / "status.json"
+        self.atomic(status, blocked)
+        self.journal("maintenance-acquiring")
+        try:
+            gate = rpc("acquire")
+        except Answered as answer:
+            # Any other error answer is a configuration or ownership problem, not busy work.
+            if answer.error != BUSY_REFUSAL: raise
+            self.refuse(rpc, status, blocked, previous, answer)
+        except Exception as lost:
+            # The add-on preempts compactions before it decides, so a lost answer can mean the
+            # handler is still running. Release removes a lease it already wrote, never one it
+            # writes afterwards, so this is never reported as nothing changed.
+            with contextlib.suppress(Exception): rpc("release")
+            raise Fence("Hermes answered maintenance acquire") from lost
+        try:
+            fence(gate["active"] is True and gate["operationId"] == self.operation and gate["busy"] == [], "maintenance acquired by this operation with no busy work")
+            fence(json.loads(self.lease.read_text()) == {"operationId": self.operation}, "maintenance lease names this operation")
+        except Exception as unexpected:
+            # The handler answered, so it has returned; release clears whatever lease it wrote.
+            self.refuse(rpc, status, blocked, previous, unexpected)
+        self.journal("owned-maintenance-acquired")
+        self.system("stop", "agent-interface.service")
+        fence(self.requests_complete(), "pending update requests complete after the app stopped")
+        # Eliminate an already awaited API request racing the private status write.
+        self.atomic(status, blocked)
+
+    def refuse(self, rpc, status, blocked, previous, refusal):
+        """Undo a finished acquire that took no usable lease, then raise Refused."""
+        # Release clears this operation's lease, if any, and reports what was busy.
+        released = rpc("release")
+        fence(released["active"] is False, "refused: maintenance released")
+        fence(not os.path.lexists(self.lease), "refused: no maintenance lease remains")
+        # The app still runs, but holding the update worker's lock keeps it from writing a
+        # new status. One it wrote anyway is left as found for review.
+        fence(status.read_bytes() == blocked, "refused: update status is still this operation's blocked status")
+        fence(self.requests_complete(), "refused: pending update requests are complete")
+        self.atomic(status, previous)
+        self.journal("maintenance-refused")
+        raise Refused("Maintenance was not acquired. Busy work at release: " + json.dumps(released.get("busy"))) from refusal
 
     def native(self, code):
         # Set the native root before bootstrap can latch process identity, so native
