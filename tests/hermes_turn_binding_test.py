@@ -11,6 +11,10 @@ contextvars (``session_lifecycle.py:24-46``, ``agent/memory_provider.py:21-33``)
 row only when it holds the turn's text (``session_workdir.py:807-814``), writes a row of its own when it
 could not rewrite the staged row after image or ``@`` expansion (``:815-835``), and reports its prompt row and every
 committed row of the turn in ``message.complete`` (``prompt_turn.py:902-942``, ``agent/persisted_turn_receipt.py:20-65``).
+The turn snapshots and clears the session's attached images when ``_run_prompt_submit`` admits it, on the
+caller's thread (``_admit_prompt_turn``, ``prompt_turn.py:150``), and later runs the model through ``_invoke_agent``
+on its own thread (``:1183``), where the add-on checks for an app prompt and adds its guidance; at the qualified
+revisions ``b9cb268`` and ``d23cc6b`` the same lines are ``:141`` and ``:1108``.
 ``session.steer`` answers with no row (``methods_session_interrupt.py:114-130``). At each tool batch the turn
 drains every waiting steer and writes them as one user row of their newline-joined words
 (``agent/interrupt_control.py:90-102``, ``agent/agent_runtime_helpers.py:3668-3703``, ``agent/prompt_builder.py:586-592``),
@@ -23,6 +27,7 @@ import copy
 import json
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -42,9 +47,11 @@ def source_git(args, **kwargs):
 
 class Turn:
     """One native turn. It holds after it starts until the test releases it."""
-    def __init__(self, rid, sid, text, display_kind, images):
-        self.rid, self.sid, self.text, self.display_kind, self.images = rid, sid, text, display_kind, images
+    def __init__(self, rid, sid, text, display_kind, images, author=None):
+        self.rid, self.sid, self.text, self.display_kind, self.images, self.author = rid, sid, text, display_kind, images, author
         self.started, self.release, self.done = threading.Event(), threading.Event(), threading.Event()
+        # The session's agent as _invoke_agent receives it on the turn; guided: the guidance the model ran with.
+        self.agent, self.guided = types.SimpleNamespace(ephemeral_system_prompt=None), None
         self.consume_steers, self.goal, self.row, self.report_row, self.report_rows = True, None, None, True, True
         # fails: the turn ends without message.complete. early: (session, persisted_turn or None) completions
         # this turn's thread writes before its own. adopt: False when the turn could not rewrite its staged row
@@ -59,16 +66,19 @@ class TurnHermes(FakeHermes):
     ``busy`` is what prompt.submit does over a running turn: "queued" or "redirected" (Hermes's default
     ``interrupt`` mode redirects text and queues anything else). ``races`` run inside the add-on's next
     image.attach or prompt.submit, before Hermes looks at the session: another client's prompt that reached
-    Hermes after the add-on found the session idle. ``start_as`` changes how the next turn prompt.submit starts
-    is run: its session, text, display kind or author.
+    Hermes after the add-on found the session idle. ``submit_races`` run only inside the add-on's next
+    prompt.submit, so after its image.attach. ``start_as`` changes how the next turn prompt.submit starts
+    is run: its session, text, display kind or author. ``snapshots`` lists each admitted turn's text and the
+    images it took, in admission order; ``snapshotted`` waits for one.
     """
     def __init__(self, busy="queued"):
         super().__init__([])
-        self.busy, self.races, self.turns, self.rows, self.calls, self.start_as = busy, [], [], [], [], {}
-        self.changed = threading.Condition()
+        self.busy, self.races, self.submit_races, self.turns, self.rows, self.calls, self.start_as = busy, [], [], [], [], [], {}
+        self.snapshots, self.changed = [], threading.Condition()
         server = self.server
         server.handle_request = self.handle
         server._run_prompt_submit = self.run_prompt_submit
+        server._invoke_agent = self.invoke_agent
         server._run_post_turn_followups = self.post_turn_followups
 
     def start(self, path):
@@ -117,6 +127,9 @@ class TurnHermes(FakeHermes):
         if method in ("image.attach", "prompt.submit"):
             while self.races:
                 self.races.pop(0)()
+        if method == "prompt.submit":
+            while self.submit_races:
+                self.submit_races.pop(0)()
         if method == "image.attach":
             self.session["attached_images"].append(params["path"])
             return ok(rid, {"attached": True})
@@ -168,6 +181,13 @@ class TurnHermes(FakeHermes):
         """Another client's prompt.submit. Its turn starts on its own thread, as Hermes's does."""
         return self.submit(rid, {"session_id": "sid", "text": text})
 
+    def snapshotted(self, text):
+        """Wait until a turn running ``text`` took the session's attached images; the images it took."""
+        with self.changed:
+            if not self.changed.wait_for(lambda: any(each == text for each, _ in self.snapshots), 5):
+                raise AssertionError("No turn admitted " + repr(text))
+            return next(images for each, images in self.snapshots if each == text)
+
     def enqueue(self, text, images, accepted=False):
         """_enqueue_prompt and, for an accepted prompt, _persist_queued_user_row."""
         session = self.session
@@ -202,12 +222,14 @@ class TurnHermes(FakeHermes):
         return True
 
     def run_prompt_submit(self, rid, sid, session, text, *, display_kind=None, image_paths=None, turn_author=None):
+        # _admit_prompt_turn: the snapshot is taken here, on the caller's thread, before the turn's own starts.
         with session["history_lock"]:
             images = list(image_paths) if image_paths is not None else session["attached_images"]
             if image_paths is None:
                 session["attached_images"] = []
-        turn = Turn(rid, sid, text, display_kind, images)
+        turn = Turn(rid, sid, text, display_kind, images, turn_author)
         with self.changed:
+            self.snapshots.append((text, images))
             self.turns.append(turn)
             self.changed.notify_all()
         context = contextvars.copy_context()
@@ -226,30 +248,39 @@ class TurnHermes(FakeHermes):
         if corrections:
             turn.delivered.append(self.write_row("\n".join(corrections))["row_id"])
 
+    def invoke_agent(self, sid, session, turn, prompt, run_message, streamer, images, display_kind, display_metadata,
+                     turn_author=None, text=None):
+        """_invoke_agent: the model runs, on the turn's thread, and its rows are written. Returns the leftover steers."""
+        turn.guided = turn.agent.ephemeral_system_prompt
+        if not turn.release.wait(5):
+            raise AssertionError("The test never released the turn for " + repr(text))
+        leftover = []
+        if turn.fails:
+            return leftover
+        staged = turn.staged if turn.adopt else None
+        if staged:
+            turn.row = staged["_row_id"]
+            if images:
+                self.row(turn.row)["text"] = image_text(text, images)
+        else:
+            turn.row = self.write_row(image_text(text, images), display_kind=display_kind)["row_id"]
+        # Corrections steered or redirected into the running turn: a last tool batch delivers whatever
+        # is waiting, or the turn ends with none and hands it back as the next prompt.
+        if turn.consume_steers:
+            self.tool_batch(turn)
+        else:
+            with session["history_lock"]:
+                leftover, session["corrections"] = session.get("corrections", []), []
+        return leftover
+
     def run_turn(self, session, turn):
         staged = session.pop("_submit_user_row", None)
-        if not isinstance(staged, dict) or staged["content"] != turn.text:
-            staged = None
+        turn.staged = staged if isinstance(staged, dict) and staged["content"] == turn.text else None
         turn.started.set()
-        if not turn.release.wait(5):
-            raise AssertionError("The test never released the turn for " + repr(turn.text))
-        if not turn.adopt:
-            staged = None
-        leftover = []
+        # The add-on wraps _invoke_agent; the wrapper passes the turn record through as Hermes's _TurnRun.
+        leftover = self.server._invoke_agent(turn.sid, session, turn, turn.text, None, None, turn.images, turn.display_kind, None,
+                                             turn.author, turn.text)
         if not turn.fails:
-            if staged:
-                turn.row = staged["_row_id"]
-                if turn.images:
-                    self.row(turn.row)["text"] = image_text(turn.text, turn.images)
-            else:
-                turn.row = self.write_row(image_text(turn.text, turn.images), display_kind=turn.display_kind)["row_id"]
-            # Corrections steered or redirected into the running turn: a last tool batch delivers whatever
-            # is waiting, or the turn ends with none and hands it back as the next prompt.
-            if turn.consume_steers:
-                self.tool_batch(turn)
-            else:
-                with session["history_lock"]:
-                    leftover, session["corrections"] = session.get("corrections", []), []
             committed = [turn.row, *turn.delivered, self.write_row("Answer to " + turn.text, role="assistant")["row_id"]]
             for sid, persisted in turn.early:
                 self.complete(sid, persisted)
@@ -427,8 +458,8 @@ class TurnBindingTests(unittest.TestCase):
             hermes.other_client("Look")
             native = hermes.finish("Look")
             # Alice sends the same words and file; the desktop's next turn takes the session first, so Hermes
-            # queues hers.
-            hermes.races.append(lambda: hermes.other_client("Book the dentist"))
+            # queues hers. That turn took the session's images before the add-on attached her photo.
+            hermes.races.append(lambda: (hermes.other_client("Book the dentist"), hermes.snapshotted("Book the dentist")))
             self.assertEqual(hermes.send("alice-1", "Look", attachments=[PHOTO])["status"], "accepted")
             self.assertEqual(hermes.shown()[0], (native.row, image_text("Look", [PHOTO["path"]]), None, None))
             bob = hermes.finish("Book the dentist")
@@ -437,6 +468,25 @@ class TurnBindingTests(unittest.TestCase):
             self.assertIsNone(hermes.bound("alice-1"))
             self.assertEqual(hermes.shown(), [(native.row, image_text("Look", [PHOTO["path"]]), None, None), (bob.row, "Book the dentist", None, None),
                                               (alice.row, image_text("Look", [PHOTO["path"]]), None, None)])
+
+    def test_a_native_turn_admitted_between_a_members_photo_and_her_prompt_gets_neither_her_receipt_nor_her_name(self):
+        # Known defect, upstream at every qualified revision and on main: nothing spans the add-on's image.attach and the
+        # image snapshot of the turn it means to start, so a native client's turn admitted between them can run with
+        # Alice's photo (docs/HermesCapabilityMatrix.md). Which turn ran the photo is not asserted; this is what the
+        # add-on still guarantees.
+        with TurnHermes(busy="queued") as hermes:
+            # After her photo is attached, the desktop's prompt takes the session and its turn takes the session's images.
+            hermes.submit_races.append(lambda: (hermes.other_client("Book the dentist"), hermes.snapshotted("Book the dentist")))
+            self.assertEqual(hermes.send("alice-1", "Look", attachments=[PHOTO])["status"], "accepted")
+            bob = hermes.finish("Book the dentist")
+            alice = hermes.finish("Look")
+            self.assertNotEqual(hermes.bound("alice-1"), bob.row)
+            shown = {row_id: (request_id, sender) for row_id, _, request_id, sender in hermes.shown()}
+            self.assertEqual(set(shown), {bob.row, alice.row})
+            self.assertEqual(shown[bob.row], (None, None))
+            self.assertIn(shown[alice.row], [(None, None), ("alice-1", "alice")])
+            receipt_answer = hermes.methods["agent-interface.receipt"]("lookup", {"request_id": "alice-1"})["result"]["receipt"]
+            self.assertNotEqual(receipt_answer["userRowId"], bob.row)
 
     def test_a_steer_consumed_in_place_is_bound_to_the_only_row_in_its_turn_with_its_words(self):
         with TurnHermes() as hermes:

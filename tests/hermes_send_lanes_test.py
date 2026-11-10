@@ -370,6 +370,26 @@ class SendLaneTests(unittest.TestCase):
             self.assertEqual(hermes.settled(), 0)
 
 
+class FakeTests(unittest.TestCase):
+    def test_a_native_method_the_test_did_not_configure_fails_it_even_where_the_add_on_swallows_the_error(self):
+        # Called directly, it raises at once, and the fake still reports it at exit.
+        with self.assertRaisesRegex(AssertionError, "were called: session.interrupt$"):
+            with LaneHermes() as hermes:
+                with self.assertRaisesRegex(AssertionError, "not configured for this test: session.interrupt"):
+                    hermes.server.handle_request({"id": "stop", "method": "session.interrupt", "params": {"session_id": "sid-slow"}})
+        # A due background compaction calls session.compress and logs Hermes's refusal as a compaction that did not run.
+        with self.assertRaisesRegex(AssertionError, "were called: session.compress$"):
+            with LaneHermes() as hermes:
+                server, idle = hermes.server, hermes.bridge.compaction
+                server._sessions["sid-slow"].update(agent=Agent(), history_version=1, history=[{}] * 30)
+                server._session_uses_compute_host = lambda session: False
+                idle.delay, idle.size = DELAY, lambda session: (2000, 1000)
+                idle.activity["sid-slow"] = time.time() - DELAY
+                with self.assertLogs(level=logging.INFO) as logs:
+                    self.assertIsNone(idle.compact("slow", "sid-slow"))
+                self.assertTrue(any("did not run" in line and "session.compress" in line for line in logs.output), logs.output)
+
+
 def complete(hermes, sid, status, row_id=None):
     """A native turn's message.complete, written from a thread of its own as another client's turn would be."""
     payload = {"status": status, "text": "", **({"persisted_turn": {"user_row_id": row_id}} if row_id is not None else {})}
