@@ -18,7 +18,9 @@
 .group-panel { padding: 24px clamp(16px, 4vw, 48px); overflow: auto; flex: 1;
   container-type: size; --group-chrome: 76px; min-height: calc(44px + var(--group-chrome) + 48px); }
 .group-panel:has(.group-composer > .group-thread) { --group-chrome: 150px; }
-.composer.group-composer textarea { max-height: min(200px, 30vh, max(44px, calc(100cqh - var(--group-chrome)))); }
+.composer.group-composer textarea { max-height: min(200px, 30vh, max(44px, calc(100cqh - var(--group-chrome) - var(--group-notes, 0px)))); }
+/* Holds its children's margins, so its height is the room the notes take. GroupChats.tsx reports it as --group-notes. */
+.group-notes { display: flow-root; }
 .group-panel button:not(.send-button) { font-size: 0.8125rem; padding: 7px 12px; }
 .group-panel > section { max-width: 860px; }
 .group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }

@@ -60,13 +60,22 @@ for (const [width, height, frames] of views) for (const frame of frames) for (co
       shellScrolled: document.querySelector('.app-shell').scrollTop };
   });
   const visible = frame ?? height;
-  const ok = seen.top >= 0 && seen.bottom <= visible && seen.tappable && seen.shellScrolled === 0;
+  // After a failed send, the explanation must be readable too: with the panel scrolled to its top, the composer
+  // must not lie over it. A landscape keyboard frame under 300 px cannot hold the explanation and a one-line
+  // composer together, so there it is reported and not required; it shows once the keyboard closes.
+  const note = !item.fail ? null : await page.locator('.group-panel [role="alert"]').evaluate(alert => {
+    alert.closest('.group-panel').scrollTop = 0;
+    const box = alert.getBoundingClientRect();
+    const uncovered = [box.top + 2, (box.top + box.bottom) / 2, box.bottom - 2].every(y => alert.contains(document.elementFromPoint(box.left + box.width / 2, y)));
+    return { top: Math.round(box.top), bottom: Math.round(box.bottom), uncovered };
+  });
+  const ok = seen.top >= 0 && seen.bottom <= visible && seen.tappable && seen.shellScrolled === 0 && (!note || note.uncovered || visible < 300);
   rows.push({ width, height, frame, chat: item.chat, draft: item.draft === long ? 'long' : item.draft ? 'short' : 'empty',
-    attach: !!item.attach, thread: !!item.thread, failed: !!item.fail, button: String(item.button), ...seen, ok });
+    attach: !!item.attach, thread: !!item.thread, failed: !!item.fail, button: String(item.button), ...seen, note, ok });
   await context.close();
 }
 await browser.close();
-for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}`);
+for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}${row.note ? `, explanation at ${row.note.top}-${row.note.bottom}${row.note.uncovered ? '' : ' covered'}` : ''}`);
 const failed = rows.filter(row => !row.ok).length;
 console.log(`${rows.length - failed} of ${rows.length} cases keep the button whole and tappable.`);
 if (report) writeFileSync(report, JSON.stringify(rows, null, 1));

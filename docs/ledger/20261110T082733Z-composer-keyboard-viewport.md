@@ -336,3 +336,31 @@ the button at 395 to 441, the reviewer's numbers. After, 80 of 80, that button a
 - `npm run typecheck` and `npm run lint` passed. `npm test`: 180 files, 2933 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 10 passed in Chromium.
 - Safari, Firefox and a physical phone: not run for this fix.
+
+## Review round 3, narrow
+
+GPT-6.1 Sol reviewed `f8cf76a`: ready after one fix. It cleared every note in every state, the landmark and its
+alert and status roles in Chromium's accessibility tree, and the 860 px limit, and its mutation moving the notes back
+outside the section turned the tool red.
+
+- P2: with the notes inside the section, the sticky composer lay over the failure's explanation. At 375 by 667 with a
+  363 px frame and a ten-line draft, the note spanned 85 to 171 and the composer began at 105; a tap on the
+  explanation reached the message box even with the panel scrolled to its top.
+- Fix, by the orchestrator: the notes sit in one box whose height `GroupChats.tsx` reports to CSS as
+  `--group-notes`, kept current by a `ResizeObserver`, and the draft's height limit subtracts it. No reviewer has
+  read this fix.
+- Limit: a landscape keyboard frame under 300 px cannot hold the explanation and a one-line composer together. There
+  the composer still covers the explanation until the keyboard closes. The retry button stays whole.
+
+### Red proof
+
+`.agents/tools/check-send-visible.mjs` now also requires, after a failed group send, that with the panel scrolled to
+its top a tap anywhere on the explanation reaches the explanation. Before the fix: 75 of 80, with the case above
+reported as "explanation at 85-171 covered". After: 80 of 80. Three landscape keyboard frames, 120, 150 and 190 px,
+report the explanation covered and are not required to show it.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed. `npm test`: 183 files, 3052 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 20 passed in Chromium.
+- Safari, Firefox and a physical phone: not run for this fix.
