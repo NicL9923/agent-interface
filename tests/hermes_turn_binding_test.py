@@ -685,10 +685,22 @@ class SteeringRuleTests(unittest.TestCase):
                 self.assertEqual(hermes.bound("kim-1"), expected)
                 self.assertEqual(shown[12] == "kim-1", expected == 12)
 
-    def test_a_row_with_no_usable_time_is_judged_by_the_other_rules_and_the_open_answers(self):
-        # Hermes has always sent a number. A row without one is treated as saved now, as on main, and a
-        # malformed one must not break the open.
-        for name, stamp in [("missing", None), ("a string", "soon")]:
+    def test_a_rows_time_is_read_as_main_reads_it_and_one_it_cannot_read_binds_nothing(self):
+        # main reads the row's time with float(), and a missing or zero one as now. The steer is sent at
+        # time 103, so a row saved at 100 is refused and one saved now is not. A time that cannot be read
+        # or compared leaves the steer unbound, and the open still answers.
+        cases = [
+            ("missing, read as now", None, 12),
+            ("zero, read as now", 0, 12),
+            ("a number as text, read as that number", "100", None),
+            ("a number as text inside the second", "102.5", 12),
+            ("words", "soon", None),
+            ("not a number", float("nan"), None),
+            ("infinite", float("inf"), None),
+            ("too large for a float", 10**400, None),
+            ("a list", [100], None),
+        ]
+        for name, stamp, expected in cases:
             messages = copy.deepcopy(self.MESSAGES)
             if stamp is None:
                 del messages[2]["timestamp"]
@@ -699,9 +711,9 @@ class SteeringRuleTests(unittest.TestCase):
                 with db:
                     receipt(db, "alice-1", 10, 1, text="Plan the trip", actor="alice")
                     db.execute("UPDATE receipts SET turn_rows='[10, 11, 12, 13]' WHERE request_id='alice-1'")
-                    receipt(db, "kim-1", None, 2, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
+                    receipt(db, "kim-1", None, 103, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
                 hermes.open()
-                self.assertEqual(hermes.bound("kim-1"), 12)
+                self.assertEqual(hermes.bound("kim-1"), expected)
 
 
 class StoredTurnRowsTests(unittest.TestCase):
