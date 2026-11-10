@@ -41,8 +41,11 @@ cannot be served:
 - An edit or redaction arrives in a read or a turn event. Both build new message objects (JSON), and
   nothing in the client changes a message in place (`grep` for writes to `.text`, `.messages` and
   `.toolCall` fields finds only the turn builder's own arrays). A new object at any position ends the reuse.
-- A replacement after a reconnect is a read, so every object is new, even where the content is equal.
-  That costs one full reading per read, which is what main paid on every delta.
+- A replacement after a reconnect is a read. Where its content changed, every object is new, which
+  costs one full reading, what main paid on every delta. Where the server answers 304 or the same
+  bytes, `src/client-api.ts` returns the cached response and its objects, so the settled list is
+  reused, which is right because nothing changed. An earlier version of this line said every read
+  builds new objects; the reviewer corrected it.
 - Two messages with the same text are two objects with two IDs. Text is never part of a key.
 
 ## Measurements
@@ -133,3 +136,15 @@ Safari, Firefox and a real phone: not run. CPU throttling in Chromium stands in 
 `useRoutineRuns`' `deliveredRuns` and App's per-delta work (`withEchoes`, `latestMessageAt`) still read
 the window on each delta; the preview has no routine runs, so they were not measured, and they are
 outside the conversation view this change covers.
+
+## Review
+
+GPT-6.1 Sol reviewed `57a73bd` against its merge base `3f8235d`: ready. It compared the new readings with the
+merge base's own implementations in 14 scenarios at every split, found no message changed in place anywhere in the
+client, and confirmed the save transition still renders the row's time and actions. All three mutations it tried in
+this branch went red. One P3: the cache's contract said every read builds new objects, where a 304 or a
+byte-identical answer returns the cached objects. The comment in `src/app/transcript-window.ts` and this ledger now
+say so. No behavior changed.
+
+It suggests a follow-up: `useRoutineRuns` and `latestMessageAt` still scan the loaded window on each delta.
+

@@ -20,8 +20,10 @@ import { isHumanMessage } from "./transcript-logic";
 /**
  * The window split at its first live row. `settled` stays the same array while it holds the same
  * message objects in the same order, so work keyed on it is reused. The client never changes a message
- * in place: every read builds new objects, and patches copy, so an edited, redacted or re-read message
- * is a new object and ends the reuse. `live` likewise stays the same array while its rows do.
+ * in place: a read whose content changed builds new objects, and patches copy, so an edited or redacted
+ * message is a new object and ends the reuse. A read that answers 304, or the same bytes as before,
+ * returns the cached response and its objects (`src/client-api.ts`), and reuse is right there because
+ * nothing changed. `live` likewise stays the same array while its rows do.
  */
 export function useSettledWindow(messages: Message[]): { settled: Message[]; live: Message[] } {
   const held = useRef<{ settled: Message[]; live: Message[] }>({ settled: [], live: [] });
