@@ -103,14 +103,16 @@ let era = 0;
 let guarding = false;
 /**
  * The account whose chats, panels, rooms and messages the address may name: the one the record named
- * when the generation started, or the one its bootstrap named since, which can be learned before the
- * record says it. `{}` is an account not yet named.
+ * when the generation started, or the one a screen of it drew since (`drawingAccount`), as the saved
+ * home and bootstrap do, which can be learned before the record says it. `{}` is an account not yet named.
  * Null when it can name none, as an address opened while signed out, which the next account keeps;
  * undefined before this tab's first start, when the address is the one the page opened with.
  */
 let addressFor: { user?: string } | null | undefined;
 /** The account a settled record says this browser has, `{}` when it does not name it, or null signed out. */
 const accountOf = (record: AuthEpoch | null) => !record || record.signedOut ? null : { ...record.user ? { user: record.user } : {} };
+/** The account a screen of this generation drew first, as the saved home does before bootstrap answers. */
+let drawnHere: string | undefined;
 const listeners = new Set<() => void>();
 const endHooks = new Set<() => void>();
 
@@ -123,6 +125,7 @@ export function onAccountEnd(hook: () => void) {
 }
 function end() {
   generation++;
+  drawnHere = undefined;
   for (const hook of endHooks) hook();
 }
 function notify() {
@@ -191,7 +194,7 @@ export function watchAccount(listener: () => void) {
     if (listeners.size) return;
     // No app draws any more, as after a test unmounts it, so none shows an account.
     guarding = false;
-    addressFor = undefined;
+    addressFor = drawnHere = undefined;
     window.removeEventListener("storage", heard);
     window.removeEventListener("pagehide", cover);
     window.removeEventListener("pageshow", woke);
@@ -374,11 +377,13 @@ export function accountRefused(hadAccount: boolean) {
 }
 
 /**
- * A bootstrap named `user`. `drawn` is the account this generation already shows, if any. Returns
- * whether the generation may use the answer: not if another account was drawn, which ends it, nor
- * while a transition is under way or after one, when the answer may be for either cookie.
+ * A bootstrap named `user`. `drawn` is the account this generation already shows, if any, from an
+ * earlier bootstrap or else from the saved home. Returns whether the generation may use the answer:
+ * not if another account was drawn, which ends it, nor while a transition is under way or after one,
+ * when the answer may be for either cookie.
  */
-export function accountNamed(user: string, drawn: string | undefined) {
+export function accountNamed(user: string, drawnByBootstrap: string | undefined) {
+  const drawn = drawnByBootstrap ?? drawnHere;
   checkAccount();
   const now = stored(), record = parseEpoch(now);
   if (now !== held || changingNow(record)) return false;
@@ -395,9 +400,18 @@ export function accountNamed(user: string, drawn: string | undefined) {
     held = seen = store(settled({ user }));
   }
   tellWorker(user);
-  // From here the address may name this account's chats, whatever the record named when the generation started.
-  addressFor = { user };
+  drawingAccount(user);
   return true;
+}
+
+/**
+ * A screen of this generation draws `user`'s account, from bootstrap or, before it answers, from the
+ * saved home. From here the address may name that account's chats, whatever the record named when the
+ * generation started, and a bootstrap that names another account ends the generation.
+ */
+export function drawingAccount(user: string) {
+  addressFor = { user };
+  drawnHere ??= user;
 }
 
 /** The account this browser signed out of while the server could not be reached, until the server's session ends. */
@@ -448,6 +462,14 @@ export function closeShownNotifications() {
  */
 function leaving() {
   closeShownNotifications();
+  endPushSubscription();
+}
+/**
+ * Ends this browser's push subscription, as a sign-out that could not reach the server must: the
+ * server still holds it for the account that left, and sends that account's pushes here until the
+ * push service answers that it is gone. Turning notifications on again subscribes anew.
+ */
+export function endPushSubscription() {
   const container = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
   void container?.getRegistration().then(registration => registration?.pushManager.getSubscription())
     .then(subscription => subscription?.unsubscribe()).catch(() => {});

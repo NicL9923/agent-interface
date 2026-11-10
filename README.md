@@ -162,7 +162,8 @@ chat names take the server's own bounds, and the account's and group members' na
 server does not bound, a generous one. A copy past any bound, a stored value over 200,000 characters, one this release cannot read,
 or storage that fails falls back to the welcome screen. When the first check fails, the saved
 home offers **Sign out of this device**: it signs out at once in every tab, removes this device's
-copy, sign-in record and theme, and shows sign-in. Since the server could not be reached, the
+copy, sign-in record and theme, ends this browser's push subscription, which the server still
+holds for that account, and shows sign-in. Since the server could not be reached, the
 account record notes that the server's session may still be live; until it is ended there, which
 the sign-in screen does as soon as the server answers, nothing reads as that account. That note is
 written, and found in storage, before anything is removed. If storage refuses it or does not keep
@@ -207,7 +208,8 @@ reads, live connections, drafts in memory and cached responses, discards any ans
 its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
 address belongs to the account the record named when its screen started, even one still
-connecting, or to the account its check named since. It is reset to `/`, fragment included,
+connecting, or to the account the saved home or its check drew since. A check that names another
+account than the saved home drew starts the app again. It is reset to `/`, fragment included,
 before a sign-out or another account draws; an address opened while signed out is kept for the
 next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed

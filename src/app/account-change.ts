@@ -1,5 +1,5 @@
 import { ApiError, request, setCsrf, write } from "../client-api";
-import { beginAccountChange, closeShownNotifications, forgetSignIn, pendingSignOut, rememberSignIn, signOutFinished } from "./account-epoch";
+import { beginAccountChange, closeShownNotifications, endPushSubscription, forgetSignIn, pendingSignOut, rememberSignIn, signOutFinished } from "./account-epoch";
 import { forgetAccountContent } from "./storage";
 
 /**
@@ -56,6 +56,8 @@ export async function signOutHere(user: string) {
     forgetAccountContent(user);
     forgetSignIn();
     closeShownNotifications();
+    // The online sign-out turns notifications off first (see App); offline only the browser's side can end.
+    endPushSubscription();
   });
   if (!done) await change.undo();
   return done;

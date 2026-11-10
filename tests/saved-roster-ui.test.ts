@@ -114,10 +114,11 @@ const answer = async (call: "GET /bootstrap?roster=lean" | "GET /groups", status
   expect(reply, `${call} waiting for its answer`).toBeDefined();
   await reply!(status, body);
 };
-const rail = () => container.querySelector<HTMLElement>(".bot-rail");
+const rail = () => container.querySelector<HTMLElement>('aside[aria-label="Assistants"]');
 const railText = () => rail()?.textContent ?? "";
-const row = (name: string) => [...rail()!.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
-const welcome = () => container.querySelector(".welcome");
+const row = (name: string) => [...rail()!.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes(name))!;
+/** The screen that says it is connecting, with nothing of an account on it. */
+const connecting = () => [...container.querySelectorAll("h1")].find(heading => heading.textContent?.startsWith("Your assistants,")) ?? null;
 /** The main landmark, the pane beside home, where the saved home says what it waits for. */
 const mainLandmark = () => container.querySelector('main, [role="main"]');
 /**
@@ -185,7 +186,7 @@ describe("the home this device saved", () => {
   it("is what home draws, and nothing said in a chat", async () => {
     store(signInHintKey, hintFor("one"));
     await open();
-    expect(welcome()).not.toBeNull();
+    expect(connecting()).not.toBeNull();
     await answer("GET /bootstrap?roster=lean", 200, one);
     // Bots and order are kept as soon as bootstrap answers; rooms once the catalog has.
     expect(savedRoster()).toEqual({ ...savedOne, rooms: [] });
@@ -232,7 +233,7 @@ describe("the home this device saved", () => {
     if (hint) store(signInHintKey, hint);
     store(savedRosterKey, saved);
     await open();
-    expect([!!welcome(), !!rail()]).toEqual([true, false]);
+    expect([!!connecting(), !!rail()]).toEqual([true, false]);
   });
 
   it("is not drawn, and nothing breaks, when storage is blocked", async () => {
@@ -241,7 +242,7 @@ describe("the home this device saved", () => {
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("Blocked", "SecurityError"); });
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("Blocked", "SecurityError"); });
     await open();
-    expect(welcome()).not.toBeNull();
+    expect(connecting()).not.toBeNull();
     await answer("GET /bootstrap?roster=lean", 200, one);
     expect(order()).toEqual(["Home", "Ranch Hand", "Trail Cook"]);
   });
@@ -260,15 +261,41 @@ describe("the home this device saved", () => {
 });
 
 describe("whose saved home it is", () => {
-  it("is gone, from the page and the device, when bootstrap answers as someone else", async () => {
+  it("is gone, from the page, the device and the address, when bootstrap answers as someone else", async () => {
     store(signInHintKey, hintFor("one"));
     store(savedRosterKey, savedOne);
-    await open();
-    await answer("GET /bootstrap?roster=lean", 200, two);
-    expect(order()).toEqual(["Garden Helper"]);
+    // Home is shared, so member two could open it too; the fragment names member one's message.
+    const twoWithHome = { ...two, bots: [...two.bots, one.bots[0]!] };
+    await open("/?bot=home#home-1");
+    expect(row("Home")).toBeDefined();
+    // The saved home drew member one, so member two's answer starts the app again with nothing of it.
+    await answer("GET /bootstrap?roster=lean", 200, twoWithHome);
+    const restarted = calls.length;
+    expect(rail()).toBeNull();
     expect(savedRoster()).toBeNull();
+    expect([location.search, location.hash]).toEqual(["", ""]);
+    await answer("GET /bootstrap?roster=lean", 200, twoWithHome);
+    expect(order()).toEqual(["Garden Helper", "Home"]);
+    expect(new URLSearchParams(location.search).get("bot")).not.toBe("home");
+    expect(location.hash).toBe("");
+    expect(calls.slice(restarted).filter(call => call.startsWith("GET /bots/home/"))).toEqual([]);
     // Another member's rooms never stand in while this member's catalog loads.
     expect(railText()).not.toContain("Supper plans");
+  });
+
+  it("leaves no address of its account on the sign-in screen when another tab signs out, though no record named that account", async () => {
+    // A browser signed in before the account record existed holds the hint and the copy alone.
+    store(signInHintKey, hintFor("one"));
+    store(savedRosterKey, savedOne);
+    await open("/?bot=ranch#ranch-1");
+    expect(row("Ranch Hand")).toBeDefined();
+    localStorage.removeItem(signInHintKey);
+    localStorage.removeItem(savedRosterKey);
+    store(authEpochKey, { id: "elsewhere", at: NOW, signedOut: true, user: "one" });
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: authEpochKey })));
+    await advance(0);
+    expect(button("Enter local workspace")).toBeDefined();
+    expect([location.search, location.hash]).toEqual(["", ""]);
   });
 
   it("is gone when bootstrap finds no session, and the next person to sign in never sees it", async () => {
@@ -276,13 +303,13 @@ describe("whose saved home it is", () => {
     store(savedRosterKey, savedOne);
     await open();
     await answer("GET /bootstrap?roster=lean", 401, { error: "Sign in required", code: "session_expired" });
-    expect(container.querySelector(".sign-in")).not.toBeNull();
+    expect(button("Enter local workspace")).toBeDefined();
     expect(savedRoster()).toBeNull();
     // Even a copy written back meanwhile, as by an older tab, is not this sign-in's.
     store(savedRosterKey, savedOne);
     await act(async () => button("Enter local workspace").click());
     await advance(0);
-    expect([!!welcome(), !!rail()]).toEqual([true, false]);
+    expect([!!connecting(), !!rail()]).toEqual([true, false]);
     expect(savedRoster()).toBeNull();
     await answer("GET /bootstrap?roster=lean", 200, two);
     expect(order()).toEqual(["Garden Helper"]);
@@ -298,9 +325,9 @@ describe("whose saved home it is", () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith("Sign out"))!.click());
     await act(async () => { await vi.dynamicImportSettled(); });
-    await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());
+    await act(async () => button("Sign out", document.querySelector('[role="alertdialog"]')!).click());
     await advance(0);
-    expect(container.querySelector(".sign-in")).not.toBeNull();
+    expect(button("Enter local workspace")).toBeDefined();
     expect(savedRoster()).toBeNull();
   });
 
@@ -330,7 +357,7 @@ describe("using the saved home before bootstrap answers", () => {
     expect(mainLandmark()?.textContent).toContain("Connecting to your household");
     // The person's start page is Today; the chat they chose wins.
     await answer("GET /bootstrap?roster=lean", 200, { ...one, preferences: { ...one.preferences, startPage: "today" } });
-    expect(container.querySelector(".transcript")?.textContent).toContain("ranch says morning.");
+    expect(container.querySelector('[role="region"][aria-label="Conversation"]')?.textContent).toContain("ranch says morning.");
     expect(reads("GET /bots/ranch/conversation")).toHaveLength(1);
     expect(new URLSearchParams(location.search).get("bot")).toBe("ranch");
   });
@@ -389,7 +416,7 @@ describe("the saved home held in memory", () => {
     // The bootstrap made as member one answers before the event arrives; it is discarded, and the home with it.
     await answer("GET /bootstrap?roster=lean", 200, one);
     expect(showsSavedHome()).toBe(false);
-    expect(welcome()).not.toBeNull();
+    expect(connecting()).not.toBeNull();
     await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: null })));
     expect(showsSavedHome()).toBe(false);
     // Starting again, the server says who is signed in.
@@ -553,7 +580,7 @@ describe("what a saved copy may hold", () => {
     signedInAsOne();
     store(savedRosterKey, saved);
     await open();
-    expect([!!welcome(), !!rail()]).toEqual([true, false]);
+    expect([!!connecting(), !!rail()]).toEqual([true, false]);
   });
 
   it("is drawn at every bound's limit, so a copy bootstrap could produce always shows", async () => {
@@ -590,7 +617,68 @@ describe("saved rooms against the roster bootstrap verified", () => {
   });
 });
 
+/** Only what the target names; reading anything else throws, so an unexpected use of the fake fails the test. */
+const strict = <T extends object>(name: string, target: T) => new Proxy(target, {
+  get(object, key) {
+    if (typeof key === "symbol" || key === "then" || key in object) return object[key as keyof T];
+    throw new Error(`The test's ${name} has no ${String(key)}`);
+  },
+});
+/** The page's side of this browser's service worker, holding one push subscription. */
+function workerWithSubscription() {
+  const unsubscribe = vi.fn(async () => true);
+  const subscription = strict("subscription", { endpoint: "https://push.example/one", unsubscribe });
+  const registration = strict("registration", {
+    active: null, getNotifications: async () => [], pushManager: strict("push manager", { getSubscription: async () => subscription }),
+  });
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: strict("service worker container", {
+    controller: null, getRegistration: async () => registration, addEventListener() {}, removeEventListener() {},
+  }) });
+  return { unsubscribe, restore: () => Reflect.deleteProperty(navigator, "serviceWorker") };
+}
+
 describe("signing out from the saved home when the app cannot be reached", () => {
+  it("leaves nothing of member one's for the next member: no address, fragment or push subscription", async () => {
+    const worker = workerWithSubscription();
+    try {
+      signedInAsOne();
+      await open("/?bot=ranch#gate");
+      await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+      await act(async () => button("Sign out of this device").click());
+      await advance(0);
+      expect(button("Enter local workspace")).toBeDefined();
+      expect([location.search, location.hash]).toEqual(["", ""]);
+      // The server still holds the subscription for member one, and cannot be told; the browser ends it.
+      await advance(0);
+      expect(worker.unsubscribe).toHaveBeenCalled();
+      // The sign-in screen ends the server's session, so the next sign-out starts from nothing on its way.
+      await answer("GET /bootstrap?roster=lean", 200, one);
+      expect(reads("POST /auth/logout")).toHaveLength(1);
+    } finally {
+      worker.restore();
+    }
+  });
+
+  it("keeps the push subscription when storage does not keep the sign-out, since the person is still signed in", async () => {
+    const worker = workerWithSubscription();
+    try {
+      signedInAsOne();
+      await open();
+      await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+      const setItem = Storage.prototype.setItem;
+      vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+        if (key === authEpochKey && value.includes('"logout":true')) throw new DOMException("Full", "QuotaExceededError");
+        setItem.call(this, key, value);
+      });
+      await act(async () => button("Sign out of this device").click());
+      await advance(0);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Couldn't sign out of this device");
+      expect(worker.unsubscribe).not.toHaveBeenCalled();
+    } finally {
+      worker.restore();
+    }
+  });
+
   it("signs out of this device at once, in every tab, and ends the server's session once it answers", async () => {
     signedInAsOne();
     store(savedThemeKey, { v: 1, user: "one", theme: "dark" });

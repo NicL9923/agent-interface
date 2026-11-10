@@ -49,7 +49,7 @@ import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
 import { prefetchLinkedChat } from "./app/linked-chat";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
-import { accountGeneration, accountStart, checkHintExpiry, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
+import { accountGeneration, accountStart, checkHintExpiry, drawingAccount, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
 import { signOutHere, signOutOf } from "./app/account-change";
 
 /**
@@ -134,6 +134,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // whatever ends it, a change of account in any tab, a sign-out, a refused session, cleared storage
   // or the sign-in hint's lapse, ends the generation and this copy with it (see App).
   const [saved] = useState(readSavedRoster);
+  // The saved home draws its account, so the address may name its chats, and the next account clears it.
+  useLayoutEffect(() => { if (saved) drawingAccount(saved.user); }, [saved]);
   /** Set once the person picks a chat or view on the saved home, so the start page does not replace it. */
   const chosenEarly = useRef(false);
   // An assistant this person just deleted leaves quietly; any other one explains itself.
