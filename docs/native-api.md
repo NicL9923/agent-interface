@@ -176,8 +176,10 @@ synthetic assistant row whose ID ends in `-inflight`, including optional
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
 The same persisted-segment and origin rules as conversation reads apply,
 and private agent handoffs are redacted. A persisted segment is any assistant row
-saved since the turn's prompt, including rows saved before guidance was steered
-into the turn, so the live reply never repeats text saved before a steer. Apply a patch only while the fetched
+saved since the prompt of the Hermes turn that is running, the prompt Hermes
+reports for it. Guidance steered into that turn keeps the segments saved before
+it, so the live reply never repeats them. Guidance Hermes queued instead starts a
+turn of its own, so only that turn's segments count. Apply a patch only while the fetched
 conversation is active and its `activity.runId` matches the patch. A settled
 conversation or a newer run supersedes a retained live tail.
 Structural events still send `data: change`, meaning refetch. Clients fetch on
@@ -224,11 +226,13 @@ or repeats a client's read.
 Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
 messages, after?, message, activity, toolCalls}`:
 
-- `messages`: the running turn's saved messages, from the prompt that started it,
-  exactly as `GET /api/bots/:id/conversation` shows them to the same person: sender
-  names, private-assistant redaction, file references and progress lines. Guidance
-  steered into the turn belongs to it. A finished turn is sent once more with its
-  final messages and settled `activity`.
+- `messages`: the running Hermes turn's saved messages, from its prompt, exactly as
+  `GET /api/bots/:id/conversation` shows them to the same person: sender names,
+  private-assistant redaction, file references and progress lines. Guidance steered
+  into the turn belongs to it. Guidance Hermes queued instead of steering in starts
+  a turn of its own under the same run, so that turn's events start at the
+  guidance, and the earlier turn's messages stay above it as the client holds them.
+  A finished turn is sent once more with its final messages and settled `activity`.
 - `after`: the ID of the message just before `messages[0]`, `null` when the turn
   starts the conversation, and absent when the server's read did not include it.
 - `message`, `activity` and `toolCalls`: the live reply, as in `inflight`, built
@@ -252,19 +256,27 @@ in `messages`, discard the event and refetch.
 Order turns and reads by `version`, which has the form `BOOT:EPOCH:GENERATION`.
 Two versions with the same `BOOT` compare by `EPOCH`, then `GENERATION`, as
 integers. A different `BOOT` means the server restarted, and the two versions do
-not compare. Arrival order cannot settle it either: a read the old process
-answered can arrive after the new process's turn event. So follow one `BOOT` at a
-time:
+not compare. Arrival order cannot settle it either: a turn event the old process
+buffered can arrive after a read the new one answered. So only a read you asked
+for decides which `BOOT` your view shows, and the newest read asked wins:
 
-- Once you take a read or turn event from a new `BOOT`, retire the one you followed.
-  Discard anything later that carries a retired `BOOT`.
-- A read you asked for before you began following the current `BOOT`, answered
-  with any other `BOOT`, is older than what you hold: discard it and read again.
-  A read you ask for after that can only be answered by the current process or a
-  newer one, so take one with a `BOOT` you have not retired as newer.
-- Never place a turn event on a conversation from another `BOOT`. Follow its
-  `BOOT`, hold the event, read again, and place it on that read if it is newer.
-  Until then keep showing what you hold, without the new live reply.
+- Take the answer to the most recent read you asked for, whatever its `BOOT`. Its
+  `BOOT` becomes the view's.
+- Drop the answer to an older read when its `BOOT` differs from the view's. The
+  newer read is already asked, so do not read again for it. An older read's answer
+  with the view's `BOOT` orders by version as below.
+- Never let a turn event from another `BOOT` change the view's `BOOT`, and never
+  place it on a conversation from another `BOOT`. Hold it and read once; turn
+  events from another `BOOT` that arrive meanwhile replace the held one and share
+  that read. Place the held event on the first read you take that you asked after
+  it, if that read has the event's `BOOT` and is older; otherwise drop the event.
+  A read that fails leaves the event held for the next read you take. Until then,
+  keep showing what you hold, without the new live reply.
+
+No response, whatever its `BOOT`, should make you read again by itself, so two
+processes that disagree, such as two behind one address, cost one read per change
+notice and one per turn event they hold, never a loop. Merge asks made while a read is
+on its way into one read.
 
 Within one `BOOT`, a read can arrive after a turn event that is newer than it,
 because the read set out first. Place that turn on top of the read. A turn
