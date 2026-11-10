@@ -269,9 +269,9 @@ three.
   suppresses every `Exception`, so at these revisions that case needs a failure the handler does not catch, but the add-on
   still handles it: it records at most one new entry equal to the attachment's path as native reads it
   (`str(path or "").strip()`, `:1005` and `:734`) or with symlinks resolved, which is how native resolves an absolute path
-  (`hermes_cli/cli_terminal_input.py:86-137`). A path native would resolve otherwise, with `~`, `$`, quotes or a
-  relative form, is not recorded and stays staged: the add-on removes nothing it cannot show is its own. The app sends
-  absolute upload paths.
+  (`hermes_cli/cli_terminal_input.py:86-137`). Corrected in the fourth round: this round computed that fallback for a
+  relative path too, against the process's directory, where native joins it to `TERMINAL_CWD`, so a failed relative
+  attach could claim another client's image. The rule is now stated exactly there.
 - P2, the cleanup overwrote a concurrent attach. `unstage_images` copied the list, removed the send's entries from the
   copy and stored it, so an attach between the copy and the store was discarded. It now deletes each entry from the live
   list in place under `history_lock`, which Hermes's turn snapshot and busy claim take (`prompt_turn.py:138-152` and
@@ -328,8 +328,78 @@ run without writing bytecode, and the source restored, checked by hash, and ever
 | The cleanup outside `history_lock` | the cleanup test: the lock was free at the write |
 | A typed stop's images left staged | the attach test, the cleanup test and the earlier typed-stop test |
 
-Survive, equivalent: the answer's path ignored in favor of the fallback, since for an absolute path without `~`, `$`,
-quotes or `\ ` native answers exactly the symlink-resolved path the fallback computes; and the first equal entry removed
-instead of the last, since equal entries are the same string and only their order among themselves differs.
+Two mutants survived this round, the answer's path ignored in favor of the fallback and the first equal entry removed
+instead of the last. They are not equivalent; the fourth round kills both.
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Fourth review round
+
+`origin/main` at `4b8fdc2` is merged in with a normal merge commit. `main` holds #314, the squashed send lanes, whose
+Hermes files are identical to `t3/send-lanes` at `19bca48`, already merged here. The three conflicts,
+`docs/HermesCapabilityMatrix.md`, `src/hermes/extension.py` and `tests/hermes_turn_binding_test.py`, resolve to this
+branch's side. The merged tree differs from `1ded5ec` only in 45 files that `main` changed and this branch did not: the
+composer keyboard and return-key work, the transcript window, the group send explanation, the two digest UI tests, and
+their evidence and ledgers.
+
+GPT-6.1 Sol re-reviewed `f280624..1ded5ec`: ready after fixes, no P1.
+
+- P2, the no-path fallback claimed another client's image. After an attach that fails past its append and answers no
+  `path`, the third round claimed the new entry equal to the attachment's path or its `os.path.realpath`, for any path.
+  Native joins a relative path to `TERMINAL_CWD` (`hermes_cli/cli_terminal_input.py:121-123`, the same at all three revisions), which need not
+  be the process's directory. With the process in `/process` and `TERMINAL_CWD=/terminal`, a member's `photo.png` is
+  appended as `/terminal/photo.png`; a desktop attaching `/process/photo.png` meanwhile had its entry claimed and deleted,
+  and the member's stayed staged. The fallback now claims only for an absolute path without `$` or `\`: native expands
+  `$` variables and reads `\ ` as a space (`:97` and `:115`), so those, like a relative path, claim nothing and stay staged. It
+  also no longer claims the unresolved path, which native never appends. The app sends absolute upload paths, so its
+  sends never take the no-claim branch. Corrected here and in `docs/HermesCapabilityMatrix.md`, which now state the rule:
+  the entry Hermes answered, or after a failure with no answer the last new entry equal to an absolute path's
+  symlink-resolved form; anything else stays staged; and of two equal entries the last is removed, which can be the other
+  client's.
+- P3, the two mutants the third round called equivalent are not. Ignoring the answered path in favor of the fallback
+  leaves a successfully attached relative photo staged after a typed stop when `TERMINAL_CWD` is not the process's
+  directory. Removing the first equal entry instead of the last reorders the list: with `[photo, scan]` staged before, a
+  typed stop with `photo` gives `[photo, scan, photo]`, and removing the first leaves `[scan, photo]`. The equivalence
+  claims are withdrawn above.
+- Hygiene. The `refuse` and `closed` fakes in `tests/hermes_extension_journal_test.py` now answer `prompt.submit` and
+  raise on any other non-image method. No existing test relied on the permissive answer: both tests pass unchanged, and
+  an unexpected method would have left the receipt `uncertain` where they assert `rejected`.
+- The turn fake resolves an attachment as native does: `\ ` read as a space, variables expanded, a relative path joined
+  to `TERMINAL_CWD`, symlinks resolved.
+
+## Fourth review round checks
+
+Source fingerprint sha256:2adee56efe0ab5ab9a9f945846d8b910a504c6d8bc1ac929253f19cc55be6478 (1717 source files); `src/hermes` alone sha256:6816f1f7122148dd28decc01c539caff95ba45b92feec67e7738567de139ff40 (20 source files). Same host and versions (Python 3.14.10, Node 24.22.2).
+
+- `npm ci` once, then `npm run test:py`: 44 files passed, 0 skipped, 0 failed (228 s). `tests/hermes_turn_binding_test.py`:
+  34 tests, 1 new and one table grown; `tests/hermes_extension_journal_test.py`: 65 tests, two fakes made strict.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+## Fourth review round red proof
+
+`test_a_photo_whose_path_native_rewrites_is_taken_back_only_by_the_path_hermes_answered` was written first and run
+against `1ded5ec`'s `src/hermes/extension.py`. Its three failed-attach cases went red for the reviewer's reason, the
+desktop's image claimed and removed: relative, `['/tmp/…/photo.png'] != ['/tmp/…/photo.png', '<process dir>/photo.png']`;
+a variable, `['/uploads/alice/photo.png'] != ['/uploads/alice/photo.png', '/uploads/$FOLDER/photo.png']`; an escaped
+space, `['/uploads/my photo.png'] != ['/uploads/my photo.png', '/uploads/my\\ photo.png']`. Its answered case passed
+there, as it should.
+
+Each line was then broken with a scripted text replacement on the fixed source, the binding tests and
+`tests/hermes_extension_journal_test.py` run with `-B` and `PYTHONDONTWRITEBYTECODE=1`, and the source restored, checked
+by hash, and every `__pycache__` deleted:
+
+| Broken | Red |
+| --- | --- |
+| The absolute-path guard dropped | the rewrite test, relative case |
+| The `$` guard dropped | the rewrite test, variable case |
+| The `\` guard dropped | the rewrite test, escaped-space case |
+| The answered path ignored in favor of the fallback | the rewrite test, relative answered case |
+| The first equal entry removed, not the last | the typed-stop test, `[photo, scan]` staged before: `['…/scan.png', '…/photo.png'] != ['…/photo.png', '…/scan.png']` |
+| The fallback without symlink resolution | the attach test, resolved-path case |
+| No fallback after a failure | the attach test, both after-append cases; the journal's image-preparation case |
+
+No mutant of this round survived.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.

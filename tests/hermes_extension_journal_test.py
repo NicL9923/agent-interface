@@ -351,6 +351,8 @@ class OpenTests(unittest.TestCase):
                     # Native appends the resolved path and answers it (methods_prompt.py:1020-1023 at ed1afb0).
                     session["attached_images"].append(request["params"]["path"])
                     return hermes.server._ok(request["id"], {"attached": True, "path": request["params"]["path"]})
+                if request["method"] != "prompt.submit":
+                    raise AssertionError("Hermes method not configured for this test: " + request["method"])
                 return hermes.server._err(request["id"], 4090, "No slot available")
             hermes.server.handle_request = Mock(side_effect=refuse)
             params = {"profile": "default", "request_id": "image", "sender_id": "member", "text": "Hello"}
@@ -371,6 +373,8 @@ class OpenTests(unittest.TestCase):
                 if request["method"] == "image.attach":
                     session["attached_images"].append(request["params"]["path"])
                     return hermes.server._ok(request["id"], {"attached": True, "path": request["params"]["path"]})
+                if request["method"] != "prompt.submit":
+                    raise AssertionError("Hermes method not configured for this test: " + request["method"])
                 hermes.server._sessions.pop("sid")
                 return hermes.server._err(request["id"], 4001, "Session not found")
             hermes.server.handle_request = Mock(side_effect=closed)

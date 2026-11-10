@@ -75,7 +75,7 @@ class TurnHermes(FakeHermes):
     voice chat and admits nothing. ``reply_as`` replaces the answer to the next prompt.submit that starts a turn, and
     ``hold_admission`` is an Event that turn's thread waits on before Hermes admits it and takes the images.
 
-    image.attach appends the path, symlinks resolved, without a lock and answers it as ``path``, as native's does
+    image.attach appends the path as native resolves it, without a lock and answers it as ``path``, as native's does
     (``methods_prompt.py:1020-1023`` and ``:1352-1355`` at ``ed1afb0``, ``:749-752`` and ``:1094-1097`` at the others).
     ``pause_attach`` makes the next one wait after it appends, where native reads the image's header
     (``_image_meta``, ``server.py:754-763`` at ``ed1afb0``, ``:840-849`` at the others). With ``fail="after"`` it then
@@ -146,8 +146,10 @@ class TurnHermes(FakeHermes):
             images = self.session["attached_images"]
             pause, self.attach_pause = self.attach_pause, None
             fail = pause[2] if pause is not None else None
-            # Native resolves the path first (hermes_cli/cli_terminal_input.py:86-137).
-            path = os.path.realpath(params["path"])
+            # Native resolves the path first: "\\ " read as a space, variables expanded, a relative path joined to
+            # TERMINAL_CWD, symlinks resolved (hermes_cli/cli_terminal_input.py:86-137).
+            expanded = os.path.expandvars(params["path"].replace("\\ ", " "))
+            path = os.path.realpath(os.path.join(os.getenv("TERMINAL_CWD", os.getcwd()), expanded))
             if fail != "before":
                 images.append(path)
             if pause is not None:
@@ -779,7 +781,9 @@ class TurnBindingTests(unittest.TestCase):
 
     def test_a_typed_stop_takes_back_its_photo_and_leaves_one_staged_before_it(self):
         # Hermes answers the stop before it reads the session, so the photo staged for it would wait for the next turn.
-        for before in ([], ["/uploads/desktop/chart.png"]):
+        # With the same photo staged before, ahead of another image, the stop takes back its own copy, the last one, and
+        # the order the next turn sees is unchanged.
+        for before in ([], ["/uploads/desktop/chart.png"], [PHOTO["path"], "/uploads/desktop/scan.png"]):
             with self.subTest(staged_before=before), TurnHermes() as hermes:
                 hermes.session["attached_images"].extend(before)
                 hermes.voice = True
@@ -827,6 +831,42 @@ class TurnBindingTests(unittest.TestCase):
                 hermes.voice = False
                 hermes.other_client("What is on this?")
                 self.assertEqual(hermes.finish("What is on this?").images, [*before, other])
+
+    def test_a_photo_whose_path_native_rewrites_is_taken_back_only_by_the_path_hermes_answered(self):
+        # Native joins a relative path to TERMINAL_CWD, not to the process's directory, expands variables and reads "\\ "
+        # as a space. While Alice's attach is paused after its append, the desktop attaches the image at the path Alice's
+        # path would name without those rewrites. When Hermes answers her path, her typed stop takes back exactly that
+        # entry. When her attach fails after its append and answers no path, the add-on cannot tell which entry is hers:
+        # it claims none, so the desktop's image survives and hers stays staged.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        terminal, here = os.path.realpath(directory.name), os.path.realpath(os.getcwd())
+        environment = {"TERMINAL_CWD": terminal, "FOLDER": "alice", "NAMED": "$FOLDER"}
+        # (case, how Alice's attach fails, her path, the entry native appends for it, the desktop's path, its entry)
+        cases = (("relative, answered", None, "photo.png", terminal + "/photo.png", here + "/photo.png", here + "/photo.png"),
+                 ("relative, fails after its append", "after", "photo.png", terminal + "/photo.png",
+                  here + "/photo.png", here + "/photo.png"),
+                 ("a variable, fails after its append", "after", "/uploads/$FOLDER/photo.png", "/uploads/alice/photo.png",
+                  "/uploads/$NAMED/photo.png", "/uploads/$FOLDER/photo.png"),
+                 ("an escaped space, fails after its append", "after", "/uploads/my\\ photo.png", "/uploads/my photo.png",
+                  "/uploads/my\\\\ photo.png", "/uploads/my\\ photo.png"))
+        for name, fail, path, mine, desktop, other in cases:
+            with self.subTest(name), patch.dict(os.environ, environment), TurnHermes() as hermes:
+                hermes.voice = True
+                appended, resume = hermes.pause_attach(fail)
+                self.addCleanup(resume.set)
+                answers = []
+                sender = threading.Thread(target=lambda hermes=hermes, path=path, answers=answers: answers.append(
+                    hermes.send("alice-stop", "stop", attachments=[{**PHOTO, "path": path}])))
+                sender.start()
+                self.assertTrue(appended.wait(5))
+                self.assertEqual(hermes.session["attached_images"], [mine])
+                self.assertEqual(hermes.other_attach(desktop)["path"], other)
+                resume.set()
+                sender.join(5)
+                [answer] = answers
+                self.assertEqual(answer["status"], "rejected" if fail else "accepted")
+                self.assertEqual(hermes.session["attached_images"], [other] if not fail else [mine, other])
 
     def test_a_typed_stop_taking_back_its_photo_keeps_one_another_client_attaches_meanwhile(self):
         # Native image.attach appends without history_lock, so the desktop's attach can land while Alice's cleanup runs.

@@ -1673,9 +1673,11 @@ class Bridge:
         and d23cc6b). It takes no lock, so another client's attach can append beside it while it reads the image's
         header (``server.py:754-763`` at ed1afb0, ``:840-849`` at the others), and not every entry new since the call
         began is this request's. An error after the append answers 5027 with no path (``methods_prompt.py:1024-1025``
-        at ed1afb0, ``:753-754`` at the others); its entry is then the attachment's path as native resolves an absolute
-        path, symlinks resolved (``hermes_cli/cli_terminal_input.py:86-137``). A path native would resolve otherwise is
-        not recorded, and stays staged rather than removing an entry this request cannot prove its own.
+        at ed1afb0, ``:753-754`` at the others). Its entry is then known only for an absolute path without ``$`` or
+        ``\\``: native appends that path with symlinks resolved (``hermes_cli/cli_terminal_input.py:86-137``). Native
+        joins a relative path to ``TERMINAL_CWD``, which need not be this process's directory, and expands ``$`` and
+        ``\\ ``, so such a path claims nothing and its image stays staged rather than removing an entry this request
+        cannot prove its own. The app sends absolute upload paths.
         """
         sessions = self.server._sessions
         for attachment in attachments:
@@ -1689,7 +1691,12 @@ class Bridge:
                     answered = result.get("path") if isinstance(result, dict) else None
                     # Native reads the path as str(path).strip() (methods_prompt.py:1005 at ed1afb0, :734 at the others).
                     raw = str(path or "").strip()
-                    own = {answered} if isinstance(answered, str) else {raw, os.path.realpath(raw)}
+                    if isinstance(answered, str):
+                        own = {answered}
+                    elif os.path.isabs(raw) and "$" not in raw and "\\" not in raw:
+                        own = {os.path.realpath(raw)}
+                    else:
+                        own = set()
                     added = list(sessions[sid].get("attached_images", []))
                     for image in prior:
                         if image in added:
