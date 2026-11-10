@@ -260,6 +260,34 @@ describe("streaming Markdown", () => {
     expect(container.textContent).toBe("Feed the **bo");
   });
 
+  it("renders many open brackets without throwing", async () => {
+    const text = "[a ".repeat(8000);
+    expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+  });
+
+  it("clears copy feedback when a growing code block changes, even mid-copy", async () => {
+    const status = () => container.querySelector('[role="status"]')?.textContent;
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1;");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1;\n");
+    expect(status()).toBe("Code copied.");
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 123;");
+    expect(status()).toBe("");
+    // A copy still pending when the code changes copied the older text, so it must not claim
+    // success, nor end a newer copy's wait.
+    const finish: Array<() => void> = [];
+    writeText.mockImplementation(() => new Promise<void>(resolve => { finish.push(resolve); }));
+    await copy();
+    await renderAs(StreamingMarkdown, "```ts\nconst x = 1234;");
+    expect(status()).toBe("");
+    await copy();
+    expect(writeText).toHaveBeenLastCalledWith("const x = 1234;\n");
+    await act(async () => finish[0]());
+    expect(container.querySelector("button")?.textContent).toBe("Copying…");
+    await act(async () => finish[1]());
+    expect(status()).toBe("Code copied.");
+  });
+
   it("keeps an unfinished code block's node across updates", async () => {
     await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')");
     const code = container.querySelector("pre code")!;

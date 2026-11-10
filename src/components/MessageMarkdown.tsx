@@ -42,9 +42,9 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
  * alone never changes the layout. A fence still streaming in stays plain until its closing line arrives.
  */
 function CodeBlock({ code, language, finished }: { code: string; language?: string; finished: boolean }) {
-  const [copyState, setCopyState] = useState<
-    "idle" | "copying" | "copied" | "failed"
-  >("idle");
+  // Feedback belongs to the code it copied; once a growing block changes, it no longer applies.
+  const [copied, setCopied] = useState<{ state: "idle" | "copying" | "copied" | "failed"; code: string }>({ state: "idle", code });
+  const copyState = copied.code === code ? copied.state : "idle";
   const highlightable = finished && !!language;
   const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
   // A finished block is keyed by its code, so a result can only ever belong to this code.
@@ -54,12 +54,15 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
   }, [highlightable, html, code, language]);
 
   async function copy() {
-    setCopyState("copying");
+    const text = code;
+    // A copy still pending when the code changes reports nothing, since it copied the older text.
+    const settle = (state: "copied" | "failed") => setCopied(current => current.code === text ? { state, code: text } : current);
+    setCopied({ state: "copying", code: text });
     try {
-      await navigator.clipboard.writeText(code);
-      setCopyState("copied");
+      await navigator.clipboard.writeText(text);
+      settle("copied");
     } catch {
-      setCopyState("failed");
+      settle("failed");
     }
   }
 

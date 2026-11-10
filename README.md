@@ -440,9 +440,11 @@ your draft. A failed turn can be retried once, by anyone, from any device: a sec
 tap, tab or phone gets the first retry's result instead of starting another turn.
 
 After you send, your message moves near the top and the reply grows below it.
-While it grows, unfinished bold, italic, strikethrough and code already show formatted, a
-link shows as text until its address finishes, and a table appears once its header row is
-complete. A code block still arriving keeps your text selection.
+While it grows, unfinished bold, strikethrough and inline code already show formatted, and a
+link shows its text until its address finishes. A table appears once its delimiter row, the
+`| --- |` line under the header, is recognized; the header waits only while that row is typed.
+A single `*`, `_` or `~` shows as typed until the reply settles it, since it is as often a glob
+or a name as formatting. A code block still arriving keeps your text selection.
 Scrolling up stops the view from following; it follows again once you return to
 the end. Each finished turn folds its tool calls and delegated work into one row,
 such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the

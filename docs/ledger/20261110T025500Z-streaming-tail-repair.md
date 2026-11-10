@@ -46,3 +46,83 @@ Each guard was broken by hand, the named test went red, and the line was restore
 ## Not exercised
 
 No browser session watched a live reply. The DOM-node and bold checks run in jsdom.
+
+## Review round 1
+
+GPT-6.1 Sol reviewed `969f76e` and judged it not ready: the function guessed in contexts it did
+not understand. `completeStreamingTail` is restructured so each repair is opt-in for a context
+it has positively identified, and everything else comes back unchanged; the model is the
+comment at the top of `src/components/streaming-tail.ts`.
+
+- B1. No recursion and no rescanning. One inline scan, plus one verifying rescan of the repaired
+  context, both under a step budget of 32 steps per character.
+- B2. A definition, a bare autolink (`://`, `www.`, `@`) and any `<` mean no repair. A link's
+  destination is hidden only while it arrives, and not when it holds a marker that could pair
+  with one before it.
+- B3. A fence behind a quote or list marker, or a list item's fence whose lines leave its indent,
+  means no repair, which covers container-prefixed `agent-ui` and `wildbots-html` fences.
+- B4. A header row is held back only while the delimiter row under it has begun and is not yet
+  complete, only at the margin, and only when the hold takes no closer or line break from the
+  paragraph above. Indented code and a lone pipe line show as typed.
+- B5. Rule chosen: only `**` and `***` close, when they follow a space or an opening bracket or
+  quote and precede a letter, digit, backtick or opening bracket. A single `*`, any `_` and a
+  single `~` never close, since assistants write `*.ts`, `*args`, `_private`, `__init__`,
+  `~user`, `~5` and footnote asterisks far more often outside code than single-marker emphasis.
+  `~~` closes only when it is the lone tilde run. Code spans close. Accepted residual: a bare
+  `**kwargs` outside backticks shows bold until its paragraph ends.
+- B6. Delimiters match with CommonMark's per-kind stack floor, so work is linear; code spans find
+  closers through per-length queues. Past the budget the text comes back unchanged.
+- B7. `CodeBlock` keeps copy feedback with the code it copied. When the code changes the status
+  clears, and a copy still pending neither claims success nor ends a newer copy's wait.
+- B8. `README.md` now says a table appears once its delimiter row is recognized, and that a
+  single `*`, `_` or `~` shows as typed.
+
+### Property
+
+The two old property tests are replaced. The parser (`mdast-util-from-markdown` with GFM) is the
+judge, and for every prefix `p` of a reply, with `live = completeStreamingTail(p)`:
+
+1. the visible text of `live` (text, inline code, code and image alt, in order) is a subsequence
+   of the visible text of `p`;
+2. every link, image and definition destination in `live` is one in `p` or in the whole reply;
+3. a `*`, `_` or `~` the parser formats in `p` is still formatted in `live`;
+4. for 11 replies an assistant would write, a marker `live` formats but `p` shows as typed is one
+   the whole reply formats too, and at least 100 such repairs happen, which an identity function
+   fails.
+
+Properties 1 to 3 run over 300 seeded random strings built from Markdown fragments and the
+reviewer's inputs, every prefix; the average call must stay under 0.5 ms. Text the parser reads
+with no stray marker, including every paragraph in `README.md` and `docs/`, must come back
+unchanged.
+
+While building it, the property and a scratch search over random strings found faults in my own
+first rewrite, each now fixed and covered by a case: a code span repair that revealed markers the
+raw text formatted, a link cut that removed a strike's closing `~~`, a header hold that removed a
+closer or a hard-break backslash from the line above, a strong opener inside a finished strike,
+closers merging with a closer the rule of three then split, a closer changing how an adjacent `_`
+flanked, and a link cut that emptied a list item. After the fixes, 21 search runs over about
+70,000 random strings, every prefix, found nothing.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/streaming-tail.test.ts tests/message-markdown.test.ts`: 153 passed.
+- `npm test`: 170 files, 2622 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 3 passed in Chromium.
+- Worst case on 100,000-character blocks, Node 24.22.2 via `npx tsx`, 10 warm runs each: 37 ms
+  cold and 32 ms warm, both on adversarial delimiter mixes. The B6 input took 21 ms cold.
+
+### Red proof, round 1
+
+On `969f76e`, with the new tests: 42 failed and 77 passed across the two files, including every
+finding's case, both new properties, the B1 render, which overflowed the stack, and the B7 copy
+test. The B6 input took 709 ms in that run.
+
+Then 65 hand mutations of `streaming-tail.ts`, one guard or rule at a time: each turned at least
+one test red before the file was restored. Survivors on the first pass were resolved by adding a
+case that kills them, found by hand or by search, or by deleting the guard when the final
+verification already covered it: the code-content check, the trailing-backslash check, the
+closer cap, the bracket cap, the HTML check on continuation lines, the ambiguous delimiter check,
+and the tilde checks that the equal-size rule now covers. Mutations in `MessageMarkdown.tsx`:
+reading copy state without its code, settling a pending copy without the code check, and keying
+an unfinished `CodeBlock` by its code each turned their test red.
