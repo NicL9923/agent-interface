@@ -68,6 +68,17 @@ alternated because the machine was loaded (load average 18 to 31).
 - Sequential runs before the interleaved one showed the branch's roster at 1.4 s; interleaved, that
   was the machine's load, not the change.
 
+### Later runs under heavier load
+
+Two later interleaved runs (load average 19 to 33), worker's cached shell, roster painted, 25th
+percentile / median: 12 loads, `main` 667 / 708, this branch 518 / 951; 24 loads, `main` 653 / 668,
+this branch 516 / 840. Every build, `main` included, split into a fast cluster and one 400 to
+600 ms slower, and this branch landed in the slow one more often in these runs. Chromium traces of
+24 loads of this branch show the same tasks in the same order in both clusters, each about twice as
+long (a 113 ms task took 205 to 235 ms), clustered in time, which is the machine's other load rather
+than a code path. The fast cluster is about 140 ms sooner than `main`'s. A quiet machine or a real
+phone would settle the median; neither was available.
+
 ## Application tests
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
