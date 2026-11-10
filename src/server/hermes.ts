@@ -1,5 +1,5 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall } from '../shared/types.js';
+import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnWatcher } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import { TALK_MODEL } from '../shared/voice.js';
 import type { ComputerAttachment, ComputerStatus } from '../shared/computer.js';
@@ -29,12 +29,9 @@ const supported = (value: boolean, reason?: string) => ({supported: value,
   ...(!value ? {reason: reason ?? 'The connected Hermes backend does not expose this capability.'} : {})});
 // Frames that only extend a running turn. Anything else changes the conversation's structure.
 const deltaEvents = ['message.delta', 'reasoning.delta', 'thinking.delta', 'tool.generating', 'status.update', 'tool.start'];
-type TurnEventName = 'start' | 'text' | 'end';
-type TurnListener = (botId: string, event: TurnEventName, at?: number) => void;
 // The frames a send is timed by: its turn's start, streamed text or reasoning, and end.
-const turnEvents = new Map<unknown, TurnEventName>([
+const turnEvents = new Map<unknown, 'start' | 'text' | 'end'>([
   ['message.start', 'start'], ['message.delta', 'text'], ['reasoning.delta', 'text'], ['message.complete', 'end']]);
-const UNOWNED_SESSIONS = 16;
 const settledStates = ['done', 'failed', 'interrupted'];
 // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
 // It stays short: writers outside this socket, such as another gateway process or the CLI, send it no frame.
@@ -111,11 +108,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
   // An array, not a Set, so calling them on every token allocates no iterator.
-  const turnListeners: TurnListener[] = [];
-  // Turn events of sessions no assistant owns yet, by session ID. Hermes attaches the socket before it
-  // answers a first open, so an open's answer names the owner later. Only the latest turn is kept, and
-  // the oldest session is forgotten past the limit, so frames for sessions nobody claims stay bounded.
-  const unowned = new Map<string, {start: boolean; text?: number; end: boolean}>();
+  const turnWatchers: TurnWatcher[] = [];
+  const toTurnWatchers = (call: (watcher: TurnWatcher) => void) => {
+    for (let index = 0; index < turnWatchers.length; index++) {
+      try { call(turnWatchers[index]); } catch { /* A watcher never stops frame processing. */ }
+    }
+  };
   const structuralGenerations = new Map<string, number>();
   const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
@@ -163,9 +161,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   const transport = createHermesTransport(options, {
     frame: sessionFrame,
     disconnected(verified) {
+      // Frames may have been missed, so no turn seen so far can be tied to a later frame.
+      toTurnWatchers(watcher => watcher.disconnected());
       live.clear();
       owners.clear();
-      unowned.clear();
       descriptions.clear();
       capabilityCache = undefined;
       rosterReuse = undefined;
@@ -222,10 +221,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Opening a conversation attaches this socket to its session, so its frames arrive here.
     const botId = owners.get(sid);
     const delta = frame.method === "event" && deltaEvents.includes(params.type);
+    // By session: a frame names no run, and the session of a first open has no owner yet.
     const turn = frame.method === 'event' ? turnEvents.get(params.type) : undefined;
-    if (turn !== undefined && turnListeners.length) {
-      if (botId !== undefined) turnEvent(botId, turn);
-      else holdTurnEvent(sid, turn);
+    if (turn !== undefined) for (let index = 0; index < turnWatchers.length; index++) {
+      try { turnWatchers[index].frame(sid, turn); } catch { /* A watcher never stops frame processing. */ }
     }
     if (botId !== undefined) {
       if (delta && state.state !== previousActivity) rosterChanged();
@@ -235,34 +234,6 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     }
     // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
     else for (const pending of opening.keys()) changed(pending, delta && params.type !== 'tool.start' ? "inflight" : undefined);
-  }
-  function turnEvent(botId: string, event: TurnEventName, at?: number): void {
-    for (let index = 0; index < turnListeners.length; index++) {
-      try { turnListeners[index](botId, event, at); } catch { /* A listener never stops frame processing. */ }
-    }
-  }
-  function holdTurnEvent(sid: string, event: TurnEventName): void {
-    let held = unowned.get(sid);
-    // After the first text frame, a token costs this one lookup.
-    if (event === 'text' && held?.text !== undefined) return;
-    if (held === undefined || event === 'start') {
-      unowned.delete(sid);
-      if (unowned.size >= UNOWNED_SESSIONS) unowned.delete(unowned.keys().next().value!);
-      held = {start: false, end: false};
-      unowned.set(sid, held);
-    }
-    if (event === 'start') held.start = true;
-    else if (event === 'end') held.end = true;
-    else held.text = performance.now();
-  }
-  /** An open named the session's owner. Its held turn events go to that assistant, in order. */
-  function claimTurnEvents(sid: string, botId: string): void {
-    const held = unowned.get(sid);
-    if (held === undefined) return;
-    unowned.delete(sid);
-    if (held.start) turnEvent(botId, 'start');
-    if (held.text !== undefined) turnEvent(botId, 'text', held.text);
-    if (held.end) turnEvent(botId, 'end');
   }
   async function voiceReply(path: string, payload: Wire): Promise<Wire> {
     const response = await http(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
@@ -315,10 +286,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     for (const [session, owner] of owners) {
       if (owner === botId && session !== live.get(botId)) owners.delete(session);
     }
-    if (live.get(botId) === value.session_id) {
-      owners.set(value.session_id, botId);
-      claimTurnEvents(value.session_id, botId);
-    }
+    if (live.get(botId) === value.session_id) owners.set(value.session_id, botId);
     if (superseded) {
       supersededOpens.add(value);
       return value;
@@ -495,9 +463,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       : 'idle';
     const detail = active ? (runningTool ? `Using ${runningTool.name}` : state?.detail) : undefined;
     const runId = value.app_run_id ?? value.app_interruption?.runId ?? undefined;
+    const fresh = current && generation === structuralGenerationOf(botId);
+    // No turn started or ended here since the read began, so the run it names is the running turn's.
+    if (fresh) toTurnWatchers(watcher => watcher.run(sid, botId, typeof value.app_run_id === 'string' ? value.app_run_id : undefined, !!value.info?.running));
     // Live patches need only the last prompt and its persisted assistant segments,
     // never a second retained copy of an older client's full transcript.
-    if (options.history !== false && current && generation === structuralGenerationOf(botId)) {
+    if (options.history !== false && fresh) {
       snapshots.set(botId, {
         value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
           inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
@@ -1141,12 +1112,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         : state.state;
       return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools};
     },
-    watchTurns(listener) {
-      turnListeners.push(listener);
+    watchTurns(watcher) {
+      turnWatchers.push(watcher);
       return () => {
-        const index = turnListeners.indexOf(listener);
-        if (index >= 0) turnListeners.splice(index, 1);
-        if (!turnListeners.length) unowned.clear();
+        const index = turnWatchers.indexOf(watcher);
+        if (index >= 0) turnWatchers.splice(index, 1);
       };
     },
     watch(botId, listener) {

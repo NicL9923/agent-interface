@@ -116,9 +116,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   requireCapability: (key: CapabilityKey) => Promise<void>;
 }) {
   const { config, runtime, store, roster, streams, requireCapability } = collaborators;
-  // Each admitted send is timed to its turn's first streamed text and first live event on a stream.
+  // Each admitted send is timed to its own run's first streamed text and first live event on a stream.
   const timings = new SendTimings(app.log);
-  const unwatchTurns = runtime.watchTurns?.((botId, event, at) => timings.turn(botId, event, at));
+  const unwatchTurns = runtime.watchTurns?.(timings);
   app.addHook("onClose", async () => { unwatchTurns?.(); timings.close(); });
   apiRoute(app, "GET /bots/:id/conversation", {}, async (req, _body, reply) => {
     const started = performance.now(), timing: ReadTiming = {};
@@ -276,11 +276,11 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
                 baseTextLength: base.text.length, baseReasoningLength: base.reasoning.length,
                 ...(appendText ? { appendText } : {}), ...(appendReasoning ? { appendReasoning } : {}),
                 activity: value.activity, ...(toolsChanged ? { toolCalls } : {}) };
-              if (stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`)) timings.written(botId);
+              if (stream?.send(`event: inflight-delta\ndata: ${JSON.stringify(delta)}\n\n`)) timings.written(botId, value.activity.runId);
               return;
             }
           }
-          if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId);
+          if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId, value.activity.runId);
         })().catch(() => changed());
       }, Math.max(0, liveLast + 250 - Date.now()));
     };
@@ -406,7 +406,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if (conversation?.activity.runId)
       for (const userId of new Set([input.senderId, requesterId])) store.participate(conversation.activity.runId, userId);
     // Measuring starts before Hermes is asked, because Hermes starts the turn and may stream before it answers.
-    const timing = timings.begin(input.botId, input.requestId, phases.arrival, steering);
+    const timing = timings.begin(input.botId, input.requestId, phases.arrival);
     try {
       // The voice mark goes only to Hermes. It is not part of the recorded request, so asking again
       // with the same ID never conflicts with a request recorded before Talk carried it.
@@ -420,7 +420,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       phases.admitted = performance.now();
       if (receipt.status === "accepted")
         timings.admitted(timing, voice ? "talk" : explicitSteering ? "steer" : "messages",
-          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted });
+          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted }, receipt.runId);
       else timings.discard(timing);
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);

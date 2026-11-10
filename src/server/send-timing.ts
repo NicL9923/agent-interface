@@ -1,7 +1,12 @@
 import type { Log } from "./logging.js";
+import type { TurnWatcher } from "../shared/types.js";
 
-/** How long a turn waits for its first live event before its timing is logged without one. */
+/** How long after it begins a send's measurement is released, logged with whatever was correlated by then. */
 export const SEND_TIMING_GIVE_UP_MS = 120_000;
+/** The unidentified turns, and the runs, a send keeps a first time for while it cannot yet tell which is its own. */
+export const SEND_TIMING_HELD = 8;
+/** Sessions whose current turn is tracked. Frames of other clients' sessions also arrive here. */
+const SESSIONS = 16;
 
 /** Where a send's request spent its time, in milliseconds. Each moment is measured from the request's arrival. */
 export interface SendPhases {
@@ -27,199 +32,321 @@ export function sendTimingHeader(phases: SendPhases, now: number): string {
 }
 
 export type SendRoute = "messages" | "steer" | "talk";
-/** A turn event Hermes reported for an assistant: a turn began, streamed text or reasoning, or ended. */
-export type TurnEvent = "start" | "text" | "end";
-/** Why a record finished, as its log line names it. */
-type Ended = "measured" | "turn" | "next-turn" | "deadline";
+/**
+ * Why a record finished, as its log line names it. Only "measured" carries both moments.
+ * - uncorrelated: a moment could not be tied to the send's run. Hermes's answer named no run, an earlier
+ *   turn of the run's session streamed text no read identified, or more turns or runs streamed at once
+ *   than a send holds.
+ * - next-run: a read found another run running on the assistant's session, so the send's run is over.
+ * - deadline: two minutes passed after the send began.
+ * - disconnected: the Hermes socket dropped while the record was open, so frames may have been missed.
+ */
+export type SendEnded = "measured" | "uncorrelated" | "next-run" | "deadline" | "disconnected";
+
+/** One turn of one session: from its message.start, or the first frame seen of it, to its message.complete. */
+interface Turn {
+  readonly session: string;
+  /** Turns in the order they were first seen, across sessions. */
+  readonly seq: number;
+  /**
+   * The app run a fresh conversation read found open while this turn ran. null: the read found none, as for a
+   * routine's turn. undefined: no read landed during it.
+   */
+  run?: string | null;
+  /** The assistant whose read identified it. */
+  botId?: string;
+  /** Two reads named different runs, so neither is trusted. */
+  conflicted: boolean;
+  ended: boolean;
+}
+interface Session {
+  turn?: Turn;
+  /** The generation at which no open record needed anything more from the current turn. */
+  framed: number;
+}
 
 /** One send's measurement. The caller holds it from before the send reaches Hermes until Hermes answers. */
 export interface SendRecord {
   readonly botId: string;
   readonly requestId: string;
   readonly arrival: number;
-  /** The assistant turn it measures. Unset while it waits for its turn to start. */
-  turn?: number;
-  /** Bound to a turn that was already running when the send arrived: a steer, measured by that reply's next growth. */
-  joined: boolean;
-  /** How its turn ended before Hermes answered the send: its end was reported, or a newer turn started. */
-  ended?: "turn" | "next-turn";
+  /** The run Hermes's answer named. Every moment recorded must belong to it. */
+  runId?: string;
   firstFrame?: number;
   firstLive?: number;
-  admission?: { route: SendRoute; steered: boolean; phases: Required<SendPhases>; timer: ReturnType<typeof setTimeout> };
+  /** Until the send's first text is matched: its first text time after arrival on each turn not yet ruled out. */
+  frames: Map<Turn, number>;
+  /**
+   * By session, the earliest turn with text after arrival that no read identified before it ended, or that two
+   * reads disagreed on. It may have been the send's own, so a later turn of the send's run there cannot be its first.
+   */
+  blind: Map<string, number>;
+  /** Before Hermes answers: the first live event written after arrival for each run. */
+  lives: Map<string, number>;
+  /** A moment can no longer be correlated. */
+  lost: boolean;
+  /** Released before Hermes answered. The answer logs this at once. */
+  released?: "deadline" | "disconnected";
+  admission?: { route: SendRoute; steered: boolean; phases: Required<SendPhases> };
+  timer?: ReturnType<typeof setTimeout>;
 }
-/** What the tracker knows of one assistant's turns, from the turn events Hermes reports. */
-interface Assistant {
-  /** Turns started so far. A record bound to an older number is finished or ends at the next event. */
-  turn: number;
-  running: boolean;
-  /** No record bound to the current turn still lacks its first frame, so a token needs no more work. */
-  framed: boolean;
-  records: SendRecord[];
-}
+
+const messages: Record<SendEnded, string> = {
+  measured: "Send timing",
+  uncorrelated: "Send timing: a moment could not be tied to the send's run",
+  "next-run": "Send timing: another run started before it was measured",
+  deadline: "Send timing: gave up at the deadline",
+  disconnected: "Send timing: Hermes disconnected while it was measured",
+};
 
 /**
- * Times each admitted send from the request's arrival to the first streamed text of its turn and the
- * first live event of that turn written to an open event stream, then logs one line per send. Only
- * identifiers and durations are logged, never message text.
+ * Times each admitted send from the request's arrival to the first streamed text of its own run and the
+ * first live event of that run written to an open event stream, then logs one line per admitted send.
+ * Only identifiers and durations are logged, never message text.
  *
- * The model. A record is one send, bound to one assistant turn.
- * - Created by begin(), before the send reaches Hermes, because Hermes starts the turn and may stream
- *   text before it answers. A steer, or a send while a turn is running, joins that running turn and is
- *   measured by its next growth. Any other send waits and binds to the next turn that starts.
- * - Hermes's answer confirms it with admitted(), or drops it with discard() when the send was not
- *   accepted. A joined send moves to the next turn when Hermes did not steer it, or when the running
- *   turn gives way before Hermes answers, as queued guidance drains into a new turn.
- * - Only frames and live events of its bound turn, after the send arrived, are recorded.
- * - It ends, logging one line: when both moments are recorded; when its turn ends; when a newer turn
- *   starts and its own end was never seen; or two minutes after admission. A turn that ended before
- *   Hermes answered ends the record at the answer.
+ * The model: correlate by identity, and omit what cannot be correlated. The order of events is never
+ * evidence of which send they belong to.
+ * - Identity. Hermes's admission answer names the send's run: its own request ID for a new task, or the
+ *   running task's root for a steer. Session frames carry only a session ID. A live event carries the run
+ *   of the conversation read it was built from. A fresh read, one with no turn starting or ending on its
+ *   session between the read's start and now, names the run open during the session's running turn, so
+ *   the runtime reports it with run() and that turn takes the run.
+ * - First live: the first live event written after arrival whose run equals the answer's run. Until the
+ *   answer, the first time per run is kept, for at most SEND_TIMING_HELD runs.
+ * - First text: the first text frame after arrival on a turn identified as the answer's run, provided no
+ *   earlier turn with text after arrival on that session went unidentified: one that ended before a read
+ *   landed in it, or that two reads disagreed on. Such a turn may have been the run's, so the later text
+ *   is not its first and is omitted. Until a turn is identified, the send keeps its first text time
+ *   there, for at most SEND_TIMING_HELD turns at once.
+ * - Limit: when an idle compaction is preempted and a native turn starts inside that send's admission,
+ *   Hermes queues the new task and a read during the native turn names the new run. That turn's text
+ *   would be taken as the send's. It needs both events inside one admission and is not otherwise guarded.
+ * - A steer is measured by its run's next growth after it arrived. Native steering answers "queued" for an
+ *   ordinary steer too, and queued text drains into a later turn of the same run, so a steer and a queued
+ *   send cannot be told apart. Both are measured on their run, past turn boundaries.
+ * - Lifetime. begin() creates the record before Hermes is asked, since Hermes may stream before it
+ *   answers. Every record has a deadline from then. admitted() confirms it with the answer's run, and
+ *   discard() drops one Hermes did not accept. It ends, logging one line with an `ended` reason (see
+ *   SendEnded): when both moments are recorded; when a moment becomes uncorrelated; when a fresh read
+ *   finds another run running for the assistant, since its runs follow each other; at the deadline; or
+ *   when the socket drops, which also forgets every tracked turn and held time. A record released before
+ *   Hermes answered logs at the answer.
  *
- * The turn and live-event hooks run on every token. Once every record bound to a turn has its first
- * frame, a token costs one map lookup and reads no clock.
+ * The frame hook runs on every token. Once no open record needs more from a session's current turn, a
+ * token costs one map lookup and reads no clock.
  */
-export class SendTimings {
-  private assistants = new Map<string, Assistant>();
+export class SendTimings implements TurnWatcher {
+  private records = new Set<SendRecord>();
+  private sessions = new Map<string, Session>();
+  private turns = 0;
+  /** Advances when a record begins, the one event after which a current turn may be needed again. */
+  private generation = 0;
   constructor(private log: Log, private now: () => number = () => performance.now(), private giveUpMs = SEND_TIMING_GIVE_UP_MS) {}
 
-  /** Starts measuring a send before it reaches Hermes. steering: it will join a running turn. */
-  begin(botId: string, requestId: string, arrival: number, steering: boolean): SendRecord {
-    const assistant = this.assistant(botId);
-    const record: SendRecord = { botId, requestId, arrival, joined: false };
-    if (steering || assistant.running) this.join(assistant, record);
-    assistant.records.push(record);
+  /** Starts measuring a send before it reaches Hermes. */
+  begin(botId: string, requestId: string, arrival: number): SendRecord {
+    const record: SendRecord = { botId, requestId, arrival, frames: new Map(), blind: new Map(), lives: new Map(), lost: false };
+    record.timer = setTimeout(() => this.expire(record), this.giveUpMs);
+    record.timer.unref?.();
+    this.records.add(record);
+    this.generation++;
     return record;
   }
 
-  /** Hermes accepted the send. steered is its admission decision when it reports one. */
-  admitted(record: SendRecord, route: SendRoute, steered: boolean, phases: Required<SendPhases>): void {
-    const assistant = this.assistants.get(record.botId);
-    if (!assistant?.records.includes(record)) return;
-    if (!steered && record.joined) this.unbind(record);
-    const timer = setTimeout(() => this.finish(record, "deadline"), this.giveUpMs);
-    timer.unref?.();
-    record.admission = { route, steered, phases, timer };
-    if (record.ended) this.finish(record, record.ended);
-    else if (record.firstFrame !== undefined && record.firstLive !== undefined) this.finish(record, "measured");
+  /** Hermes accepted the send into runId. steered is its admission decision when it reports one. */
+  admitted(record: SendRecord, route: SendRoute, steered: boolean, phases: Required<SendPhases>, runId: string | undefined): void {
+    if (record.admission) return;
+    record.admission = { route, steered, phases };
+    if (record.released) return this.write(record, record.released);
+    if (!this.records.has(record)) return;
+    if (runId === undefined) return this.finish(record, "uncorrelated");
+    record.runId = runId;
+    record.firstLive = record.lives.get(runId);
+    record.lives.clear();
+    if (record.lost) return this.finish(record, "uncorrelated");
+    this.resolve(record);
+    this.settle(record);
   }
 
   /** Hermes did not accept the send, or its answer was lost. Nothing is logged. */
   discard(record: SendRecord): void {
-    const assistant = this.assistants.get(record.botId);
-    if (assistant) assistant.records = assistant.records.filter(other => other !== record);
+    this.release(record);
   }
 
-  /** A turn event for this assistant. at is when a held frame arrived, for one reported late. */
-  turn(botId: string, event: TurnEvent, at?: number): void {
+  frame(sessionId: string, event: "start" | "text" | "end"): void {
     if (event === "text") {
-      const assistant = this.assistants.get(botId);
-      if (assistant === undefined || assistant.framed) return;
-      this.text(assistant, at ?? this.now());
-    } else if (event === "start") this.started(this.assistant(botId));
-    else {
-      const assistant = this.assistants.get(botId);
-      if (assistant !== undefined) this.ended(assistant);
+      const session = this.sessions.get(sessionId);
+      if (session !== undefined && session.framed === this.generation) return;
+      this.text(sessionId, session);
+    } else if (event === "start") {
+      this.open(this.session(sessionId), sessionId);
+    } else {
+      const turn = this.sessions.get(sessionId)?.turn;
+      if (turn && !turn.ended) this.turnEnded(turn);
     }
   }
 
-  /** A live event for this assistant was written to an open event stream. */
-  written(botId: string): void {
-    const assistant = this.assistants.get(botId);
-    if (assistant === undefined || !assistant.records.length) return;
-    const at = this.now();
-    for (const record of [...assistant.records]) {
-      if (!this.current(assistant, record) || record.firstLive !== undefined) continue;
-      record.firstLive = at;
-      if (record.admission && record.firstFrame !== undefined) this.finish(record, "measured");
+  run(sessionId: string, botId: string, runId: string | undefined, running: boolean): void {
+    let turn = this.sessions.get(sessionId)?.turn;
+    if (!turn || turn.ended) {
+      // A read between turns says nothing about a turn. One mid-turn whose start was not seen opens it here.
+      if (!running) return;
+      turn = this.open(this.session(sessionId), sessionId);
+    }
+    const run = runId ?? null;
+    if (turn.run === undefined) { turn.run = run; turn.botId = botId; }
+    else if (turn.run !== run && !turn.conflicted) {
+      turn.conflicted = true;
+      // A send may have skipped its text as another run's, so none may take a later first text there.
+      for (const record of this.records) this.blind(record, turn);
+    }
+    for (const record of this.records) {
+      // An assistant's runs follow each other, so another one running means this send's run is over.
+      if (record.admission && record.botId === botId && runId !== undefined && runId !== record.runId) this.finish(record, "next-run");
+      else if (record.frames.has(turn)) this.resolve(record);
+    }
+  }
+
+  disconnected(): void {
+    for (const record of this.records) {
+      if (record.admission) this.finish(record, "disconnected");
+      else { this.release(record); record.released = "disconnected"; }
+    }
+    this.sessions.clear();
+  }
+
+  /** A live event of runId for this assistant was written to an open event stream. */
+  written(botId: string, runId: string | undefined): void {
+    let at: number | undefined;
+    for (const record of this.records) {
+      if (record.botId !== botId || record.firstLive !== undefined || record.lost) continue;
+      if (record.runId !== undefined) {
+        if (runId !== record.runId) continue;
+        record.firstLive = at ??= this.now();
+        this.settle(record);
+      } else if (runId !== undefined && !record.lives.has(runId)) {
+        if (record.lives.size >= SEND_TIMING_HELD) this.lose(record);
+        else record.lives.set(runId, at ??= this.now());
+      }
     }
   }
 
   /** Stops every timer, as the app does on close. */
   close(): void {
-    for (const assistant of this.assistants.values()) for (const record of assistant.records) clearTimeout(record.admission?.timer);
-    this.assistants.clear();
+    for (const record of this.records) clearTimeout(record.timer);
+    this.records.clear();
+    this.sessions.clear();
   }
 
-  private assistant(botId: string): Assistant {
-    let assistant = this.assistants.get(botId);
-    if (assistant === undefined) {
-      assistant = { turn: 0, running: false, framed: true, records: [] };
-      this.assistants.set(botId, assistant);
+  /** The session, made the most recent. The least recent is forgotten past the limit, its turn ended unseen. */
+  private session(sessionId: string): Session {
+    const session = this.sessions.get(sessionId) ?? { framed: -1 };
+    this.sessions.delete(sessionId);
+    if (this.sessions.size >= SESSIONS) {
+      const [oldest, forgotten] = this.sessions.entries().next().value!;
+      this.sessions.delete(oldest);
+      if (forgotten.turn && !forgotten.turn.ended) this.turnEnded(forgotten.turn);
     }
-    return assistant;
+    this.sessions.set(sessionId, session);
+    return session;
   }
 
-  private current(assistant: Assistant, record: SendRecord): boolean {
-    return record.turn === assistant.turn && record.ended === undefined;
+  /** A new turn on the session. One still running there ended without its end being seen. */
+  private open(session: Session, sessionId: string): Turn {
+    if (session.turn && !session.turn.ended) this.turnEnded(session.turn);
+    session.turn = { session: sessionId, seq: ++this.turns, conflicted: false, ended: false };
+    session.framed = -1;
+    return session.turn;
   }
 
-  private join(assistant: Assistant, record: SendRecord): void {
-    record.turn = assistant.turn;
-    record.joined = true;
-    assistant.framed = false;
+  private text(sessionId: string, known: Session | undefined): void {
+    if (!this.records.size) return;
+    const session = known ?? this.session(sessionId);
+    // Text with no running turn seen belongs to a turn whose start was missed.
+    const turn = session.turn && !session.turn.ended ? session.turn : this.open(session, sessionId);
+    let at: number | undefined;
+    for (const record of this.records) {
+      if (record.firstFrame !== undefined || record.lost || record.frames.has(turn) || this.ruledOut(record, turn)) continue;
+      if (turn.conflicted) { this.blind(record, turn); continue; }
+      if (record.frames.size >= SEND_TIMING_HELD) { this.lose(record); continue; }
+      record.frames.set(turn, at ??= this.now());
+      this.resolve(record);
+    }
+    session.framed = this.generation;
   }
 
-  private unbind(record: SendRecord): void {
-    record.turn = undefined;
-    record.joined = false;
-    record.firstFrame = record.firstLive = undefined;
+  /** Identified as a turn that is not this send's run. */
+  private ruledOut(record: SendRecord, turn: Turn): boolean {
+    if (turn.conflicted || turn.run === undefined) return false;
+    return turn.run === null || turn.botId !== record.botId || record.runId !== undefined && turn.run !== record.runId;
   }
 
-  private text(assistant: Assistant, at: number): void {
-    let framed = true;
-    for (const record of [...assistant.records]) {
-      if (!this.current(assistant, record) || record.firstFrame !== undefined) continue;
-      // A frame held from before this send arrived belongs to an earlier growth.
-      if (at < record.arrival) { framed = false; continue; }
+  private turnEnded(turn: Turn): void {
+    turn.ended = true;
+    for (const record of this.records) {
+      if (!record.frames.has(turn) || turn.run !== undefined && !turn.conflicted) continue;
+      this.blind(record, turn);
+      this.resolve(record);
+    }
+  }
+
+  private blind(record: SendRecord, turn: Turn): void {
+    record.frames.delete(turn);
+    if (!record.blind.has(turn.session)) record.blind.set(turn.session, turn.seq);
+  }
+
+  /** Takes the first text time of the send's own run, unless an unidentified turn before it may have been the run's. */
+  private resolve(record: SendRecord): void {
+    if (record.runId === undefined || record.firstFrame !== undefined || record.lost) return;
+    for (const [turn, at] of record.frames) {
+      if (this.ruledOut(record, turn)) { record.frames.delete(turn); continue; }
+      // A conflicted turn never holds an entry: it blinds its session instead.
+      if (turn.run !== record.runId) continue;
+      if ((record.blind.get(turn.session) ?? Infinity) < turn.seq) return this.lose(record);
       record.firstFrame = at;
-      if (record.admission && record.firstLive !== undefined) this.finish(record, "measured");
+      record.frames.clear();
+      return this.settle(record);
     }
-    assistant.framed = framed;
   }
 
-  private started(assistant: Assistant): void {
-    assistant.turn++;
-    assistant.running = true;
-    for (const record of [...assistant.records]) {
-      // A waiting send binds to the new turn, and so does one that joined a turn and has no answer yet:
-      // Hermes started a turn after it arrived, so the earlier turn is not the one its answer joins.
-      if (record.turn === undefined || record.joined && !record.admission) {
-        record.turn = assistant.turn;
-        record.joined = false;
-        record.firstFrame = record.firstLive = undefined;
-      } else if (record.ended === undefined) {
-        // Its turn's end was never reported. A newer turn replaced it.
-        if (record.admission) this.finish(record, "next-turn");
-        else record.ended = "next-turn";
-      }
-    }
-    assistant.framed = !assistant.records.some(record => this.current(assistant, record) && record.firstFrame === undefined);
+  private lose(record: SendRecord): void {
+    record.lost = true;
+    record.frames.clear();
+    if (record.admission) this.finish(record, "uncorrelated");
   }
 
-  private ended(assistant: Assistant): void {
-    assistant.running = false;
-    for (const record of [...assistant.records]) {
-      if (!this.current(assistant, record)) continue;
-      if (record.admission) this.finish(record, "turn");
-      // A send that joined a running turn and has no answer yet may start or steer the next turn instead.
-      else if (record.joined) this.unbind(record);
-      else record.ended = "turn";
-    }
-    assistant.framed = true;
+  private settle(record: SendRecord): void {
+    if (record.admission && record.firstFrame !== undefined && record.firstLive !== undefined) this.finish(record, "measured");
   }
 
-  private finish(record: SendRecord, ended: Ended): void {
-    const assistant = this.assistants.get(record.botId);
-    if (!assistant?.records.includes(record) || !record.admission) return;
-    assistant.records = assistant.records.filter(other => other !== record);
-    clearTimeout(record.admission.timer);
-    const { route, steered, phases: { arrival, hermesStart, admitted } } = record.admission;
+  private expire(record: SendRecord): void {
+    if (record.admission) return this.finish(record, "deadline");
+    this.release(record);
+    record.released = "deadline";
+  }
+
+  private release(record: SendRecord): void {
+    this.records.delete(record);
+    clearTimeout(record.timer);
+    record.frames.clear();
+    record.blind.clear();
+    record.lives.clear();
+  }
+
+  private finish(record: SendRecord, ended: SendEnded): void {
+    if (!this.records.has(record)) return;
+    this.release(record);
+    this.write(record, ended);
+  }
+
+  private write(record: SendRecord, ended: SendEnded): void {
+    const { route, steered, phases: { arrival, hermesStart, admitted } } = record.admission!;
     const since = (at: number | undefined) => at === undefined ? undefined : round(at - arrival);
-    const live = record.firstLive !== undefined;
     this.log.info({ sendTiming: {
       route, botId: record.botId, requestId: record.requestId, steered,
       prepareMs: since(hermesStart), admissionMs: since(admitted),
       firstFrameMs: since(record.firstFrame), firstLiveMs: since(record.firstLive), ended,
       ...(ended === "deadline" ? { gaveUpAfterMs: this.giveUpMs } : {}),
-    } }, live ? "Send timing" : ended === "deadline" ? "Send timing: no live event before the deadline" : "Send timing: no live event in its turn");
+    } }, messages[ended]);
   }
 }

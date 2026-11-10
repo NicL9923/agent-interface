@@ -497,6 +497,22 @@ export interface RuntimeStatus {
   retryAt?: string;
   lastConnectedAt?: string;
 }
+/**
+ * What a runtime reports so a send can be timed against its own Hermes run. Each call is synchronous and in
+ * the order the socket delivered what it reports.
+ */
+export interface TurnWatcher {
+  /** A session frame that starts a turn, streams text or reasoning, or ends one. Runs on every token, so it stays cheap. */
+  frame(sessionId: string, event: "start" | "text" | "end"): void;
+  /**
+   * A conversation read of this assistant found runId open on the session (undefined: no app run was open),
+   * and no turn started or ended there between the read's start and this call. running is Hermes's own flag.
+   */
+  run(sessionId: string, botId: string, runId: string | undefined, running: boolean): void;
+  /** The socket dropped, so frames may have been missed. Called before the runtime forgets its sessions. */
+  disconnected(): void;
+}
+
 export interface Runtime {
   setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
   /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */
@@ -536,13 +552,8 @@ export interface Runtime {
   /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
   inflight?(botId: string): Inflight | undefined;
-  /**
-   * Calls the listener with the assistant's ID when one of its turns starts, streams text or reasoning,
-   * or ends, so a send can be timed to its own turn's first live text. A frame from a session no
-   * assistant owned yet is reported once an open names its owner, with at, the performance.now() time
-   * it arrived. It runs on every token, so a listener must stay cheap. Unsubscribe with the returned function.
-   */
-  watchTurns?(listener: (botId: string, event: "start" | "text" | "end", at?: number) => void): () => void;
+  /** Reports the turn events a send is timed by, in frame order. Unsubscribe with the returned function. */
+  watchTurns?(watcher: TurnWatcher): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

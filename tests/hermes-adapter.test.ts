@@ -13,6 +13,7 @@ import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
 import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
+import { SendTimings } from '../src/server/send-timing.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
 
 const realFetch=globalThis.fetch;
@@ -354,9 +355,10 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(value.message.origin?.kind).toBe('scheduled');
     expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(opens);
   });
-  it('reports turn starts, text, reasoning and ends by assistant, and ignores other frames and sessions', async () => {
-    const turns = vi.fn(), changes = vi.fn();
-    const stop = runtime.watchTurns!(turns);
+  it('reports turn starts, text, reasoning and ends by session, and ignores other frames', async () => {
+    const frames: unknown[][] = [], changes = vi.fn();
+    const watcher = {frame: vi.fn((...call: unknown[]) => { frames.push(call); }), run: vi.fn(), disconnected: vi.fn()};
+    const stop = runtime.watchTurns!(watcher);
     runtime.watch!('shared', changes);
     await runtime.conversation('shared');
     const event=(type:string,session='live-one')=>sockets.at(-1)!.receive({method:'event',params:{session_id:session,type,payload:{text:'x'}}});
@@ -364,61 +366,64 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     // Other live frames are not turn events.
     event('status.update'); event('thinking.delta'); event('tool.start');
     event('message.complete');
-    expect(turns.mock.calls).toEqual([['shared','start',undefined],['shared','text',undefined],['shared','text',undefined],['shared','end',undefined]]);
-    // A listener that throws never stops frame processing.
-    turns.mockImplementation(() => { throw new Error('listener failed'); });
+    // A frame names no run or assistant, so a session nobody opened here is reported by its own ID.
+    event('message.delta', 'elsewhere');
+    expect(frames).toEqual([['live-one','start'],['live-one','text'],['live-one','text'],['live-one','end'],['elsewhere','text']]);
+    // A watcher that throws never stops frame processing.
+    watcher.frame.mockImplementation(() => { throw new Error('watcher failed'); });
     changes.mockClear();
     event('message.delta');
     expect(changes).toHaveBeenCalledWith('inflight');
     stop();
     event('message.delta');
-    expect(turns).toHaveBeenCalledTimes(5);
+    expect(watcher.frame).toHaveBeenCalledTimes(6);
   });
-  it('gives a text frame from a session no assistant owns yet only to the assistant whose open names it', async () => {
-    await runtime.status();
-    const heard: unknown[][] = [];
-    runtime.watchTurns!((...call) => { heard.push(call); });
-    deferredMethods.add('agent-interface.open');
-    // Two assistants open at once. Hermes attaches the socket to each session before it answers.
-    const first = runtime.conversation('shared'), second = runtime.conversation('other');
-    await vi.waitFor(() => expect(calls.filter(call => call.method === 'agent-interface.open')).toHaveLength(2));
-    const [sharedOpen, otherOpen] = calls.filter(call => call.method === 'agent-interface.open') as Record<string, any>[];
-    const frame = (type: string, text = 'only shared') => sockets[0].receive({method: 'event', params: {session_id: 'live-one', type, payload: {text}}});
-    const before = performance.now();
-    frame('message.start'); frame('message.delta');
-    const after = performance.now();
-    frame('message.delta', 'more');
-    // A turn start is a structural change, so each open asks again once answered. Each assistant keeps its own session.
-    deferredMethods.clear();
-    beforeSend = request => { if (request.method === 'agent-interface.open') snapshot.session_id = request.params.profile === 'other' ? 'live-two' : 'live-one'; };
-    sockets[0].receive({jsonrpc: '2.0', id: otherOpen.id, result: {...structuredClone(snapshot), session_id: 'live-two'}});
-    expect(heard).toEqual([]);
-    sockets[0].receive({jsonrpc: '2.0', id: sharedOpen.id, result: {...structuredClone(snapshot), session_id: 'live-one'}});
-    await Promise.all([first, second]);
-    // The owner hears the turn in order, with the time its first text frame arrived.
-    expect(heard).toEqual([['shared', 'start', undefined], ['shared', 'text', expect.any(Number)]]);
-    expect(heard[1][2]).toBeGreaterThanOrEqual(before);
-    expect(heard[1][2]).toBeLessThanOrEqual(after);
-    frame('message.complete');
-    expect(heard.at(-1)).toEqual(['shared', 'end', undefined]);
-  });
-  it('holds turn events for a bounded number of unowned sessions, keeping the newest', async () => {
-    await runtime.status();
-    const heard: unknown[][] = [];
-    runtime.watchTurns!((...call) => { heard.push(call); });
-    // Sixteen other clients' sessions stream after this one, so its held text is forgotten.
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'old'}}});
-    for (let index = 0; index < 16; index++)
-      sockets[0].receive({method: 'event', params: {session_id: `elsewhere-${index}`, type: 'message.delta', payload: {text: 'x'}}});
+  it('reports the run a fresh read finds open, and nothing from a read a turn started or ended during', async () => {
+    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn()};
+    runtime.watchTurns!(watcher);
+    Object.assign(snapshot, {app_run_id: 'run-one', info: {running: true}});
     await runtime.conversation('shared');
-    expect(heard).toEqual([]);
-    // The newest held session is still claimed when an open names it. Only its latest turn is kept:
-    // a turn that started after the held text drops that text's time.
-    sockets[0].receive({method: 'event', params: {session_id: 'elsewhere-15', type: 'message.start', payload: {}}});
-    snapshot.session_id = 'elsewhere-15';
+    expect(watcher.run.mock.calls).toEqual([['live-one', 'shared', 'run-one', true]]);
+    // A turn starts while Hermes is answering the read: the run it names may be the previous turn's.
+    deferredMethods.add('agent-interface.open');
+    snapshot.app_run_id = 'run-two';
+    const read = runtime.conversation('shared');
+    await vi.waitFor(() => expect(calls.filter(call => call.method === 'agent-interface.open')).toHaveLength(2));
+    const stale = calls.at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    deferredMethods.clear();
+    sockets[0].receive({jsonrpc: '2.0', id: stale.id, result: {...structuredClone(snapshot), app_run_id: 'run-one'}});
+    await read;
+    // The read is asked again and only the fresh answer reports.
+    expect(watcher.run.mock.calls.slice(1)).toEqual([['live-one', 'shared', 'run-two', true]]);
+    // A turn starts while the history of an older add-on's answer is still being read.
+    deferredMethods.add('session.history');
+    const {messages: _rows, ...withoutRows} = snapshot;
+    snapshot = {...withoutRows, app_run_id: 'run-three'};
+    hermesChanged();
+    const late = runtime.conversation('shared');
+    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe('session.history'));
+    const history = calls.at(-1) as Record<string, any>;
+    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    sockets[0].receive({jsonrpc: '2.0', id: history.id, result: {messages: []}});
+    await late;
+    expect(watcher.run.mock.calls.slice(2)).toEqual([]);
+    deferredMethods.clear();
+    snapshot.messages = [];
+    // A read that finds no app run says so.
+    Object.assign(snapshot, {app_run_id: undefined, info: {running: false}});
     hermesChanged();
     await runtime.conversation('shared');
-    expect(heard).toEqual([['shared', 'start', undefined]]);
+    expect(watcher.run.mock.calls.at(-1)).toEqual(['live-one', 'shared', undefined, false]);
+  });
+  it('tells turn watchers the socket dropped before it forgets the session owners', async () => {
+    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn(() => runtime.inflight!('shared'))};
+    runtime.watchTurns!(watcher);
+    await runtime.conversation('shared');
+    sockets[0].close();
+    expect(watcher.disconnected).toHaveBeenCalledTimes(1);
+    // Called first, while the runtime still holds the session it is about to forget.
+    expect(watcher.disconnected.mock.results[0].value).toBeDefined();
   });
   it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
     snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
@@ -2311,5 +2316,114 @@ describe('approval scopes, question shapes and the steering decision on the wire
     runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
     expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
     expect(JSON.parse(String((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
+  });
+});
+
+// Review round 2: each case reproduced a misattribution of the event-order model through this runtime.
+describe('send timing through the real runtime', () => {
+  type Line = Record<string, unknown>;
+  function attach() {
+    vi.useFakeTimers({toFake: ['performance']});
+    const lines: Line[] = [];
+    const log = {info: (fields: {sendTiming: Line}) => { lines.push(fields.sendTiming); }, warn: () => { throw new Error('warn'); }, error: () => { throw new Error('error'); }};
+    const timings = new SendTimings(log as never);
+    runtime.watchTurns!(timings);
+    const now = () => performance.now();
+    const start = now();
+    const at = (ms: number) => vi.advanceTimersByTime(start + ms - now());
+    const frame = (type: string) => sockets.at(-1)!.receive({method: 'event', params: {session_id: 'live-one', type, payload: {text: 'x'}}});
+    /** A conversation read, as an open chat makes after each structural change. */
+    const read = async (runId?: string, running = true) => {
+      snapshot.app_run_id = runId; snapshot.info = {running};
+      hermesChanged();
+      await runtime.conversation('shared');
+    };
+    /** The event stream writes the live reply, as conversation-routes.ts does. */
+    const written = () => { const value = runtime.inflight!('shared'); if (value) timings.written('shared', value.activity.runId); };
+    const admitted = (record: ReturnType<SendTimings['begin']>, runId: string, steered = false) =>
+      timings.admitted(record, steered ? 'steer' : 'messages', steered, {arrival: record.arrival, hermesStart: record.arrival, admitted: now()}, runId);
+    const timing = (requestId: string) => lines.find(line => line.requestId === requestId);
+    return {timings, now, at, frame, read, written, admitted, timing};
+  }
+
+  it('times two sends begun while idle each by its own run, not by the next turn to start', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const a = t.timings.begin('shared', 'A', t.now()), b = t.timings.begin('shared', 'B', t.now());
+    t.at(10); t.frame('message.start'); await t.read('A');
+    t.at(14); t.frame('message.delta');
+    t.at(17); t.written();
+    t.at(18); t.admitted(a, 'A');
+    t.at(30); t.frame('message.complete');
+    t.at(40); t.frame('message.start'); await t.read('B');
+    t.at(64); t.frame('message.delta');
+    t.at(67); t.written();
+    t.at(70); t.admitted(b, 'B');
+    expect(t.timing('A')).toMatchObject({firstFrameMs: 14, firstLiveMs: 17, ended: 'measured'});
+    expect(t.timing('B')).toMatchObject({firstFrameMs: 64, firstLiveMs: 67, ended: 'measured'});
+  });
+
+  it('never credits a routine turn that started before Hermes answered to the send', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const send = t.timings.begin('shared', 'mine', t.now());
+    // A routine's turn runs in the chat first. Hermes has no app run open for it.
+    t.at(10); t.frame('message.start'); await t.read(undefined);
+    t.at(20); t.frame('message.delta'); t.written();
+    t.at(30); t.frame('message.complete');
+    t.at(40); t.frame('message.start'); await t.read('mine');
+    t.at(50); t.admitted(send, 'mine');
+    t.at(60); t.frame('message.delta');
+    t.at(65); t.written();
+    expect(t.timing('mine')).toMatchObject({firstFrameMs: 60, firstLiveMs: 65, ended: 'measured'});
+  });
+
+  it('measures a steer Hermes queued by the first growth of its run after the send, past the turn that was running', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const first = t.timings.begin('shared', 'first', t.now());
+    t.at(10); t.frame('message.start'); await t.read('R');
+    t.at(12); t.frame('message.delta'); t.written();
+    t.admitted(first, 'R');
+    // A steer arrives while the reply runs. Hermes queues it: the running turn ends without growing.
+    t.at(50); const steer = t.timings.begin('shared', 'steer', t.now());
+    t.at(55); t.admitted(steer, 'R', true);
+    t.at(60); t.frame('message.complete');
+    // The queued guidance drains into the next turn of the same run.
+    t.at(70); t.frame('message.start'); await t.read('R');
+    t.at(90); t.frame('message.delta');
+    t.at(95); t.written();
+    expect(t.timing('steer')).toMatchObject({firstFrameMs: 40, firstLiveMs: 45, ended: 'measured'});
+  });
+
+  it('drops a measurement when the socket disconnects while it is open', async () => {
+    await runtime.conversation('shared');
+    const t = attach();
+    const send = t.timings.begin('shared', 'cut', t.now());
+    t.at(10); t.frame('message.start'); await t.read('R');
+    t.at(20); t.admitted(send, 'R');
+    // The socket drops before any text. Hermes ends that turn and starts another while nobody listens.
+    sockets.at(-1)!.close();
+    await runtime.reconnect!();
+    t.at(200); await t.read('R');
+    // The later turn streams, and its start was never seen.
+    t.at(220); t.frame('message.delta');
+    t.at(230); t.written();
+    expect(t.timing('cut')).toMatchObject({ended: 'disconnected', firstFrameMs: undefined, firstLiveMs: undefined});
+  });
+
+  it('measures a steer by the first growth after it arrived, while the session had no owner yet', async () => {
+    await runtime.status();
+    const t = attach();
+    // An unowned session's turn streams before any send.
+    t.at(20); t.frame('message.start'); t.frame('message.delta');
+    t.at(30); const steer = t.timings.begin('shared', 'steer', t.now());
+    t.at(40); t.frame('message.delta');
+    // The open names the owner, then Hermes answers the steer.
+    t.at(45); await t.read('R');
+    t.at(50); t.admitted(steer, 'R', true);
+    t.at(60); t.written();
+    t.at(70); t.frame('message.complete');
+    expect(t.timing('steer')).toMatchObject({firstFrameMs: 10, firstLiveMs: 30, ended: 'measured'});
   });
 });
