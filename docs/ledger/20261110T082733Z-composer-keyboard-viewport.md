@@ -364,3 +364,33 @@ report the explanation covered and are not required to show it.
 - `npm run typecheck` and `npm run lint` passed. `npm test`: 183 files, 3052 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 20 passed in Chromium.
 - Safari, Firefox and a physical phone: not run for this fix.
+
+## Review round 4, narrow, after #311 merged
+
+GPT-6.1 Sol reviewed `071d859` on `main` at `d090194`: ready after one fix. It cleared the original reproduction at
+375 by 667 with a 363 px frame, the notes' height going back to `0px` when they disappear, a room change, a room
+that is gone, the effect's dependency on `gone`, and found no `ResizeObserver` error or continuing layout write.
+
+- P2: the tool's blanket exemption under 300 px hid a frame that can show both. At 932 by 430 with a 250 px frame
+  the explanation spanned 106 to 172 and the composer began at 138.5, covering it, and the tool passed only because
+  the frame was under 300 px.
+- Fix, by the orchestrator, as the reviewer prescribed: the group panel's least height includes the notes'
+  measured height, so the header gives way before the composer covers the explanation. The tool gained the 250 px
+  frame, and requires the explanation uncovered wherever the frame is at least the panel's least height, read from
+  the page, in place of the 300 px limit. No reviewer has read this fix.
+- Limit, now measured: a frame shorter than the panel's least height, 247 px at 932 by 430 with this explanation,
+  cannot hold the explanation and a one-line composer together. At 190, 150 and 120 px the explanation is cut off
+  above the frame with the header until the keyboard closes. The retry button stays whole.
+
+### Red proof
+
+With the tool's new frame and new rule and without the CSS change: 86 of 88, the 250 px frame failing with
+"explanation at 106-172 covered", the reviewer's numbers, and the 190 px frame failing against a least height of
+168. With the CSS change: 88 of 88, the 250 px frame's explanation at 27 to 93, the reviewer's numbers for its own
+trial of this fix.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed. `npm test`: 184 files, 3077 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 20 passed in Chromium.
+- Safari, Firefox and a physical phone: not run.
