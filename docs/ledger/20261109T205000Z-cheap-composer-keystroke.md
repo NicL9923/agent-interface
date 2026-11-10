@@ -129,3 +129,18 @@ No Safari or Firefox. The fallback paths, a browser without `field-sizing` or wi
 `OffscreenCanvas`, ran only in jsdom. The character probe ran only in Chromium with the app's font.
 `origin/main` was not rebuilt for the tab case; its outcome is the reviewer's, and it follows from
 main measuring with the same span.
+
+## Second review round
+
+GPT-6.1 Sol rechecked `aa108c0b..fd42a768` and found one more character the canvas measures
+wrong. In Chromium with the app's CSS, `Name\uFFFCQuantity` measured 102.27 px on canvas and
+118.27 px in the span and the field, so at a 120 px slot the field stayed inline and wrapped.
+U+FFFC, the object replacement character, now joins tab, vertical tab and form feed in
+`canvasMismeasures` and is measured by the span.
+
+| Break | Test | Result |
+| --- | --- | --- |
+| U+FFFC left out of `canvasMismeasures` (the head before this fix) | composer-layout "with an object replacement character in the span" | failed, then passed with the fix |
+
+The reviewer accepted the render test as written. It noted that React's `Profiler` inside
+`Conversation` is a supported alternative; switching was left optional and was not done.

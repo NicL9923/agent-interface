@@ -38,7 +38,9 @@ describe("textWidth", () => {
     expect(measure.textContent).toBe("");
   });
   // Chromium, 16px app font: a tabbed row measured 185.85px on canvas and 247.17px in the span and field.
-  it.each([["a tab", "Name\tQuantity\tPrice\tTotal"], ["a vertical tab", "Name\vTotal"], ["a form feed", "Name\fTotal"]])(
+  it.each([["a tab", "Name\tQuantity\tPrice\tTotal"], ["a vertical tab", "Name\vTotal"], ["a form feed", "Name\fTotal"],
+    // Chromium: 102.27px on canvas, 118.27px in the span and field.
+    ["an object replacement character", "Name\uFFFCQuantity"]])(
     "measures text with %s in the span, as the field draws it", (_, text) => {
       const measure = span();
       expect(textWidth(text, slot, measure)).toBe(spanWidth);
