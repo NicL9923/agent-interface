@@ -69,6 +69,8 @@ checked at the qualified `b9cb268` and `d23cc6b`. None is necessarily the produc
 - The decorated-history cache no longer turns off for unbound receipts: a read binds only from the rows and the
   journal, so a later read of the same rows and journal binds nothing new.
 - `docs/HermesCapabilityMatrix.md` records the rule, its native evidence and the unbound cases.
+- The inline guidance comment no longer lists image recovery among what it leaves alone. After that comment-only
+  change, `tests/hermes_turn_binding_test.py` and `npm run lint:py` ran again and passed.
 
 ## Decisions in the second round
 
