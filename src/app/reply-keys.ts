@@ -24,31 +24,34 @@ export const isLiveRow = (message: Message) => message.id.endsWith("-inflight");
 /**
  * The key each of a turn's rows renders under, and the record to keep once they commit. A row's key
  * comes from its own identity, never its position: a saved row's is its ID, and the live row's is
- * `live:N`, new for each live reply.
+ * `live:N`, new for each live reply. The live row's node is kept when its saved copy can take its
+ * key, and the rule never has to choose between two rows for it:
  *
- * A saved reply takes the live row's key only when the client sees the hand-off happen, in one update:
- * the live row it last showed is gone, or now shows text that does not continue it, and exactly one
- * new row appeared, a saved assistant row whose text continues the live row's. Anything else, such as
- * a progress line saved with the reply, or a reply saved under different text, is not guessed at: the
- * saved reply renders under its own ID, in a new node, as it did before rows were kept.
+ * 1. A progress line, a row marked interim, never takes a live key. It is keyed by its own ID.
+ * 2. Whenever an update adds a saved assistant row to the turn, the live reply that follows it, if
+ *    there is one, is a new reply and gets a new live key, whatever its text. So does a live reply
+ *    whose text no longer continues what the live row showed, and the live row's end.
+ * 3. The saved row takes the old live key only when it is the one new row, a saved assistant row
+ *    that is not a progress line, and its text continues the old live text.
+ * 4. In every other case each row is keyed by its own identity and built again, as before rows were
+ *    kept.
  */
 export function replyKeys(record: ReplyKeyRecord, rows: Message[]): { key(message: Message): string; record: ReplyKeyRecord } {
   const ids = new Set(rows.map(message => message.id)), shown = new Set(record.shown);
   const handed = new Map([...record.handed].filter(([id]) => ids.has(id)));
-  const live = rows.find(isLiveRow);
+  const added = rows.filter(message => !shown.has(message.id));
+  const live = rows.find(isLiveRow), last = record.live;
   let lives = record.lives;
-  const last = record.live;
-  if (last && !(live && live.text.startsWith(last.text))) {
-    const added = rows.filter(message => !shown.has(message.id));
+  if (last && (added.some(message => message.role === "assistant" && !isLiveRow(message)) || !live?.text.startsWith(last.text))) {
     const [only] = added;
-    if (added.length === 1 && only.role === "assistant" && !isLiveRow(only) && only.text.trim().startsWith(last.text.trim()))
+    if (added.length === 1 && only.role === "assistant" && !isLiveRow(only) && !only.interim && only.text.trim().startsWith(last.text.trim()))
       handed.set(only.id, last.key);
     // Handed on or gone, that key has shown its message.
     lives++;
   }
   const liveKey = `live:${lives}`;
   return {
-    key: message => isLiveRow(message) ? liveKey : handed.get(message.id) ?? message.id,
+    key: message => message.interim ? message.id : isLiveRow(message) ? liveKey : handed.get(message.id) ?? message.id,
     record: { shown: [...ids], live: live && { key: liveKey, text: live.text }, handed, lives },
   };
 }

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { StrictMode, act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
@@ -79,9 +79,10 @@ beforeEach(() => {
 afterEach(() => { expect(unexpected).toEqual([]); });
 
 const stream = () => [...FakeEventSource.streams].find(item => item.url.startsWith("/api/bots/home/events"))!;
-async function open() {
+/** Opens the chat, under StrictMode as the app's entry renders it when `strict`, so renders and effects run twice. */
+async function open(strict = false) {
   history.replaceState(null, "", "/?bot=home");
-  await act(async () => mount.root.render(createElement(App)));
+  await act(async () => mount.root.render(strict ? createElement(StrictMode, null, createElement(App)) : createElement(App)));
   await advance(0);
   await act(async () => stream().connect());
   await advance(0);
@@ -288,6 +289,43 @@ describe("a live reply's row when it is saved", () => {
     expect(row("s1-inflight")).not.toBe(segment);
     expect(replyText("s1-inflight")).toBe("The north gate is latched.");
     expect(replyText("m2")).toBe("Checking the gate log.");
+  });
+
+  it("hands the live node and its selection to the saved reply, and starts a new live reply that begins the same way in a new node", async () => {
+    await open(true);
+    await send("inflight", live("Here is the result.\n\n"));
+    const before = row("s1-inflight")!;
+    select(before, 0, 4);
+    expect(document.getSelection()!.toString()).toBe("Here");
+    // One update saves the reply, after a tool call, and starts the next live reply with the same opening.
+    const update = () => turn([saved("m2", "Here is the result.\n\nThe north gate is latched."), toolRow("completed")], "Here is the result.\n\nThe east gate is open.");
+    await update();
+    expect(row("m2")).toBe(before);
+    expect(document.getSelection()!.toString()).toBe("Here");
+    const next = row("s1-inflight")!;
+    expect(next).not.toBe(before);
+    // The same update again moves nothing.
+    await update();
+    expect(row("m2")).toBe(before);
+    expect(row("s1-inflight")).toBe(next);
+    expect(replyText("m2")).toBe("Here is the result.The north gate is latched.");
+    await advance(CATCH_UP_MS + 100);
+    expect(replyText("s1-inflight")).toBe("Here is the result.The east gate is open.");
+  });
+
+  it("never hands the live node to a progress line, even one that continues the live text", async () => {
+    await open();
+    await send("inflight", live("Gate report.\n\n"));
+    const before = row("s1-inflight")!;
+    select(before, 0, 4);
+    expect(document.getSelection()!.toString()).toBe("Gate");
+    await turn([{ ...saved("p1", "Gate report.\n\nChecking the east gate."), interim: true }], "The north gate is latched.");
+    expect(row("p1")).not.toBe(before);
+    expect(before.isConnected).toBe(false);
+    // The selection went with the node, rather than moving to the progress line's text.
+    expect(document.getSelection()!.toString()).toBe("");
+    expect(replyText("p1")).toBe("Gate report.\nChecking the east gate.");
+    expect(replyText("s1-inflight")).toBe("The north gate is latched.");
   });
 
   it("streams a retried turn's reply in a new node and hands it to that reply's saved copy", async () => {

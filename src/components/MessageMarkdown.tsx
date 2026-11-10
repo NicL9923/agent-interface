@@ -277,6 +277,17 @@ export function streamingBlocks(text: string): string[] | null {
 const parsed = (text: string) => fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
 const shape = (nodes: unknown[]) => JSON.stringify(nodes, (key, value: unknown) => key === "position" ? undefined : value);
 /**
+ * The longest saved reply whose blocks are checked against the whole parse (`blocksAgree`). The check
+ * runs on the main thread the moment a reply is saved and grows with the reply. In a production
+ * build in Chromium on NicolasLaptop, a reply of prose paragraphs took 22 to 24 ms at 19,949
+ * characters, 28 to 29 at 24,829, 48 at 49,819 and 91 to 121 at 99,799; a reply of short
+ * paragraphs, 30 to 31 ms at 19,054, 38 to 40 at 24,990, 41 to 66 at 29,918, 61 to 96 at 48,734 and
+ * 125 to 130 at 98,014. Parsing the saved reply whole and rendering it took 13 to 22 ms near 20,000
+ * characters, 33 to 44 near 50,000 and 46 to 66 near 100,000. At this length the check stays under
+ * about 40 ms in both shapes. A longer reply parses whole, and a selection in it is lost at the save.
+ */
+export const MAX_CHECKED_REPLY = 25_000;
+/**
  * Whether `blocks`, each parsed alone, make the same document as `text` parsed whole, as React
  * Markdown parses them. It parses the reply twice without rendering it, so it stays cheap enough to
  * run once when a streamed reply is saved: see ReplyMarkdown.
@@ -315,16 +326,18 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = tr
  * Once saved, the reply shows its raw text at once, with no pacing or hold-back. A row that
  * streamed keeps rendering in the same blocks, so React keeps its nodes, and any selection or
  * copy state in them, when those blocks parse to the same document as the whole reply
- * (`blocksAgree`). Otherwise it parses whole, in the same container: a saved reply never shows a
- * gap in the splitter. A reply that was never live renders as MessageMarkdown.
+ * (`blocksAgree`) and the reply is short enough to check (`MAX_CHECKED_REPLY`). Otherwise it parses
+ * whole, in the same container: a saved reply never shows a gap in the splitter. A reply that was never live renders as MessageMarkdown.
  */
 export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: MessageMarkdownProps & { live: boolean }) {
   const [streamed, setStreamed] = useState(live);
   if (live && !streamed) setStreamed(true);
   const text = useRevealed(props.text, live);
-  // Checked once per saved text. A reply the splitter parses whole needs no check.
+  // Checked once per saved text. A reply the splitter parses whole needs no check, and one longer
+  // than MAX_CHECKED_REPLY parses whole without it.
   const whole = useMemo(() => {
     if (live || !streamed) return false;
+    if (text.length > MAX_CHECKED_REPLY) return true;
     const blocks = streamingBlocks(text);
     return !!blocks && !blocksAgree(text, blocks);
   }, [live, streamed, text]);

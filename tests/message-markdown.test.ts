@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MessageMarkdown, ReplyMarkdown, StreamingMarkdown, blocksAgree, sameBlock, streamingBlocks } from "../src/components/MessageMarkdown";
+import { MAX_CHECKED_REPLY, MessageMarkdown, ReplyMarkdown, StreamingMarkdown, blocksAgree, sameBlock, streamingBlocks } from "../src/components/MessageMarkdown";
 import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
@@ -515,6 +515,24 @@ describe("a streamed reply once saved", () => {
     }
     expect(diverged).toEqual([]);
   }, 60_000);
+
+  // The check parses the reply twice, which costs more than a person should wait at the save past
+  // MAX_CHECKED_REPLY characters, so a longer reply parses whole, as a rebuilt row does.
+  it.each([
+    ["at the longest checked length keeps its nodes", MAX_CHECKED_REPLY, true],
+    ["one character longer parses whole", MAX_CHECKED_REPLY + 1, false],
+  ])("a saved reply %s, and shows as it does opened fresh", async (_case, length, kept) => {
+    const paragraph = "The north gate is **latched** and the east gate is open.\n\n";
+    const body = paragraph.repeat(Math.floor((length - 20) / paragraph.length));
+    const text = body + "Done".padEnd(length - body.length, ".");
+    expect(text.length).toBe(length);
+    await act(async () => root.render(createElement("div")));
+    await renderAs(createElement(ReplyMarkdown, { text, live: true }));
+    const first = container.querySelector("p");
+    const saved = await renderAs(createElement(ReplyMarkdown, { text, live: false }));
+    expect(container.querySelector("p") === first).toBe(kept);
+    expect(saved).toBe(await openedFresh(text));
+  }, 30_000);
 
   it("finds where blocks and the whole parse disagree, so a saved reply parses whole there", () => {
     expect(blocksAgree("First\n\u00a0\nSecond", ["First", "Second"])).toBe(false);
