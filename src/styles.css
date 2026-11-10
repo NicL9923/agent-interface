@@ -24,6 +24,13 @@
   --user: #e7eee4;
   color-scheme: light;
 }
+/* A page leaving for the back-forward cache shows nothing of its account if it is shown again before
+   its script runs. Visibility keeps layout and scroll; `*` reaches dialogs and anything set visible.
+   See the cover in src/app/account-epoch.ts. */
+:root[data-account-covered],
+:root[data-account-covered] * {
+  visibility: hidden !important;
+}
 :root[data-theme="dark"] {
   --surface: #1b211e;
   --rail: #151c18;

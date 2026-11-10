@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
+import { assistants, chooseDark, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -91,17 +91,43 @@ test.describe("a returning member's load", () => {
   // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
   test.use({ serviceWorkers: "block" });
 
+  test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page }) => {
+    await signIn(page);
+    await chooseDark(page);
+    // The theme as the app's first frame paints: a MutationObserver runs before the browser paints, after
+    // React's layout effects and before its other effects.
+    await page.addInitScript(() => {
+      new MutationObserver((_changes, observer) => {
+        if (!document.getElementById("root")?.firstElementChild) return;
+        (window as unknown as { themeAtFirstDraw?: string }).themeAtFirstDraw = document.documentElement.dataset.theme;
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    let themeAtBoot: string | undefined;
+    // While the bundle is on its way, another tab of this browser signs the member out and leaves what its sign-out leaves.
+    await page.route(/\/assets\/index-[^/]+\.js$/, async route => {
+      themeAtBoot = await page.evaluate(async () => {
+        const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string };
+        await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken }, body: "{}" });
+        localStorage.removeItem("agent-interface:theme");
+        localStorage.removeItem("agent-interface:sign-in-hint");
+        localStorage.setItem("agent-interface:auth-epoch", JSON.stringify({ id: "elsewhere", at: Date.now(), signedOut: true }));
+        return document.documentElement.dataset.theme;
+      });
+      await route.continue();
+    });
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+    // boot.js applied the dark theme, rightly at that moment; nothing of it reaches the app's first frame.
+    expect(themeAtBoot).toBe("dark");
+    expect(await page.evaluate(() => (window as unknown as { themeAtFirstDraw?: string }).themeAtFirstDraw)).toBe("system");
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("system");
+  });
+
   test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page }) => {
     await signIn(page);
     // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
-    const saved = await page.evaluate(async () => {
-      const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string; preferences: Record<string, unknown> };
-      return (await fetch("/api/preferences", { method: "PATCH", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken },
-        body: JSON.stringify({ ...boot.preferences, theme: "dark" }) })).status;
-    });
-    expect(saved).toBe(200);
-    await page.reload();
-    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+    await chooseDark(page);
 
     // The bundle is held back, so a bootstrap that waits for the app's code comes after it.
     const order: string[] = [];
@@ -271,6 +297,8 @@ test.describe("after a deploy retires a lazy screen's file", () => {
 // old shell at most once: from the next load on, the old worker opens the network's shell, as it would
 // with no cached copy, until the new release takes over.
 const releaseMark = (page: Page) => page.locator('meta[name="release"]');
+// The releases' caches. The worker also keeps which account may see notifications, in a cache every release keeps.
+const releaseCaches = (page: Page) => page.evaluate(async () => (await globalThis.caches.keys()).filter(key => key.startsWith("agent-interface-")));
 const shellNoted = (page: Page) => page.evaluate(async () => {
   for (const key of await caches.keys()) if (await (await caches.open(key)).match("/.shell-outdated")) return key;
   return null;
@@ -280,7 +308,7 @@ test("after a deploy, the next load opens the new shell, and the new release is 
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
-  const caches = () => page.evaluate(() => globalThis.caches.keys());
+  const caches = () => releaseCaches(page);
   const [current] = await caches();
   expect(current).toMatch(/^agent-interface-[0-9a-f]{16}$/);
 
@@ -310,7 +338,7 @@ test("a new release whose worker cannot install still reaches the person on thei
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
-  const [current] = await page.evaluate(() => globalThis.caches.keys());
+  const [current] = await releaseCaches(page);
 
   await deployNextRelease({ installs: false });
   await page.reload();
@@ -319,7 +347,7 @@ test("a new release whose worker cannot install still reaches the person on thei
   await expect(releaseMark(page)).toHaveCount(1);
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   // The old worker still serves, and nothing offers a release that never installed.
-  expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
+  expect(await releaseCaches(page)).toEqual([current]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
 

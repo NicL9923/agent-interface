@@ -51,3 +51,14 @@ export async function signIn(page: Page) {
 }
 export const assistants = (page: Page) => page.getByRole("region", { name: "Your assistants" });
 export const conversation = (page: Page) => page.getByRole("region", { name: "Conversation" });
+/** Saves the dark theme for the signed-in member, and reloads so this device keeps it for boot.js. */
+export async function chooseDark(page: Page) {
+  const saved = await page.evaluate(async () => {
+    const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string; preferences: Record<string, unknown> };
+    return (await fetch("/api/preferences", { method: "PATCH", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken },
+      body: JSON.stringify({ ...boot.preferences, theme: "dark" }) })).status;
+  });
+  expect(saved).toBe(200);
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+}

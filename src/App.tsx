@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { api } from "./client-api";
@@ -49,7 +49,7 @@ import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
 import { prefetchLinkedChat } from "./app/linked-chat";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
-import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
+import { accountGeneration, accountStart, checkHintExpiry, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
 import { signOutHere, signOutOf } from "./app/account-change";
 
 /**
@@ -70,12 +70,20 @@ export function App() {
   useEffect(() => {
     if (!pending) return;
     const start = accountStart();
-    // The last account's theme goes with it; the saved one stays while the hint still names its account.
-    document.documentElement.dataset.theme = savedTheme() ?? "system";
-    // An address that named the last account's chat or panel opens nothing of it for the next.
-    if ("start" in start && start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+    // An address that named the last account's chat, panel, room or message opens nothing of it for the next.
+    if ("start" in start && start.leftAccount && (location.search || location.hash || location.pathname !== "/")) history.replaceState(null, "", "/");
     setShown({ changes, start, generation: accountGeneration() });
   }, [pending, changes]);
+  // Each generation's first draw, before it paints, shows the theme this device saved only while the
+  // sign-in hint still names that theme's account and no other tab's sign-in or sign-out is under way,
+  // which may bring another account; otherwise the system's. public/boot.js applied it by the same rule,
+  // but a change can finish after boot.js ran and before this first draw, as after it in another tab.
+  // Bootstrap's own answer replaces it in AccountApp.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = "wait" in shown.start ? "system" : savedTheme() ?? "system";
+  }, [shown]);
+  // A page covered for the back-forward cache shows again once nothing of an ended generation is drawn.
+  useLayoutEffect(uncoverEnded, [pending, shown]);
   const { start, generation } = shown;
   const wait = "wait" in start ? start.wait : undefined;
   useEffect(() => {
@@ -228,6 +236,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     document.documentElement.dataset.theme = userId ? theme : "system";
     if (userId) rememberTheme(userId, theme);
   }, [theme, userId, session.auth]);
+  // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
+  useEffect(() => () => { document.documentElement.dataset.theme = "system"; }, []);
   const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");
@@ -488,7 +498,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           <p>{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
           {appUnavailable && <button onClick={refreshSession}>Try again</button>}
           {/* Account is disabled until the app answers, so this is the way out for someone else at this browser. */}
-          {appUnavailable && <button onClick={() => signOutHere(earlyHome.user.id)}>Sign out of this device</button>}
+          {/* A tab that has not yet seen another tab's change is refused; that change draws this tab again. */}
+          {appUnavailable && <button onClick={() => void signOutHere(earlyHome.user.id).catch(() => {})}>Sign out of this device</button>}
         </main>
       </div>
     );

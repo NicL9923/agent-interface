@@ -1012,8 +1012,16 @@ priority 5, which iOS applies even while the app is closed.
 ### Web Push
 
 Web Push payloads carry `title`, `body`, `url`, `tag`, `kind`, `botId`, an
-approval's `approvalId`, and `badge` as above. The service worker sets the app badge
-from `badge`, or clears it at 0. A lone approval also carries `declineToken`, a
+approval's `approvalId`, `badge` as above, and `account`, the same marker of the
+recipient's account that APNs payloads carry. The service worker sets the app badge
+from `badge`, or clears it at 0. Its pages tell it which account is signed in, and it
+shows a push only for that account: a push that names another account, or any push
+while signed out or while a sign-in or sign-out is under way, shows nothing and leaves
+the badge alone. Apart from the seconds a sign-in or sign-out is under way, that is
+a push to a subscription the browser already ended, so a browser that revokes a
+subscription after silent pushes revokes only that one. A
+push without `account`, from an older server, shows as before while someone is signed
+in, and a worker from before this field ignores it. A lone approval also carries `declineToken`, a
 single-use token valid for an hour that denies that approval for that person.
 Where the browser supports notification actions, the service worker offers Review,
 which opens the chat as a tap does, and Decline, which calls
@@ -1021,7 +1029,9 @@ which opens the chat as a tap does, and Decline, which calls
 The request still needs the app's Origin. The server answers 401 for a used,
 expired or unknown token, or an assistant the person can no longer see, and 409
 when the approval is no longer pending. A failed Decline shows a notification that
-opens the chat. APNs payloads never carry the token.
+opens the chat. APNs payloads never carry the token. On a notification for an
+account no longer signed in, Decline sends nothing and a tap opens the app without
+that account's chat.
 
 ### Chat presence
 
