@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hermes_compaction_test import DELAY, Agent, Native
-from hermes_extension_journal_test import PooledHermes, Replies, saved
+from hermes_extension_journal_test import PooledHermes, Replies, extension, saved
 
 ADMISSION = ("image.attach", "prompt.submit", "session.steer")
 # Every native method these tests let the add-on call: admission, and the roster and activation an open makes.
@@ -158,6 +158,21 @@ def within(call, seconds=2):
     if thread.is_alive():
         raise AssertionError("Blocked: " + getattr(call, "__name__", repr(call)))
     return result[0] if result else None
+
+
+def failing_spawn(count=1):
+    """The next ``count`` send-lane worker threads fail to start, as at a process's thread limit.
+
+    The executor has already queued the work item when its thread fails to start, so that item runs on
+    whichever send worker starts next.
+    """
+    start, left = threading.Thread.start, [count]
+    def spawn(thread):
+        if thread.name.startswith("agent-interface-send") and left[0]:
+            left[0] -= 1
+            raise RuntimeError("can't start new thread")
+        return start(thread)
+    return patch.object(threading.Thread, "start", spawn)
 
 
 def tool_frames(hermes, sid, tool_id):
@@ -368,6 +383,36 @@ class SendLaneTests(unittest.TestCase):
             self.assertTrue(replies.wait("next"))
             self.assertEqual(replies.answers["next"]["result"]["status"], "accepted")
             self.assertEqual(hermes.settled(), 0)
+
+
+class LaneSchedulingTests(unittest.TestCase):
+    def test_a_send_whose_worker_cannot_start_is_refused_once_and_never_runs_later(self):
+        # The next send goes to the same assistant's lane, or to another assistant's, whose worker starts.
+        for profile in ("slow", "fast"):
+            with self.subTest(next_send=profile), LaneHermes() as hermes:
+                replies = Replies()
+                with failing_spawn(), self.assertRaisesRegex(RuntimeError, "can't start new thread"):
+                    hermes.send("first", "slow", replies)
+                # Native dispatch answers a raise once, as an internal error. The send holds nothing.
+                self.assertEqual(hermes.active[0], 0)
+                self.assertIsNone(hermes.send("second", profile, replies))
+                self.assertTrue(replies.wait("second"), replies.answers)
+                self.assertEqual(replies.answers["second"]["result"]["status"], "accepted")
+                self.assertEqual(hermes.settled(), 0)
+                # The first send's queued work item ran on the worker that started, and did nothing.
+                self.assertEqual([(method, text) for method, profile, text, _ in hermes.calls], [("prompt.submit", "Message second")])
+                self.assertNotIn("first", replies.answers)
+                self.assertEqual(hermes.active[0], 0)
+
+    def test_a_reservation_released_twice_frees_one_admission_and_says_so(self):
+        with LaneHermes() as hermes:
+            self.assertTrue(hermes.retirement.acquire())
+            reservation = extension.Reservation(hermes.retirement)
+            reservation.release()
+            with self.assertLogs(level=logging.ERROR) as logs:
+                reservation.release()
+            self.assertEqual(hermes.active[0], 0)
+            self.assertIn("released twice", logs.output[0])
 
 
 class FakeTests(unittest.TestCase):
