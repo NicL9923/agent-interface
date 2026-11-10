@@ -69,12 +69,15 @@ class TurnHermes(FakeHermes):
     Hermes after the add-on found the session idle. ``submit_races`` run only inside the add-on's next
     prompt.submit, so after its image.attach. ``start_as`` changes how the next turn prompt.submit starts
     is run: its session, text, display kind or author. ``snapshots`` lists each admitted turn's text and the
-    images it took, in admission order; ``snapshotted`` waits for one.
+    images it took, in admission order; ``snapshotted`` waits for one. With ``voice`` on, a typed "stop" ends the
+    voice chat and admits nothing. ``reply_as`` replaces the answer to the next prompt.submit that starts a turn, and
+    ``hold_admission`` is an Event that turn's thread waits on before Hermes admits it and takes the images.
     """
     def __init__(self, busy="queued"):
         super().__init__([])
         self.busy, self.races, self.submit_races, self.turns, self.rows, self.calls, self.start_as = busy, [], [], [], [], [], {}
         self.snapshots, self.changed = [], threading.Condition()
+        self.voice, self.reply_as, self.hold_admission = False, None, None
         server = self.server
         server.handle_request = self.handle
         server._run_prompt_submit = self.run_prompt_submit
@@ -160,6 +163,12 @@ class TurnHermes(FakeHermes):
     def submit(self, rid, params):
         """prompt.submit, for the add-on and for another client alike."""
         text, session = params["text"], self.session
+        # A stop phrase typed while the session's voice mode is on ends the voice chat before Hermes reads the
+        # session, so nothing is admitted and its attached images stay staged (methods_prompt.py:835-836 at
+        # ed1afb0, :580 at b9cb268 and d23cc6b).
+        if self.voice and text.strip().lower() == "stop":
+            self.voice = False
+            return self.server._ok(rid, {"voice_stopped": True})
         with session["history_lock"]:
             if session["running"]:
                 images, session["attached_images"] = session["attached_images"], []
@@ -174,8 +183,14 @@ class TurnHermes(FakeHermes):
                 session["_submit_user_row"] = staged
         started, self.start_as = {"sid": "sid", "text": text, **self.start_as}, {}
         sid, text = started.pop("sid"), started.pop("text")
-        threading.Thread(target=lambda: self.server._run_prompt_submit(rid, sid, session, text, **started), daemon=True).start()
-        return self.server._ok(rid, {"status": "streaming", **({"user_row_id": staged["_row_id"]} if staged else {})})
+        hold, self.hold_admission = self.hold_admission, None
+        def admit():
+            if hold is not None and not hold.wait(5):
+                raise AssertionError("The test never let Hermes admit " + repr(text))
+            self.server._run_prompt_submit(rid, sid, session, text, **started)
+        threading.Thread(target=admit, daemon=True).start()
+        reply, self.reply_as = self.reply_as, None
+        return self.server._ok(rid, reply if reply is not None else {"status": "streaming", **({"user_row_id": staged["_row_id"]} if staged else {})})
 
     def other_client(self, text, rid=7):
         """Another client's prompt.submit. Its turn starts on its own thread, as Hermes's does."""
@@ -693,6 +708,31 @@ class TurnBindingTests(unittest.TestCase):
                     hermes.finish("Make it Tuesday")
                 self.assertIsNone(hermes.bound("alice-1"))
                 self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+
+    def test_a_typed_stop_takes_back_its_photo_and_leaves_one_staged_before_it(self):
+        # Hermes answers the stop before it reads the session, so the photo staged for it would wait for the next turn.
+        for before in ([], ["/uploads/desktop/chart.png"]):
+            with self.subTest(staged_before=before), TurnHermes() as hermes:
+                hermes.session["attached_images"].extend(before)
+                hermes.voice = True
+                stop = hermes.send("alice-stop", "stop", attachments=[PHOTO])
+                self.assertEqual((stop["status"], stop["turn"]), ("accepted", "none"))
+                self.assertEqual(hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='alice-stop'").fetchone(), (1,))
+                self.assertEqual(hermes.session["attached_images"], before)
+                # Her next send is text only; its turn takes what was staged before the stop, never the stop's photo.
+                self.assertEqual(hermes.send("alice-time", "What time is it?")["status"], "accepted")
+                self.assertEqual(hermes.finish("What time is it?").images, before)
+
+    def test_an_answer_the_add_on_does_not_know_leaves_its_photo_for_the_turn_it_may_have_started(self):
+        with TurnHermes() as hermes:
+            # Hermes started the turn and answered in a shape this add-on does not know. Its turn's thread takes the
+            # session's images after the answer, as native's does (methods_prompt.py:965-973 at ed1afb0, :695-702 at
+            # b9cb268 and d23cc6b).
+            hermes.reply_as, hermes.hold_admission = {"status": "started"}, threading.Event()
+            admission = hermes.hold_admission
+            self.assertEqual(hermes.send("alice-1", "Look", attachments=[PHOTO])["turn"], "unknown")
+            admission.set()
+            self.assertEqual(hermes.finish("Look").images, [PHOTO["path"]])
 
     def test_unbound_sends_and_steers_still_let_opens_reuse_decorated_history(self):
         with StoredRows(turns(2)) as hermes:

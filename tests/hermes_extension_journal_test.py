@@ -848,6 +848,18 @@ class AdmissionTurnTests(unittest.TestCase):
             self.assertEqual((following["status"], following["runId"]), ("accepted", "next"))
             self.assertNotIn("turn", following)
 
+    def test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            answer, _, _ = self.submit(hermes, "unknown", "accepted")
+            self.assertEqual((answer["status"], answer["turn"]), ("accepted", "unknown"))
+            # Only a turn's end settles it, so it is not terminal.
+            self.assertEqual(hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='unknown'").fetchone(), (0,))
+            # With Hermes idle, a different send is refused as the preceding task finishing, not admitted beside it.
+            refused, calls, _ = self.submit(hermes, "next", "streaming")
+            self.assertEqual(calls, [])
+            self.assertEqual((refused["status"], refused["message"]), ("rejected", "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles."))
+
     def test_a_steer_carries_no_turn_though_hermes_answers_it_queued(self):
         with FakeGateway([]) as hermes:
             hermes.open()

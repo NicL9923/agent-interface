@@ -197,3 +197,57 @@ Source fingerprint sha256:233d80cc08b8498eccfbc586ffd5627e9a8c07ddc15cab98f5edd4
   record dropped, its exit check removed, and `main`'s completion hook restored) each turn their test red here too.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Second review round
+
+`t3/send-lanes` at `19bca48`, its fifth review round, is merged in with a normal merge commit, without conflicts: `main`
+at `f0ae0a5`, a lane worker that cannot start answered once and never run later, and the one-shot `Reservation`. See
+that entry. GPT-6.1 Sol reviewed `f9d6698`: no P1.
+
+- P2, a typed stop's photo taken by the next send. Alice sends "stop" with a photo while voice mode is on; the add-on
+  stages the photo and Hermes answers `{"voice_stopped": true}`. Hermes answers a typed stop before it reads the session
+  (`tui_gateway/methods_prompt.py:835-836` at `ed1afb0`, `:580` at `b9cb268` and `d23cc6b`), so it never touches
+  `attached_images`, and the next turn's admission takes every image staged on the session (`prompt_turn.py:150-152` at
+  `ed1afb0`, `:141-143` at the others). Her "What time is it?" ran with the stop's photo. The add-on now removes the images
+  this request staged when the answer is `turn: "none"`, with the same `unstage_images` its refusal paths use, which
+  keeps images staged before the request. The forwarded form of the answer (`methods_prompt.py:760-761` at `ed1afb0`) has
+  nothing to remove: a session with staged images is never forwarded (`tui_gateway/owner_forward.py:100`), and the two
+  later revisions have no forwarding.
+- Decision, `unknown`. Its images stay staged. A turn Hermes starts takes the session's images on the turn's own thread,
+  started just before Hermes answers (`methods_prompt.py:965-973` at `ed1afb0`, `:695-702` at the others), so an answer
+  the add-on does not know may belong to a turn that has not yet taken them, and removing them would take the photo out of
+  the very turn it was sent with. The cost: if such an answer admitted nothing, its images wait for the next turn, as on
+  `main`. No known answer does that.
+- P3, an unknown answer's settlement untested. A new test checks that its receipt is not terminal and that a different
+  send after it, with Hermes idle, is refused as Hermes finishing the preceding task, without calling Hermes.
+- The turn fake now models a typed stop (`voice`), and can answer a started turn in another shape (`reply_as`) and hold
+  that turn's admission on an event (`hold_admission`), so the image snapshot happens after the add-on has the answer, as
+  Hermes's thread does.
+
+## Second review round checks
+
+Source fingerprint sha256:2e1ed1cb59188f38f820a4da48c41402d9ee0e784f13bf7f55d105521e22820c (1697 source files); `src/hermes` alone sha256:e7b2af77b57294a2d9992f09294dcb12e84c2f06cbf44411f51eea8b0d1a4db9 (20 source files). Same host and versions (Python 3.14.10).
+
+- `npm run test:py`: 44 files passed, 0 skipped, 0 failed (210 s). `tests/hermes_turn_binding_test.py`: 31 tests, 2 new;
+  `AdmissionTurnTests`: 5 tests, 1 new.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+## Second review round red proof
+
+`test_a_typed_stop_takes_back_its_photo_and_leaves_one_staged_before_it` went red on the merged code before the fix, for
+the reviewer's reason, in both cases: the stop left `['/uploads/shared/photo.png']` staged, and beside an image staged
+before it, `['/uploads/desktop/chart.png', '/uploads/shared/photo.png']`.
+
+Each line was then broken with a scripted text replacement, the test run, and the source restored and checked. The script
+runs tests without writing bytecode and deletes the source's `__pycache__` after restoring:
+
+| Broken | Red |
+| --- | --- |
+| A typed stop's images left staged | the typed-stop test, both cases |
+| A typed stop clearing every staged image | the typed-stop test, with an image staged before it |
+| An unknown answer's images removed too | `test_an_answer_the_add_on_does_not_know_leaves_its_photo_for_the_turn_it_may_have_started` |
+| An unknown answer settled, as the reviewer's probe did | `test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started` |
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.

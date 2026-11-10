@@ -1905,6 +1905,11 @@ class Bridge:
         # A typed stop admitted nothing, so nothing will settle its receipt: it is settled now, and
         # never holds up the next send as a task Hermes is finishing.
         settled = steering or status == "rejected" or turn == "none"
+        if turn == "none":
+            # Hermes answers a typed stop before it reads the session, so this request's images stay staged and the
+            # next turn would take them (methods_prompt.py:835-836 at ed1afb0, :580 at b9cb268 and d23cc6b). An
+            # unknown answer keeps them: a turn Hermes started takes them on its own thread after it answers.
+            self.unstage_images(sid, staged)
         if not steering:
             self.turn_started(sid, native_rid, result.get("status") == "streaming")
         with journal.lock, journal.db:
