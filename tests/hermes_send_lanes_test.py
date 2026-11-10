@@ -3,7 +3,8 @@
 Hermes is a fake at its edges: native dispatch and handle_request, which reserve retirement admission as
 rpc_dispatch does; image.attach, prompt.submit and session.steer, which a test can hold or fail per
 assistant; and session.compress for a background compaction. The bridge, its lanes, the journal and the
-idle compactor are the real code.
+idle compactor are the real code. A test that checks the add-on's timings runs it on a ``Clock``, so the time a
+held call takes is what the test advances, never what the scheduler gives it.
 """
 import logging
 import sys
@@ -130,6 +131,27 @@ class LaneHermes(PooledHermes):
         return result == [True, True]
 
 
+class Clock:
+    """``time`` as the add-on reads it, with ``perf_counter``, the clock its ``app_timing`` reads, moved only by
+    ``advance``. Every other name is the real module's, so its waits, deadlines and timestamps are unchanged."""
+    def __init__(self):
+        self.now = 1000.0
+
+    def perf_counter(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def clocked():
+    """Run the add-on on a ``Clock`` for the rest of the block; the ``Clock``."""
+    return patch.object(extension, "time", Clock())
+
+
 def compacting(test, hermes, profile):
     """A background compaction of the assistant's canonical session that cannot be cancelled: its commit
     holds the fence until the test sets ``release``, so a preempt waits for it."""
@@ -139,6 +161,9 @@ def compacting(test, hermes, profile):
     server._session_uses_compute_host = lambda session: False
     native = Native(server, sid, events)
     native.answers = [None]
+    # Only the test's release, or this helper's cleanup, ends it. Its own 5 s finish could land before a loaded test
+    # releases it, ending the compaction the test's timings and ordering depend on. 60 s is a safety bound only.
+    native.polls = 6000
     idle.delay, idle.native, idle.size = DELAY, native, lambda session: (2000, 1000)
     idle.activity[sid] = time.time() - DELAY
     thread = threading.Thread(target=lambda: idle.compact(profile, sid), daemon=True)
@@ -220,7 +245,7 @@ def tool_frames(hermes, sid, tool_id):
 
 class SendLaneTests(unittest.TestCase):
     def test_a_send_waiting_for_a_compaction_holds_up_no_other_assistant(self):
-        with LaneHermes() as hermes:
+        with LaneHermes() as hermes, clocked() as clock:
             native = compacting(self, hermes, "slow")
             replies, server = Replies(), hermes.server
             with self.assertLogs(level=logging.INFO) as logs:
@@ -238,7 +263,8 @@ class SendLaneTests(unittest.TestCase):
                 self.assertEqual(lookup["result"]["receipt"]["status"], "accepted")
                 self.assertNotIn("slow-send", replies.answers)
                 self.assertTrue(hermes.free())
-                time.sleep(0.2)
+                # The compaction takes 200 ms to let go; the send's lock wait after it takes none.
+                clock.advance(0.2)
                 native.release.set()
                 self.assertTrue(replies.wait("slow-send"))
             slow = replies.answers["slow-send"]["result"]
@@ -250,7 +276,7 @@ class SendLaneTests(unittest.TestCase):
             self.assertEqual(hermes.settled(), 0)
 
     def test_a_send_staging_images_leaves_the_journal_to_everyone_else(self):
-        with LaneHermes() as hermes:
+        with LaneHermes() as hermes, clocked() as clock:
             replies, server = Replies(), hermes.server
             staging = hermes.hold("image.attach", "slow")
             hermes.send("photo", "slow", replies, attachments=[{"path": "/photo.png", "mime": "image/png"}])
@@ -271,7 +297,7 @@ class SendLaneTests(unittest.TestCase):
             delivery = threading.Thread(target=deliver, daemon=True)
             delivery.start()
             self.assertFalse(delivered.wait(0.3))
-            time.sleep(0.2)
+            clock.advance(0.2)
             staging.set()
             self.assertTrue(replies.wait("photo"))
             self.assertTrue(delivered.wait(5))
@@ -283,7 +309,7 @@ class SendLaneTests(unittest.TestCase):
             self.assertEqual(hermes.settled(), 0)
 
     def test_one_assistants_sends_are_admitted_in_arrival_order_on_the_callers_transport(self):
-        with LaneHermes() as hermes:
+        with LaneHermes() as hermes, clocked() as clock:
             replies = Replies()
             admitting = hermes.hold("prompt.submit", "slow")
             hermes.send("first", "slow", replies)
@@ -294,7 +320,7 @@ class SendLaneTests(unittest.TestCase):
             within(lambda: tool_frames(hermes, "sid-slow", "early"))
             self.assertEqual(hermes.journal.db.execute("SELECT run_id FROM tools").fetchall(), [("first",)])
             self.assertEqual([call[2] for call in hermes.calls], ["Message first"])
-            time.sleep(0.2)
+            clock.advance(0.2)
             admitting.set()
             self.assertTrue(replies.wait("first", "second"))
             self.assertEqual([(method, text) for method, _, text, _ in hermes.calls],
