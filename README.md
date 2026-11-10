@@ -200,6 +200,28 @@ earlier release's cache instead of downloading it again. The pages, icons, manif
 unhashed files are always fetched fresh. The worker's hashed-name rule must match
 `src/server/static-cache.ts`; a test compares them.
 
+The worker opens the app shell (`/` and `/index.html`) from its own release's cache, without
+waiting on the network. Install fills that cache all or nothing, so the shell and the code it
+loads first always come from one release. Only when the cache has no shell, as after storage
+is cleared, does the network answer. After each such open the worker fetches the server's
+shell in the background:
+
+- A different shell means a new release, so it runs the update check at once. The browser
+  also checks `sw.js` on each navigation, and the page every 30 minutes, when it is shown
+  again and when it comes back online.
+- A redirect, 401 or 403 means something in front of the app now asks for a sign-in, which a
+  cached shell would hide for good, since `sw.js` is refused too. The worker unregisters itself
+  and reloads its windows from the network.
+- A server error or no network changes nothing; the app opens from the cache and says it
+  cannot reach the server.
+
+A release that finishes installing while the app is open is offered with **Refresh**. A page
+load that finds a release already waiting moves to it at once: it tells that worker to take
+over and reloads. So a person who never taps Refresh reaches the new release on their next
+load after it installed, such as a reload, a relaunch, or a notification that opens a window.
+Other open windows then show **Refresh**, as when another tab updates. The shell is not
+fetched with navigation preload, since the cached copy answers first.
+
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
 omitted to preserve native control styling. Keep custom layout, avatar and
@@ -556,7 +578,8 @@ first, and `npx playwright install chromium` once per Playwright version. `e2e/s
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
 with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
 network. It covers sign-in, sending a message and receiving the reply over the live event
-stream, the service worker opening the app offline and recovering, and no page errors,
+stream, the service worker opening the app offline and recovering, an open tab finding a
+new release and its next load moving to it, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.

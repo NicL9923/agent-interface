@@ -16,16 +16,19 @@ const html = () => new Response('<!doctype html>', { headers: { 'content-type': 
 // A healthy server: pages are HTML and everything else is code or an image.
 const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
 
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>> } = {}) {
+type Window = { url: string; navigate: ReturnType<typeof vi.fn> };
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[] } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
   const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
   const showNotification = vi.fn().mockResolvedValue(undefined);
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
+  const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
+  const matchAll = vi.fn(async () => options.windows ?? []);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
   // Installing needs the network; tests of later steps keep the default of being offline.
   // Cache storage by name. The current release's cache starts with its app shell, as after an install.
-  const stores = new Map<string, Map<string, unknown>>([['agent-interface-test', new Map([['/index.html', 'static shell']])]]);
+  const stores = new Map<string, Map<string, unknown>>([['agent-interface-test', new Map<string, unknown>([['/index.html', new Response('static shell', { headers: { 'content-type': 'text/html' } })]])]]);
   for (const [name, entries] of Object.entries(options.older ?? {})) stores.set(name, new Map(Object.entries(entries)));
   const match = vi.fn();
   const put = vi.fn();
@@ -41,8 +44,8 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     self: {
       location: { origin: 'https://app.example' },
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
-      registration: { showNotification },
-      clients: { matchAll: async () => [], openWindow, claim },
+      registration: { showNotification, update, unregister },
+      clients: { matchAll, openWindow, claim },
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
@@ -62,7 +65,16 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     return waited;
   };
   const install = () => { fetch.mockImplementation(healthy); return run('install'); };
-  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, showNotification, openWindow, setAppBadge, clearAppBadge };
+  // A navigation to the app. Returns its answer and whatever the worker left running after it.
+  const navigate = async (url = 'https://app.example/') => {
+    let response: Promise<unknown> | undefined;
+    const background: Promise<unknown>[] = [];
+    handlers.fetch({ request: { url, method: 'GET', mode: 'navigate' }, respondWith: (value: Promise<unknown>) => { response = value; }, waitUntil: (value: Promise<unknown>) => background.push(value) });
+    const answer = await response;
+    await Promise.all(background);
+    return answer as Response;
+  };
+  return { handlers, fetch, match, put, stores, claim, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, openWindow, setAppBadge, clearAppBadge, update, unregister };
 }
 
 describe('service worker privacy and return path', () => {
@@ -105,9 +117,7 @@ describe('service worker privacy and return path', () => {
     sw.fetch.mockImplementation((path: string) => path === '/index.html' ? Promise.reject(new Error('offline')) : healthy(path));
     await expect(sw.tryInstall()).rejects.toThrow();
     sw.fetch.mockRejectedValue(new Error('offline'));
-    let response: Promise<unknown> | undefined;
-    sw.handlers.fetch({ request: { method: 'GET', mode: 'navigate', url: 'https://app.example/' }, respondWith: (value: Promise<unknown>) => { response = value; } });
-    expect(await response).toBe('static shell');
+    expect(await (await sw.navigate()).text()).toBe('static shell');
   });
 
   it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
@@ -186,14 +196,8 @@ describe('service worker privacy and return path', () => {
   });
 
   it('uses only the static shell for offline conversation navigation', async () => {
-    const { handlers, fetch, match } = worker();
-    let response: Promise<unknown> | undefined;
-    handlers.fetch({
-      request: { url: 'https://app.example/?bot=shared', method: 'GET', mode: 'navigate' },
-      respondWith: (value: Promise<unknown>) => { response = value; },
-    });
-    expect(await response).toBe('static shell');
-    expect(fetch).toHaveBeenCalledOnce();
+    const { navigate, match } = worker();
+    expect(await (await navigate('https://app.example/?bot=shared')).text()).toBe('static shell');
     expect(match).toHaveBeenCalledWith('/index.html');
   });
 
@@ -450,5 +454,75 @@ describe('service worker release updates', () => {
       'assets/index-D7HmB6A.js', 'assets/index-D7HmB6AIx.js', 'assets/sub/index-D7HmB6AI.js', 'assets/vendor.js',
       'index.html', 'icon-192.png', 'manifest.webmanifest', 'native-computer.html', 'index-D7HmB6AI.js',
     ]) expect(hashed('/' + name), name).toBe(isHashedAsset(root, `${root}/${name}`));
+  });
+});
+
+describe('service worker app shell', () => {
+  const shell = (body = '<!doctype html><script src="/assets/app-a1234567.js">') => new Response(body, { headers: { 'content-type': 'text/html' } });
+  // This release's cache holds a real shell, as after an install.
+  const installed = (options: Parameters<typeof worker>[0] = {}) => {
+    const sw = worker(options);
+    sw.stores.get('agent-interface-test')!.set('/index.html', shell());
+    return sw;
+  };
+  const window = (url = 'https://app.example/?bot=ranch'): Window => ({ url, navigate: vi.fn().mockResolvedValue(undefined) });
+
+  it('opens from this release\'s cache without waiting on the network', async () => {
+    const sw = installed();
+    let check!: () => void;
+    // The network answers only after the shell has opened.
+    sw.fetch.mockImplementation(() => new Promise(resolve => { check = () => resolve(shell()); }));
+    let answer: unknown;
+    sw.handlers.fetch({ request: { url: 'https://app.example/', method: 'GET', mode: 'navigate' }, respondWith: async (value: Promise<unknown>) => { answer = await value; }, waitUntil: () => {} });
+    await vi.waitFor(() => expect(answer).toBeInstanceOf(Response));
+    expect(await (answer as Response).text()).toContain('/assets/app-a1234567.js');
+    check();
+  });
+
+  it('opens from the network when this release holds no shell, never from an older release', async () => {
+    const sw = worker({ older: { 'agent-interface-previous': { '/index.html': shell('older release') } } });
+    sw.stores.get('agent-interface-test')!.delete('/index.html');
+    sw.fetch.mockResolvedValue(shell('from the network'));
+    expect(await (await sw.navigate()).text()).toBe('from the network');
+    // The navigation itself, and nothing in the background.
+    expect(sw.fetch).toHaveBeenCalledOnce();
+  });
+
+  it('checks the server\'s shell afterwards and runs the update check only when it differs', async () => {
+    const sw = installed();
+    sw.fetch.mockResolvedValue(shell());
+    await sw.navigate();
+    expect(sw.fetch).toHaveBeenCalledExactlyOnceWith('/index.html', { cache: 'no-store', redirect: 'manual' });
+    expect(sw.update).not.toHaveBeenCalled();
+    sw.fetch.mockResolvedValue(shell('<!doctype html><script src="/assets/app-z7654321.js">'));
+    await sw.navigate();
+    expect(sw.update).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a redirect', () => ({ type: 'opaqueredirect', status: 0, ok: false })],
+    ['a sign-in', () => new Response('', { status: 401 })],
+    ['a refusal', () => new Response('', { status: 403 })],
+  ])('removes itself and reloads open windows from the network when the server answers with %s', async (_name, answer) => {
+    const open = [window(), window('https://app.example/?view=today')];
+    const sw = installed({ windows: open });
+    sw.fetch.mockResolvedValue(answer());
+    // This load already has the cached shell; the reload is what reaches the server.
+    expect(await sw.navigate()).toBeInstanceOf(Response);
+    expect(sw.unregister).toHaveBeenCalledOnce();
+    expect(open.map(client => client.navigate.mock.calls)).toEqual([[[open[0].url]], [[open[1].url]]]);
+  });
+
+  it.each([
+    ['a server error', () => Promise.resolve(new Response('down', { status: 502 }))],
+    ['no network', () => Promise.reject(new Error('offline'))],
+  ])('keeps opening from the cache through %s', async (_name, answer) => {
+    const open = [window()];
+    const sw = installed({ windows: open });
+    sw.fetch.mockImplementation(answer);
+    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    expect(sw.unregister).not.toHaveBeenCalled();
+    expect(sw.update).not.toHaveBeenCalled();
+    expect(open[0].navigate).not.toHaveBeenCalled();
   });
 });

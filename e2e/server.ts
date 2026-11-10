@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
@@ -87,11 +87,20 @@ const { app } = await createApp(
     try { const entry = JSON.parse(line); if (entry.csp) violations.push(entry.csp); } catch { /* Not a JSON log line. */ }
   } } },
 );
+// After POST /next-release on the control port, sw.js names another cache, as the next build's worker would.
+// Everything it installs is this build's files, so the release it stands for is complete.
+let nextRelease = false;
+app.addHook("onRequest", async (req, reply) => {
+  if (!nextRelease || req.url !== "/sw.js") return;
+  const source = readFileSync("dist/client/sw.js", "utf8").replace("const CACHE = 'agent-interface-", "const CACHE = 'agent-interface-next-");
+  return reply.header("Cache-Control", "no-cache").type("text/javascript").send(source);
+});
 await app.listen({ host: "127.0.0.1", port });
 
-// GET reads the violations. DELETE starts the next test from a clean slate.
+// GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); }
+  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); nextRelease = false; }
+  if (req.method === "POST" && req.url === "/next-release") nextRelease = true;
   res.setHeader("content-type", "application/json");
   res.end(JSON.stringify(violations));
 });

@@ -112,6 +112,35 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
 });
 
+// Checks the server's shell after this release's copy has answered. A different shell means a new
+// release, so the update check runs now rather than whenever the browser gets to it. A server that
+// now answers the app's address with a sign-in or a redirect has put something in front of the app
+// that this cached copy would hide for good, since it would refuse sw.js too: the worker removes
+// itself and loads the open windows from the network. An error or no network changes nothing;
+// opening from the cache through those is the point.
+async function revalidate(copy) {
+  let response;
+  try { response = await fetch('/index.html', { cache: 'no-store', redirect: 'manual' }); } catch { return; }
+  if (response.type === 'opaqueredirect' || response.status === 401 || response.status === 403) {
+    await self.registration.unregister();
+    for (const client of await self.clients.matchAll({ type: 'window' })) await client.navigate(client.url).catch(() => {});
+    return;
+  }
+  if (!response.ok) return;
+  if (await response.text() !== await copy.text()) await self.registration.update().catch(() => {});
+}
+
+// The app shell opens from this release's own cache, which install fills all or nothing, so the page
+// and every file it loads first come from one release, and a slow network never delays opening.
+// Without a cached shell, as when storage was cleared, the network answers.
+async function openShell(event) {
+  const cached = await (await caches.open(CACHE)).match('/index.html');
+  if (!cached) return fetch(event.request);
+  // Copied before the page reads the body, which can only be read once.
+  event.waitUntil(revalidate(cached.clone()));
+  return cached;
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -119,10 +148,7 @@ self.addEventListener('fetch', (event) => {
   // Never intercept authenticated endpoints, including streams and downloads.
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    event.respondWith(fetch(request).catch(async () => {
-      const shell = await (await caches.open(CACHE)).match('/index.html');
-      return shell || Response.error();
-    }));
+    event.respondWith(openShell(event));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {

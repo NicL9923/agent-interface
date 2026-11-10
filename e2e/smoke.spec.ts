@@ -1,4 +1,4 @@
-import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -59,4 +59,24 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await expect(page.getByRole("alertdialog", { name: "Use a banked reset?" })).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
+});
+
+test("an open tab is offered a new release, and its next load reaches it without the offer being taken", async ({ page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  const caches = () => page.evaluate(() => globalThis.caches.keys());
+  const [current] = await caches();
+  expect(current).toMatch(/^agent-interface-[0-9a-f]{16}$/);
+
+  // The tab's own update check, as its timer or a return to the tab runs it, finds and installs the release.
+  await deployNextRelease();
+  await page.evaluate(async () => { await (await navigator.serviceWorker.getRegistration())!.update(); });
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toBeVisible();
+
+  // The person reloads without tapping Refresh. That load finds the release waiting and moves to it.
+  await page.reload();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect.poll(caches).toEqual([current.replace("agent-interface-", "agent-interface-next-")]);
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
