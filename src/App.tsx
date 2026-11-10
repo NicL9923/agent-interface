@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
 import { api } from "./client-api";
@@ -47,7 +47,7 @@ import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
-import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
+import { accountGeneration, accountStart, checkHintExpiry, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
 import { signOutOf } from "./app/account-change";
 
 /**
@@ -68,12 +68,15 @@ export function App() {
   useEffect(() => {
     if (!pending) return;
     const start = accountStart();
-    // The last account's theme goes with it; the saved one stays while the hint still names its account.
-    document.documentElement.dataset.theme = savedTheme() ?? "system";
-    // An address that named the last account's chat or panel opens nothing of it for the next.
-    if ("start" in start && start.leftAccount && location.search) history.replaceState(history.state, "", "/");
+    // The last account's theme goes with it; the saved one stays while the hint still names its account
+    // and no other tab's sign-in or sign-out is under way, which may bring another account.
+    document.documentElement.dataset.theme = "wait" in start ? "system" : savedTheme() ?? "system";
+    // An address that named the last account's chat, panel, room or message opens nothing of it for the next.
+    if ("start" in start && start.leftAccount && (location.search || location.hash || location.pathname !== "/")) history.replaceState(null, "", "/");
     setShown({ changes, start, generation: accountGeneration() });
   }, [pending, changes]);
+  // A page covered for the back-forward cache shows again once nothing of an ended generation is drawn.
+  useLayoutEffect(uncoverEnded, [pending, shown]);
   const { start, generation } = shown;
   const wait = "wait" in start ? start.wait : undefined;
   useEffect(() => {
@@ -215,6 +218,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     document.documentElement.dataset.theme = userId ? theme : "system";
     if (userId) rememberTheme(userId, theme);
   }, [theme, userId, session.auth]);
+  // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
+  useEffect(() => () => { document.documentElement.dataset.theme = "system"; }, []);
   const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");

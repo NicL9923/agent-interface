@@ -53,8 +53,10 @@ uncertain sends, group drafts and form answers in localStorage.
 | Presence and device-activity reports queued or sent at unmount | Fenced by generation |
 | Draft saves, sends | Their live checks read the shared generation |
 | Service worker messages | Carry only an address, opened under the account signed in now |
-| Notifications on screen | Closed at sign-out, refusal and another account |
-| `<html data-theme>` | Reset to the system theme with the generation |
+| Notifications on screen | Closed at sign-out, refusal and another account, by the page and by the service worker |
+| A push on its way for the last account | The service worker shows a push only for the account its pages last named (second round) |
+| `<html data-theme>`, tab title, app badge, favicon dot | Reset as the generation unmounts (second round; the first round's claim about the theme was wrong) |
+| The address | Query, fragment and path reset to `/` when the last generation drew an account (second round) |
 
 ## Accepted limit
 
@@ -111,3 +113,149 @@ server, which refuses the session and is then the refused-session transition.
   still catches its sign-in, at that tab's next answer.
 - With storage that refuses writes, tabs cannot tell each other; each still drops on its own
   transitions and on a bootstrap that names another account.
+
+## Second round: the cross-provider review of `148d8ef`
+
+xAI's Grok 4.7 reviewed `148d8ef`: ready after fixes. This round fixes its findings. Checks ran on
+NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright 1.64.1 with its headless shell and its
+full Chromium, Chrome for Testing 158.0.8127.18). `src/server` changed: one additive push field.
+
+### Changes
+
+1. **Back-forward cache.** `pagehide` covers the account in place: `data-account-covered` on the
+   root element hides every element with `visibility: hidden !important` (layout and scroll stay),
+   and the title and theme go plain. Nothing unmounts. On the way back, `woke` uncovers at once
+   when the generation is unchanged and restores title and theme; after a change the cover stays
+   until App's layout effect sees a commit with nothing of the ended generation drawn.
+2. **Address.** `end` sets `endedShown` only when an account was shown, and only the next start
+   result reads and clears it, so the second end of another tab's change no longer forgets it.
+   App resets the address to `/` when the search, fragment or path is anything else.
+3. **Title, badge, theme.** `useAppBadge` clears the title, app badge and favicon dot as it
+   unmounts; `AccountApp` resets `data-theme` to `system`, what a signed-out page has.
+4. **Pushes on their way.** The server adds `account`, the APNs marker (`accountMarker`), to every
+   web push; `accountPayload` is now shared by APNs and Web Push. The page posts `ACCOUNT` to the
+   service worker at every settled record, at a bootstrap that names the account, and `null`
+   while a change is under way or after sign-out. The worker hashes the ID and keeps
+   `{ marker }` or `{ signedOut }` in a cache named `wildbots-account`, which activation's
+   cleanup of `agent-interface-*` leaves alone. It drops a push for another account and any push
+   while signed out, refuses Decline for another account, opens the app without the chat on a tap
+   of one, and closes other accounts' notifications when the account changes. A push without
+   `account` shows as before while signed in; a worker that never heard keeps today's rule.
+   Each tab tells the worker once per generation for each account it names. An earlier draft
+   told it once per tab, and a tab that had told it "one" stayed silent after another tab told
+   it "none" and closed mid-sign-out; the worker then dropped member one's pushes for good.
+5. **Stale mark on waking.** `woke` notifies when the tab waits and the mark it waits on is stale.
+6. **Web Locks.** `beginAccountChange`, `settle` and `undo` run under `navigator.locks.request`
+   on the record's key where the browser has it, and at once where it does not. They are now
+   async; `signInWith` and `signOutOf` await them. The other writers stay unlocked: they write only
+   while no change is under way, and only a settled record of the account the server named.
+   Chromium copies localStorage between renderer processes a moment after a write, so the lock
+   narrows the window for a read and cannot close it.
+7. **Found by the new write-refusal test.** With storage refusing writes, a sign-out looped
+   forever: refused session, a transition storage would not keep, bootstrap, refused again. The
+   tab now keeps a refused write in memory while storage still holds what it held, so it acts
+   under the record it meant to write.
+
+### Does Chromium restore this app from the back-forward cache?
+
+Yes, in full Chromium. Playwright's default browser cannot show it: Playwright launches every
+Chromium with `--disable-back-forward-cache`, and its headless shell refuses the cache even
+without that switch (CDP `Page.backForwardCacheNotUsed`: `BackForwardCacheDisabledForDelegate`,
+for a plain static page too). Full Chromium in new headless mode, with that switch left out,
+restored the app signed out, signed in with its event streams open, and signed in with the
+service worker controlling it or blocked. The new `e2e/back-forward-cache.spec.ts` runs that
+browser. On a restore Chromium fires `resume`, then `visibilitychange`, then `pageshow`, and the
+storage events from the frozen time after those. At `resume` the page was covered with no row
+visible in both cases. With the same account, the first frame showed the chat and the draft as
+left; after a sign-out elsewhere, sign-in.
+
+Against a build of `148d8ef`, both new e2e cases failed at `resume`: `covered: false,
+rowsVisible: true`. Member one's rows were on screen in the restored page before any of its
+script ran, which is the reviewer's P1 seen in a browser rather than read.
+
+### Checks
+
+- `npm ci`, `npm run typecheck`, `npm run lint`, `ruff check .` (ruff 0.17.3): passed.
+- Touched files: `tests/account-transitions-ui.test.ts` 25 tests (15 new),
+  `tests/service-worker.test.ts` 90 (5 new), `tests/push-actions.test.ts` 5 (1 new),
+  `tests/native-api.test.ts` 21 (one changed: it pinned Web Push without `account`).
+- `npm test`: 193 files, 3,233 tests passed.
+- `npm run build`, then `npm run test:e2e` on port 4173: 23 Chromium tests passed, including the
+  two new back-forward-cache cases. Two release-update cases now list only the releases' caches,
+  since the worker keeps a cache that every release keeps.
+
+### Red runs
+
+The new tests against `148d8ef`'s `src` and `scripts`, with the new tests in place:
+
+| Test | Failed at |
+| --- | --- |
+| Covers the account as the page is put away | `covered()` false after `pagehide` |
+| Keeps it covered after a sign-out elsewhere | `{ covered: false, one: true }` at `pageshow` |
+| Member two's own chat after another tab's sign-in | "Barn door sticks" missing: two's home chat opened from `?bot=home` |
+| No address after a sign-out in another tab | search still `?bot=home` |
+| No unread count, badge or theme between accounts | title still `(1) WildBots` |
+| A stale mark on waking | no bootstrap after `focus` |
+| A refused sign-in's undo beside another tab's settle | record lost `user: "two"`, kept the mark |
+| Sign-out with storage refusing writes | timed out: the bootstrap loop |
+| Upload and send in flight | two's home chat from the carried address (item 2) |
+| Web push names its account (server) | `account` undefined |
+| Worker: shows for the account, keeps whose it is | `data.account` missing |
+| Worker: drops another account's push after a restart | shown |
+| Worker: shows nothing signed out | shown |
+| Worker: Decline for another account | `fetch` called |
+| The worker told again after another tab told it none | written against this round's draft, which failed it: last word `null` |
+
+The lock test first passed against `148d8ef` because its storage hook fired the other tab's
+settle on every read (`??=` on the old `settle`, which returns nothing); with a one-shot flag it
+fails for the reviewer's reason.
+
+Mutations of this round's code, each run against the tests that cover it:
+
+| Mutation | Result |
+| --- | --- |
+| `pagehide` cover not registered | failed: both cache tests |
+| Same-account `woke` does not uncover | failed: the same-account case |
+| App never uncovers after a change | failed: the change case |
+| Cover keeps the title | failed: the same-account case |
+| A later end forgets the shown account | failed: both address cases |
+| Start does not clear the flag | survived: no flow writes an address between a clear and the next start |
+| Fragment not checked | survived: `useUrlSync` writes a query whenever an account shows a chat, so a fragment alone never names one today |
+| Badge not cleared at unmount | failed |
+| Theme not reset at unmount | failed |
+| Waking ignores a stale mark | failed |
+| No Web Lock | failed: the lock test |
+| Refused write not kept in memory | failed: the write-refusal test times out in the loop |
+| Unreadable record left unwritten | failed: the newer-format test |
+| A refused read throws | failed: the read-refusal test |
+| Storage listener removed | failed: the three-tab test |
+| Uploads not aborted at unmount | failed: the in-flight test |
+| Send answer unchecked in `api` | survived; with `use-submission`'s generation check also removed, survived: the tree is gone, so a late answer has nothing to draw into and sends nothing |
+| Worker shows every push / when signed out / declines for anyone / keeps others' notifications / drops pushes naming no account / keeps the account only in memory | each failed its test |
+| The page's word to the worker not reset at a start | failed: the told-again test |
+| A bootstrap does not tell the worker | failed: the told-again test |
+
+The reviewer's pin of the separate unmount commit:
+
+| Mutation | Result |
+| --- | --- |
+| `accountStart()` during the pending render | survived |
+| Device-activity fence removed | survived |
+| Presence fence removed | failed |
+| Both of the first two | failed: an `inactive` report for member one |
+| Pending render and presence fence | failed |
+
+Every request today's tree makes from an unmount cleanup is also fenced by generation, so the
+separate commit and the device-activity fence back each other up, and a test can see either only
+when both are gone. The new test fails when both are broken, and it fails on the presence fence
+alone. A future cleanup without a fence of its own is what the separate commit is there for.
+
+### Not exercised
+
+- Safari, Firefox, an installed home-screen app, a real push service and a real phone: not run.
+  Safari's and Firefox's back-forward caches and their event order on a restore are not checked.
+- Chrome on Android shows a screenshot taken before `pagehide` during a back gesture's animation;
+  the cover cannot reach it.
+- A dropped push shows no notification. Chrome may show its own "updated in the background"
+  notice for one, and Safari revokes a subscription after three; outside a change under way, the
+  subscription is one the browser already ended.

@@ -280,8 +280,9 @@ export class BackgroundWorker {
         // The person's app badge as of this delivery, including what it is about to tell them.
         const badge = badgeFor(await roster(), this.store, item.user_id, item.items.map(row => JSON.parse(row.payload)));
         const deliveryPayload = JSON.stringify(badge === undefined ? display : {...display, badge});
-        // Notification actions name the account they act for, so a phone signed in as someone else refuses them.
-        const nativePayload = JSON.stringify({...JSON.parse(deliveryPayload), account: accountMarker(item.user_id)});
+        // Every payload names the account it is for, so a phone or browser signed in as someone else since
+        // shows none of it and refuses its actions (scripts/service-worker.js). Older web workers ignore it.
+        const accountPayload = JSON.stringify({...JSON.parse(deliveryPayload), account: accountMarker(item.user_id)});
         const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
         const devices = this.sendApns && this.config.apns ? this.store.nativeDevices(item.user_id, this.config.apns.environment) : [];
         // Keep undelivered events durable until this person has a subscription.
@@ -290,7 +291,7 @@ export class BackgroundWorker {
         const single = item.items.length === 1 ? JSON.parse(item.items[0].payload) as { kind?: string; botId?: unknown; approvalId?: unknown } : undefined;
         const declineToken = subscriptions.length && single?.kind === "approval" && typeof single.botId === "string" && typeof single.approvalId === "string" && single.approvalId
           ? this.store.issuePushAction({ userId: item.user_id, botId: single.botId, approvalId: single.approvalId, decision: "denied" }) : undefined;
-        const webPayload = declineToken ? JSON.stringify({...JSON.parse(deliveryPayload), declineToken}) : deliveryPayload;
+        const webPayload = declineToken ? JSON.stringify({...JSON.parse(accountPayload), declineToken}) : accountPayload;
         let failed: string | undefined;
         // A send can take a while; an assistant made private meanwhile stops the rest of this
         // delivery before its frozen payload reaches another endpoint. The next pass drops it.
@@ -309,7 +310,7 @@ export class BackgroundWorker {
           })),
           ...devices.map((device): DeliveryTarget => ({
             endpoint: `apns:${device.environment}:${device.token}`, deviceId: device.deviceId,
-            deliver: async () => { await this.sendApns!(device, nativePayload); },
+            deliver: async () => { await this.sendApns!(device, accountPayload); },
             dead: apnsTokenDead,
             drop: () => this.store.removeNativeDevice(item.user_id, device.deviceId),
             describe: error => {

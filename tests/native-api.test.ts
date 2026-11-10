@@ -518,7 +518,7 @@ it("derives an APNs collapse ID from the tag within Apple's 64 bytes", async () 
   } finally { sender.close(); rmSync(dir, { recursive: true }); }
 });
 
-it("names the recipient account and the approval on iOS only, keeping Web Push as before", async () => {
+it("names the recipient account on iOS and Web Push alike, and the approval on iOS only", async () => {
   const store = new Store(":memory:");
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" }); config.apns = apnsConfig();
   store.user({ id: "one", name: "one", email: "one@example.test" });
@@ -532,7 +532,8 @@ it("names the recipient account and the approval on iOS only, keeping Web Push a
   const worker = new BackgroundWorker(store, runtime, config, async (_subscription, payload) => { web.push(JSON.parse(payload)); },
     async (_device, payload) => { native.push(JSON.parse(apnsPayload(payload))); });
   await worker.tick();
-  expect(web.map(row => [row.tag, row.approvalId, row.account])).toEqual([["ask", "request-7", undefined], ["done", undefined, undefined]]);
+  // A browser's service worker drops a push for an account other than the one signed in there.
+  expect(web.map(row => [row.tag, row.approvalId, row.account])).toEqual([["ask", "request-7", accountMarker("one")], ["done", undefined, accountMarker("one")]]);
   expect(native.map(row => [row.tag, (row.aps as { category?: string }).category, row.approvalId, row.account])).toEqual([
     ["ask", "APPROVAL", "request-7", accountMarker("one")], ["done", "REPLY", undefined, accountMarker("one")]]);
   expect(accountMarker("one")).toMatch(/^[0-9a-f]{16}$/);

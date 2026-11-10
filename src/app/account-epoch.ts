@@ -41,15 +41,28 @@ function parseEpoch(text: string): AuthEpoch | null {
   if (typeof record.id !== "string" || typeof record.at !== "number" || record.user !== undefined && typeof record.user !== "string") return null;
   return record as AuthEpoch;
 }
-// The raw text is compared, so even a record this code cannot parse is a change when it changes.
-function stored() {
+function readStored() {
   try { return localStorage.getItem(authEpochKey) ?? ""; } catch { return ""; }
 }
-/** Writes and returns what storage now holds, which is the old text when storage refuses the write. */
+/**
+ * A record storage refused to write, over the text it still holds. Storage that refuses writes leaves
+ * every tab on its own, and each still takes its own transitions: it acts under the record it meant
+ * to write until storage holds something else. Without this, a refused session that can never be
+ * written would start the tab from bootstrap, be refused, and start it again, forever.
+ */
+let unwritten: { over: string; text: string } | undefined;
+// The raw text is compared, so even a record this code cannot parse is a change when it changes.
+function stored() {
+  const now = readStored();
+  return unwritten?.over === now ? unwritten.text : now;
+}
+/** Writes and returns the record this tab now acts under. */
 function store(text: string) {
   try {
     if (text) localStorage.setItem(authEpochKey, text); else localStorage.removeItem(authEpochKey);
-  } catch { /* Storage that refuses writes leaves every tab on its own; each still sees its own transitions. */ }
+  } catch { /* Kept in memory below. */ }
+  const now = readStored();
+  unwritten = now === text ? undefined : { over: now, text };
   return stored();
 }
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -74,6 +87,11 @@ let era = 0;
 let guarding = false;
 /** Whether the generation drew an account from a bootstrap, so its address may name that account's chats. */
 let shown = false;
+/**
+ * Whether a generation that drew an account ended since the tab last started one. Set by any end
+ * while one shows and cleared only by the start that follows, so a second end during another tab's
+ * change, which finds nothing shown, does not forget that the address may name the last account's chats.
+ */
 let endedShown = false;
 const listeners = new Set<() => void>();
 const endHooks = new Set<() => void>();
@@ -87,7 +105,7 @@ export function onAccountEnd(hook: () => void) {
 }
 function end() {
   generation++;
-  endedShown = shown;
+  if (shown) endedShown = true;
   shown = false;
   for (const hook of endHooks) hook();
 }
@@ -107,6 +125,8 @@ export function checkAccount() {
   }
   notify();
 }
+/** Whether this tab waits on another tab's sign-in or sign-out, whose mark has since gone stale. */
+const waitedTooLong = () => held === WAITING && !changingNow(current());
 
 /** A request, stream event or upload made for an account this tab no longer acts for. */
 export class AccountChanged extends Error {
@@ -145,6 +165,7 @@ export function watchAccount(listener: () => void) {
   listeners.add(listener);
   if (listeners.size === 1) {
     window.addEventListener("storage", heard);
+    window.addEventListener("pagehide", cover);
     window.addEventListener("pageshow", woke);
     window.addEventListener("focus", woke);
     document.addEventListener("visibilitychange", woke);
@@ -156,6 +177,7 @@ export function watchAccount(listener: () => void) {
     guarding = false;
     shown = false;
     window.removeEventListener("storage", heard);
+    window.removeEventListener("pagehide", cover);
     window.removeEventListener("pageshow", woke);
     window.removeEventListener("focus", woke);
     document.removeEventListener("visibilitychange", woke);
@@ -170,6 +192,45 @@ function woke() {
   if (document.visibilityState === "hidden") return;
   checkAccount();
   checkHintExpiry();
+  // The text is unchanged, but the mark this tab waits on went stale while it slept, and its own
+  // timer may run late in a background tab: start now.
+  if (waitedTooLong()) notify();
+  if (coveredAt === generation) uncover();
+}
+
+// --- The back-forward cache ---
+
+/**
+ * The generation drawn when the page was hidden for the back-forward cache, while it stays covered.
+ * A frozen page hears no storage events, and a restored one shows its last frame before `pageshow`
+ * runs, so the account's screens are hidden as the page leaves: `:root[data-account-covered]` in
+ * styles.css. They keep their layout, scroll, drafts and open panels. Coming back, `woke` uncovers
+ * them at once if the account is the same; otherwise the change unmounts them, and App uncovers
+ * once the next screen is drawn.
+ */
+let coveredAt: number | undefined;
+let covered = { title: "", theme: "" };
+function cover() {
+  if (coveredAt === undefined) covered = { title: document.title, theme: document.documentElement.dataset.theme ?? "" };
+  coveredAt = generation;
+  document.documentElement.dataset.accountCovered = "";
+  // The title can carry the account's unread count, which the tab strip shows too, and the page
+  // behind the cover is painted in the account's theme.
+  document.title = "WildBots";
+  document.documentElement.dataset.theme = "system";
+}
+function uncover() {
+  if (coveredAt === undefined) return;
+  const same = coveredAt === generation;
+  coveredAt = undefined;
+  delete document.documentElement.dataset.accountCovered;
+  if (!same) return;
+  document.title = covered.title;
+  if (covered.theme) document.documentElement.dataset.theme = covered.theme;
+}
+/** Called by App once a commit draws nothing of a generation that ended while the page was covered. */
+export function uncoverEnded() {
+  if (coveredAt !== undefined && coveredAt !== generation) uncover();
 }
 
 export type AccountStart = { wait: number } | { start: "bootstrap" | "signed-out"; leftAccount: boolean };
@@ -189,17 +250,38 @@ export function accountStart(): AccountStart {
   }
   held = seen = now;
   guarding = true;
-  return { start: generation > 0 && record?.signedOut ? "signed-out" : "bootstrap", leftAccount: endedShown };
+  const leftAccount = endedShown;
+  endedShown = false;
+  // Another tab may have told the service worker otherwise since, and closed before it settled.
+  told = undefined;
+  return { start: generation > 0 && record?.signedOut ? "signed-out" : "bootstrap", leftAccount };
 }
 
 /** Writes a settled record and ends this tab's generation, as every other tab will. */
 function transition(fields: Pick<AuthEpoch, "signedOut" | "user">) {
   owned = null;
   seen = store(settled(fields));
+  tellWorker(fields.signedOut ? null : fields.user ?? null);
   end();
   notify();
 }
-const current = () => parseEpoch(stored());
+function current() { return parseEpoch(stored()); }
+
+/**
+ * Runs a read of the record and the write that depends on it as one step across tabs, with the Web
+ * Locks API where the browser has it, so another tab's write cannot land between them. Without it
+ * the work runs at once, as before. Every sign-in and sign-out step, which may write while another
+ * tab's change is under way, goes through here. The other writers write only while no change is under
+ * way, and each writes a settled record of the account the server named, so their order does not
+ * matter. Chromium copies localStorage between tabs in different processes a moment after each write,
+ * so the lock narrows that moment for a read, and cannot close it.
+ */
+function exclusive<T>(work: () => T): Promise<T> {
+  if (typeof navigator === "undefined" || !navigator.locks) {
+    try { return Promise.resolve(work()); } catch (error) { return Promise.reject(error); }
+  }
+  return navigator.locks.request(authEpochKey, () => work());
+}
 
 /**
  * Marks a sign-in or sign-out as under way in every tab, before its request can change the cookie.
@@ -207,7 +289,7 @@ const current = () => parseEpoch(stored());
  * request failed and the cookie is unchanged. A sign-out passes `ownTree`, so a tab that has not yet
  * seen another tab's transition never signs out an account it does not show.
  */
-export function beginAccountChange({ ownTree = false } = {}) {
+export const beginAccountChange = ({ ownTree = false } = {}) => exclusive(() => {
   if (ownTree) {
     checkAccount();
     if (stored() !== held) throw new AccountChanged();
@@ -216,18 +298,19 @@ export function beginAccountChange({ ownTree = false } = {}) {
   const mark = store(JSON.stringify({ id: newId(), at: Date.now(), changing: true, ...previous?.user ? { user: previous.user } : {} } satisfies AuthEpoch));
   owned = held = seen = mark;
   era++;
+  // Until it settles, the cookie may belong to either account, so no push is shown for either.
+  tellWorker(null);
   return {
-    settle(fields: Pick<AuthEpoch, "signedOut" | "user">) {
-      transition(fields);
-    },
-    undo() {
+    settle: (fields: Pick<AuthEpoch, "signedOut" | "user">) => exclusive(() => transition(fields)),
+    undo: () => exclusive(() => {
       owned = null;
       era++;
       if (stored() !== mark) return checkAccount();
       held = seen = store(before);
-    },
+      tellWorker(previous && !previous.signedOut ? previous.user ?? null : null);
+    }),
   };
-}
+});
 
 /**
  * The server refused this browser's session. Every tab shows sign-in. `hadAccount` is whether this
@@ -266,8 +349,27 @@ export function accountNamed(user: string, drawn: string | undefined) {
     // This generation holds nothing of another account, so it keeps the answer; other tabs start again.
     held = seen = store(settled({ user }));
   }
+  tellWorker(user);
   shown = true;
   return true;
+}
+
+/**
+ * Tells the service worker which account it may show notifications for, or none. It keeps that where
+ * it can read it after the browser stops and restarts it, and drops a push, or refuses a notification's
+ * action, for any other account (see scripts/service-worker.js). Each tab tells it in order, once per
+ * generation for each account it names, so a bootstrap on every focus does not repeat it.
+ */
+let told: string | null | undefined;
+let telling = Promise.resolve();
+function tellWorker(user: string | null) {
+  if (told === user) return;
+  told = user;
+  const container = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
+  if (!container) return;
+  telling = telling.then(() => container.getRegistration())
+    .then(registration => registration?.active?.postMessage({ type: "ACCOUNT", user }))
+    .catch(() => {});
 }
 
 /** Notifications already on screen for an account that left this browser. */

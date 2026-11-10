@@ -8,17 +8,17 @@ import { forgetAccountContent } from "./storage";
  * the record goes back and the tabs that waited read their account again.
  */
 export async function signInWith(path: string, body: unknown) {
-  const change = beginAccountChange();
+  const change = await beginAccountChange();
   let answer: { user?: { id?: unknown } } | undefined;
   try {
     answer = await write<typeof answer>(path, body);
   } catch (error) {
-    change.undo();
+    await change.undo();
     throw error;
   }
   rememberSignIn();
   // The first bootstrap names the account if the answer does not.
-  change.settle({ user: typeof answer?.user?.id === "string" ? answer.user.id : undefined });
+  await change.settle({ user: typeof answer?.user?.id === "string" ? answer.user.id : undefined });
 }
 
 /**
@@ -27,15 +27,15 @@ export async function signInWith(path: string, body: unknown) {
  * that hold this member's content leave the browser, and every tab shows sign-in.
  */
 export async function signOutOf(user: string) {
-  const change = beginAccountChange({ ownTree: true });
+  const change = await beginAccountChange({ ownTree: true });
   try {
     await write("/auth/logout", {});
   } catch (error) {
-    change.undo();
+    await change.undo();
     throw error;
   }
   forgetAccountContent(user);
   forgetSignIn();
   closeShownNotifications();
-  change.settle({ signedOut: true, user });
+  await change.settle({ signedOut: true, user });
 }

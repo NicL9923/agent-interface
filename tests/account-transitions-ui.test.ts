@@ -40,13 +40,25 @@ type Queued = { key: string | null; oldValue: string | null; newValue: string | 
 const data = new Map<string, string>();
 let queued: Queued[] = [];
 let onWrite: ((key: string, value: string | null) => void) | undefined;
+let onRead: ((key: string) => void) | undefined;
+/** Storage that refuses reads, as a profile that blocks site data does, or writes, as a full one does. */
+let refusing: { read?: true; write?: true } = {};
 const record = (key: string | null, oldValue: string | null, newValue: string | null) => {
   queued.push({ key, oldValue, newValue });
   if (key) onWrite?.(key, newValue);
 };
 const methods: Partial<Storage> = {
-  getItem: key => data.get(key) ?? null,
-  setItem: (key, value) => { const old = data.get(key) ?? null; data.set(key, String(value)); record(key, old, String(value)); },
+  getItem: key => {
+    if (refusing.read) throw new DOMException("The operation is insecure.", "SecurityError");
+    const value = data.get(key) ?? null;
+    // After the read, as another tab's write that lands right after it would.
+    onRead?.(key);
+    return value;
+  },
+  setItem: (key, value) => {
+    if (refusing.write) throw new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    const old = data.get(key) ?? null; data.set(key, String(value)); record(key, old, String(value));
+  },
   removeItem: key => { const old = data.get(key) ?? null; if (data.delete(key)) record(key, old, null); },
   key: index => [...data.keys()][index] ?? null,
   clear: () => { data.clear(); record(null, null, null); },
@@ -101,6 +113,7 @@ function serve({ call, cookie: carried, csrf, body }: Call): Response {
     return json(200, carried === "one" && chat === "ranch" ? { text: "Buy salt licks", attachments: [], revision: 1 } : null);
   if (method === "PUT" && /^\/bots\/[^/]+\/draft$/.test(path)) return json(200, { revision: 2 });
   if (method === "GET" && /^\/bots\/[^/]+\/routine-runs$/.test(path)) return json(200, { runs: [], unavailable: [] });
+  if (method === "POST" && /^\/bots\/[^/]+\/messages$/.test(path)) return json(200, { requestId: JSON.parse(body).requestId, status: "accepted", runId: "run-1" });
   const empty: Record<string, unknown> = {
     "GET /groups": { supported: false, canSend: false, rooms: [], reason: "Not in this test." },
     "GET /usage/accounts": { accounts: [], unavailableBots: [] },
@@ -192,6 +205,12 @@ beforeEach(() => {
   window.__wildbotsStartup = undefined;
   queued = [];
   onWrite = undefined;
+  onRead = undefined;
+  refusing = {};
+  // The document outlives each test's tabs, as a tab outlives the app it reloads.
+  document.title = "WildBots";
+  document.documentElement.dataset.theme = "system";
+  delete document.documentElement.dataset.accountCovered;
   cookie = null;
   calls = [];
   unexpected = [];
@@ -482,3 +501,338 @@ describe("the read boot.js starts before the bundle", () => {
   });
 });
 
+// --- What the second review found ---
+
+/** Member one's boot with changes for one test, put back after it. */
+async function withOne<T>(patch: Partial<Bootstrap>, run: () => Promise<T>) {
+  const saved = accounts.one;
+  accounts.one = { ...saved, ...patch };
+  try { return await run(); } finally { accounts.one = saved; }
+}
+/** Writes the record as another tab of this browser would, and delivers the storage event at once. */
+async function elsewhere(record: object) {
+  sharedStorage.setItem(authEpochKey, JSON.stringify(record));
+  await deliver();
+}
+const root = document.documentElement;
+const covered = () => root.hasAttribute("data-account-covered");
+const pageTransition = (type: "pagehide" | "pageshow") =>
+  act(async () => { window.dispatchEvent(new PageTransitionEvent(type, { persisted: true })); });
+/** What the page holds the moment the browser fires `pageshow`, after the app's own listener and before React draws again. */
+function atPageshow(tab: Tab) {
+  const seen: { covered?: boolean; one?: boolean } = {};
+  window.addEventListener("pageshow", () => { seen.covered = covered(); seen.one = tab.text().includes("Gate code is 4471"); }, { once: true });
+  return seen;
+}
+// Member one's preferences and news, which the tab title, the app badge and the page's theme carry.
+const oneWithNews = {
+  preferences: { ...accounts.one.preferences, theme: "dark" as const },
+  bots: [accounts.one.bots[0]!, { ...accounts.one.bots[1]!, activity: "waiting" as const }],
+};
+
+describe("a page in the back-forward cache", () => {
+  it("covers the account as the page is put away, and gives it back as it was, before any frame, when the account is the same", async () => {
+    await withOne(oneWithNews, async () => {
+      signedInAs("one");
+      const tab = await openTab("/?bot=ranch");
+      const box = tab.container.querySelector("textarea")!;
+      await typeInto(box, "Half a thought");
+      expect(document.title).toBe("(1) WildBots");
+      await pageTransition("pagehide");
+      // The frozen page shows nothing of the account: no screens, no unread count, no theme.
+      expect(covered()).toBe(true);
+      expect(document.title).toBe("WildBots");
+      expect(root.dataset.theme).toBe("system");
+      // Nothing was unmounted, so nothing is lost.
+      expect(tab.container.querySelector("textarea")).toBe(box);
+      const before = calls.length;
+      const seen = atPageshow(tab);
+      await pageTransition("pageshow");
+      expect(seen).toEqual({ covered: false, one: true });
+      expect(tab.container.querySelector("textarea")).toBe(box);
+      expect(box.value).toBe("Half a thought");
+      expect(document.title).toBe("(1) WildBots");
+      expect(root.dataset.theme).toBe("dark");
+      expect(calls.slice(before).map(call => call.call)).not.toContain("GET /bootstrap?roster=lean");
+    });
+  });
+
+  it("keeps the account covered when another tab signed out meanwhile, until sign-in has replaced it", async () => {
+    signedInAs("one");
+    const tab = await openTab("/?bot=ranch");
+    await pageTransition("pagehide");
+    // A page in the cache hears no storage events.
+    sharedStorage.setItem(authEpochKey, JSON.stringify({ id: "elsewhere", at: NOW, signedOut: true, user: "one" }));
+    queued = [];
+    cookie = null;
+    const seen = atPageshow(tab);
+    await pageTransition("pageshow");
+    await advance(0);
+    // Member one's rows were still in the document when the page showed again, and covered.
+    expect(seen).toEqual({ covered: true, one: true });
+    expect(covered()).toBe(false);
+    showsNothingOf(tab);
+    expect(tab.text()).toContain("Enter local workspace");
+  });
+});
+
+describe("the address after a change", () => {
+  it("opens member two's own chat, not the one member one was at, when another tab signs member two in", async () => {
+    signedInAs("one");
+    const tab = await openTab("/?bot=home#latest");
+    expect(tab.text()).toContain("One's home chat");
+    // Another tab marks its sign-in as under way, then settles it; each event arrives on its own.
+    await elsewhere({ id: "two-changing", at: NOW, changing: true, user: "one" });
+    expect(tab.text()).toContain("Connecting to your household");
+    cookie = "two";
+    await elsewhere({ id: "two-settled", at: NOW, user: "two" });
+    expect(tab.text()).toContain("Barn door sticks");
+    expect(tab.text()).not.toContain("Two's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("barn");
+    expect(location.hash).toBe("");
+  });
+
+  it("leaves no address of member one's on the sign-in screen when they sign out in another tab", async () => {
+    signedInAs("one");
+    // Only a fragment, so the test sees it go on its own.
+    const tab = await openTab("/#ranch-1");
+    await elsewhere({ id: "one-leaving", at: NOW, changing: true, user: "one" });
+    cookie = null;
+    await elsewhere({ id: "one-gone", at: NOW, signedOut: true, user: "one" });
+    expect(tab.text()).toContain("Enter local workspace");
+    expect(location.search).toBe("");
+    expect(location.hash).toBe("");
+  });
+
+  it("keeps an address the person opened while signed out, which named no account's chat yet", async () => {
+    const tab = await openTab("/?bot=home");
+    await signInAs(tab, "two");
+    expect(tab.text()).toContain("Two's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+  });
+});
+
+describe("the screen between two accounts", () => {
+  it("shows neither member one's unread count, app badge nor theme while another tab's sign-in is on its way", async () => {
+    const setAppBadge = vi.fn(async () => {}), clearAppBadge = vi.fn(async () => {});
+    Object.defineProperties(navigator, { setAppBadge: { configurable: true, value: setAppBadge }, clearAppBadge: { configurable: true, value: clearAppBadge } });
+    try {
+      await withOne(oneWithNews, async () => {
+        signedInAs("one");
+        const tab = await openTab("/?bot=ranch");
+        expect(document.title).toBe("(1) WildBots");
+        expect(root.dataset.theme).toBe("dark");
+        expect(setAppBadge).toHaveBeenLastCalledWith(1);
+        const cleared = clearAppBadge.mock.calls.length;
+        await elsewhere({ id: "two-changing", at: NOW, changing: true, user: "one" });
+        expect(tab.text()).toContain("Connecting to your household");
+        expect(document.title).toBe("WildBots");
+        expect(root.dataset.theme).toBe("system");
+        expect(clearAppBadge.mock.calls.length).toBeGreaterThan(cleared);
+      });
+    } finally {
+      for (const name of ["setAppBadge", "clearAppBadge"]) Reflect.deleteProperty(navigator, name);
+    }
+  });
+
+  it("starts a tab that waited on a mark gone stale while it slept as soon as it wakes, without its own timer", async () => {
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "abandoned", at: NOW - 10_000, changing: true, user: "one" }));
+    const tab = await openTab();
+    expect(tab.text()).toContain("Connecting to your household");
+    // The tab slept: the clock moved on and its timer, throttled, has not run.
+    vi.setSystemTime(NOW + 56_000);
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    expect(calls.map(call => call.call)).toContain("GET /bootstrap?roster=lean");
+    await waitForUi(() => expect(tab.text()).toContain("Ranch Hand"));
+  });
+});
+
+describe("the record's other guards", () => {
+  it("lets another tab's settled sign-in stand when a refused sign-in puts the record back at that moment", async () => {
+    // The browser's lock manager: one holder of a name at a time, the others in the order they asked.
+    let queue = Promise.resolve();
+    const request = vi.fn((name: string, callback: () => unknown) => {
+      if (name !== authEpochKey) throw new Error(`The test's locks have no ${name}`);
+      const run = queue.then(callback);
+      queue = run.then(() => {}, () => {});
+      return run;
+    });
+    Object.defineProperty(navigator, "locks", { configurable: true, value: { request } });
+    try {
+      signedInAs("one");
+      // Two tabs' copies of the module, with no app drawn, so only the record is in play.
+      vi.resetModules();
+      const first = await import("../src/app/account-epoch");
+      vi.resetModules();
+      const second = await import("../src/app/account-epoch");
+      const signingTwo = await second.beginAccountChange();
+      const refused = await first.beginAccountChange();
+      // As the refused sign-in reads the record to put it back, the other tab's sign-in settles.
+      let settling: Promise<void> | undefined, planted = false;
+      onRead = key => {
+        if (key !== authEpochKey || planted) return;
+        planted = true;
+        settling = signingTwo.settle({ user: "two" });
+      };
+      await refused.undo();
+      onRead = undefined;
+      await settling;
+      const now = JSON.parse(data.get(authEpochKey)!);
+      expect(now).toMatchObject({ user: "two" });
+      expect(now).not.toHaveProperty("changing");
+    } finally {
+      Reflect.deleteProperty(navigator, "locks");
+    }
+  });
+
+  it("asks the server when the record is in a format it cannot read, and writes its own once the server names the account", async () => {
+    // A newer release's record. Treated as a settled change, never as one under way, so a record this
+    // code cannot read can never hold a tab on the connecting screen.
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ format: 2, epoch: "from a newer release" }));
+    const tab = await openTab("/?bot=ranch");
+    expect(tab.text()).toContain("Gate code is 4471");
+    // Every tab, of either release, then sees one change and asks the server, which names the same account.
+    expect(JSON.parse(data.get(authEpochKey)!)).toMatchObject({ user: "one" });
+  });
+
+  it("shows the account the server names, and drops it at its own sign-out, when storage refuses every read", async () => {
+    signedInAs("one");
+    refusing = { read: true };
+    const tab = await openTab("/?bot=ranch");
+    expect(tab.text()).toContain("Gate code is 4471");
+    await signOutFrom(tab);
+    showsNothingOf(tab);
+    expect(tab.text()).toContain("Enter local workspace");
+  });
+
+  it("drops member one at its own sign-out when storage refuses every write, though it cannot tell other tabs", async () => {
+    signedInAs("one");
+    const tab = await openTab("/?bot=ranch");
+    refusing = { write: true };
+    await signOutFrom(tab);
+    showsNothingOf(tab);
+    expect(tab.text()).toContain("Enter local workspace");
+    // Nothing after the sign-out went as member one, and the tab asked the server once, not forever.
+    const logout = calls.findIndex(call => call.call === "POST /auth/logout");
+    expect(usedOne(logout).map(call => call.call)).toEqual(["POST /auth/logout"]);
+    await advance(5_000);
+    expect(calls.slice(logout).filter(call => call.call.startsWith("GET /bootstrap")).length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("several tabs and work in flight", () => {
+  it("takes member two's sign-in into two other tabs that show member one, with their events late and reversed", async () => {
+    const signInTab = await openTab();
+    signedInAs("one");
+    const ranchTab = await openTab("/?bot=ranch");
+    const homeTab = await openTab("/?bot=home");
+    expect(ranchTab.text()).toContain("Ranch Hand");
+    expect(homeTab.text()).toContain("One's home chat");
+    let changeAt = -1;
+    onWrite = (key, value) => { if (key === authEpochKey && changeAt < 0 && value?.includes('"changing"')) changeAt = calls.length; };
+    await signInAs(signInTab, "two");
+    await deliver("reversed");
+    for (const tab of [signInTab, ranchTab, homeTab]) {
+      expect(tab.text()).toContain("Barn Cat");
+      showsNothingOf(tab, [...ONE, "One's home chat"]);
+    }
+    expect(usedOne(changeAt)).toEqual([]);
+  });
+
+  it("lets go of an upload and a send in flight for member one when another tab signs member two in", async () => {
+    // An upload goes by XMLHttpRequest. Each one here waits for the test and records the cookie it carried.
+    const uploads: { cookie: Member | null; aborted: boolean; onabort?: () => void; onload?: () => void; status: number; responseText: string }[] = [];
+    vi.stubGlobal("XMLHttpRequest", class {
+      upload = {};
+      status = 0;
+      responseText = "";
+      onabort?: () => void;
+      onload?: () => void;
+      aborted = false;
+      cookie = cookie;
+      open(method: string, url: string) { if (method !== "POST" || url !== "/api/bots/home/uploads") throw new Error(`Unexpected upload ${method} ${url}`); }
+      setRequestHeader() {}
+      send() { uploads.push(this); }
+      abort() { this.aborted = true; this.onabort?.(); }
+    });
+    signedInAs("one");
+    holding = ["POST /bots/ranch/messages"];
+    const tab = await openTab("/?bot=ranch");
+    await typeInto(tab.container.querySelector("textarea")!, "Gate needs salt licks");
+    await act(async () => tab.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    await advance(0);
+    expect(held.map(item => item.call.call)).toEqual(["POST /bots/ranch/messages"]);
+    // A chat with a send on its way takes no files, so the upload is in another chat.
+    await act(async () => [...tab.container.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes("Home"))!.click());
+    await advance(0);
+    expect(tab.text()).toContain("One's home chat");
+    const input = tab.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, "files", { configurable: true, value: [new File(["north fence"], "fence.txt", { type: "text/plain" })] });
+    await act(async () => { input.dispatchEvent(new Event("change", { bubbles: true })); });
+    await advance(0);
+    expect(uploads).toHaveLength(1);
+    const changeAt = calls.length;
+    await elsewhere({ id: "two-changing", at: NOW, changing: true, user: "one" });
+    // The upload was let go with the generation that started it.
+    expect(uploads[0]!.aborted).toBe(true);
+    cookie = "two";
+    await elsewhere({ id: "two-settled", at: NOW, user: "two" });
+    // The send that went out as member one answers now, as member one; nothing of it shows or follows it.
+    await answerHeld("POST /bots/ranch/messages");
+    await advance(5_000);
+    expect(tab.text()).toContain("Barn door sticks");
+    showsNothingOf(tab, [...ONE, "Gate needs salt licks", "fence.txt"]);
+    expect(calls.slice(changeAt).filter(call => call.cookie === "one" || call.call.includes("/ranch/") || call.body.includes("Gate needs salt licks"))).toEqual([]);
+    expect(uploads).toHaveLength(1);
+  });
+
+  it("never sends member one's leaving reports as anyone, from the screens a change unmounts", async () => {
+    // The old screens unmount in a commit of their own, while this tab still acts under the old record,
+    // so any request their cleanup makes is refused. Presence and device activity are also fenced by
+    // generation, so this goes red only when both guards are gone; see the ledger.
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const signInTab = await openTab();
+    signedInAs("one");
+    const tab = await openTab("/?bot=ranch");
+    await advance(0);
+    expect(calls.map(call => call.call)).toEqual(expect.arrayContaining(["PUT /devices/activity", "PUT /bots/ranch/presence"]));
+    let changeAt = -1;
+    onWrite = (key, value) => { if (key === authEpochKey && changeAt < 0 && value?.includes('"changing"')) changeAt = calls.length; };
+    await signInAs(signInTab, "two");
+    await deliver();
+    expect(tab.text()).toContain("Barn Cat");
+    expect(calls.slice(changeAt).filter(call => call.call === "PUT /bots/ranch/presence" || call.call === "PUT /devices/activity" && call.body.includes('"inactive"'))).toEqual([]);
+  });
+});
+
+describe("what the service worker is told", () => {
+  it("tells the worker the account again after another tab told it none and closed before its sign-out settled", async () => {
+    // The page's side of the worker. Nothing else of it is configured, so anything else throws.
+    const told: unknown[] = [];
+    const registration = {
+      active: { postMessage: (message: { type: string; user: unknown }) => { if (message.type !== "ACCOUNT") throw new Error(`Unexpected message ${message.type}`); told.push(message.user); } },
+    };
+    // The app also listens for the worker's messages, which this test never sends.
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {
+      getRegistration: async () => registration, controller: null, addEventListener() {}, removeEventListener() {},
+    } });
+    try {
+      signedInAs("one");
+      const tab = await openTab("/?bot=ranch");
+      expect(tab.text()).toContain("Gate code is 4471");
+      expect(told).toEqual(["one"]);
+      // Another tab starts a sign-out, tells the worker no one is signed in, and closes before it settles.
+      await elsewhere({ id: "abandoned", at: NOW, changing: true, user: "one" });
+      told.push(null);
+      expect(tab.text()).toContain("Connecting to your household");
+      // Its mark goes stale; the cookie never changed, and this tab reads member one again.
+      await advance(65_000);
+      await waitForUi(() => expect(tab.text()).toContain("Gate code is 4471"));
+      expect(told.at(-1)).toBe("one");
+    } finally {
+      Reflect.deleteProperty(navigator, "serviceWorker");
+    }
+  });
+});
