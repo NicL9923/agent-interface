@@ -308,6 +308,48 @@ export function logicalEndSide(grapheme: string, last: Box, previous: Box | unde
   return direction === "rtl" ? "left" : "right";
 }
 
+/**
+ * Where the caret goes once its gap and width, `reach`, are known: past the text's logical end, unless
+ * another glyph on the line takes that room, as where Latin meets Arabic with no space between, or
+ * Arabic meets a number. Then it goes past the end of the line in the paragraph's direction, beyond
+ * every glyph on it, which is also where the next word goes when it runs in that direction.
+ * `line` holds the boxes of the line's other glyphs; a space is not one, so the caret may sit in it.
+ */
+export function clearEnd(x: number, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+  const from = side === "left" ? x - reach : x, to = side === "left" ? x : x + reach;
+  if (!line.some(glyph => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
+  if (direction === "rtl") return { x: Math.min(x, ...line.map(glyph => glyph.left)), side: "left" };
+  return { x: Math.max(x, ...line.map(glyph => glyph.right)), side: "right" };
+}
+
+const space = /\s/;
+/**
+ * The boxes of the words on the last grapheme's line, other than that grapheme, read back from `before`
+ * in `node` through the reply's earlier text until a word lies on a line above. Words are measured
+ * whole, without the spaces between them.
+ */
+function lineGlyphs(walker: TreeWalker, node: Text, before: number, last: Box): Box[] {
+  const glyphs: Box[] = [];
+  for (let text: Text | null = node, end = before; text; text = walker.previousNode() as Text | null, end = text?.data.length ?? 0) {
+    for (let start = end; end > 0; end = start) {
+      while (end > 0 && space.test(text.data[end - 1])) end--;
+      for (start = end; start > 0 && !space.test(text.data[start - 1]);) start--;
+      if (start === end) break;
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      let above = false;
+      for (const rect of range.getClientRects?.() ?? []) {
+        const middle = (rect.top + rect.bottom) / 2;
+        if (middle < last.top) above = true;
+        else if (middle <= last.bottom) glyphs.push(rect);
+      }
+      if (above) return glyphs;
+    }
+  }
+  return glyphs;
+}
+
 const measure = (node: Text, start: number, end: number) => {
   const range = document.createRange();
   range.setStart(node, start);
@@ -317,11 +359,12 @@ const measure = (node: Text, start: number, end: number) => {
 };
 /**
  * Where the reply's last visible character ends, skipping trailing space and the labels of copy
- * controls: the x of its logical end, its line's top and height, and the text node it is in. It
+ * controls: the x of its logical end, or of its line's end when another glyph takes the caret's
+ * room there (see clearEnd), its line's top and height, and the text node it is in. It
  * measures the last grapheme and the one before it, not a collapsed range, since browsers differ
  * on a collapsed range's rectangle and on which side of a bidirectional boundary it lies.
  */
-function textEnd(box: Element): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
+function textEnd(box: Element, reach: number): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
   const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
     acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
   });
@@ -333,8 +376,9 @@ function textEnd(box: Element): { x: number; side: "left" | "right"; top: number
   if (!last) return undefined;
   const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
   const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
-  const side = logicalEndSide(node.data.slice(start, end), last, previous, direction);
-  return { x: side === "left" ? last.left : last.right, side, top: last.top, height: last.height, node };
+  const logical = logicalEndSide(node.data.slice(start, end), last, previous, direction);
+  const { x, side } = clearEnd(logical === "left" ? last.left : last.right, logical, lineGlyphs(walker, node, start, last), direction, reach);
+  return { x, side, top: last.top, height: last.height, node };
 }
 /** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
 function visibleArea(from: Node, box: Element): Box {
@@ -350,15 +394,16 @@ function visibleArea(from: Node, box: Element): Box {
 const CARET_GAP = 2;
 /**
  * Puts the caret at the logical end of the reply's text: after its last character in the direction
- * that text runs, so right of Latin text and left of Arabic or Hebrew. It is absolutely positioned
+ * that text runs, so right of Latin text and left of Arabic or Hebrew, or past the line's end when a
+ * glyph of the other direction touches that edge. It is absolutely positioned
  * against its containing block, so it never moves the text, and it has no text of its own to
  * select or read. It stays inside the visible part of a code block or table that scrolls sideways.
  */
 function placeCaret(caret: HTMLElement) {
   const box = caret.previousElementSibling, parent = caret.offsetParent;
   if (!box || !(parent instanceof HTMLElement)) return;
-  const base = parent.getBoundingClientRect(), end = textEnd(box);
-  const area = visibleArea(end?.node ?? box, box), width = caret.offsetWidth;
+  const width = caret.offsetWidth, base = parent.getBoundingClientRect(), end = textEnd(box, CARET_GAP + width);
+  const area = visibleArea(end?.node ?? box, box);
   const side = end?.side ?? "right", at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
   // Text flush with an edge, such as Arabic in a left-to-right paragraph, puts the caret just outside it.
   const least = area.left - (side === "left" ? CARET_GAP + width : 0), most = area.right + (side === "right" ? CARET_GAP : -width);

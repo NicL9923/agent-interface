@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LiveMarkdown, logicalEndSide } from "../src/components/MessageMarkdown";
+import { clearEnd, LiveMarkdown, logicalEndSide } from "../src/components/MessageMarkdown";
 import { CATCH_UP_MS, MIN_FRAME_MS, graphemeCut, useRevealed } from "../src/components/streaming-reveal";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
@@ -223,6 +223,17 @@ describe("where the caret goes", () => {
     ["punctuation alone, in a left-to-right paragraph", "!", at(0), undefined, "ltr", "right"],
   ] as const)("ends %s on its trailing side", (_name, grapheme, last, previous, direction, side) => {
     expect(logicalEndSide(grapheme, last, previous, direction)).toBe(side);
+  });
+
+  // The caret's gap and width come to 4 px. "o" ends at 50 where an Arabic letter's trailing edge
+  // touches it, as in "helloمرحبا"; the line runs from 0 to 90.
+  it.each([
+    ["stays past the logical end when nothing lies there", 50, "left", [at(10), at(70)], "ltr", { x: 50, side: "left" }],
+    ["stays past the logical end when a space's width lies between it and the next glyph", 50, "right", [at(55)], "ltr", { x: 50, side: "right" }],
+    ["moves past the line's right end when a glyph touches the logical end", 50, "left", [at(40), at(80)], "ltr", { x: 90, side: "right" }],
+    ["moves past the line's left end in a right-to-left paragraph", 50, "right", [at(0), at(50)], "rtl", { x: 0, side: "left" }],
+  ] as const)("%s", (_name, x, side, line, direction, spot) => {
+    expect(clearEnd(x, side, [...line], direction, 4)).toEqual(spot);
   });
 
   it("places the caret again once a frame while a code block in the reply scrolls sideways", async () => {
