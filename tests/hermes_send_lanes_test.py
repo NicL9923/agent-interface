@@ -357,8 +357,9 @@ class SendLaneTests(unittest.TestCase):
                 lease = Path(directory) / "maintenance.json"
                 with LaneHermes({"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"}) as hermes:
                     replies, server = Replies(), hermes.server
-                    maintenance = lambda action: server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
-                        "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
+                    def maintenance(action, server=server, replies=replies):
+                        return server.dispatch({"id": action, "method": "agent-interface.maintenance", "params": {
+                            "service_key": "key", "action": action, "operation_id": "operation-1"}}, replies)
                     gates = []
                     for index, (held, params) in enumerate(sends):
                         if held:
