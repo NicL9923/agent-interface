@@ -111,3 +111,32 @@ app, never an address, and its bootstrap reaches the app through `accountNamed` 
 
 `npm run typecheck`, `npm run lint`, `ruff check .`: pass. `npm test`: 194 files, 3300 tests.
 `npm run build`: pass. `npm run test:e2e`: 25 passed.
+
+## Fifth round: the account transitions' fourth review, merged from `t3/account-transitions`
+
+`t3/account-transitions` at `ad3b65b` merged in as `8a5d8da`, bringing `origin/main` at `145104f`
+(merged there as `4375e9569a30d602d504c2d1b5fd449c8de34b67`). One conflict: the import line of
+`e2e/smoke.spec.ts`, where this branch added `chooseDark` and `main` added `slowAdmission`; both
+kept. The service worker's account code and `src/app/account-epoch.ts`'s account code are now the
+same as on `t3/account-transitions`. The changes, the worker's ordering discipline, the
+enumeration test and the page-side table are in `20261110T191900Z-account-transitions.md`,
+fourth round.
+
+This branch needs nothing more for them. `public/boot.js` holds back the saved theme and its early
+read for any fresh changing mark, whatever the mark says it began from, so the new `fromSignedOut`
+field changes nothing there. Its `checkAccount` takes a record without ending a generation before
+any app draws, which the page-side table's cells do not reach: each starts with `accountStart`.
+
+### Red runs on this branch
+
+- The new tests against this branch's files at `6cab97a` (`scripts/service-worker.js` and
+  `src/app/account-epoch.ts`): 13 failed, for the same reasons as on `t3/account-transitions`. The
+  enumeration broke 2274 of 4000 orders, with the same counts per invariant.
+- Every mutation in the account-transitions table, run again on this branch's merged code: the
+  same result for each. The generation checks after the reads and after opening the cache passed
+  alone and together; the check after a badge clear passed alone; every other mutation failed.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 199 files, 3382
+tests. `npm run build`: pass. `npm run test:e2e`: 29 passed.
