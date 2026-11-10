@@ -221,6 +221,27 @@ still win.
 - The chat header lifts with a border and shadow once messages scroll under it. This uses
   scroll-driven animations where the browser supports them.
 - While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
+- While a reply streams, its text appears at a steady pace instead of jumping a line or two at
+  each of the server's updates, up to four a second. Each update is revealed within about a third
+  of a second of arriving, however long it is, with at most 30 paints a second, and a reply
+  already under way when the chat opens shows at once. A caret at the text's logical end, right of
+  Latin text and left of Arabic or Hebrew, or past the line's end where text of the other direction
+  touches that edge with no space, pulses until the reply is saved, and follows a code
+  block or table scrolled sideways. The text shows at once in a hidden tab, and under reduced
+  motion, where the caret stays lit and still.
+- When a streamed reply is saved under Hermes's own ID, its row usually stays in place: React
+  keeps the same nodes, so a text selection, a code block's copy state and the reader's spot
+  survive. That holds when the client sees the saved copy replace the live reply as the one new
+  row, with the same text. A progress line never takes the live reply's row, and a live reply that
+  starts in the same update as a saved one gets a new row, even when it begins the same way. When
+  more than one row lands at once, such as a progress line saved beside the reply, the reply's row
+  is built again, as before. A steer or another member's message
+  arriving mid-reply starts a new turn, and the live reply moves into it, which also builds its row
+  again, so a selection in it is lost. If the saved reply is longer than 25,000 characters, or its
+  blocks would parse differently from the whole reply, it is parsed whole in the same row, and a
+  selection in it is lost too. The row's time and actions appear in
+  space it already held while streaming. Files the turn made still appear below the reply once it
+  is saved, since their size is not known before.
 - On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
   it hops and the other pinned ones look over. Approving a request or answering a question makes
   the assistant cheer, and settled approval cards fold away.

@@ -259,3 +259,5 @@
 .reply-file-more { color: var(--muted); padding-inline: 11px; }
 @media (pointer: coarse) { .reply-file { min-height: 40px; } }
 /* END reply files */
+/* A streaming reply's meta row keeps its place until the reply is saved. */
+.message-meta[inert] { visibility: hidden; }

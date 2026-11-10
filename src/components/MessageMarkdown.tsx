@@ -1,14 +1,18 @@
-import { Children, createContext, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Children, createContext, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
 import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import { streamingHoldBack } from "./streaming-hold-back";
+import { graphemeCut, useRevealed } from "./streaming-reveal";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -174,6 +178,13 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
   return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
 });
 
+/**
+ * Whether a block can keep its parsed output: true unless something it shows changed. The message
+ * ID reaches only reply cards, so a live row saved under Hermes's own ID keeps its parsed blocks
+ * unless one holds a card. Every other prop changes the output.
+ */
+export const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) => a.text === b.text && a.inlineUi === b.inlineUi && a.botId === b.botId
+  && a.userId === b.userId && a.unavailable === b.unavailable && (a.messageId === b.messageId || !/agent-ui/.test(b.text));
 /** One parsed piece of a reply, without its container, so several can share one. */
 const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
   const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
@@ -184,11 +195,14 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
       </Markdown>
     </ReplyContext.Provider>
   );
-});
+}, sameBlock);
 
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
-const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])([ \t]|$)/;
+// CommonMark's line endings, and its blank line: one of only spaces and tabs. A no-break space is text.
+const lineEnding = /\r\n|\r|\n/g;
+const blank = (line: string) => /^[ \t]*$/.test(line);
 // A list marker at any depth, and a fence indented past where the tracker below can see one.
 const anyListItem = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const anyFence = /^[ \t]*(?:`{3,}|~{3,})/;
@@ -227,41 +241,265 @@ const indent = (line: string) => {
  */
 export function streamingBlocks(text: string): string[] | null {
   if (wholeReply.test(text)) return null;
-  const lines = text.split("\n"), blocks: string[] = [];
+  // Each block is cut from the text itself, so its line endings stay as they arrived.
+  const lines: string[] = [], starts: number[] = [], ends: number[] = [], blocks: string[] = [];
+  let at = 0;
+  for (const ending of text.matchAll(lineEnding)) {
+    lines.push(text.slice(at, ending.index));
+    starts.push(at);
+    ends.push(ending.index);
+    at = ending.index + ending[0].length;
+  }
+  lines.push(text.slice(at));
+  starts.push(at);
   let start = 0, open: string | undefined, openIndent = 0, listed = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (open && line.trim() && indent(line) < openIndent) return null;
+    if (open && !blank(line) && indent(line) < openIndent) return null;
     listed ||= anyListItem.test(line);
     if (!open && listed && indent(line) > 3 && anyFence.test(line)) return null;
     const marker = fence.exec(line)?.[1];
     if (marker) {
       if (!open) [open, openIndent] = [marker, indent(line)];
-      else if (marker[0] === open[0] && marker.length >= open.length && !line.trim().slice(marker.length).trim()) open = undefined;
+      else if (marker[0] === open[0] && marker.length >= open.length && blank(line.slice(line.indexOf(marker) + marker.length))) open = undefined;
       continue;
     }
     if (!open && spansReply.test(line)) return null;
     const next = lines[index + 1];
-    if (open || line.trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
-    blocks.push(lines.slice(start, index).join("\n"));
+    if (open || !blank(line) || index === start || next === undefined || blank(next) || /^[ \t]/.test(next) || listItem.test(next)) continue;
+    blocks.push(text.slice(starts[start], ends[index - 1]));
     start = index + 1;
   }
-  blocks.push(lines.slice(start).join("\n"));
+  blocks.push(text.slice(starts[start]));
   return blocks;
+}
+
+const parsed = (text: string) => fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
+const shape = (nodes: unknown[]) => JSON.stringify(nodes, (key, value: unknown) => key === "position" ? undefined : value);
+/**
+ * The longest saved reply whose blocks are checked against the whole parse (`blocksAgree`). The check
+ * runs on the main thread the moment a reply is saved and grows with the reply. In a production
+ * build in Chromium on NicolasLaptop, a reply of prose paragraphs took 22 to 24 ms at 19,949
+ * characters, 28 to 29 at 24,829, 48 at 49,819 and 91 to 121 at 99,799; a reply of short
+ * paragraphs, 30 to 31 ms at 19,054, 38 to 40 at 24,990, 41 to 66 at 29,918, 61 to 96 at 48,734 and
+ * 125 to 130 at 98,014. Parsing the saved reply whole and rendering it took 13 to 22 ms near 20,000
+ * characters, 33 to 44 near 50,000 and 46 to 66 near 100,000. At this length the check stays under
+ * about 40 ms in both shapes. A longer reply parses whole, and a selection in it is lost at the save.
+ */
+export const MAX_CHECKED_REPLY = 25_000;
+/**
+ * Whether `blocks`, each parsed alone, make the same document as `text` parsed whole, as React
+ * Markdown parses them. It parses the reply twice without rendering it, so it stays cheap enough to
+ * run once when a streamed reply is saved: see ReplyMarkdown.
+ */
+export function blocksAgree(text: string, blocks: string[]): boolean {
+  return shape(parsed(text)) === shape(blocks.flatMap(parsed));
 }
 
 /**
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
  * grows, so a long reply no longer re-parses from the top several times a second. A short
  * unfinished marker, link or table header at the growing end is held back until it is whole, so it
- * does not flash as raw Markdown. The saved reply replaces this and is parsed whole.
+ * does not flash as raw Markdown. Without `holdBack` it renders a saved reply in the same blocks
+ * from its raw text, so a row that streamed keeps its nodes when saved. `whole` parses it whole,
+ * in the same container.
  */
-export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
+export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = true, whole: parseWhole = false, ...props }: MessageMarkdownProps & { holdBack?: boolean; whole?: boolean }) {
   const blocks = useMemo(() => {
-    const split = streamingBlocks(props.text);
-    return split ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : null;
-  }, [props.text]);
-  const whole = useMemo(() => blocks ? "" : streamingHoldBack(props.text), [blocks, props.text]);
-  if (!blocks) return <MessageMarkdown {...props} text={whole} />;
-  return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
+    const split = parseWhole ? null : streamingBlocks(props.text);
+    return split && holdBack ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : split;
+  }, [props.text, holdBack, parseWhole]);
+  const whole = useMemo(() => blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text, [blocks, holdBack, props.text]);
+  // One container however the reply splits, so the reply's node never changes while it streams.
+  return <div className="message-markdown">
+    {blocks ? blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />) : <MarkdownBlocks key="whole" {...props} text={whole} />}
+  </div>;
 });
+
+/**
+ * A reply in the transcript. A live one is revealed at a steady pace (see streaming-reveal.ts),
+ * then split and held back as StreamingMarkdown does. Revealing comes first so the hold-back judges
+ * the end a person actually sees: a cut the reveal makes inside `**bold**` is held back like one
+ * the stream made. Both keep a prefix, so the result is a prefix of what arrived. A caret follows
+ * the last character while it is live.
+ *
+ * Once saved, the reply shows its raw text at once, with no pacing or hold-back. A row that
+ * streamed keeps rendering in the same blocks, so React keeps its nodes, and any selection or
+ * copy state in them, when those blocks parse to the same document as the whole reply
+ * (`blocksAgree`) and the reply is short enough to check (`MAX_CHECKED_REPLY`). Otherwise it parses
+ * whole, in the same container: a saved reply never shows a gap in the splitter. A reply that was never live renders as MessageMarkdown.
+ */
+export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: MessageMarkdownProps & { live: boolean }) {
+  const [streamed, setStreamed] = useState(live);
+  if (live && !streamed) setStreamed(true);
+  const text = useRevealed(props.text, live);
+  // Checked once per saved text. A reply the splitter parses whole needs no check, and one longer
+  // than MAX_CHECKED_REPLY parses whole without it.
+  const whole = useMemo(() => {
+    if (live || !streamed) return false;
+    if (text.length > MAX_CHECKED_REPLY) return true;
+    const blocks = streamingBlocks(text);
+    return !!blocks && !blocksAgree(text, blocks);
+  }, [live, streamed, text]);
+  if (!live && !streamed) return <MessageMarkdown {...props} />;
+  return <>
+    <StreamingMarkdown {...props} text={text} holdBack={live} whole={whole} />
+    {live && <StreamingCaret text={text} />}
+  </>;
+});
+
+// Text a person reads in the reply, not a control's label or a status line.
+const notReplyText = "button, [role=status], [aria-hidden=true], .markdown-code-header";
+
+type Box = { left: number; right: number; top: number; bottom: number };
+/** Digits run left to right even inside right-to-left text. */
+const digit = /^\p{Nd}/u;
+/** Letters of the scripts written right to left. */
+const rightToLeft = /^[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]/u;
+const letter = /^\p{L}/u;
+/**
+ * Which edge of the reply's last grapheme is the text's logical end: its trailing edge in the
+ * direction it runs. A letter's direction is its script's, wherever it sits, and a digit runs left
+ * to right. Punctuation, spaces and symbols take their direction from the text around them, so
+ * the browser's own layout decides: if the grapheme before it on the same line lies to its right,
+ * the text runs right to left there. With nothing before it on the line, the paragraph's direction
+ * decides, as it does for the browser.
+ */
+export function logicalEndSide(grapheme: string, last: Box, previous: Box | undefined, direction: string): "left" | "right" {
+  if (digit.test(grapheme)) return "right";
+  if (rightToLeft.test(grapheme)) return "left";
+  if (letter.test(grapheme)) return "right";
+  if (previous && previous.top < last.bottom && previous.bottom > last.top)
+    return previous.left + previous.right > last.left + last.right ? "left" : "right";
+  return direction === "rtl" ? "left" : "right";
+}
+
+/**
+ * Where the caret goes once its gap and width, `reach`, are known: past the text's logical end, the
+ * `side` of its `last` grapheme, unless another glyph on the line takes that room, as where Latin
+ * meets Arabic with no space between, or Arabic meets a number. Then it goes past the end of the line
+ * in the paragraph's direction, beyond every glyph on it, which is also where the next word goes when
+ * it runs in that direction. `line` holds the boxes of the line's other glyphs; a space is not one, so
+ * the caret may sit in it.
+ */
+export function clearEnd(last: Box, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+  const x = side === "left" ? last.left : last.right;
+  const from = side === "left" ? x - reach : x, to = side === "left" ? x : x + reach;
+  if (!line.some(glyph => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
+  // The final grapheme counts whole: in "helloم" it is the line's end itself.
+  if (direction === "rtl") return { x: Math.min(last.left, ...line.map(glyph => glyph.left)), side: "left" };
+  return { x: Math.max(last.right, ...line.map(glyph => glyph.right)), side: "right" };
+}
+
+const space = /\s/;
+/**
+ * The boxes of the words on the last grapheme's line, other than that grapheme, read back from `before`
+ * in `node` through the reply's earlier text until a word lies on a line above. Words are measured
+ * whole, without the spaces between them.
+ */
+function lineGlyphs(walker: TreeWalker, node: Text, before: number, last: Box): Box[] {
+  const glyphs: Box[] = [];
+  for (let text: Text | null = node, end = before; text; text = walker.previousNode() as Text | null, end = text?.data.length ?? 0) {
+    for (let start = end; end > 0; end = start) {
+      while (end > 0 && space.test(text.data[end - 1])) end--;
+      for (start = end; start > 0 && !space.test(text.data[start - 1]);) start--;
+      if (start === end) break;
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, end);
+      let above = false;
+      for (const rect of range.getClientRects?.() ?? []) {
+        const middle = (rect.top + rect.bottom) / 2;
+        if (middle < last.top) above = true;
+        else if (middle <= last.bottom) glyphs.push(rect);
+      }
+      if (above) return glyphs;
+    }
+  }
+  return glyphs;
+}
+
+const measure = (node: Text, start: number, end: number) => {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const rects = range.getClientRects?.();
+  return rects?.length ? rects[rects.length - 1] : undefined;
+};
+/**
+ * Where the reply's last visible character ends, skipping trailing space and the labels of copy
+ * controls: the x of its logical end, or of its line's end when another glyph takes the caret's
+ * room there (see clearEnd), its line's top and height, and the text node it is in. It
+ * measures the last grapheme and the one before it, not a collapsed range, since browsers differ
+ * on a collapsed range's rectangle and on which side of a bidirectional boundary it lies.
+ */
+function textEnd(box: Element, reach: number): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+  });
+  const node = walker.lastChild() as Text | null;
+  if (!node) return undefined;
+  const end = node.data.search(/\S\s*$/) + 1;
+  const start = graphemeCut(node.data, end - 1);
+  const last = measure(node, start, end);
+  if (!last) return undefined;
+  const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
+  const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
+  const logical = logicalEndSide(node.data.slice(start, end), last, previous, direction);
+  const { x, side } = clearEnd(last, logical, lineGlyphs(walker, node, start, last), direction, reach);
+  return { x, side, top: last.top, height: last.height, node };
+}
+/** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
+function visibleArea(from: Node, box: Element): Box {
+  const area = box.getBoundingClientRect();
+  for (let element = from.parentElement; element && element !== box; element = element.parentElement) {
+    if (!/auto|scroll|hidden/.test(getComputedStyle(element).overflowX)) continue;
+    const clip = element.getBoundingClientRect();
+    return { left: Math.max(area.left, clip.left), right: Math.min(area.right, clip.right), top: clip.top, bottom: clip.bottom };
+  }
+  return area;
+}
+/** The space between the last character and the caret. */
+const CARET_GAP = 2;
+/**
+ * Puts the caret at the logical end of the reply's text: after its last character in the direction
+ * that text runs, so right of Latin text and left of Arabic or Hebrew, or past the line's end when a
+ * glyph of the other direction touches that edge. It is absolutely positioned
+ * against its containing block, so it never moves the text, and it has no text of its own to
+ * select or read. It stays inside the visible part of a code block or table that scrolls sideways.
+ */
+function placeCaret(caret: HTMLElement) {
+  const box = caret.previousElementSibling, parent = caret.offsetParent;
+  if (!box || !(parent instanceof HTMLElement)) return;
+  const width = caret.offsetWidth, base = parent.getBoundingClientRect(), end = textEnd(box, CARET_GAP + width);
+  const area = visibleArea(end?.node ?? box, box);
+  const side = end?.side ?? "right", at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
+  // Text flush with an edge, such as Arabic in a left-to-right paragraph, puts the caret just outside it.
+  const least = area.left - (side === "left" ? CARET_GAP + width : 0), most = area.right + (side === "right" ? CARET_GAP : -width);
+  const x = Math.max(least, Math.min(at, most)) - base.left - parent.clientLeft + parent.scrollLeft;
+  const y = (end ? end.top : area.top) - base.top - parent.clientTop + parent.scrollTop;
+  caret.style.transform = `translate(${x}px, ${y}px)`;
+  caret.style.height = end ? `${end.height}px` : "";
+}
+function StreamingCaret({ text }: { text: string }) {
+  const caret = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => { if (caret.current) placeCaret(caret.current); }, [text]);
+  useEffect(() => {
+    const element = caret.current, box = element?.previousElementSibling;
+    if (!element || !box) return;
+    // Scrolling a code block or table sideways moves the text under the caret. Scroll events do not
+    // bubble, so the reply hears its own blocks' in the capture phase, and places the caret once a frame.
+    let frame = 0;
+    const scrolled = () => { frame ||= requestAnimationFrame(() => { frame = 0; placeCaret(element); }); };
+    box.addEventListener("scroll", scrolled, { capture: true, passive: true });
+    // A narrower window or a late image moves the text without changing it.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => placeCaret(element));
+    observer?.observe(box);
+    return () => {
+      box.removeEventListener("scroll", scrolled, { capture: true });
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, []);
+  return <span ref={caret} className="streaming-caret" aria-hidden="true" />;
+}

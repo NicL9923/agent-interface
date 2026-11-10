@@ -36,6 +36,7 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const [threadId, setThreadId] = useState('');
   const [replyToId, setReplyToId] = useState('');
   const panel = useRef<HTMLDivElement>(null);
+  const notesBox = useRef<HTMLDivElement>(null);
   const scrollLatest = useRef(false);
   const [notice, setNotice] = useState('');
   // Another member made one of its assistants personal, so the group left this person's list.
@@ -201,15 +202,27 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
     // Include pending decisions and paging controls after the messages.
     view.scrollTop = view.scrollHeight;
   }, [events, state]);
+  // The draft gives up the height the notes take, so the composer never lies over an error it caused. CSS cannot
+  // measure them, so their height is handed to it as --group-notes.
+  useLayoutEffect(() => {
+    const box = notesBox.current, view = panel.current;
+    if (!box || !view) return;
+    const reserve = () => view.style.setProperty('--group-notes', `${box.offsetHeight}px`);
+    reserve();
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(reserve);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [gone]);
   // Errors and notes sit inside the conversation's section. The composer sticks to the bottom of the panel only
   // within that section, so a note above the section would push the section down and the composer's buttons with
   // it, off a short screen.
-  const notes = <>
+  const notes = <div className="group-notes" ref={notesBox}>
     {room.error && <FormMessage tone="error">{room.error} <button onClick={() => void room.reload()}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {notice && <p className="capability-note" role="status">{notice}</p>}
     {reason && !canSend && !gone && <p className="capability-note">{reason}</p>}
-  </>;
+  </div>;
   return <div className="group-panel" ref={panel}>
     {gone && notes}
     {!gone && <section aria-label="Group conversation">{notes}{state ? <><div className="group-heading"><div>
