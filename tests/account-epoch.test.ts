@@ -29,15 +29,15 @@ afterEach(() => { vi.useRealTimers(); });
 describe("a page that opens while another tab's sign-in or sign-out is on its way", () => {
   it.each([
     // The mark began with member one signed in, so the address is theirs, and stays when the change is undone.
-    { name: "a mark that began with member one signed in, put back", opened: mark({ user: "one" }), then: settled({ user: "one" }, "earlier"), left: false },
+    { name: "a mark that began with member one signed in, put back", opened: mark({ user: "one" }), settles: settled({ user: "one" }, "earlier"), left: false },
     // The mark began signed out; the name is only the last account's, kept for the next sign-in to compare.
-    { name: "a mark that began signed out after member one, settled as member two", opened: mark({ user: "one", fromSignedOut: true }), then: settled({ user: "two" }), left: false },
+    { name: "a mark that began signed out after member one, settled as member two", opened: mark({ user: "one", fromSignedOut: true }), settles: settled({ user: "two" }), left: false },
     // The mark began with an account no record named yet, which may not be the one that settles.
-    { name: "a mark that began with an unnamed account, settled as member two", opened: mark(), then: settled({ user: "two" }), left: true },
-  ])("$name: the address left is $left", async ({ opened, then, left }) => {
+    { name: "a mark that began with an unnamed account, settled as member two", opened: mark(), settles: settled({ user: "two" }), left: true },
+  ])("$name: the address left is $left", async ({ opened, settles, left }) => {
     const epoch = await openWith(opened);
     expect(epoch.accountStart()).toMatchObject({ wait: NOW + epoch.CHANGE_STALE_MS });
-    expect(another(epoch, then)).toEqual({ start: "bootstrap", leftAccount: left });
+    expect(another(epoch, settles)).toEqual({ start: "bootstrap", leftAccount: left });
   });
 
   // A stale mark is settled as far as this tab can tell, as the account it began with or none, and
