@@ -12,6 +12,7 @@ import contextvars
 import datetime
 import hashlib
 import json
+import math
 import logging
 import os
 import sqlite3
@@ -1467,7 +1468,8 @@ class Bridge:
         only when exactly one user row inside those rows holds its words and was not saved more
         than a second before the steer was sent, no receipt holds that row, and no other receipt
         of the run, bound or not, sent the same words. The second is the slack between the
-        add-on's clock at the receipt and Hermes's at the row, as before this rule.
+        add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
+        time cannot be read or compared binds nothing.
         Anything else leaves it unbound and its row shows unattributed. Known limit: a native
         client's identical words in the same turn, saved after the steer was sent or within that
         second, can still take the steer's place, because Hermes names no steer's row
@@ -1475,10 +1477,15 @@ class Bridge:
         """
         journal = self.journal
         steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
-        def saved(message):
-            # A row without a usable time counts as saved now.
-            stamp = message.get("timestamp")
-            return float(stamp) if type(stamp) in (int, float) and stamp else time.time()
+        def saved(row_id):
+            # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
+            # zero one as now. None for a time that cannot be read or compared, which binds nothing.
+            stamp = next(message for message in messages if message.get("row_id") == row_id).get("timestamp")
+            try:
+                at = float(stamp or time.time())
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return at if math.isfinite(at) else None
         for request_id, text, run_id, extent, sent in steers:
             try:
                 extent = turn_extent(json.loads(extent))
@@ -1490,7 +1497,7 @@ class Bridge:
             found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
                      and message["row_id"] in extent and message.get("text") == text]
             # The root's own row is held by the root's receipt, so the second test also excludes it.
-            if len(found) != 1 or sent > saved(next(m for m in messages if m.get("row_id") == found[0])) + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
+            if len(found) != 1 or (at := saved(found[0])) is None or sent > at + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
                 continue
             with journal.db:
                 journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (found[0], request_id))
