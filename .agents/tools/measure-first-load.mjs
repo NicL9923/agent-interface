@@ -148,7 +148,9 @@ async function scenario(_name, { serviceWorker, httpCache }) {
   }, chosenTheme);
   if (saved !== 200) throw new Error(`Saving the ${chosenTheme} theme answered ${saved}`);
   if (serviceWorker) {
-    await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+    // A worker that finished installing after the page loaded controls it from the next load.
+    const controlled = () => page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 60_000 });
+    await controlled().catch(async () => { await page.reload(); await controlled(); });
     // Two loads under the worker, so the shell, its code and any note about it are settled.
     await page.reload(); await page.locator('.bot-rail').getByText('Ranch Hand').first().waitFor();
   }
