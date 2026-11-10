@@ -19,7 +19,7 @@ import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
 import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
-import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, openRequests, receipt, turnRows, turnStart, unbridged, type LiveState } from './hermes-mapping.js';
+import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, nativePrompt, openRequests, receipt, turnRows, turnStart, unbridged, type LiveState } from './hermes-mapping.js';
 
 export type { HermesOptions } from './hermes-transport.js';
 
@@ -533,12 +533,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Live patches need only the last prompt and its persisted assistant segments, and `?inflight=3`
     // streams the running turn's saved messages, never a second retained copy of an older client's full transcript.
     if (options.history !== false && fresh) {
-      const saved = turnRows(shown, `${sid}-inflight`, contextEnd, !!cut);
+      // One boundary, the native turn's prompt, for the turn's rows, the snapshot's rows and what the live reply leaves out.
+      const prompt = nativePrompt(inflight);
+      const saved = turnRows(shown, prompt, `${sid}-inflight`, contextEnd, !!cut);
       if (saved.messages[0]) turnStarts.set(botId, saved.messages[0].id);
       const snapshot: Snapshot = {
         value: {session_id: sid, info: {running: value.info?.running}, app_run_id: value.app_run_id,
           inflight: {user: inflight.user, display_kind: inflight.display_kind, display_metadata: inflight.display_metadata}},
-        rows: rows.slice(Math.max(0, turnStart(rows)))
+        rows: rows.slice(Math.max(0, turnStart(rows, prompt)))
           .filter(row => row.id !== `${sid}-inflight` && (row.role === 'user' || row.role === 'assistant')),
         activity: {state: attention.length ? 'blocked' : activity, detail, runId},
         version: versionOf(generation),

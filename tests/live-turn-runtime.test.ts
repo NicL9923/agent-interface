@@ -333,21 +333,42 @@ describe("turn reads for streams that follow turns", () => {
   });
 });
 
+describe("the live reply's saved text", () => {
+  // Hermes names the native turn's prompt before it saved it. Nothing saved belongs to that turn yet, so the earlier
+  // native turn's "Checked." under the same app run is not this turn's, though its live text starts the same.
+  it("removes nothing while the native turn's prompt is not saved", async () => {
+    midTurn();
+    saveSegment(4, "Checked.");
+    Object.assign(hermes, { inflight: { user: "Check the loft", assistant: "Checked. Loft" } });
+    const read = await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Checked. Loft" });
+  });
+});
+
 describe("turnRows", () => {
   const message = (id: string, role: Message["role"], extra: Partial<Message> = {}): Message => ({ id, role, text: id, ...extra });
-  it("starts at the last prompt, keeps guidance steered into the turn and progress lines, and leaves out the live reply", () => {
-    const shown = [message("u1", "user"), message("a1", "assistant"), message("u2", "user"), message("p0", "assistant", { interim: true }),
-      message("a2", "assistant"), message("s1", "user", { steered: true, sender: { id: "two", name: "Two" } }), message("live-inflight", "assistant")];
-    expect(turnRows(shown, "live-inflight", 0, false)).toEqual({ after: "a1", messages: shown.slice(2, 6) });
+  const shown = [message("u1", "user"), message("a1", "assistant"), message("u2", "user"), message("p0", "assistant", { interim: true }),
+    message("a2", "assistant"), message("s1", "user", { steered: true, sender: { id: "two", name: "Two" } }), message("live-inflight", "assistant")];
+  // Hermes names the native turn's prompt. Steered in place, guidance leaves it as the turn's own; queued, the guidance is the prompt.
+  it.each([
+    ["guidance steered into it", "u2", { after: "a1", messages: shown.slice(2, 6) }],
+    ["guidance Hermes queued as a native turn of its own", "s1", { after: "a2", messages: shown.slice(5, 6) }],
+    // Between native turns Hermes names none, and the live text has been cleared.
+    ["no prompt reported", "", { after: "a2", messages: shown.slice(5, 6) }],
+    // Before Hermes saved the prompt, the window is all the read can say.
+    ["a prompt not saved yet", "u3", { after: null, messages: shown.slice(0, 6) }],
+  ])("starts at the native turn's prompt with %s, keeps progress lines, and leaves out the live reply", (_name, prompt, rows) => {
+    expect(turnRows(shown, prompt, "live-inflight", 0, false)).toEqual(rows);
   });
-  it("starts at steered guidance only when no other prompt is in the read", () => {
-    const shown = [message("s1", "user", { steered: true }), message("a1", "assistant")];
-    expect(turnRows(shown, "x-inflight", 0, true)).toEqual({ messages: shown });
+  it("starts at the last prompt with the native turn's text when an earlier one says the same", () => {
+    const again = [message("u1", "user", { text: "Check" }), message("a1", "assistant"), message("u2", "user", { text: " Check " })];
+    expect(turnRows(again, "Check", "x-inflight", 0, false)).toEqual({ after: "a1", messages: again.slice(2) });
   });
   it("says the turn starts the history only for an uncut read, and never starts it among a window's earlier context", () => {
     const shown = [message("u1", "user", { files: [] }), message("u2", "user"), message("a2", "assistant")];
-    expect(turnRows(shown.slice(1), "x-inflight", 0, false)).toEqual({ after: null, messages: shown.slice(1) });
-    expect(turnRows(shown, "x-inflight", 1, true)).toEqual({ messages: shown.slice(1) });
-    expect(turnRows([], "x-inflight", 0, false)).toEqual({ after: null, messages: [] });
+    expect(turnRows(shown.slice(1), "u2", "x-inflight", 0, false)).toEqual({ after: null, messages: shown.slice(1) });
+    expect(turnRows(shown, "u1", "x-inflight", 1, true)).toEqual({ messages: shown.slice(1) });
+    expect(turnRows([], "", "x-inflight", 0, false)).toEqual({ after: null, messages: [] });
   });
 });
+
