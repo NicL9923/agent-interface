@@ -3,6 +3,9 @@ import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { gfm } from "micromark-extension-gfm";
 import { parseReplyDocument, replyCardsFromText } from "../shared/reply-cards";
 import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
@@ -175,6 +178,13 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
   return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
 });
 
+/**
+ * Whether a block can keep its parsed output: true unless something it shows changed. The message
+ * ID reaches only reply cards, so a live row saved under Hermes's own ID keeps its parsed blocks
+ * unless one holds a card. Every other prop changes the output.
+ */
+export const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) => a.text === b.text && a.inlineUi === b.inlineUi && a.botId === b.botId
+  && a.userId === b.userId && a.unavailable === b.unavailable && (a.messageId === b.messageId || !/agent-ui/.test(b.text));
 /** One parsed piece of a reply, without its container, so several can share one. */
 const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
   const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
@@ -185,11 +195,14 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
       </Markdown>
     </ReplyContext.Provider>
   );
-});
+}, sameBlock);
 
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
-const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])([ \t]|$)/;
+// CommonMark's line endings, and its blank line: one of only spaces and tabs. A no-break space is text.
+const lineEnding = /\r\n|\r|\n/g;
+const blank = (line: string) => /^[ \t]*$/.test(line);
 // A list marker at any depth, and a fence indented past where the tracker below can see one.
 const anyListItem = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const anyFence = /^[ \t]*(?:`{3,}|~{3,})/;
@@ -228,57 +241,110 @@ const indent = (line: string) => {
  */
 export function streamingBlocks(text: string): string[] | null {
   if (wholeReply.test(text)) return null;
-  const lines = text.split("\n"), blocks: string[] = [];
+  // Each block is cut from the text itself, so its line endings stay as they arrived.
+  const lines: string[] = [], starts: number[] = [], ends: number[] = [], blocks: string[] = [];
+  let at = 0;
+  for (const ending of text.matchAll(lineEnding)) {
+    lines.push(text.slice(at, ending.index));
+    starts.push(at);
+    ends.push(ending.index);
+    at = ending.index + ending[0].length;
+  }
+  lines.push(text.slice(at));
+  starts.push(at);
   let start = 0, open: string | undefined, openIndent = 0, listed = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
-    if (open && line.trim() && indent(line) < openIndent) return null;
+    if (open && !blank(line) && indent(line) < openIndent) return null;
     listed ||= anyListItem.test(line);
     if (!open && listed && indent(line) > 3 && anyFence.test(line)) return null;
     const marker = fence.exec(line)?.[1];
     if (marker) {
       if (!open) [open, openIndent] = [marker, indent(line)];
-      else if (marker[0] === open[0] && marker.length >= open.length && !line.trim().slice(marker.length).trim()) open = undefined;
+      else if (marker[0] === open[0] && marker.length >= open.length && blank(line.slice(line.indexOf(marker) + marker.length))) open = undefined;
       continue;
     }
     if (!open && spansReply.test(line)) return null;
     const next = lines[index + 1];
-    if (open || line.trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
-    blocks.push(lines.slice(start, index).join("\n"));
+    if (open || !blank(line) || index === start || next === undefined || blank(next) || /^[ \t]/.test(next) || listItem.test(next)) continue;
+    blocks.push(text.slice(starts[start], ends[index - 1]));
     start = index + 1;
   }
-  blocks.push(lines.slice(start).join("\n"));
+  blocks.push(text.slice(starts[start]));
   return blocks;
+}
+
+const parsed = (text: string) => fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
+const shape = (nodes: unknown[]) => JSON.stringify(nodes, (key, value: unknown) => key === "position" ? undefined : value);
+/**
+ * The longest saved reply whose blocks are checked against the whole parse (`blocksAgree`). The check
+ * runs on the main thread the moment a reply is saved and grows with the reply. In a production
+ * build in Chromium on NicolasLaptop, a reply of prose paragraphs took 22 to 24 ms at 19,949
+ * characters, 28 to 29 at 24,829, 48 at 49,819 and 91 to 121 at 99,799; a reply of short
+ * paragraphs, 30 to 31 ms at 19,054, 38 to 40 at 24,990, 41 to 66 at 29,918, 61 to 96 at 48,734 and
+ * 125 to 130 at 98,014. Parsing the saved reply whole and rendering it took 13 to 22 ms near 20,000
+ * characters, 33 to 44 near 50,000 and 46 to 66 near 100,000. At this length the check stays under
+ * about 40 ms in both shapes. A longer reply parses whole, and a selection in it is lost at the save.
+ */
+export const MAX_CHECKED_REPLY = 25_000;
+/**
+ * Whether `blocks`, each parsed alone, make the same document as `text` parsed whole, as React
+ * Markdown parses them. It parses the reply twice without rendering it, so it stays cheap enough to
+ * run once when a streamed reply is saved: see ReplyMarkdown.
+ */
+export function blocksAgree(text: string, blocks: string[]): boolean {
+  return shape(parsed(text)) === shape(blocks.flatMap(parsed));
 }
 
 /**
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
  * grows, so a long reply no longer re-parses from the top several times a second. A short
  * unfinished marker, link or table header at the growing end is held back until it is whole, so it
- * does not flash as raw Markdown. The saved reply replaces this and is parsed whole.
+ * does not flash as raw Markdown. Without `holdBack` it renders a saved reply in the same blocks
+ * from its raw text, so a row that streamed keeps its nodes when saved. `whole` parses it whole,
+ * in the same container.
  */
-export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
+export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = true, whole: parseWhole = false, ...props }: MessageMarkdownProps & { holdBack?: boolean; whole?: boolean }) {
   const blocks = useMemo(() => {
-    const split = streamingBlocks(props.text);
-    return split ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : null;
-  }, [props.text]);
-  const whole = useMemo(() => blocks ? "" : streamingHoldBack(props.text), [blocks, props.text]);
-  if (!blocks) return <MessageMarkdown {...props} text={whole} />;
-  return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
+    const split = parseWhole ? null : streamingBlocks(props.text);
+    return split && holdBack ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : split;
+  }, [props.text, holdBack, parseWhole]);
+  const whole = useMemo(() => blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text, [blocks, holdBack, props.text]);
+  // One container however the reply splits, so the reply's node never changes while it streams.
+  return <div className="message-markdown">
+    {blocks ? blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />) : <MarkdownBlocks key="whole" {...props} text={whole} />}
+  </div>;
 });
 
 /**
- * A reply still arriving, as the transcript's live row shows it. Its text is revealed at a steady
- * pace (see streaming-reveal.ts), then split and held back as StreamingMarkdown does. Revealing
- * comes first so the hold-back judges the end a person actually sees: a cut the reveal makes
- * inside `**bold**` is held back like one the stream made. Both keep a prefix, so the result is a
- * prefix of what arrived. A caret follows the last character until the row is saved.
+ * A reply in the transcript. A live one is revealed at a steady pace (see streaming-reveal.ts),
+ * then split and held back as StreamingMarkdown does. Revealing comes first so the hold-back judges
+ * the end a person actually sees: a cut the reveal makes inside `**bold**` is held back like one
+ * the stream made. Both keep a prefix, so the result is a prefix of what arrived. A caret follows
+ * the last character while it is live.
+ *
+ * Once saved, the reply shows its raw text at once, with no pacing or hold-back. A row that
+ * streamed keeps rendering in the same blocks, so React keeps its nodes, and any selection or
+ * copy state in them, when those blocks parse to the same document as the whole reply
+ * (`blocksAgree`) and the reply is short enough to check (`MAX_CHECKED_REPLY`). Otherwise it parses
+ * whole, in the same container: a saved reply never shows a gap in the splitter. A reply that was never live renders as MessageMarkdown.
  */
-export const LiveMarkdown = memo(function LiveMarkdown(props: MessageMarkdownProps) {
-  const text = useRevealed(props.text);
+export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: MessageMarkdownProps & { live: boolean }) {
+  const [streamed, setStreamed] = useState(live);
+  if (live && !streamed) setStreamed(true);
+  const text = useRevealed(props.text, live);
+  // Checked once per saved text. A reply the splitter parses whole needs no check, and one longer
+  // than MAX_CHECKED_REPLY parses whole without it.
+  const whole = useMemo(() => {
+    if (live || !streamed) return false;
+    if (text.length > MAX_CHECKED_REPLY) return true;
+    const blocks = streamingBlocks(text);
+    return !!blocks && !blocksAgree(text, blocks);
+  }, [live, streamed, text]);
+  if (!live && !streamed) return <MessageMarkdown {...props} />;
   return <>
-    <StreamingMarkdown {...props} text={text} />
-    <StreamingCaret text={text} />
+    <StreamingMarkdown {...props} text={text} holdBack={live} whole={whole} />
+    {live && <StreamingCaret text={text} />}
   </>;
 });
 

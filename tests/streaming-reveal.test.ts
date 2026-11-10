@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearEnd, LiveMarkdown, logicalEndSide } from "../src/components/MessageMarkdown";
+import { clearEnd, ReplyMarkdown, logicalEndSide } from "../src/components/MessageMarkdown";
 import { CATCH_UP_MS, MIN_FRAME_MS, graphemeCut, useRevealed } from "../src/components/streaming-reveal";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
@@ -18,7 +18,7 @@ beforeEach(() => {
 });
 afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); });
 
-const show = (text: string) => mount.render(createElement(LiveMarkdown, { text }));
+const show = (text: string) => mount.render(createElement(ReplyMarkdown, { text, live: true }));
 const shown = () => mount.container.querySelector(".message-markdown")?.textContent ?? "";
 const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
 type Shown = { at: number; text: string };

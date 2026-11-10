@@ -73,17 +73,18 @@ type Shown = { pace: Pace; length: number; at: number };
 /**
  * The part of a live reply's `text` to show now. Re-renders on animation frames until the reveal
  * catches up. Every paced paint, whether an arrival or a frame makes it, is at least MIN_FRAME_MS
- * after the last one, so the cap holds however often text arrives.
+ * after the last one, so the cap holds however often text arrives. When `live` is false, as once
+ * the reply is saved, all of it shows at once.
  */
-export function useRevealed(text: string): string {
+export function useRevealed(text: string, live = true): string {
   const [state, setState] = useState<Shown>(() => ({ pace: settledPace(text), length: text.length, at: -Infinity }));
   // What the last commit showed and when it was painted, for the frame loop. It outlives each update's loop.
   const painted = useRef({ length: state.length, at: state.at });
   let current = state;
   // New text is taken in during render, so the frame that shows it never paints a stale cut.
-  if (state.pace.text !== text) {
+  if (state.pace.text !== text || !live && state.length < text.length) {
     const now = performance.now();
-    const pace = arrive(state.pace, text, now, instant());
+    const pace = arrive(state.pace, text, now, !live || instant());
     const paced = pace.shown < pace.text.length;
     const shown = state.pace.text.slice(0, state.length);
     // Text that continues what shows, arriving within MIN_FRAME_MS of the last paint, waits for the

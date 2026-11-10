@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MessageMarkdown, StreamingMarkdown, streamingBlocks } from "../src/components/MessageMarkdown";
+import { MAX_CHECKED_REPLY, MessageMarkdown, ReplyMarkdown, StreamingMarkdown, blocksAgree, sameBlock, streamingBlocks } from "../src/components/MessageMarkdown";
 import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
@@ -418,5 +418,146 @@ describe("streaming Markdown", () => {
     expect(streamingBlocks(`${item}\n\nDone`)).toEqual([item, "Done"]);
     // With no list above it, a fence indented four spaces is indented code and splits as usual.
     expect(streamingBlocks("Example:\n\n    ```\n    code\n\nDone")).toEqual(["Example:\n\n    ```\n    code", "Done"]);
+  });
+});
+
+describe("a streamed reply once saved", () => {
+  const renderAs = async (element: ReturnType<typeof createElement>) => {
+    await act(async () => root.render(element));
+    // Newlines between blocks are insignificant in the transcript's normal white-space.
+    return container.innerHTML.replace(/>\n</g, "><");
+  };
+  /** The reply streamed in its row, then saved: what the row shows. The hold-back plays no part in a saved reply. */
+  const streamedThenSaved = async (text: string) => {
+    await act(async () => root.render(createElement("div")));
+    await renderAs(createElement(ReplyMarkdown, { text, live: true }));
+    return renderAs(createElement(ReplyMarkdown, { text, live: false }));
+  };
+  const openedFresh = async (text: string) => {
+    await act(async () => root.render(createElement("div")));
+    return renderAs(createElement(MessageMarkdown, { text }));
+  };
+
+  // CommonMark: a line of only spaces and tabs is blank, a no-break space is not, and a lone \r
+  // ends a line as \r\n does.
+  it.each([
+    ["a line holding only a no-break space, which is not blank", "First\n\u00a0\nSecond", ["First\n\u00a0\nSecond"]],
+    ["a line of spaces and a tab, which is blank", "First\n \t\nSecond", ["First", "Second"]],
+    ["bare carriage returns", "First\r\rSecond", ["First", "Second"]],
+    ["carriage return and line feed pairs", "First\r\n\r\nSecond", ["First", "Second"]],
+    ["a definition after bare carriage returns", "See [docs][a].\n\nMore.\r\r[a]: https://example.test", null],
+    ["a fence closed by a line that ends in a no-break space", "```\ncode\n```\u00a0\n\nAfter", ["```\ncode\n```\u00a0\n\nAfter"]],
+  ])("splits as CommonMark reads %s", (_case, text, blocks) => {
+    expect(streamingBlocks(text)).toEqual(blocks);
+  });
+
+  // Every input the reviewers of this file have reported, and the two this round found.
+  const reported = [
+    "See [docs][a].\n\nMore.\r\r[a]: https://example.test",
+    "First\n\u00a0\nSecond",
+    "## Supper\n\nBeans, **cornbread** and greens.\n\n> Soak the beans tonight.\n\n```txt\nsoak\n\nsimmer\n```\n\n| Day | Meal |\n| --- | --- |\n| Sat | Chili |",
+    "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
+    "- Beans\n\n- Cornbread\n\n* Greens",
+    "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+    "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
+    "- Code:\n\n    ```\n\n  **literal",
+    "[---](https://x.test",
+    "[# Heading](https://x.test",
+    "[r]: https://x.test\n\nRun `[r]",
+    "Intro\r\r    **code",
+    "Compute 2 **3",
+    "Pass **kwargs",
+    "Exclude **test.ts",
+    "See [docs][r].\n\n[r]: https://example.test/_private",
+    "https://example.test/a_[b",
+    "- ```\n  **literal",
+    "> ~~~\n> **literal",
+    "| this is a paragraph",
+    "    | literal code",
+    "Use *.ts files",
+    "*a ".repeat(200) + "b_ ".repeat(200),
+    "Note[^a]\n\nHere:\n\n- ```\n  code\n  ```\n\n[^a]: footnote",
+    "See [docs][a].\n\nSteps:\n\n- ```\n  code\n  ```\n  [a]: https://example.test\n  ```",
+    "See [docs][a].\n\nSteps:\n\n- Run:\n\n  ```\n[a]: https://example.test\n  ```",
+    "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test",
+    "See [docs][a b].\n\n[a\nb]: https://example.test",
+    "See [docs][a\\]b].\n\n[a\\]b]: https://example.test",
+    "- Code:\n\n    ```\n    x\n\n> Next",
+    "1. Install:\n\n   ```sh\n   npm i\n\n   npm test\n   ```\n\nDone",
+    "Example:\n\n    ```\n    code\n\nDone",
+    "Match `/[^a-z]/` once.\n\nThen [^b] again.",
+    "```js``` is inline.\n\n[1]: https://example.test",
+    "Cards\n\n```agent-ui\n{}\n```",
+    ...["[1]: https://example.test", "[^1]: Footnote", "> [^1]: Footnote", "<!--\n\nhidden\n-->", "<script>\n\nlet x = 1;\n</script>"]
+      .flatMap(line => [`See [docs][1].\n\n${line}`, `Sample:\n\n\`\`\`\n${line}\n\`\`\`\n\nDone`, `Sample:\n\n~~~\n${line}`]),
+  ];
+  it.each(reported)("shows a reported input as it shows opened fresh: %#", async text => {
+    expect(await streamedThenSaved(text)).toBe(await openedFresh(text));
+  });
+
+  it("shows the two inputs this round found in blocks as the whole parse does", async () => {
+    for (const text of reported.slice(0, 2))
+      expect(await renderAs(createElement(StreamingMarkdown, { text, holdBack: false }))).toBe(await openedFresh(text));
+  });
+
+  // Seeded replies from lines that test blank lines, line endings, containers, fences and definitions.
+  it("shows seeded random replies streamed and saved as they show opened fresh", async () => {
+    const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "- ```", "  ```", "```", "~~~", "    ```",
+      "> ```", "  code", "code", "    indented", "> text", "- item", "1. item", "  - nested", "<div>", "</div>", "| a | b |", "| - | - |",
+      "Text **bold**", "Title", "===", "\u00a0", " \t", "\t", "", ""];
+    const endings = ["\n", "\r", "\r\n", "\n\n", "\r\r"];
+    let seed = 23;
+    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const diverged: string[] = [];
+    for (let run = 0; run < 400 && diverged.length < 3; run++) {
+      const text = Array.from({ length: 3 + pick(12) }, () => lines[pick(lines.length)] + endings[pick(endings.length)]).join("");
+      if (await streamedThenSaved(text) !== await openedFresh(text)) diverged.push(text);
+    }
+    expect(diverged).toEqual([]);
+  }, 60_000);
+
+  // The check parses the reply twice, which costs more than a person should wait at the save past
+  // MAX_CHECKED_REPLY characters, so a longer reply parses whole, as a rebuilt row does.
+  it.each([
+    ["at the longest checked length keeps its nodes", MAX_CHECKED_REPLY, true],
+    ["one character longer parses whole", MAX_CHECKED_REPLY + 1, false],
+  ])("a saved reply %s, and shows as it does opened fresh", async (_case, length, kept) => {
+    const paragraph = "The north gate is **latched** and the east gate is open.\n\n";
+    const body = paragraph.repeat(Math.floor((length - 20) / paragraph.length));
+    // Padded to exactly `length` characters.
+    const text = body + "Done".padEnd(length - body.length, ".");
+    await act(async () => root.render(createElement("div")));
+    await renderAs(createElement(ReplyMarkdown, { text, live: true }));
+    const first = container.querySelector("p");
+    const saved = await renderAs(createElement(ReplyMarkdown, { text, live: false }));
+    expect(container.querySelector("p") === first).toBe(kept);
+    expect(saved).toBe(await openedFresh(text));
+  }, 30_000);
+
+  it("finds where blocks and the whole parse disagree, so a saved reply parses whole there", () => {
+    expect(blocksAgree("First\n\u00a0\nSecond", ["First", "Second"])).toBe(false);
+    expect(blocksAgree("See [docs][a].\n\nMore.\r\r[a]: https://example.test", ["See [docs][a].", "More.\r\r[a]: https://example.test"])).toBe(false);
+    expect(blocksAgree("First\n\nSecond", ["First", "Second"])).toBe(true);
+    expect(blocksAgree("```\ncode\n\nmore\n```\n\nAfter", ["```\ncode\n\nmore\n```", "After"])).toBe(true);
+  });
+});
+
+describe("which blocks parse again", () => {
+  const block = { text: "The gate is latched.", botId: "home", messageId: "m2", userId: "one", unavailable: false, inlineUi: true };
+  const cards = "```agent-ui\n{\"cards\":[]}\n```";
+  it("keeps a block's parse when only the message ID changed, as when a live row is saved", () => {
+    expect(sameBlock({ ...block, messageId: "s1-inflight" }, block)).toBe(true);
+  });
+  it("parses a block with reply cards again under a new ID, since its cards act on that message", () => {
+    expect(sameBlock({ ...block, text: cards, messageId: "s1-inflight" }, { ...block, text: cards })).toBe(false);
+  });
+  it.each([
+    ["text", { text: "The gate is open." }],
+    ["inline UI", { inlineUi: false }],
+    ["assistant", { botId: "trail" }],
+    ["member", { userId: "two" }],
+    ["connection", { unavailable: true }],
+  ] as const)("parses a block again when its %s changes", (_what, change) => {
+    expect(sameBlock(block, { ...block, ...change })).toBe(false);
   });
 });

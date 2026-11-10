@@ -1,5 +1,5 @@
 // Counts and times how often a live reply re-parses while about 20,000 characters stream, as the
-// transcript showed it before pacing (StreamingMarkdown at each update) and after (LiveMarkdown on
+// transcript showed it before pacing (StreamingMarkdown at each update) and after (ReplyMarkdown, live, on
 // animation frames). Run: npx vitest run --config .agents/tools/streaming-parse-bench.config.ts
 // jsdom is slower than a browser, so the times are an upper bound; the counts are exact.
 import { act, createElement } from "react";
@@ -18,7 +18,7 @@ vi.mock("react-markdown", async importActual => {
   };
   return { ...actual, default: Markdown };
 });
-const { LiveMarkdown, StreamingMarkdown } = await import("../../src/components/MessageMarkdown");
+const { ReplyMarkdown, StreamingMarkdown } = await import("../../src/components/MessageMarkdown");
 
 const UPDATE_MS = 250, FRAME_MS = 1000 / 60;
 // A prose reply of the kind assistants write, and the worst case: one fence that is still open, so
@@ -37,7 +37,7 @@ const p95 = (values: number[]) => [...values].sort((a, b) => a - b)[Math.floor(v
 async function measure(name: string, text: string, live: boolean) {
   vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "Date", "setTimeout"] });
   const { root } = mountRoot();
-  const component = live ? LiveMarkdown : StreamingMarkdown;
+  const component = (props: { text: string }) => live ? createElement(ReplyMarkdown, { ...props, live: true }) : createElement(StreamingMarkdown, props);
   const step = 125, start = text.length - 8 * step;
   await act(async () => root.render(createElement(component, { text: text.slice(0, start) })));
   parses.count = 0;
