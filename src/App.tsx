@@ -419,8 +419,8 @@ export function App() {
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={backToHome}
           onDetails={bot => open({ kind: "details", botId: bot.id })} />
-        {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {viewDock.length > 0 && <div className="view-dock"><StatusDock items={viewDock} /></div>}
+        {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
           <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
