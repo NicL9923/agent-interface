@@ -5,8 +5,12 @@ const controlUrl = `http://127.0.0.1:${controlPort}/csp-violations`;
 /** Clears recorded violations and puts the scripted conversations back as they started. */
 const resetServer = () => fetch(controlUrl, { method: "DELETE" });
 const violations = async () => await (await fetch(controlUrl)).json() as unknown[];
-/** Makes the server answer sw.js as a new release's worker would, until the next test starts. */
-export const deployNextRelease = () => fetch(`http://127.0.0.1:${controlPort}/next-release`, { method: "POST" });
+/**
+ * Makes the server answer sw.js and the app shell as a new release would, until the next test starts.
+ * With `installs: false` the new worker refuses to install. The new shell carries `meta[name=release]`.
+ */
+export const deployNextRelease = ({ installs = true } = {}) =>
+  fetch(`http://127.0.0.1:${controlPort}/next-release${installs ? "" : "?install=fail"}`, { method: "POST" });
 
 /**
  * A signed-out page probes /api/bootstrap and Chromium logs the 401 as a console error. Nothing else is
