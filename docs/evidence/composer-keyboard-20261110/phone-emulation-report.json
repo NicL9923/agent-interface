@@ -1,0 +1,754 @@
+{
+ "tiny-before": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 456,
+    "bottom": 568,
+    "height": 112
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 456,
+    "bottom": 568,
+    "height": 112
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 268
+  },
+  "afterSendTap": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 363,
+    "bottom": 568,
+    "height": 205
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 363,
+    "bottom": 568,
+    "height": 205
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "homeShown": true
+ },
+ "tiny-after": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 456,
+    "bottom": 568,
+    "height": 112
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 162,
+    "bottom": 260,
+    "height": 98
+   },
+   "area": {
+    "top": 156,
+    "bottom": 268,
+    "height": 112
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 268,
+    "height": 268
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 268
+  },
+  "afterSendTap": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 162,
+    "bottom": 260,
+    "height": 98
+   },
+   "area": {
+    "top": 80,
+    "bottom": 268,
+    "height": 188
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 268,
+    "height": 268
+   },
+   "docScroll": 0,
+   "lastVisible": false,
+   "atEnd": false,
+   "focus": "message"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 568,
+   "composer": {
+    "top": 462,
+    "bottom": 560,
+    "height": 98
+   },
+   "area": {
+    "top": 363,
+    "bottom": 568,
+    "height": 205
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 568,
+    "height": 568
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "homeShown": true
+ },
+ "small-before": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 599,
+    "bottom": 667,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 599,
+    "bottom": 667,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 367
+  },
+  "afterSendTap": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 506,
+    "bottom": 667,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 506,
+    "bottom": 667,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "homeShown": true
+ },
+ "small-after": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 599,
+    "bottom": 667,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 305,
+    "bottom": 359,
+    "height": 54
+   },
+   "area": {
+    "top": 299,
+    "bottom": 367,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 367,
+    "height": 367
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 367
+  },
+  "afterSendTap": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 305,
+    "bottom": 359,
+    "height": 54
+   },
+   "area": {
+    "top": 206,
+    "bottom": 367,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 367,
+    "height": 367
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 667,
+   "composer": {
+    "top": 605,
+    "bottom": 659,
+    "height": 54
+   },
+   "area": {
+    "top": 506,
+    "bottom": 667,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 667,
+    "height": 667
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "homeShown": true
+ },
+ "large-before": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 671,
+    "bottom": 739,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 671,
+    "bottom": 739,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 439
+  },
+  "afterSendTap": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 578,
+    "bottom": 739,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 578,
+    "bottom": 739,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "homeShown": true
+ },
+ "large-after": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 671,
+    "bottom": 739,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 377,
+    "bottom": 431,
+    "height": 54
+   },
+   "area": {
+    "top": 371,
+    "bottom": 439,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 439,
+    "height": 439
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 439
+  },
+  "afterSendTap": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 377,
+    "bottom": 431,
+    "height": 54
+   },
+   "area": {
+    "top": 278,
+    "bottom": 439,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 439,
+    "height": 439
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 739,
+   "composer": {
+    "top": 677,
+    "bottom": 731,
+    "height": 54
+   },
+   "area": {
+    "top": 578,
+    "bottom": 739,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 739,
+    "height": 739
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "homeShown": true
+ },
+ "android-before": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 771,
+    "bottom": 839,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 771,
+    "bottom": 839,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 539
+  },
+  "afterSendTap": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 678,
+    "bottom": 839,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 678,
+    "bottom": 839,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "homeShown": true
+ },
+ "android-after": {
+  "errors": [],
+  "noKeyboard": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 771,
+    "bottom": 839,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "body"
+  },
+  "keyboard": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 477,
+    "bottom": 531,
+    "height": 54
+   },
+   "area": {
+    "top": 471,
+    "bottom": 539,
+    "height": 68
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 539,
+    "height": 539
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message",
+   "visibleBottom": 539
+  },
+  "afterSendTap": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 477,
+    "bottom": 531,
+    "height": 54
+   },
+   "area": {
+    "top": 378,
+    "bottom": 539,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 539,
+    "height": 539
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "sentShown": 1,
+  "closed": {
+   "innerHeight": 839,
+   "composer": {
+    "top": 777,
+    "bottom": 831,
+    "height": 54
+   },
+   "area": {
+    "top": 678,
+    "bottom": 839,
+    "height": 161
+   },
+   "shell": {
+    "top": 0,
+    "bottom": 839,
+    "height": 839
+   },
+   "docScroll": 0,
+   "lastVisible": true,
+   "atEnd": true,
+   "focus": "message"
+  },
+  "homeShown": true
+ }
+}
