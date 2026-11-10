@@ -204,3 +204,109 @@ replays the measured sequence. Before the fix it failed with the shell cleared: 
 - `npm run build` passed. `npm run test:e2e`: 10 passed in Chromium.
 - `.agents/tools/check-send-visible.mjs`: 70 of 70.
 - The fix has not run in Safari. A second simulator check follows.
+
+## Third simulator check, on `73e4469`, and fixes for short frames, the page's end and the pan gap
+
+Safari on an iPhone 17e and an iPhone 18 Pro Max simulator, iOS 27.0, on the Mac mini, driven by the T3 device
+tools, with the same-origin probe from the earlier checks. A simulator is not a physical phone: its keyboard,
+touch input and Safari's bars are the simulator's, and every result below is simulator-only. Talk was not opened.
+The keyboard-minimization default was set to false for the run and restored to true on both simulators. Builds ran
+side by side behind probe proxies: this fix, `origin/main` at `39e35a6` from a scratch worktree, and the e2e
+server for the send step. Scripts, logs, screenshots and videos are on the Mac mini in
+`/Volumes/DevSSD/scratch/wildbots-keyboard-check/run3/`. The Mac lock was queued 0.15 s and held 2,868 s.
+
+### What changed
+
+- `keyboardFrame` answers "no keyboard frame" for a visible frame shorter than `LEAST_FRAME`, 112px, the composer
+  area's floor with a stacked draft in `src/styles.css`. The shell keeps the layout viewport's height there and
+  Safari pans to the field, as on `main`.
+- The shell's top is clamped so top plus height never passes the root's `clientHeight`.
+- The top is the larger of the visual viewport's `pageTop` and the window's `scrollY`, and the window's `scroll`
+  event is followed too. `scrollY + offsetTop`, which the brief offered, is wrong here: at rest Safari reports
+  `offsetTop` equal to `pageTop` (330 and 330), so the sum would be 660.
+
+### A, a frame too small to use: fixed
+
+- Before, from the second check: `visualViewport.height` -44 made the shell 4101.6px tall with Send at y 4044, and
+  2px or 34px fitted the shell to a frame Send could not fit in.
+- 17e landscape, 1 tab, 12-line draft: the frame is 34px. The shell stays 326px, the root's height, and
+  `scrollHeight` equals `clientHeight`. Safari panned 186 to 205px, and typed text ("Line 6 hay orderxxx") showed
+  above the accessory bar. Screenshot `shots/i17e-A-landscape-1tab-typed.png`.
+- 17e landscape, 2 tabs: the frame is -12px (-44px with 4 tabs). The shell stays 280px with no runaway. Safari's
+  address bar, tab bar and accessory bar cover the whole page area, so the field is not visible; no page layout
+  can change that. `shots/i17e-A-landscape-2tabs-typed.png`.
+- Pro Max landscape: the 116px frame is still fitted, Send at 59 to 103. `shots/i18pm-A-landscape-1tab-after.png`.
+
+### B, the shell making the page taller: fixed
+
+- Before: after a drag that started on the notice, the top was 478 and the height 349, so `scrollHeight` was 827
+  against a `clientHeight` of 796.
+- After, the same drag on the Pro Max: `pageTop` reached 521 during the drag (frame bottom 870), top plus height
+  never passed 796, and `scrollHeight` stayed 796 across all 188 probe entries. Safari settled at 447, not 478.
+  `shots/i18pm-B-fix-drag-notice-up.png`.
+
+### C, an empty band after a drag on the notice or composer: not fixed, same on `main`
+
+The drag pans the page past the keyboard's pan, then Safari shrinks the visual viewport so it ends at the page's
+bottom: 17e 369 to 271 at `pageTop` 428, Pro Max 447 to 349 at `pageTop` 447. The band is the area past the
+document's end, above Safari's address pill, and the form accessory bar appears. `origin/main` does the same with
+the same gesture: 271 at 428 on the 17e, 349 at 447 on the Pro Max (`shots/i17e-C-main-drag-notice-up.png`,
+`shots/i18pm-C-main-drag-notice-up.png`). Tried through an injected stylesheet under `[data-keyboard-open]`:
+
+- `overscroll-behavior` on the root, `touch-action: none` on the root and body, `overflow: hidden` on the root and
+  body, either property alone on the composer area: the page still panned.
+- `touch-action: none` and `overscroll-behavior: none` together on `.composer-area` and its descendants held the page
+  at 330 on 6 of 6 drags from the notice or the buttons. A drag from the message box still panned it, to 489, and
+  it only works if the notice itself gets `touch-action: none`, which stops the notice dock and the attachment tray
+  from scrolling by touch. No rule met the brief's conditions, so none was kept.
+
+### D, the shell above the frame while the keyboard opens: fixed
+
+On 4 of 5 opens on the 17e, the visual viewport's resize came with `pageTop` 0, the window's scroll 30ms later with
+`scrollY` 330 and `pageTop` still 0, and the visual viewport's scroll 390 to 420ms after that. Video at 30 fps showed
+about 13 frames, roughly 430ms, with only the composer on screen. After the fix, 5 of 5 opens set the top to 330 at
+the window's scroll; the header, notice and composer stay on screen and slide up with the keyboard, with a short
+empty band above the header for about 6 frames, the same motion as an open without the gap. The Pro Max shows the
+same gap (400 to 460ms) and the same result after. `video/frames/D-before-after.png`,
+`video/frames/i18pm-D-after1.png`.
+
+Residual: during the second check's hardware-key typing, which toggled the keyboard several times a second,
+`scrollY` read 401 and 367 while `pageTop` read 182 for about 50ms. The shell now follows `scrollY` there, clamped
+to 349. That state was not reproduced with the on-screen keyboard.
+
+### E, "Jump to latest" over the reply: not fixed, differs from `main`
+
+After sending with the keyboard up on the Pro Max (e2e server, Trail Cook), the button covers the reply line "Post
+two is loose…" because the transcript is 298px and the view keeps the sent message near the top
+(`shots/i18pm-E-fix-after-send1.png`). On `main`, Send closes the keyboard; tapping the box again shows no button,
+since the transcript keeps its 647px, the reply's end is in view, and Safari pans the header off screen
+(`shots/i18pm-E-main-after-send1-kb.png`). Scrolled up in Kitchen companion portrait, both builds place the button
+over the same reply text and neither covers the header.
+
+### Also seen
+
+- `use-talk.ts` shows "Talk ended when the app went to the background." on any page hide on a phone, even when
+  Talk was never started. Switching Safari tabs showed it.
+- The preview fixture never confirmed a send through the probe proxy ("Checking whether your last message
+  arrived"), so the send step used the e2e server.
+
+### Red proof
+
+The new tests were written first and failed: A's three short frames and B's clamp (4 failed, 8 passed), then D's
+window scroll (1 failed, 13 passed, top `0px` where `330px` was expected). Each line was then broken by hand:
+
+- Removing the `LEAST_FRAME` check failed the negative, zero and 111px cases. Making it `<=` failed the 112px case.
+- Removing the clamp failed "never places the shell past the bottom of the page". Clamping 1px short also failed the
+  measured-pan case.
+- Removing the window listener, or taking the top from `pageTop` alone, failed "follows the window's scroll".
+  Removing the window unlisten failed "stops following the window's scroll". Taking the top from `scrollY` alone
+  failed four cases.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/keyboard-viewport.test.ts`: 14 tests passed.
+- `npm test`: 180 files, 2929 passed and 4 failed. `direct-routes` (2) and `native-contract` (1 test, 2 reports)
+  fail the same way on an untouched `73e4469` on this Mac, where the expected LAN route is missing.
+  `live-turn-timing` read 65ms for 61ms once and passed when rerun. Linux CI is the reference for these.
+- `npm run build` passed. The Playwright suite was not run here.
