@@ -27,7 +27,7 @@ async function installation(overrides: Partial<Runtime> = {}) {
   const send = (payload: Record<string, unknown>) =>
     result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { attachments: [], ...payload } });
   const check = async (requestId: string) => (await result.app.inject({ url: `/api/submissions/${requestId}`, headers })).json() as SubmissionReceipt;
-  return { ...result, submit, send, check };
+  return { ...result, submit, send, check, headers };
 }
 
 describe("the admission's turn on a receipt", () => {
@@ -65,6 +65,36 @@ describe("the admission's turn on a receipt", () => {
     const checked = await check(requestId);
     expect(checked.status).toBe("accepted");
     expect(checked).not.toHaveProperty("turn");
+  });
+
+  // A typed stop phrase ended Hermes's voice chat and sent nothing to the assistant, so the person's words and photo
+  // stay in their draft on every device. Any other accepted turn, including an unknown one or none at all from an
+  // older add-on, clears the draft as a sent message does.
+  it.each([
+    { turn: "none", kept: true },
+    { turn: "unknown", kept: false },
+    { turn: undefined, kept: false },
+  ] as const)("keeps the sender's draft and its photo only when a typed stop admitted nothing (turn $turn)", async ({ turn, kept }) => {
+    const message = "Hermes ended its voice chat. Nothing was sent to the assistant.";
+    const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> =>
+      ({ requestId: input.requestId, status: "accepted", runId: "run", ...turn ? { turn, message } : {} }));
+    const { send, check, app, headers } = await installation({
+      submit, lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run" }),
+    });
+    const photo = { id: "cGhvdG8.c2ln", name: "gate.jpg", mime: "image/jpeg" };
+    const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Stop voice", attachments: [photo], baseRevision: 0 } });
+    expect(saved.json()).toMatchObject({ revision: 1, reason: "edit" });
+    const requestId = randomUUID();
+    const body = { requestId, text: "Stop voice", attachments: [photo], draftBaseRevision: 1 };
+    expect((await send(body)).json()).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
+    // The same request again, and a check of it, answer from the record and change nothing.
+    expect((await send(body)).json()).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
+    expect(await check(requestId)).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
+    expect(submit).toHaveBeenCalledTimes(1);
+    const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
+    expect(draft).toMatchObject(kept
+      ? { text: "Stop voice", attachments: [photo], revision: 1, reason: "edit", sentRevision: 0 }
+      : { text: "", attachments: [], revision: 2, reason: "sent", sentRevision: 2 });
   });
 
   it("answers a later retry of the same failed turn with the first retry's recorded receipt, turn included", async () => {

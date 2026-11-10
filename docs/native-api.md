@@ -709,7 +709,7 @@ did with the message's turn, when the add-on reports `admission_turn`:
 | `started` | started the message's turn | the assistant thinking until Hermes reports the turn |
 | `queued` | put it in its busy queue behind running work; it may merge it into a queued prompt or drop it as a copy of the running one | as for a message that starts a turn |
 | `joined` | put it into the running turn | nothing more, as for `steered: true`; Hermes's copy does not carry `steered` |
-| `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message and show the receipt's `message` |
+| `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message, put its text and files back in the draft as for a refused message, and show the receipt's `message` |
 | `unknown` | answered in a way neither the add-on nor this server knows | as for a message that starts a turn; never take it for `started` |
 
 The server sends `started` only when the add-on reports `admission_turn` and its
@@ -786,6 +786,16 @@ draft. Without `draftBaseRevision`, as from older app builds, the base rule does
 not apply. A clear always advances the revision with reason `sent`, even for an
 empty draft, so a save dispatched before the send conflicts instead of restoring
 the sent text.
+
+An accepted receipt with `turn: "none"` sent nothing to the assistant: a typed stop
+phrase ended Hermes's voice chat. The server leaves the draft, its files and its
+revision as they are, so no `draft` event follows and other devices keep the same
+text. Treat that receipt like a refused one: stop waiting for the clear, keep or
+restore the sent text and files in the local copy, and show the receipt's
+`message`. A repeat of the same request ID, or `GET /api/submissions/:id`, answers
+the same receipt and still clears nothing. A receipt with any other `turn`, or with
+none, clears the draft as above. That includes a typed stop whose answer was lost
+and later recovered by a lookup, which cannot say what the turn was.
 
 Clients keep a local copy with its base revision, a fingerprint of the content at
 that revision, an unsaved-edits flag, and a sequence number that increases with

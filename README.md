@@ -695,8 +695,9 @@ Retry, that much late, and two reads asked during one admission can still show t
 last turn's Retry. A message sent while the assistant works adds none, and neither
 does one Hermes puts into the running turn. Stop appears once Hermes reports the
 turn. Hermes's typed stop phrase, which acts only while Hermes's own voice mode is
-on for the session, admits nothing: the message leaves the chat and the composer
-says Hermes ended its voice chat. WildBots never turns that mode on. An older
+on for the session, admits nothing: the message leaves the chat, its words and files
+stay in the draft on every device, and the composer says Hermes ended its voice
+chat. WildBots never turns that mode on. An older
 add-on reports the phrase as accepted like any message, which shows thinking for
 the echo's 30 seconds with nothing running. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate

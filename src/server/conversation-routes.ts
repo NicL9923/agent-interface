@@ -19,6 +19,7 @@ import { routePattern } from "./route-path.js";
 import { SendTimings, sendTimingHeader, type SendPhases } from "./send-timing.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
+import { withAdmission } from "./store-submissions.js";
 import { nameRequesters } from "./vault.js";
 import { shownMessages } from "./conversation-view.js";
 
@@ -484,11 +485,6 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   };
   apiRoute(app, "POST /bots/:id/messages", { body: message }, timedSend(false));
   apiRoute(app, "POST /bots/:id/steer", { body: message }, timedSend(true));
-  // A lookup never carries what Hermes's admission answer said about the turn. The recorded receipt keeps it, so a
-  // client whose answer was lost learns it here, while both say the message was accepted.
-  const withAdmission = (looked: SubmissionReceipt, recorded?: SubmissionReceipt): SubmissionReceipt =>
-    looked.status !== "accepted" || recorded?.status !== "accepted" ? looked
-      : { ...looked, ...recorded.turn ? { turn: recorded.turn } : {}, ...recorded.admittedVersion ? { admittedVersion: recorded.admittedVersion } : {} };
   apiRoute(app, "GET /submissions/:id", {}, async req => {
     const requestId = z.string().uuid().parse(req.params.id);
     const recorded = store.submission(requestId);
@@ -507,6 +503,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         const receipt = await runtime.lookupSubmission(requestId);
         if (receipt) {
           if (previous) store.receipt(receipt);
+          // A client whose answer was lost learns the turn here.
           return told(withAdmission(receipt, previous?.receipt));
         }
         if (!previous)

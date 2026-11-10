@@ -240,9 +240,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   const drop = useFileDrop(footer, addFiles);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
   const declinedStep = useDeclined(botId);
-  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message.
+  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message. A typed
+  // stop phrase that ended Hermes's voice chat reached no one, so the question stays.
   useEffect(() => {
-    if (declinedStep && receipt?.status === "accepted") clearDecline(botId);
+    if (declinedStep && receipt?.status === "accepted" && receipt.turn !== "none") clearDecline(botId);
   }, [receipt?.requestId, receipt?.status]);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);

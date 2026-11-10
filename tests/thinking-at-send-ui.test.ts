@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, write } from "../src/client-api";
 import { COPY_HANDOFF_MS, ECHO_PATIENCE, SENDING_ROW_MS } from "../src/app/sent-echo";
+import { draftKey, localRead, type Draft } from "../src/app/storage";
 import { defaultPreferences } from "../src/shared/types";
 import type { ActivityState, Bootstrap, Conversation, SubmissionReceipt } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -337,14 +338,34 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     expect(echo()).toBeUndefined();
   });
 
-  it("goes at once, with the message, when Hermes says a typed stop phrase admitted nothing, and says why", async () => {
+  // Nothing reached the assistant, so the words go back into the message box, and the next send is a new message.
+  it("goes at once, with the message, when Hermes says a typed stop phrase admitted nothing, says why, and keeps the draft", async () => {
     await open();
     await send();
     expect(status()).toBe("Shared is thinking...");
+    expect(container.querySelector("textarea")!.value).toBe("");
     await act(async () => sent!.resolve({ turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." }));
     expect(row()).toBeNull();
     expect(echo()).toBeUndefined();
     expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    expect(container.querySelector("textarea")!.value).toBe("Feed the horses");
+    // A reload finds the words too, no longer marked as the copy on its way.
+    expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
+    expect(localRead<Draft>(draftKey("one", "shared"))).not.toHaveProperty("sentHash");
+    expect(sendButton().disabled).toBe(false);
+  });
+
+  it("keeps the draft when a check finds a lost send was a typed stop that admitted nothing", async () => {
+    await open();
+    await send();
+    lookup = requestId => ({ requestId, status: "accepted", runId: "run", turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." });
+    await act(async () => sent!.reject(new ApiError("Hermes is unavailable.", 503)));
+    await waitForUi(() => expect(container.querySelector("textarea")!.value).toBe("Feed the horses"));
+    expect(echo()).toBeUndefined();
+    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    // A reload finds the words too, no longer marked as the copy on its way.
+    expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
+    expect(localRead<Draft>(draftKey("one", "shared"))).not.toHaveProperty("sentHash");
   });
 
   it("adds no row once Hermes says it put the message into the running turn", async () => {
