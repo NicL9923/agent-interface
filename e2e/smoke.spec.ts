@@ -173,6 +173,48 @@ test("a new release whose worker cannot install still reaches the person on thei
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
 
+test("a reply keeps growing across a tool call, and its saved segment never disappears or doubles", async ({ page }) => {
+  const saved = "Looking at the north fence.", after = "Post two is loose, so I tightened the wire and checked the gate.";
+  const reads: number[] = [];
+  page.on("request", request => { if (new URL(request.url()).pathname === "/api/bots/trail/conversation") reads.push(Date.now()); });
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Trail Cook/ }).click();
+  // Every text the transcript showed, as it changed.
+  await page.evaluate(() => {
+    const region = document.querySelector('[role="region"][aria-label="Conversation"]')!;
+    const seen: { at: number; text: string }[] = (window as unknown as { seen: typeof seen }).seen = [];
+    new MutationObserver(() => seen.push({ at: Date.now(), text: region.textContent ?? "" }))
+      .observe(region, { childList: true, subtree: true, characterData: true });
+  });
+  await page.getByRole("textbox", { name: "Message Trail Cook" }).fill("Walk the fence line");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(conversation(page).getByText(after, { exact: true })).toBeVisible();
+  const seen = await page.evaluate(() => (window as unknown as { seen: { at: number; text: string }[] }).seen);
+
+  // The segment's start never shows twice, not even as a saved copy beside a live tail still catching up.
+  // Once it showed whole, every later view holds it: never dropped.
+  const starts = (text: string) => text.split("Looking").length - 1;
+  expect(seen.filter(view => starts(view.text) > 1).map(view => view.text)).toEqual([]);
+  const whole = seen.findIndex(view => view.text.includes(saved));
+  expect(whole).toBeGreaterThanOrEqual(0);
+  expect(seen.slice(whole).filter(view => !view.text.includes(saved)).map(view => view.text)).toEqual([]);
+
+  // After the tool, the reply grew a word or so at a time, only ever forward, far more often than the chat read.
+  const shown = (text: string) => {
+    const tail = text.slice(text.indexOf("Post"));
+    let length = 0;
+    while (length < after.length && tail[length] === after[length]) length++;
+    return length;
+  };
+  const lengths = seen.filter(view => view.text.includes("Post")).map(view => shown(view.text));
+  // Text resumed with the first word after the tool, a turn read later, not with the chat's next read.
+  expect(lengths[0], lengths.join(" ")).toBeLessThanOrEqual("Post ".length);
+  for (let index = 1; index < lengths.length; index++) expect(lengths[index], lengths.join(" ")).toBeGreaterThanOrEqual(lengths[index - 1]);
+  const from = seen.find(view => view.text.includes("Post"))!.at, to = seen.find(view => view.text.includes(after))!.at;
+  const steps = new Set(lengths).size, readsMeanwhile = reads.filter(at => at >= from && at <= to).length;
+  expect(steps, `${steps} growth steps, ${readsMeanwhile} reads`).toBeGreaterThan(readsMeanwhile + 3);
+});
+
 test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
