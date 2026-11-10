@@ -100,8 +100,8 @@ first rewrite, each now fixed and covered by a case: a code span repair that rev
 raw text formatted, a link cut that removed a strike's closing `~~`, a header hold that removed a
 closer or a hard-break backslash from the line above, a strong opener inside a finished strike,
 closers merging with a closer the rule of three then split, a closer changing how an adjacent `_`
-flanked, and a link cut that emptied a list item. After the fixes, 21 search runs over about
-70,000 random strings, every prefix, found nothing.
+flanked, and a link cut that emptied a list item. After the fixes, 12 search runs over 42,000
+random strings from three fragment sets, every prefix, found nothing.
 
 ### Checks
 
@@ -114,9 +114,9 @@ flanked, and a link cut that emptied a list item. After the fixes, 21 search run
 
 ### Red proof, round 1
 
-On `969f76e`, with the new tests: 42 failed and 77 passed across the two files, including every
-finding's case, both new properties, the B1 render, which overflowed the stack, and the B7 copy
-test. The B6 input took 709 ms in that run.
+On `969f76e`, with the committed tests: 65 failed and 88 passed across the two files, including
+every finding's case, both new properties, the B1 function and render cases, which overflowed the
+stack after 6.1 s and 10.4 s, the timing case, which took 1.8 s, and the B7 copy test.
 
 Then 65 hand mutations of `streaming-tail.ts`, one guard or rule at a time: each turned at least
 one test red before the file was restored. Survivors on the first pass were resolved by adding a
