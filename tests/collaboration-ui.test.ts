@@ -293,6 +293,17 @@ describe('group conversation',()=>{
     expect(field().value).toBe('Ask @planner and @ranch ');
   });
 
+  // Ctrl+Enter and Cmd+Enter send everywhere, so the list of members must not take them as a pick.
+  it.each([['Ctrl',{ctrlKey:true}],['Cmd',{metaKey:true}]])('sends with %s+Enter while members are suggested, leaving the mention as typed',async(_,chord)=>{
+    serve();
+    vi.mocked(write).mockResolvedValue({accepted:true});
+    await act(async()=>root.render(view()));
+    await type('Ask @ra');
+    expect(suggestions()).toEqual(['@ranch']);
+    await act(async()=>field().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,...chord})));
+    expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Ask @ra'}));
+  });
+
   it('reads new events when the stream names this room, instead of polling every few seconds',async()=>{
     FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
     serve();

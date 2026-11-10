@@ -263,7 +263,8 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
                   setMentionIndex(index => (Math.min(index, suggestions.length - 1) + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length);
                   return;
                 }
-                if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
+                // Plain Enter picks the member. Ctrl+Enter and Cmd+Enter are left to send, as they do everywhere.
+                if ((event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
                 if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
               }
               if (sendsOnKey(event.nativeEvent, enterSends)) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }

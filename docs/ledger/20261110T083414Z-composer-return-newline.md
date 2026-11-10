@@ -139,3 +139,30 @@ on a phone.
 state, `npm run typecheck` and `npm run lint` passed, `npm test` passed 181 files and 2948 tests, `npm run build`
 passed, `npm run test:e2e` passed 10, and `.agents/tools/check-send-visible.mjs` kept the button whole and tappable
 in 70 of 70 cases. In a group chat, where Return now starts a new line on a phone, Send stays on screen.
+
+## Review round 2
+
+GPT-6.1 Sol reviewed `0276253..2d5db06`: ready after one fix of its own, plus the group retry fix it takes from
+`composer-keyboard-viewport`. It cleared the pointer rule on every device type it tried, including a touch screen
+with a trackpad and a desktop touch screen with no mouse, the IME guard's order in both composers, the hint
+following a pointer change, the removal of the remembered-key heuristic and its storage, and found no collision of
+Ctrl+Enter or Cmd+Enter with the global shortcuts, Find, the approval menu or the command palette. All 14 hand
+mutations in this branch's scope went red.
+
+- P2: with the group composer's list of members showing, Ctrl+Enter and Cmd+Enter picked the member instead of
+  sending. `Ask @ra` became `Ask @ranch ` and nothing was posted. An earlier note in this ledger chose that; it
+  contradicts the rule that the two chords send everywhere.
+- Fix, by the orchestrator: the list takes plain Enter and Tab. Ctrl+Enter and Cmd+Enter fall through to
+  `sendsOnKey`. No reviewer has read this fix.
+
+### Red proof
+
+"sends with Ctrl+Enter while members are suggested, leaving the mention as typed", and the Cmd case, failed before
+the fix with no message posted.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed. `npm test`: 181 files, 2958 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 10 passed in Chromium.
+- `.agents/tools/check-send-visible.mjs`: 80 of 80.
+- Safari, Firefox and a physical phone: not run for this fix.
