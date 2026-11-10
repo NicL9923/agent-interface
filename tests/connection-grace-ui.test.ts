@@ -104,6 +104,30 @@ describe('a failed conversation read', () => {
     expect(shown()).toBe(false);
   });
 
+  // The app's one connection announcement follows what the chat shows, not the first failed read, so a
+  // blip that changes nothing on screen says nothing to a screen reader either.
+  it('announces the connection is down only once the chat shows it', async () => {
+    await opened();
+    const announced = () => container.querySelector('[data-connection-announcer]')!.textContent;
+    failure = blip(); await read();
+    expect(shown()).toBe(false);
+    expect(announced()).toBe('');
+    await read();
+    expect(shown()).toBe(true);
+    expect(announced()).not.toBe('');
+    failure = undefined; await read();
+    expect(announced()).toBe('');
+  });
+
+  // The notice above the composer is rebuilt when the roster is read again. It follows what the chat shows
+  // then too, not the failed read that is still inside its grace period.
+  it('keeps the notice away through a roster refresh during the grace period', async () => {
+    await opened();
+    failure = blip(); await read();
+    await rosterChanged();
+    expect(shown()).toBe(false);
+  });
+
   it('shows the connection is down on a second failure in a row', async () => {
     await opened();
     failure = blip(); await read();

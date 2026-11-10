@@ -414,3 +414,62 @@ describe("the stream watchdog", () => {
     expect(opened()).toBe(2);
   });
 });
+
+// Owners report each stream's health, so polls that stand in for it slow down only while it is live and
+// the connection notice can say when live updates stopped.
+describe("stream health", () => {
+  const watched = () => {
+    const heard: (boolean | undefined)[] = [];
+    const stream = changeStream("/events", vi.fn(), undefined, {}, undefined, { random: middle, onHealth: up => heard.push(up) });
+    stream.open();
+    return { stream, heard };
+  };
+
+  it("is up only on data a whole ping interval after a connection opened, never on open or its greeting", () => {
+    const { stream, heard } = watched();
+    live().connect();
+    live().emit("ping", "10");
+    live().emit("groups", "groups");
+    expect(heard).toEqual([false]);
+    vi.advanceTimersByTime(10_000);
+    live().emit("ping", "10");
+    expect(heard).toEqual([false, true]);
+    // A drop is down at once, and stays down, not closed, through the replacement.
+    live().drop();
+    vi.advanceTimersByTime(1_500);
+    live().connect();
+    expect(heard).toEqual([false, true, false]);
+    stream.close();
+    expect(heard).toEqual([false, true, false, undefined]);
+  });
+
+  it("is unlisted while suspended and down again while a resumed stream waits for its retry, so the notice counts from the show", () => {
+    const { stream, heard } = watched();
+    live().fail();
+    expect(heard).toEqual([false]);
+    // A hidden page: the stream holds no connection and says nothing about the server.
+    stream.suspend();
+    expect(heard).toEqual([false, undefined]);
+    // Shown before the first retry, 1.5 s after the refusal: no attempt yet, and down while it waits.
+    vi.advanceTimersByTime(500);
+    stream.open();
+    expect(opened()).toBe(1);
+    expect(heard).toEqual([false, undefined, false]);
+    vi.advanceTimersByTime(1_000);
+    expect(opened()).toBe(2);
+    expect(heard, "the attempt changes nothing it already reported").toEqual([false, undefined, false]);
+  });
+
+  // The reviewer's reproduction: a watchdog replacement that sends headers and `retry: 3000`, then nothing.
+  it("never reports a replacement up that sent only its headers, however long it stays open", () => {
+    const { heard } = watched();
+    live().connect();
+    live().emit("ping", "10");
+    vi.advanceTimersByTime(10_000);
+    live().emit("ping", "10");
+    vi.advanceTimersByTime(25_000 + VERDICT + 1_500);
+    live().connect();
+    vi.advanceTimersByTime(54_000);
+    expect(heard).toEqual([false, true, false]);
+  });
+});

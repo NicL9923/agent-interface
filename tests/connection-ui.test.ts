@@ -528,20 +528,29 @@ describe('pushed conversation updates',()=>{
     expect(reads()).toBe(before+1);
     return stream;
   };
-  it('refetches on each change notice and otherwise polls only every 30 seconds',async()=>{
+  it('refetches on each change notice, and polls every 2 minutes while the stream is live and every 30 seconds while it is down',async()=>{
     const stream=await opened();
     const first=reads();
-    await advance(29_000);
-    expect(reads()).toBe(first);
     conversation={...conversation,messages:[...conversation.messages,{id:'answer-two',role:'assistant',text:'Pushed answer'}]};
     await act(async()=>stream.emit('message','change'));await advance(20);
     expect(reads()).toBe(first+1);
     expect(container.textContent).toContain('Pushed answer');
-    // Pings only show the stream is alive.
-    await act(async()=>stream.emit('ping','ping'));await advance(20);
+    // A live stream is the fast path, and the poll slows down to a safety net: nothing for almost 2 minutes,
+    // then a read at the first 30-second tick 2 minutes after the last read.
+    for(let tick=0;tick<12;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
     expect(reads()).toBe(first+1);
-    await advance(1_000);
-    expect(reads()).toBe(first+2);
+    for(let tick=0;tick<3;tick++){await act(async()=>stream.emit('ping','10'));await advance(10_000);}
+    expect(reads(),'the slow poll never stops').toBe(first+2);
+    // A drop: the stream retries within 2 seconds, and the poll reads at its next tick until the stream is back.
+    await act(async()=>stream.drop());
+    await advance(30_000);
+    expect(reads()).toBe(first+3);
+    const replacement=[...FakeEventSource.streams].find(item=>item.url.includes('/bots/'))!;
+    expect(replacement).not.toBe(stream);
+    await act(async()=>{replacement.connect();replacement.emit('ping','10');});await advance(20);
+    expect(reads(),'connecting reads, as notices sent meanwhile are lost').toBe(first+4);
+    for(let tick=0;tick<6;tick++){await act(async()=>replacement.emit('ping','10'));await advance(10_000);}
+    expect(reads()).toBe(first+4);
   });
   it('reloads after each reconnect, retries a refused stream within 2 seconds, and replaces a silent one within 25 seconds and its retry',async()=>{
     const stream=await opened();
@@ -585,3 +594,4 @@ describe('pushed conversation updates',()=>{
     }finally{Reflect.deleteProperty(document,'visibilityState');}
   });
 });
+
