@@ -27,8 +27,8 @@ function current() {
 const fresh = (path: string) => Date.now() - (done.get(path)?.at ?? -Infinity) < FRESH_MS;
 /**
  * The latest page being prefetched, or read a moment ago, so opening the chat joins that read
- * instead of repeating it. The chat's change stream reads again as it connects, so nothing that
- * changed since is missed.
+ * instead of repeating it. Only the chat's first load may join it: the change stream's connection
+ * and every notice after read fresh, so nothing that changed since is missed.
  */
 export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
   current();

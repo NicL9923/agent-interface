@@ -79,11 +79,19 @@ device gets it as before. Security alerts always reach every device. See
 
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
-within the session's seven days and that sign-in's last check listed the chat, so a
-signed-out browser or a chat you may not see sends no request that would be refused. The
-browser keeps only that lapse time and the chat IDs, in `agent-interface:sign-in-hint`,
-and drops them at sign-out or a refused session. A link to a message, Today or a group
-chat waits for the check as before. See `src/app/linked-chat.ts`.
+within the session's seven days and that sign-in's last check named the account and listed
+the chat, so a signed-out browser or a chat you may not see usually sends no request that
+would be refused. Two cases still cost one refused read: a session the server ended early,
+such as an account removed from the household, and an assistant made private since the
+last check. The app then shows what it shows today: the sign-in screen, or its notice that
+the assistant is no longer available. The read is tagged with the account the record names,
+and the chat shows it only if the sign-in check answers as that same account and no other
+tab has signed out or in meanwhile; otherwise the chat reads again. Only the chat's first
+load uses the early read: its change stream and later loads always read fresh. The browser
+keeps only the lapse time, the account ID and the chat IDs, in
+`agent-interface:sign-in-hint`, and drops them at sign-out, a refused session, or a check
+that finds another account. A link to a message, Today or a group chat waits for the check
+as before. See `src/app/linked-chat.ts`.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web

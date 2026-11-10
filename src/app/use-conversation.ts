@@ -139,6 +139,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
+    // Only the chat's first load may take a prefetched page. Every later load is a stream notice, a
+    // reconnect or a poll, which exists to see what changed since, so it always asks the server.
+    let opened = false;
     let watch: ReplyWatch = {};
     let announced = 0;
     let secureRequestIds = new Set<string>();
@@ -155,8 +158,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
         : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
-        // A prefetch of the latest page still on its way is that read; if it fails, read again.
-        const joined = query === firstQuery ? prefetchedFirstPage(botId) : undefined;
+        // A prefetch of the latest page, on its way or just finished, is the first load; if it fails, read again.
+        const joined = !opened && query === firstQuery ? prefetchedFirstPage(botId) : undefined;
+        opened = true;
         const result = await joined?.catch(() => undefined)
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;

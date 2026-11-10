@@ -173,6 +173,27 @@ describe("opening a chat after a prefetch", () => {
     expect(conversationReads()).toHaveLength(3);
   });
 
+  // A finished prefetch answers the chat's first load only. An empty chat has no window to start
+  // from, so every later load asks for the same first page and must not be handed the old read.
+  it("reads fresh for the stream's connection and each notice after an empty prefetch", async () => {
+    let reads = 0;
+    const empty = { ...page("barn"), messages: [] };
+    respond = path => path.includes("/conversation") ? json(++reads === 1 ? empty : page("barn", "First reply")) : json({});
+    const { prefetchFirstPage } = await import("../src/app/conversation-page");
+    prefetchFirstPage("barn");
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const container = await open();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toBe("");
+    expect(conversationReads()).toHaveLength(1);
+    // Inside the five seconds a finished prefetch stays joinable.
+    await act(async () => { [...FakeEventSource.streams][0].connect(); await vi.advanceTimersByTimeAsync(1_000); });
+    expect(conversationReads()).toHaveLength(2);
+    expect(container.textContent).toBe("First reply");
+    await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
+    expect(conversationReads()).toHaveLength(3);
+  });
+
   it("reads again itself when the prefetch fails", async () => {
     let calls = 0;
     respond = path => path.includes("/conversation")
