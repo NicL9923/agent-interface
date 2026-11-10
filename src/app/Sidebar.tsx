@@ -167,7 +167,8 @@ export const Sidebar = memo(function Sidebar({ boot, botId, shownBotId, readThro
       {season && <SeasonalAmbience season={season} />}
       <header className="home-bar">
         <AccountMenu user={boot.user} status={status} onUsage={onUsage} onSettings={onSettings} onSignOut={onSignOut} />
-        {connectionLost && <span className="home-sync" role="status">
+        {/* Seen here; the app's one connection live region announces it. */}
+        {connectionLost && <span className="home-sync">
           <Icon name="spinner" size={16} className={offline ? undefined : "spin"} />{offline ? "Offline" : "Reconnecting"}</span>}
         <span className="home-bar-actions">
           <Button className="home-round" aria-label="Search & saved" aria-pressed={view === "find"} onClick={() => onView("find")}>

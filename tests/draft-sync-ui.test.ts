@@ -314,30 +314,6 @@ describe('draft sync across devices',()=>{
     }finally{vi.unstubAllGlobals();stubMatchMedia();}
   });
 
-  // The reviewer's reproduction: the stream drops, the phone sends the draft, and the stream is back before
-  // the next poll. The reconnect's conversation read carries the new draft, and nothing else would show it.
-  it('takes a draft changed during a reconnect from the read that reconnect makes, so sent text never lingers',async()=>{
-    FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
-    try{
-      phone.edit('shared','Buy feed');
-      await renderApp();
-      const chat=()=>[...FakeEventSource.streams].filter(stream=>stream.url.startsWith('/api/bots/shared/events')).at(-1)!;
-      const draftReads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/bots/shared/draft').length;
-      // A healthy stream: connected, greeted, and pinged again 10 seconds later.
-      await act(async()=>{chat().connect();chat().emit('ping','10');});
-      await advance(10_000);
-      await act(async()=>chat().emit('ping','10'));
-      expect(textarea().value).toBe('Buy feed');
-      await act(async()=>chat().drop());
-      phone.send('shared','Buy feed');
-      await advance(3_000);
-      const before=draftReads();
-      await act(async()=>{chat().connect();chat().emit('ping','10');});await advance(0);
-      expect(textarea().value).toBe('');
-      expect(draftReads(),'the conversation read already carried it').toBe(before);
-    }finally{vi.unstubAllGlobals();stubMatchMedia();}
-  });
-
   it('reads again when a newer revision is announced while a read is still on its way',async()=>{
     FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
     try{

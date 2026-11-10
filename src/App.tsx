@@ -41,7 +41,7 @@ import { headerAvatar, morphNavigate, railAvatar } from "./app/navigation-morph"
 import { tintProps } from "./app/bot-tint";
 import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
-import { ConnectionPanel } from "./components/ConnectionPanel";
+import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
@@ -410,6 +410,7 @@ export function App() {
 
   return (
     <div className="app-shell">
+      <ConnectionAnnouncer shown={connectionLost || liveDown} connection={boot.connection} offline={offline} appUnavailable={appUnavailable} liveOnly={!connectionLost} />
       <Sidebar boot={boot} botId={botId} shownBotId={shownBotId} readThrough={readThrough} groups={homeGroups} view={view} state={state}
         connectionLost={connectionLost} offline={offline} mobile={mobile} open={railOpen} update={update}
         onSelectBot={selectFromHome} onView={showView} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}

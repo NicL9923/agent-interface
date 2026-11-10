@@ -31,26 +31,37 @@ export function SetupCommand() {
   </div>;
 }
 
-export function ConnectionPanel({ connection, offline = false, appUnavailable = false, liveOnly = false, busy, retry, compact = false }: {
+type ConnectionState = {
   connection: RuntimeStatus;
   offline?: boolean;
   appUnavailable?: boolean;
   /** The app and Hermes answer, but live updates stopped: replies and changes show late until they return. */
   liveOnly?: boolean;
+};
+/** What the connection panel says, and what the app's one connection live region announces. */
+export function connectionCopy({ connection, offline = false, appUnavailable = false, liveOnly = false }: ConnectionState) {
+  return offline ? { title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online." }
+    : appUnavailable ? { title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically." }
+    : liveOnly ? { title: "Reconnecting live updates", detail: "New replies and changes may take up to 30 seconds to show until then. Messages still send." }
+    : explanations[connection.code || "unreachable"] || explanations.unreachable!;
+}
+
+/**
+ * Shows the connection state. It is not a live region: the app announces each change once, through
+ * `ConnectionAnnouncer`, however many places show it.
+ */
+export function ConnectionPanel({ connection, offline = false, appUnavailable = false, liveOnly = false, busy, retry, compact = false }: ConnectionState & {
   busy: boolean;
   retry: () => void;
   compact?: boolean;
 }) {
-  const copy = offline ? { title: "You're offline", detail: "Your draft is kept on this device. We'll reconnect when you're back online." }
-    : appUnavailable ? { title: "Reconnecting to the app", detail: "Your conversation stays here and your draft is kept. We'll check again automatically." }
-    : liveOnly ? { title: "Reconnecting live updates", detail: "New replies and changes may take up to 30 seconds to show until then. Messages still send." }
-    : explanations[connection.code || "unreachable"] || explanations.unreachable!;
+  const copy = connectionCopy({ connection, offline, appUnavailable, liveOnly });
   return <section className={compact ? "connection-panel compact" : "connection-panel setup"} aria-label="Hermes connection">
     {!compact && <Avatar size={84} state="disconnected" offline={offline} />}
     <div className="connection-copy">
       {!compact && <p className="eyebrow">Your household workspace</p>}
       <h2>{copy.title}</h2>
-      <p role="status">{copy.detail}</p>
+      <p>{copy.detail}</p>
       {!compact && copy.setup && <>
         <ol className="setup-steps">
           <li><span aria-hidden="true">✓</span><div><strong>You're signed in</strong><small>Your household account is ready.</small></div></li>
@@ -77,4 +88,14 @@ export function ConnectionPanel({ connection, offline = false, appUnavailable = 
       </details>
     </div>
   </section>;
+}
+
+/**
+ * The app's one connection live region. It stays in the page, outside the sidebar and the view, so a
+ * change is announced on every view and at every width, including a phone's home list, which makes the
+ * view behind it inert. It is empty while the connection and live updates are well.
+ */
+export function ConnectionAnnouncer({ shown, ...state }: ConnectionState & { shown: boolean }) {
+  const copy = shown ? connectionCopy(state) : undefined;
+  return <p className="sr-only" role="status" data-connection-announcer="">{copy ? `${copy.title}. ${copy.detail}` : ""}</p>;
 }

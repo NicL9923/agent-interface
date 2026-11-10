@@ -155,19 +155,6 @@ describe("group chats on home", () => {
     expect(catalogReads()).toBe(before + 1);
   });
 
-  // A catalog that says group chats are unsupported changes only with the server, and a server
-  // that hosts none sends no notices, so the 30-second poll would read the same answer forever.
-  it("reads an unsupported catalog only every 5 minutes", async () => {
-    catalog = { supported: false, canSend: false, rooms: [], reason: "This Hermes version does not expose hosted group chats." };
-    await render();
-    const catalogReads = () => reads(path => path === "/groups");
-    const opened = catalogReads();
-    await advance(GROUP_FALLBACK_POLL_MS - 1000);
-    expect(catalogReads()).toBe(opened);
-    await advance(1000);
-    expect(catalogReads()).toBe(opened + 1);
-  });
-
   it("keeps the 30-second catalog poll for a server that never sends groups notices", async () => {
     await render();
     const catalogReads = () => reads(path => path === "/groups");

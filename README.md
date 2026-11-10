@@ -419,8 +419,9 @@ in bootstrap reloads the open chat and reconnects its stream. A stream counts as
 after its opening ping, never on connecting alone. Today, chat presence and device activity keep their
 own intervals. When the household stream or the open chat's has been down for 20 seconds, the
 connection notice says live updates are reconnecting, above the composer in a chat and at the top of
-Today, Find and group chats. It clears once the stream is live again. Manual reconnect checks
-immediately. The transport bounds
+Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
+connection change once, from one status region the whole app shares; the sidebar's Offline chip and the
+notice show the state without announcing it again. Manual reconnect checks immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.

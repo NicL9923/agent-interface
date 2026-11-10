@@ -284,7 +284,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
             {/* Headers, home and lists keep avatars still; this one moves to show live work. */}
             <Avatar avatar={selected.avatar} state={state === "blocked" ? "idle" : state} size={52} name={selected.name} botId={selected.id} offline={offline} prop={state === "working" ? prop : undefined} />
             <div className="activity-copy">
-              <div role="status" aria-atomic="true">
+              {/* Offline is the connection's news, which the app's connection live region announces once. */}
+              <div role={state === "disconnected" ? undefined : "status"} aria-atomic="true">
                 {state === "failed" || state === "interrupted" ? <>
                   <p className="recovery-title">{state === "failed" ? `${selected.name} couldn't finish.` : `${selected.name}'s task was interrupted.`}</p>
                   {conversation?.activity.detail?.trim() && <p className="recovery-detail">{conversation.activity.detail}</p>}
