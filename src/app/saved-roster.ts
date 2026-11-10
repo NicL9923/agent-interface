@@ -1,7 +1,7 @@
 import type { GroupMember, GroupRoom } from "../shared/collaboration";
-import { defaultPreferences, type Avatar, type Bootstrap, type Bot, type Preferences } from "../shared/types";
+import { avatarAccessories, avatarEyes, avatarShapes, defaultPreferences, mascotFamilies, type Avatar, type Bootstrap, type Bot, type Preferences } from "../shared/types";
 import { hintedUser } from "./account-epoch";
-import { localRead, localRemove, localSave, savedRosterKey } from "./storage";
+import { localRemove, localSave, savedRosterKey } from "./storage";
 
 /**
  * The last home this device showed a signed-in person, kept so the next visit can draw it at once
@@ -36,41 +36,63 @@ export type SavedRoster = {
 /** What home draws, from bootstrap or from the saved copy. */
 export type HomeSource = Pick<Bootstrap, "user" | "bots" | "preferences">;
 
-const text = (value: unknown): value is string => typeof value === "string";
-const texts = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
+// Every bound is the server's own for the same field (src/server/schemas.ts), or above it, so a copy
+// that bootstrap could have produced always passes and anything else is not this release's.
+/** The stored text, at most; a larger value is not read at all. */
+export const MAX_SAVED_CHARS = 200_000;
+export const LIMITS = { id: 200, name: 255, url: 2048, bots: 300, rooms: 100, members: 50, sections: 30, sectionBots: 100, favorites: 100 } as const;
+const text = (value: unknown, max: number): value is string => typeof value === "string" && value.length <= max;
+const id = (value: unknown): value is string => text(value, LIMITS.id) && value.length > 0;
+const ids = (value: unknown, max: number): value is string[] => Array.isArray(value) && value.length <= max && value.every(id);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-const avatarModes = new Set(["geometric", "mascot", "portrait"]);
-// Avatar renders whatever shape a release stored; an unknown mode or a portrait not from the app's
-// own files would make it draw something the server never said.
-const savedAvatar = (value: unknown) => value === undefined
-  || record(value) && avatarModes.has(value.mode as string) && (value.mode !== "portrait" || text(value.src) && value.src.startsWith("/api/files/"));
+const list = (value: unknown, max: number, item: (value: unknown) => boolean) => Array.isArray(value) && value.length <= max && value.every(item);
+const oneOf = (values: readonly string[]) => (value: unknown) => typeof value === "string" && values.includes(value);
+// What Avatar reads of each kind, each field as the server accepts it, so a stored avatar can never
+// make it draw something the server never said, nor throw.
+const scale = (value: unknown) => value === undefined || typeof value === "number" && value >= 0.6 && value <= 1.5;
+const face = (value: Record<string, unknown>) => typeof value.color === "string" && /^#[0-9a-f]{6}$/i.test(value.color)
+  && oneOf(avatarEyes)(value.eyes) && oneOf(avatarAccessories)(value.accessory)
+  && scale(value.eyeWidth) && scale(value.eyeHeight) && scale(value.eyeSpacing);
+const savedAvatar = (value: unknown) => value === undefined || record(value) && (
+  value.mode === "geometric" ? oneOf(avatarShapes)(value.shape) && face(value)
+  : value.mode === "mascot" ? oneOf(mascotFamilies)(value.family) && face(value)
+  : value.mode === "portrait" && text(value.src, LIMITS.url) && value.src.startsWith("/api/files/") && oneOf(["uploaded", "generated"])(value.origin));
 const savedBot = (value: unknown): value is SavedBot =>
-  record(value) && text(value.id) && text(value.name) && typeof value.shared === "boolean" && savedAvatar(value.avatar);
-const savedMember = (value: unknown): value is SavedMember =>
-  record(value) && text(value.member_id) && text(value.profile) && text(value.handle) && (value.display_name === undefined || text(value.display_name));
+  record(value) && id(value.id) && text(value.name, LIMITS.name) && typeof value.shared === "boolean" && savedAvatar(value.avatar);
+const savedMember = (value: unknown): value is SavedMember => record(value) && id(value.member_id) && id(value.profile) && id(value.handle)
+  && (value.display_name === undefined || text(value.display_name, LIMITS.name));
 const savedRoom = (value: unknown): value is SavedRoom =>
-  record(value) && text(value.room_id) && text(value.name) && Array.isArray(value.members) && value.members.every(savedMember);
-const savedSection = (value: unknown) => record(value) && text(value.id) && text(value.name) && texts(value.botIds);
-const savedOrder = (value: unknown): value is Order => record(value) && texts(value.favorites)
-  && Array.isArray(value.sections) && value.sections.every(savedSection)
-  && (value.mainBotId === undefined || text(value.mainBotId))
+  record(value) && id(value.room_id) && text(value.name, LIMITS.name) && list(value.members, LIMITS.members, savedMember);
+const savedSection = (value: unknown) => record(value) && id(value.id) && text(value.name, LIMITS.name) && ids(value.botIds, LIMITS.sectionBots);
+const savedOrder = (value: unknown): value is Order => record(value) && ids(value.favorites, LIMITS.favorites)
+  && list(value.sections, LIMITS.sections, savedSection)
+  && (value.mainBotId === undefined || id(value.mainBotId))
   && (value.mainSuggestionDismissed === undefined || typeof value.mainSuggestionDismissed === "boolean");
+// The account button shows the picture bootstrap gave, an https address.
+const picture = (value: unknown) => value === undefined || text(value, LIMITS.url) && value.startsWith("https://");
 
 /** The saved copy as stored, if it is one this release understands. Its account is not checked here. */
 export function parseSavedRoster(value: unknown): SavedRoster | null {
-  if (!record(value) || value.v !== SAVED_ROSTER_VERSION || !text(value.user)) return null;
+  if (!record(value) || value.v !== SAVED_ROSTER_VERSION || !id(value.user)) return null;
   const me = value.me;
-  if (!record(me) || !text(me.name) || me.picture !== undefined && !text(me.picture)) return null;
-  if (!Array.isArray(value.bots) || !value.bots.length || !value.bots.every(savedBot)) return null;
-  if (!savedOrder(value.order) || !Array.isArray(value.rooms) || !value.rooms.every(savedRoom)) return null;
+  if (!record(me) || !text(me.name, LIMITS.name) || !picture(me.picture)) return null;
+  if (!Array.isArray(value.bots) || !value.bots.length || !list(value.bots, LIMITS.bots, savedBot)) return null;
+  if (!savedOrder(value.order) || !list(value.rooms, LIMITS.rooms, savedRoom)) return null;
   return value as SavedRoster;
+}
+/** The stored copy, unread when larger than any this release writes. */
+function storedRoster() {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(savedRosterKey); } catch { return null; }
+  if (raw === null || raw.length > MAX_SAVED_CHARS) return null;
+  try { return parseSavedRoster(JSON.parse(raw)); } catch { return null; }
 }
 
 /** The saved home of the account this browser's sign-in names, or nothing. */
 export function readSavedRoster(): SavedRoster | null {
   const user = hintedUser();
   if (!user) return null;
-  const saved = parseSavedRoster(localRead(savedRosterKey));
+  const saved = storedRoster();
   return saved?.user === user ? saved : null;
 }
 
@@ -87,8 +109,14 @@ export function savedHome(saved: SavedRoster): HomeSource {
   };
 }
 
-/** Group chats from the saved copy, field by field, with no latest message. */
-export const savedRooms = (saved: SavedRoster): GroupRoom[] => saved.rooms.map(({ room_id, name, members }) => ({
+/**
+ * The saved rooms whose every member is an assistant in `bots`, the roster bootstrap just gave, when
+ * there is one: a room with an assistant this person can no longer use is not theirs to see.
+ */
+const usable = (rooms: SavedRoom[], bots?: { id: string }[]) =>
+  bots ? rooms.filter(room => room.members.every(member => bots.some(bot => bot.id === member.member_id))) : rooms;
+/** Group chats from the saved copy, field by field, with no latest message, kept to `bots` when given. */
+export const savedRooms = (saved: SavedRoster, bots?: { id: string }[]): GroupRoom[] => usable(saved.rooms, bots).map(({ room_id, name, members }) => ({
   room_id, name, members: members.map(({ member_id, profile, handle, display_name }) => ({ member_id, profile, handle, ...display_name ? { display_name } : {} })),
 }));
 
@@ -99,7 +127,7 @@ export const savedRooms = (saved: SavedRoster): GroupRoom[] => saved.rooms.map((
  */
 export function rememberRoster(boot: HomeSource, rooms: GroupRoom[] | null) {
   if (hintedUser() !== boot.user.id || !boot.bots.length) return localRemove(savedRosterKey);
-  const previous = parseSavedRoster(localRead(savedRosterKey));
+  const previous = storedRoster();
   const next: SavedRoster = {
     v: SAVED_ROSTER_VERSION,
     user: boot.user.id,
@@ -114,8 +142,10 @@ export function rememberRoster(boot: HomeSource, rooms: GroupRoom[] | null) {
     rooms: rooms?.map(room => ({ room_id: room.room_id, name: room.name, members: room.members.map(member => ({
       member_id: member.member_id, profile: member.profile, handle: member.handle,
       ...member.display_name ? { display_name: member.display_name } : {},
-    })) })) ?? (previous?.user === boot.user.id ? previous.rooms : []),
+    })) })) ?? (previous?.user === boot.user.id ? usable(previous.rooms, boot.bots) : []),
   };
   if (previous && JSON.stringify(previous) === JSON.stringify(next)) return;
+  // A home past any bound would not be read back, so nothing is kept rather than a copy that never draws.
+  if (!parseSavedRoster(next) || JSON.stringify(next).length > MAX_SAVED_CHARS) return localRemove(savedRosterKey);
   localSave(savedRosterKey, next);
 }

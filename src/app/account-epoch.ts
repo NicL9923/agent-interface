@@ -27,6 +27,11 @@ export type AuthEpoch = {
   changing?: true;
   /** Settled with no session. */
   signedOut?: true;
+  /**
+   * With `signedOut`: this browser signed out while the server could not be reached, so the server's
+   * session may still be live. Nothing reads with it; the sign-in screen ends it on the server first.
+   */
+  logout?: true;
   /** The account the last answer named, kept through a sign-out so the next sign-in can tell another account from the same one. */
   user?: string;
 };
@@ -53,8 +58,9 @@ function store(text: string) {
   return stored();
 }
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const settled = (fields: Pick<AuthEpoch, "signedOut" | "user">) =>
-  JSON.stringify({ id: newId(), at: Date.now(), ...fields.signedOut ? { signedOut: true } : {}, ...fields.user ? { user: fields.user } : {} } satisfies AuthEpoch);
+type Settled = Pick<AuthEpoch, "signedOut" | "user" | "logout">;
+const settled = (fields: Settled) => JSON.stringify({ id: newId(), at: Date.now(), ...fields.signedOut ? { signedOut: true } : {},
+  ...fields.signedOut && fields.logout ? { logout: true } : {}, ...fields.user ? { user: fields.user } : {} } satisfies AuthEpoch);
 const changingNow = (record: AuthEpoch | null) => !!record?.changing && Date.now() - record.at < CHANGE_STALE_MS;
 
 // Never equal to stored text: a tab that loads during another tab's transition acts under nothing until it settles.
@@ -189,11 +195,13 @@ export function accountStart(): AccountStart {
   }
   held = seen = now;
   guarding = true;
-  return { start: generation > 0 && record?.signedOut ? "signed-out" : "bootstrap", leftAccount: endedShown };
+  // A sign-out whose server session may still be live shows sign-in even on a fresh page, which would otherwise read it.
+  const out = !!record?.signedOut && (generation > 0 || !!record.logout);
+  return { start: out ? "signed-out" : "bootstrap", leftAccount: endedShown };
 }
 
 /** Writes a settled record and ends this tab's generation, as every other tab will. */
-function transition(fields: Pick<AuthEpoch, "signedOut" | "user">) {
+function transition(fields: Settled) {
   owned = null;
   seen = store(settled(fields));
   end();
@@ -217,7 +225,7 @@ export function beginAccountChange({ ownTree = false } = {}) {
   owned = held = seen = mark;
   era++;
   return {
-    settle(fields: Pick<AuthEpoch, "signedOut" | "user">) {
+    settle(fields: Settled) {
       transition(fields);
     },
     undo() {
@@ -268,6 +276,20 @@ export function accountNamed(user: string, drawn: string | undefined) {
   }
   shown = true;
   return true;
+}
+
+/** The account this browser signed out of while the server could not be reached, until the server's session ends. */
+export function pendingSignOut() {
+  const record = current();
+  return record?.signedOut && record.logout ? record.user ?? "" : null;
+}
+/** The server's session ended. Only the mark goes: every tab already shows sign-in. */
+export function signOutFinished() {
+  const record = current();
+  if (!record?.signedOut || !record.logout) return;
+  const mine = stored() === held;
+  const now = store(settled({ signedOut: true, user: record.user }));
+  if (mine) held = seen = now;
 }
 
 /** Notifications already on screen for an account that left this browser. */

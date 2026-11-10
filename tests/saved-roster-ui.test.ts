@@ -4,7 +4,8 @@ import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
-import { savedRosterKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, savedRosterKey, savedThemeKey, signInHintKey } from "../src/app/storage";
+import { LIMITS, MAX_SAVED_CHARS } from "../src/app/saved-roster";
 import type { GroupCatalog } from "../src/shared/collaboration";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -116,6 +117,14 @@ const rail = () => container.querySelector<HTMLElement>(".bot-rail");
 const railText = () => rail()?.textContent ?? "";
 const row = (name: string) => [...rail()!.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
 const welcome = () => container.querySelector(".welcome");
+/**
+ * What the rows say that only the server can know, as a person sees it or a screen reader reads it:
+ * an unread mark, an activity, a date.
+ */
+const notKnown = () => [...rail()!.querySelectorAll("button")].flatMap(item => [
+  ...item.textContent?.match(/Unread|Thinking|Working|Waiting|Needs your help|Done/g) ?? [],
+  ...[...item.querySelectorAll("time")].map(time => time.textContent),
+]);
 /** What the app's one connection live region says. */
 const announced = () => [...container.querySelectorAll('[role="status"]')].map(region => region.textContent).join(" ").trim();
 /** Home's rows top to bottom, by name. */
@@ -131,7 +140,7 @@ describe("the home this device saved", () => {
     expect(railText()).toContain("Ranch work");
     // No message, time, unread mark or activity from the last visit is shown as if current.
     expect(railText()).not.toMatch(/Fence check|Grocery list|Beans at six|Working/);
-    expect(rail()!.querySelectorAll("time, .unread-mark, .bot-activity")).toHaveLength(0);
+    expect(notKnown()).toEqual([]);
     expect(row("Ranch Hand").textContent).toContain("Personal assistant");
     expect(row("Supper plans").textContent).toContain("Group chat with Home and Trail Cook");
     expect(row("Supper plans").textContent).not.toContain("No messages yet");
@@ -159,7 +168,8 @@ describe("the home this device saved", () => {
     expect(row("Ranch Hand")).toBe(ranch);
     expect(document.activeElement).toBe(ranch);
     expect(ranch.textContent).toContain("Fence check is done.");
-    expect(ranch.querySelector(".unread-mark")).not.toBeNull();
+    // The row's name, as a screen reader reads it, now says it is unread.
+    expect(ranch.textContent).toContain("Unread");
     expect(railText()).not.toContain("Connecting");
     // The rooms stay as saved until the catalog answers, rather than leaving and coming back, and stay saved.
     expect(row("Supper plans").textContent).toContain("Group chat with Home and Trail Cook");
@@ -197,7 +207,7 @@ describe("the home this device saved", () => {
     await open();
     expect(order()).toEqual(["Home", "Ranch Hand", "Trail Cook", "Supper plans"]);
     expect(railText()).not.toMatch(/Fence check|Beans at six|Working/);
-    expect(rail()!.querySelectorAll("time, .unread-mark, .bot-activity")).toHaveLength(0);
+    expect(notKnown()).toEqual([]);
   });
 
   // Each falls back to the page without it: the welcome screen until bootstrap answers.
@@ -296,9 +306,14 @@ describe("whose saved home it is", () => {
     store(savedRosterKey, savedOne);
     await open();
     expect(rail()).not.toBeNull();
+    // Another tab's sign-out, as it writes it (src/app/account-change.ts).
     localStorage.removeItem(signInHintKey);
-    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: signInHintKey, newValue: null })));
-    expect([!!welcome(), !!rail()]).toEqual([true, false]);
+    localStorage.removeItem(savedRosterKey);
+    store(authEpochKey, { id: "elsewhere", at: NOW, signedOut: true, user: "one" });
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: authEpochKey })));
+    await advance(0);
+    expect(rail()).toBeNull();
+    expect(button("Enter local workspace")).toBeDefined();
   });
 });
 
@@ -330,3 +345,224 @@ describe("using the saved home before bootstrap answers", () => {
     expect(row("Ranch Hand").textContent).toContain("Fence check is done.");
   });
 });
+
+// What every signed-in browser holds since the account record: the record, the hint and the copy.
+const signedInAsOne = (hint = hintFor("one")) => {
+  store(authEpochKey, { id: "earlier", at: NOW - 60_000, user: "one" });
+  store(signInHintKey, hint);
+  store(savedRosterKey, savedOne);
+};
+/** Another tab's sign-out of member one, written as that tab writes it, and heard only if `heard`. */
+async function signedOutElsewhere(heard: boolean) {
+  localStorage.removeItem(signInHintKey);
+  localStorage.removeItem(savedRosterKey);
+  store(authEpochKey, { id: "elsewhere", at: NOW, signedOut: true, user: "one" });
+  if (heard) await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: authEpochKey })));
+  await advance(0);
+}
+const showsSavedHome = () => railText().includes("Ranch Hand");
+
+describe("the saved home held in memory", () => {
+  it("goes when storage is cleared, at the event that says so however late, and the answer before it is not drawn", async () => {
+    signedInAsOne();
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    localStorage.clear();
+    // The bootstrap made as member one answers before the event arrives; it is discarded, and the home with it.
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    expect(showsSavedHome()).toBe(false);
+    expect(welcome()).not.toBeNull();
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: null })));
+    expect(showsSavedHome()).toBe(false);
+    // Starting again, the server says who is signed in.
+    expect(reads("GET /bootstrap")).toHaveLength(2);
+  });
+
+  it("goes at the event when storage is cleared and nothing else has happened", async () => {
+    signedInAsOne();
+    await open();
+    localStorage.clear();
+    expect(showsSavedHome()).toBe(true);
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: null })));
+    await advance(0);
+    expect(showsSavedHome()).toBe(false);
+  });
+
+  it("goes when the sign-in hint lapses, at that moment, and bootstrap is asked again", async () => {
+    signedInAsOne(hintFor("one"));
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    await advance(59_000);
+    expect(showsSavedHome()).toBe(true);
+    await advance(1_000);
+    expect(showsSavedHome()).toBe(false);
+    expect([savedRoster(), localStorage.getItem(signInHintKey)]).toEqual([null, null]);
+    expect(reads("GET /bootstrap")).toHaveLength(2);
+  });
+
+  it.each([
+    ["shown from the back-forward cache", () => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }))],
+    ["shown again", () => document.dispatchEvent(new Event("visibilitychange"))],
+  ])("goes when the page is %s after a sign-out elsewhere it never heard", async (_name, wake) => {
+    signedInAsOne();
+    await open();
+    await signedOutElsewhere(false);
+    expect(showsSavedHome()).toBe(true);
+    await act(async () => wake());
+    await advance(0);
+    expect(showsSavedHome()).toBe(false);
+    expect(button("Enter local workspace")).toBeDefined();
+  });
+
+  it("is not drawn again by the bootstrap made before another tab's sign-out removed it", async () => {
+    signedInAsOne();
+    await open();
+    await signedOutElsewhere(true);
+    expect(button("Enter local workspace")).toBeDefined();
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    expect(rail()).toBeNull();
+    expect(container.textContent).not.toMatch(/Ranch Hand|Sam Rivers/);
+  });
+});
+
+describe("the first answer that refuses the session", () => {
+  it("removes the copy, the hint and the theme, and shows sign-in in this tab", async () => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    await open();
+    expect(showsSavedHome()).toBe(true);
+    await answer("GET /bootstrap?roster=lean", 401, { error: "Sign in required", code: "session_expired" });
+    expect(button("Enter local workspace")).toBeDefined();
+    expect(rail()).toBeNull();
+    expect([savedRoster(), localStorage.getItem(signInHintKey), localStorage.getItem(savedThemeKey)]).toEqual([null, null, null]);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ signedOut: true, user: "one" });
+  });
+});
+
+describe("what a saved copy may hold", () => {
+  const long = (length: number) => "x".repeat(length);
+  const bot = (avatar: unknown) => ({ ...savedOne, bots: [{ id: "home", name: "Home", shared: true, avatar }] });
+  const geometric = { mode: "geometric", shape: "blob", color: "#1084FE", eyes: "oval", accessory: "none" };
+  const mascot = { mode: "mascot", family: "bear", color: "#FF9800", eyes: "round", accessory: "hat" };
+  const portrait = { mode: "portrait", src: "/api/files/home.png", origin: "uploaded" };
+  const many = <T,>(count: number, item: (index: number) => T) => Array.from({ length: count }, (_, index) => item(index));
+  const room = (members: unknown[]) => ({ ...savedOne, rooms: [{ room_id: "supper", name: "Supper plans", members }] });
+  const member = { member_id: "home", profile: "home", handle: "home" };
+
+  // One case per field and bound, each one the server would never have sent. Every one falls back to
+  // the page without the copy, and none reaches the avatar or the rail to break it.
+  it.each([
+    ["a geometric avatar's color that is not a color", bot({ ...geometric, color: { r: 1 } })],
+    ["a geometric avatar's unknown shape", bot({ ...geometric, shape: "hexagon" })],
+    ["a geometric avatar's unknown eyes", bot({ ...geometric, eyes: "laser" })],
+    ["a geometric avatar's unknown accessory", bot({ ...geometric, accessory: "cape" })],
+    ["a geometric avatar's eye width past the server's range", bot({ ...geometric, eyeWidth: 1.6 })],
+    ["a geometric avatar's eye height that is not a number", bot({ ...geometric, eyeHeight: "1" })],
+    ["a geometric avatar's eye spacing under the server's range", bot({ ...geometric, eyeSpacing: 0.5 })],
+    ["a mascot's unknown family", bot({ ...mascot, family: "dragon" })],
+    ["a mascot's color that is not a color", bot({ ...mascot, color: "orange" })],
+    ["a portrait's unknown origin", bot({ ...portrait, origin: "found" })],
+    ["a portrait's address past its bound", bot({ ...portrait, src: `/api/files/${long(LIMITS.url)}` })],
+    ["an assistant's name past its bound", { ...savedOne, bots: [{ id: "home", name: long(LIMITS.name + 1), shared: true }] }],
+    ["an assistant's empty ID", { ...savedOne, bots: [{ id: "", name: "Home", shared: true }] }],
+    ["an assistant's ID past its bound", { ...savedOne, bots: [{ id: long(LIMITS.id + 1), name: "Home", shared: true }] }],
+    ["more assistants than its bound", { ...savedOne, bots: many(LIMITS.bots + 1, index => ({ id: `b${index}`, name: "B", shared: true })) }],
+    ["the account's name past its bound", { ...savedOne, me: { name: long(LIMITS.name + 1) } }],
+    ["the account's picture from a plain address", { ...savedOne, me: { name: "Sam", picture: "http://lh3.googleusercontent.com/sam" } }],
+    ["the account's picture past its bound", { ...savedOne, me: { name: "Sam", picture: `https://${long(LIMITS.url)}` } }],
+    ["more rooms than their bound", { ...savedOne, rooms: many(LIMITS.rooms + 1, index => ({ room_id: `r${index}`, name: "R", members: [] })) }],
+    ["a room's name past its bound", { ...savedOne, rooms: [{ room_id: "supper", name: long(LIMITS.name + 1), members: [] }] }],
+    ["more room members than their bound", room(many(LIMITS.members + 1, () => member))],
+    ["a room member's name past its bound", room([{ ...member, display_name: long(LIMITS.name + 1) }])],
+    ["more sections than their bound", { ...savedOne, order: { ...savedOne.order, sections: many(LIMITS.sections + 1, index => ({ id: `s${index}`, name: "S", botIds: [] })) } }],
+    ["a section with more assistants than its bound", { ...savedOne, order: { ...savedOne.order, sections: [{ id: "s", name: "S", botIds: many(LIMITS.sectionBots + 1, index => `b${index}`) }] } }],
+    ["more pinned assistants than their bound", { ...savedOne, order: { ...savedOne.order, favorites: many(LIMITS.favorites + 1, index => `b${index}`) } }],
+    ["a main assistant ID past its bound", { ...savedOne, order: { ...savedOne.order, mainBotId: long(LIMITS.id + 1) } }],
+    ["a stored value larger than any this release writes", { ...savedOne, extra: long(MAX_SAVED_CHARS) }],
+  ])("is not drawn with %s", async (_name, saved) => {
+    signedInAsOne();
+    store(savedRosterKey, saved);
+    await open();
+    expect([!!welcome(), !!rail()]).toEqual([true, false]);
+  });
+
+  it("is drawn at every bound's limit, so a copy bootstrap could produce always shows", async () => {
+    signedInAsOne();
+    store(savedRosterKey, { ...savedOne, me: { name: long(LIMITS.name), picture: `https://${long(LIMITS.url - 8)}` },
+      bots: [{ id: long(LIMITS.id), name: long(LIMITS.name), shared: true, avatar: { ...geometric, eyeWidth: 1.5, eyeHeight: 0.6 } },
+        ...savedOne.bots, { id: "fox", name: "Fox", shared: false, avatar: mascot }, { id: "pic", name: "Pic", shared: false, avatar: portrait }] });
+    await open();
+    expect(railText()).toContain(long(LIMITS.name));
+    expect(railText()).toContain("Fox");
+  });
+});
+
+describe("saved rooms against the roster bootstrap verified", () => {
+  it("drop a room whose assistant left the roster at once, and keep it dropped when the catalog fails", async () => {
+    signedInAsOne();
+    await open();
+    expect(railText()).toContain("Supper plans");
+    // Trail Cook, a member of Supper plans, is no longer this person's.
+    await answer("GET /bootstrap?roster=lean", 200, { ...one, bots: one.bots.filter(item => item.id !== "trail") });
+    expect(railText()).not.toContain("Supper plans");
+    await answer("GET /groups", 500, { error: "Hermes is restarting" });
+    expect(railText()).not.toContain("Supper plans");
+    expect((savedRoster() as typeof savedOne).rooms).toEqual([]);
+  });
+
+  it("keep a room whose assistants all remain while the catalog fails", async () => {
+    signedInAsOne();
+    await open();
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    await answer("GET /groups", 500, { error: "Hermes is restarting" });
+    expect((savedRoster() as typeof savedOne).rooms).toEqual(savedOne.rooms);
+  });
+});
+
+describe("signing out from the saved home when the app cannot be reached", () => {
+  it("signs out of this device at once, in every tab, and ends the server's session once it answers", async () => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    await open();
+    await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+    await act(async () => button("Sign out of this device").click());
+    await advance(0);
+    expect(button("Enter local workspace")).toBeDefined();
+    expect(rail()).toBeNull();
+    expect([savedRoster(), localStorage.getItem(signInHintKey), localStorage.getItem(savedThemeKey)]).toEqual([null, null, null]);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ signedOut: true, logout: true, user: "one" });
+    // Coming back to the page while that is on its way reads nothing more.
+    const bootstraps = reads("GET /bootstrap").length;
+    await advance(6_000);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(reads("GET /bootstrap")).toHaveLength(bootstraps);
+    // The sign-in screen reads bootstrap only for the token the server's sign-out needs, and shows none of it.
+    const logoutBefore = reads("POST /auth/logout").length;
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    expect(reads("POST /auth/logout")).toHaveLength(logoutBefore + 1);
+    expect(container.textContent).not.toMatch(/Ranch Hand|Sam Rivers/);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).not.toHaveProperty("logout");
+  });
+
+  it("reads nothing as that account on a later page while the server's session may still be live", async () => {
+    store(authEpochKey, { id: "offline", at: NOW - 60_000, signedOut: true, logout: true, user: "one" });
+    // A later page: its own copy of every module, as a new page load has.
+    vi.resetModules();
+    const { App: FreshApp } = await import("../src/App");
+    history.replaceState(null, "", "/");
+    await act(async () => root.render(createElement(FreshApp)));
+    expect(button("Enter local workspace")).toBeDefined();
+    // The one bootstrap it makes ends the session; a failure leaves the mark for the next try.
+    await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+    expect(reads("POST /auth/logout")).toHaveLength(0);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ logout: true });
+    expect(button("Enter local workspace")).toBeDefined();
+  });
+
+  it("is not offered while the app is still connecting", async () => {
+    signedInAsOne();
+    await open();
+    expect(container.textContent).not.toContain("Sign out of this device");
+  });
+});
+

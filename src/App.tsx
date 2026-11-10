@@ -48,10 +48,9 @@ import { waitingOnClose, type SheetClose } from "./app/close-request";
 import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
 import { prefetchLinkedChat } from "./app/linked-chat";
-import { savedRosterKey, signInHintKey } from "./app/storage";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 import { accountGeneration, accountStart, checkHintExpiry, hintUntil, watchAccount } from "./app/account-epoch";
-import { signOutOf } from "./app/account-change";
+import { signOutHere, signOutOf } from "./app/account-change";
 
 /**
  * The app for one account generation at a time (see account-epoch.ts). A sign-in, sign-out, refused
@@ -123,15 +122,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // Phones open on the home list unless a link names a destination.
   const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
   const mobile = useMobile();
-  // The home this device last showed, drawn until bootstrap answers. Read again when another tab signs in or out.
-  const [saved, setSaved] = useState(readSavedRoster);
-  useEffect(() => {
-    const changed = (event: StorageEvent) => {
-      if (event.key === null || event.key === signInHintKey || event.key === savedRosterKey) setSaved(readSavedRoster());
-    };
-    window.addEventListener("storage", changed);
-    return () => window.removeEventListener("storage", changed);
-  }, []);
+  // The home this device last showed, drawn until bootstrap answers. Read once per account generation:
+  // whatever ends it, a change of account in any tab, a sign-out, a refused session, cleared storage
+  // or the sign-in hint's lapse, ends the generation and this copy with it (see App).
+  const [saved] = useState(readSavedRoster);
   /** Set once the person picks a chat or view on the saved home, so the start page does not replace it. */
   const chosenEarly = useRef(false);
   // An assistant this person just deleted leaves quietly; any other one explains itself.
@@ -174,7 +168,9 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
   // Until the catalog answers, home keeps this account's saved rooms in place (see saved-roster.ts).
   const roomsSaved = !catalog && !groupLoad.error && !!saved && (!userId || saved.user === userId);
-  const rooms = useMemo(() => roomsSaved && saved ? savedRooms(saved) : orderRooms(catalog?.rooms ?? []), [catalog, roomsSaved, saved]);
+  // Once bootstrap has reached Hermes, a saved room with an assistant no longer in the roster goes at once.
+  const verifiedBots = boot?.connection.connected ? boot.bots : undefined;
+  const rooms = useMemo(() => roomsSaved && saved ? savedRooms(saved, verifiedBots) : orderRooms(catalog?.rooms ?? []), [catalog, roomsSaved, saved, verifiedBots]);
   const reloadGroups = useStableCallback(() => void groupLoad.reload());
   useEffect(() => {
     if (!userId) return;
@@ -491,6 +487,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>
           <p>{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
           {appUnavailable && <button onClick={refreshSession}>Try again</button>}
+          {/* Account is disabled until the app answers, so this is the way out for someone else at this browser. */}
+          {appUnavailable && <button onClick={() => signOutHere(earlyHome.user.id)}>Sign out of this device</button>}
         </main>
       </div>
     );
