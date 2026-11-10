@@ -173,14 +173,12 @@ The rest of this section is web-only. The avatar conductor and pose math that iO
 ### Crash reports
 
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
-Reload instead of a blank screen. A lazy screen whose file is gone, as when a tab stayed open
-across a deploy, makes the tab reload itself once, onto the release the server now has. The
-server answers a missing `/assets/` path with an uncached plain-text 404, never the app
-shell, and Vite reports the failed import as `vite:preloadError`. The tab does not reload
-while a send is on its way, a file is still uploading, or the open chat's draft differs from
-the copy saved on the device. It reloads at most once per tab every five minutes, timed in
-`sessionStorage` so the reload cannot reset it, and not at all when that storage is blocked.
-Otherwise the screen shows its own Reload prompt. See `src/app/chunk-recovery.ts`. Chat and group drafts are written to the device on
+Reload instead of a blank screen. A lazy screen that cannot load, as when a tab stayed
+open across a deploy and the screen's file is gone, says "This screen could not load" with
+Reload, and the rest of the app keeps working. The server answers a missing `/assets/` path
+with an uncached plain-text 404, never the app shell. The page never reloads itself; Reload
+loads the release the server has now, since the worker fetches the app shell from the network
+first. Chat and group drafts are written to the device on
 every edit, so a reload keeps them. While someone is signed in, the web client sends
 that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
 distinct report once, at most five per page load, and never chunk-load failures the
@@ -570,7 +568,7 @@ starts the real app server and built client on loopback ports 4173 and 4174, in 
 with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
 network. It covers sign-in, sending a message and receiving the reply over the live event
 stream, the service worker opening the app offline and recovering, a lazy screen whose file
-a deploy retired reloading the tab once and then offering Reload, and no page errors,
+a deploy retired offering Reload without reloading on its own, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.

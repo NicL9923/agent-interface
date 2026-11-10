@@ -29,7 +29,7 @@ class LoadFailure extends Component<{ children: ReactNode; fallback?: ReactNode 
   render() {
     return this.state.failed
       ? this.props.fallback ?? <div className="notice error panel-failure" role="alert">
-        <span>This screen could not load. Check your connection, then reload to try again.</span>
+        <span>This screen could not load. The app may have been updated, or the connection dropped. Reload to try again.</span>
         <button type="button" onClick={() => location.reload()}>Reload</button>
       </div>
       : this.props.children;

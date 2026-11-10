@@ -50,17 +50,13 @@ export type Pending = {
 // browser already saved, such as a request whose outcome is uncertain and must be retried, not resent.
 export const draftKey = (user: string, bot: string) =>
   `agent-interface:draft:${user}:${bot}`;
-/** Starts every saved send that has not settled. See sendPending in chunk-recovery.ts. */
-export const submissionPrefix = "agent-interface:submission:";
 export const submissionKey = (user: string, bot: string) =>
-  `${submissionPrefix}${user}:${bot}`;
+  `agent-interface:submission:${user}:${bot}`;
 export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
 /** In sessionStorage: a sign-in flow belongs to this tab. */
 export const integrationFlowKey = (user: string, profile: string) => `integration-flow:${user ? `${user}:` : ""}${profile}`;
 export const groupCreateKey = (user: string) => `agent-interface:group-create:${user}`;
-/** Starts every group send that has not settled, and, with `:draft` after the room, its draft. */
-export const groupSendPrefix = "agent-interface:group-send:";
-export const groupSendKey = (user: string, room: string) => `${groupSendPrefix}${user}:${room}`;
+export const groupSendKey = (user: string, room: string) => `agent-interface:group-send:${user}:${room}`;
 export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
 /** In sessionStorage: retain an unclear approval decision across navigation and reloads. */
 export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;

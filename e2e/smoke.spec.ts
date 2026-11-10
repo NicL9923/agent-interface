@@ -65,12 +65,13 @@ test.describe("after a deploy retires a lazy screen's file", () => {
   // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
   test.use({ serviceWorkers: "block" });
 
-  test("the tab reloads itself once, then leaves the screen's Reload prompt", async ({ page, allowConsoleError }) => {
+  test("the screen offers Reload and leaves the page alone until the person takes it", async ({ page, allowConsoleError }) => {
     // Chromium logs the refused file, and React the screen error the prompt handles. Nothing else is excused.
     allowConsoleError.push(/status of 404/, /dynamically imported module/);
     await signIn(page);
     // The page asks for a name this build never had, as a page from the previous release would, and the real server answers.
-    await page.route(/\/assets\/UsagePanel-[^/]+\.js$/, route => route.continue({ url: route.request().url().replace(/UsagePanel-[^/]+\.js$/, "UsagePanel-retired0.js") }));
+    const retired = /\/assets\/UsagePanel-[^/]+\.js$/;
+    await page.route(retired, route => route.continue({ url: route.request().url().replace(/UsagePanel-[^/]+\.js$/, "UsagePanel-retired0.js") }));
     let loads = 0;
     page.on("load", () => { loads++; });
     const openUsage = async () => {
@@ -79,11 +80,18 @@ test.describe("after a deploy retires a lazy screen's file", () => {
     };
 
     await openUsage();
-    await expect.poll(() => loads).toBe(1);
+    const prompt = page.getByRole("alert").filter({ hasText: "This screen could not load." });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toContainText("The app may have been updated");
+    // Nothing reloaded under the person: the rest of the app is still the page they had.
+    expect(loads).toBe(0);
     await expect(assistants(page)).toBeVisible();
 
+    // Reload asks the server for the app again, and the screen opens from what it has now.
+    await page.unroute(retired);
+    await prompt.getByRole("button", { name: "Reload" }).click();
+    await expect.poll(() => loads).toBe(1);
     await openUsage();
-    await expect(page.getByRole("alert").filter({ hasText: "This screen could not load." })).toBeVisible();
-    expect(loads).toBe(1);
+    await expect(page.getByText("2 banked resets")).toBeVisible();
   });
 });
