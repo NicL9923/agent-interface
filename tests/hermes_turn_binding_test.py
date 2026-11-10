@@ -657,29 +657,51 @@ class SteeringRuleTests(unittest.TestCase):
                 {"row_id": 14, "role": "user", "text": "Avoid flights", "timestamp": 5}]
 
     def test_a_steer_binds_only_when_one_row_of_its_finished_turn_can_be_its_own(self):
-        # (case, root's reported turn rows, other receipts, row the steer is bound to). Row 14 is the next
-        # turn's first row, outside the root's turn.
+        # (case, root's reported turn rows, other receipts, when the steer was sent, row the steer is bound to).
+        # Row 14 is the next turn's first row, outside the root's turn. Row 12 was saved at time 3.
         cases = [
-            ("one row in the turn", "[10, 11, 12, 13]", [], 12),
-            ("the turn has not finished", None, [], None),
-            ("two rows in the turn", "[10, 11, 12, 13, 14]", [], None),
-            ("only a row after the turn", "[10, 11, 13]", [], None),
-            ("another unbound steer with the words", "[10, 11, 12, 13]", [("bob-1", None, "Avoid flights", 1)], None),
-            ("another bound steer with the words", "[10, 11, 12, 13]", [("bob-1", 99, "Avoid flights", 1)], None),
-            ("the row held by another receipt", "[10, 11, 12, 13]", [("bob-2", 12, "Something else", 0)], None),
+            ("one row in the turn", "[10, 11, 12, 13]", [], 2, 12),
+            ("the turn has not finished", None, [], 2, None),
+            ("two rows in the turn", "[10, 11, 12, 13, 14]", [], 2, None),
+            ("only a row after the turn", "[10, 11, 13]", [], 2, None),
+            ("another unbound steer with the words", "[10, 11, 12, 13]", [("bob-1", None, "Avoid flights", 1)], 2, None),
+            ("another bound steer with the words", "[10, 11, 12, 13]", [("bob-1", 99, "Avoid flights", 1)], 2, None),
+            ("the row held by another receipt", "[10, 11, 12, 13]", [("bob-2", 12, "Something else", 0)], 2, None),
+            # A row saved before the steer was sent is someone else's words. One second covers the gap between
+            # the add-on's clock at the receipt and Hermes's at the row.
+            ("the row saved a second before the steer was sent", "[10, 11, 12, 13]", [], 4, 12),
+            ("the row saved more than a second before the steer was sent", "[10, 11, 12, 13]", [], 4.5, None),
         ]
-        for name, extent, others, expected in cases:
+        for name, extent, others, sent, expected in cases:
             with self.subTest(name), StoredRows(copy.deepcopy(self.MESSAGES)) as hermes:
                 db = hermes.journal.db
                 with db:
                     receipt(db, "alice-1", 10, 1, text="Plan the trip", actor="alice")
                     db.execute("UPDATE receipts SET turn_rows=? WHERE request_id='alice-1'", (extent,))
-                    receipt(db, "kim-1", None, 2, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
+                    receipt(db, "kim-1", None, sent, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
                     for request_id, row, text, steering in others:
                         receipt(db, request_id, row, 3, run_id="alice-1" if steering else None, text=text, steering=steering, actor="bob")
                 shown = {row["row_id"]: row.get("app_request_id") for row in hermes.open()["messages"] if row["role"] == "user"}
                 self.assertEqual(hermes.bound("kim-1"), expected)
                 self.assertEqual(shown[12] == "kim-1", expected == 12)
+
+    def test_a_row_with_no_usable_time_is_judged_by_the_other_rules_and_the_open_answers(self):
+        # Hermes has always sent a number. A row without one is treated as saved now, as on main, and a
+        # malformed one must not break the open.
+        for name, stamp in [("missing", None), ("a string", "soon")]:
+            messages = copy.deepcopy(self.MESSAGES)
+            if stamp is None:
+                del messages[2]["timestamp"]
+            else:
+                messages[2]["timestamp"] = stamp
+            with self.subTest(name), StoredRows(messages) as hermes:
+                db = hermes.journal.db
+                with db:
+                    receipt(db, "alice-1", 10, 1, text="Plan the trip", actor="alice")
+                    db.execute("UPDATE receipts SET turn_rows='[10, 11, 12, 13]' WHERE request_id='alice-1'")
+                    receipt(db, "kim-1", None, 2, run_id="alice-1", text="Avoid flights", steering=1, actor="kim")
+                hermes.open()
+                self.assertEqual(hermes.bound("kim-1"), 12)
 
 
 class StoredTurnRowsTests(unittest.TestCase):

@@ -1416,15 +1416,22 @@ class Bridge:
         (``tui_gateway/methods_session_interrupt.py:114-130`` and ``agent/agent_runtime_helpers.py:3668-3703``
         at ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn
         has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
-        only when exactly one user row inside those rows holds its words, no receipt holds that
-        row, and no other receipt of the run, bound or not, sent the same words.
+        only when exactly one user row inside those rows holds its words and was not saved more
+        than a second before the steer was sent, no receipt holds that row, and no other receipt
+        of the run, bound or not, sent the same words. The second is the slack between the
+        add-on's clock at the receipt and Hermes's at the row, as before this rule.
         Anything else leaves it unbound and its row shows unattributed. Known limit: a native
-        client's identical words in the same turn can still take the steer's place, because
-        Hermes names no steer's row (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
+        client's identical words in the same turn, saved after the steer was sent or within that
+        second, can still take the steer's place, because Hermes names no steer's row
+        (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
         """
         journal = self.journal
-        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
-        for request_id, text, run_id, extent in steers:
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        def saved(message):
+            # A row without a usable time counts as saved now.
+            stamp = message.get("timestamp")
+            return float(stamp) if type(stamp) in (int, float) and stamp else time.time()
+        for request_id, text, run_id, extent, sent in steers:
             try:
                 extent = turn_extent(json.loads(extent))
             except ValueError:
@@ -1435,7 +1442,7 @@ class Bridge:
             found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
                      and message["row_id"] in extent and message.get("text") == text]
             # The root's own row is held by the root's receipt, so the second test also excludes it.
-            if len(found) != 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
+            if len(found) != 1 or sent > saved(next(m for m in messages if m.get("row_id") == found[0])) + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
                 continue
             with journal.db:
                 journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (found[0], request_id))
