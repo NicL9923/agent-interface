@@ -4,7 +4,7 @@ import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
-import { api, ApiError, clearResponseCache, uploadFile, write } from "../src/client-api";
+import { api, ApiError, uploadFile, write } from "../src/client-api";
 import { useChatPresence } from "../src/app/use-chat-presence";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
@@ -629,7 +629,6 @@ describe("conversation state", () => {
     await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());
     expect(write).toHaveBeenCalledWith("/push/subscriptions", { endpoint }, "DELETE");
     expect(order).toEqual(["/push/subscriptions", "unsubscribe", "/auth/logout"]);
-    expect(clearResponseCache).toHaveBeenCalledTimes(1);
     expect(container.querySelector(".sign-in")).not.toBeNull();
     vi.mocked(write).mockReset().mockResolvedValue({});
   });

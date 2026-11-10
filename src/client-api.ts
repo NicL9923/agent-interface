@@ -2,6 +2,8 @@ import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type
 import type { ErrorCode } from "./shared/errors";
 import type { Inflight, InflightDelta } from "./shared/types";
 import { dropStartupRead, takeStartupRead } from "./startup-read";
+import { AccountChanged, accountMark, accountStill, onAccountEnd, type AccountMark } from "./app/account-epoch";
+export { AccountChanged };
 let csrf = "";
 export function setCsrf(value: string) {
   csrf = value;
@@ -32,6 +34,29 @@ export function clearResponseCache() {
   // boot.js's read carried the cookie from before the account changed.
   dropStartupRead();
 }
+// Nothing read or signed for one account answers for the next.
+onAccountEnd(() => {
+  csrf = "";
+  clearResponseCache();
+});
+/** Routes that carry no account, which a tab may read while it waits for another tab's sign-in. */
+const accountFree = new Set(["/auth/config"]);
+/**
+ * Every request belongs to the account this tab acts under (see account-epoch.ts). One made after
+ * another tab signed in or out never goes, and an answer that arrives after the change is discarded
+ * as an abort, whatever it says: the cookie it carried may not be the cookie in use now.
+ */
+export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const mark = accountFree.has(path) ? null : accountMark();
+  try {
+    const value = await send<T>(path, init, retried);
+    if (mark && !accountStill(mark)) throw new AccountChanged();
+    return value;
+  } catch (error) {
+    if (mark && !accountStill(mark)) throw new AccountChanged();
+    throw error;
+  }
+}
 /** Caches a body unless the entry already holds one from a read that started later. */
 function remember(path: string, entry: Cached) {
   if ((responses.get(path)?.started ?? -1) > entry.started) return;
@@ -61,7 +86,7 @@ export class ApiError extends Error {
     super(message);
   }
 }
-export async function api<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+async function send<T>(path: string, init: RequestInit, retried: boolean): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !(init.body instanceof FormData))
     headers.set("Content-Type", "application/json");
@@ -384,6 +409,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   const connect = () => {
     clearTimeout(timer);
     timer = undefined;
+    let mark: AccountMark;
+    try { mark = accountMark(); } catch { return; }
     const current = source = new EventSource(`/api${withPing(path)}`);
     openedAt = since = Date.now();
     // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
@@ -391,11 +418,18 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     recovered = graced = false;
     report(false);
     arm(deadline(), check);
-    // Only the stream this one opened last speaks for it: a replaced one's late events change nothing.
+    // Only the stream this one opened last speaks for it: a replaced one's late events change nothing,
+    // and neither do events that arrive after this browser changed accounts.
+    const speaks = () => {
+      if (current !== source) return false;
+      if (accountStill(mark)) return true;
+      drop();
+      return false;
+    };
     const on = (name: string, handle: (data: string) => void) =>
-      current.addEventListener(name, event => { if (current === source) handle((event as MessageEvent).data); });
+      current.addEventListener(name, event => { if (speaks()) handle((event as MessageEvent).data); });
     current.onopen = () => {
-      if (current !== source) return;
+      if (!speaks()) return;
       // A connection that took long to open has not proved itself by the time its greeting arrives.
       openedAt = since = Date.now();
       onChange();
@@ -435,6 +469,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {
   return new Promise<T>((resolve, reject) => {
+    const mark = accountMark();
     const request = new XMLHttpRequest();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stalled = false;
@@ -452,6 +487,8 @@ export function uploadFile<T>(path: string, file: File, { onProgress, signal }: 
     request.setRequestHeader("X-CSRF-Token", csrf);
     request.upload.onprogress = event => { watch(); if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
     request.onload = () => finish(() => {
+      // A file uploaded for an account this browser no longer acts for joins no draft.
+      if (!accountStill(mark)) return reject(new AccountChanged());
       let data: Record<string, any> = {};
       try { data = request.responseText ? JSON.parse(request.responseText) : {}; }
       catch {

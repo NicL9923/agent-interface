@@ -1,5 +1,5 @@
 import type { Preferences } from "../shared/types";
-import { hintedUser } from "./linked-chat";
+import { hintedUser } from "./account-epoch";
 import { localRead, localRemove, localSave, savedThemeKey } from "./storage";
 
 /**

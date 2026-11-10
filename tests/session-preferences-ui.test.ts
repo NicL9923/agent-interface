@@ -13,7 +13,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
 }))(original)));
 let root: Root, session: ReturnType<typeof useSession>;
 function Harness() {
-  session = useSession({ onIdentityChange() {}, onFirstBootstrap() {}, onError() {}, onBotGone() {} });
+  session = useSession({ onFirstBootstrap() {}, onError() {}, onBotGone() {} });
   return null;
 }
 const preferences = (favorites: string[]) => ({ favorites, followBots: [], sections: [] }) as unknown as Preferences;

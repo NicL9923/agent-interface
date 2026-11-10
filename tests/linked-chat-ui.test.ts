@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
-import { savedThemeKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { SESSION_MAX_AGE_MS } from "../src/shared/session";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { quietConsoleErrors } from "./act-guard";
@@ -175,20 +175,31 @@ describe("a link that names a chat", () => {
     expect(transcript()).not.toContain("One's private draft");
   });
 
+  // Another tab's sign-in or sign-out writes the account record (see account-epoch.ts); the read
+  // that went out under the old cookie never shows, and neither does the bootstrap beside it.
   it.each([
-    ["removes the sign-in record", null],
-    ["writes a new sign-in", JSON.stringify({ until: NOW + SESSION_MAX_AGE_MS, bots: [] })],
-  ])("drops its read when another tab %s while it is out", async (_name, newValue) => {
+    ["signs out", { signedOut: true, user: "one" }, null],
+    ["signs in again", { user: "one" }, { until: NOW + SESSION_MAX_AGE_MS, bots: [] }],
+  ])("drops its read when another tab %s while it is out", async (name, record, nextHint) => {
     saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
     await open("/?bot=ranch");
-    const oldValue = localStorage.getItem(signInHintKey);
     await act(async () => {
-      if (newValue) localStorage.setItem(signInHintKey, newValue); else localStorage.removeItem(signInHintKey);
-      window.dispatchEvent(new StorageEvent("storage", { key: signInHintKey, oldValue, newValue, storageArea: localStorage }));
+      const oldValue = localStorage.getItem(authEpochKey), newValue = JSON.stringify({ id: "elsewhere", at: NOW, ...record });
+      localStorage.setItem(authEpochKey, newValue);
+      if (nextHint) saveHint(nextHint); else localStorage.removeItem(signInHintKey);
+      window.dispatchEvent(new StorageEvent("storage", { key: authEpochKey, oldValue, newValue, storageArea: localStorage }));
     });
-    await answerChat("ranch", page("ranch", "Read before the switch"));
-    await answerBootstrap(bootstrap);
+    await answerChat("ranch", page("ranch", "Read before the switch"), 0);
+    await answer(bootstrapReplies[0], bootstrap);
     expect(transcript()).not.toContain("Read before the switch");
+    if (name === "signs out") {
+      expect(button("Enter local workspace")).toBeDefined();
+      expect(conversationReads()).toHaveLength(1);
+      expect(bootstrapReplies).toHaveLength(1);
+      return;
+    }
+    expect(bootstrapReplies).toHaveLength(2);
+    await answerBootstrap(bootstrap);
     expect(conversationReads()).toHaveLength(2);
     await answerChat("ranch", page("ranch", "Read after the switch"));
     expect(transcript()).toContain("Read after the switch");

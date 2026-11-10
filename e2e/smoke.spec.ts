@@ -128,6 +128,30 @@ test.describe("a returning member's load", () => {
   });
 });
 
+test("a sign-out or sign-in in one tab changes the account every other tab shows, without a reload", async ({ context, page }) => {
+  await signIn(page);
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  const other = await context.newPage();
+  await other.goto("/");
+  await expect(assistants(other).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
+
+  await other.bringToFront();
+  await other.getByRole("button", { name: "Account" }).click();
+  await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
+  // This checks the tabs, not the sheet's layout, so the press goes to the button whatever overlaps it.
+  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).dispatchEvent("click");
+  await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+  await expect(page.getByText("Ranch Hand")).toHaveCount(0);
+
+  await other.getByLabel("Sign in as").selectOption("two");
+  await other.getByRole("button", { name: "Enter local workspace" }).click();
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByRole("menu", { name: "Account" })).toContainText("two@localhost.invalid");
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
+});
+
 test.describe("after a deploy retires a lazy screen's file", () => {
   // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
   test.use({ serviceWorkers: "block" });

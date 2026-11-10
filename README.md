@@ -150,8 +150,62 @@ which the chat shows while it reads again. The response cache keeps the body of 
 latest-started read of each path, so a slower, older read that finishes last never replaces
 it. The browser keeps only the lapse time, the account ID and the chat IDs, in
 `agent-interface:sign-in-hint`, and drops them, and the saved theme with them, at sign-out,
-a refused session, a new sign-in, or a check that finds another account. A link to a message, Today or a group chat waits for the check
-as before. See `src/app/linked-chat.ts`.
+a refused session, a new sign-in, a check that finds another account, or the lapse time. A link to a message, Today or a group chat
+waits for the check as before. See `src/app/linked-chat.ts`.
+
+### Accounts in one browser
+
+Household members sometimes share a browser profile, and every tab of a profile shares one
+session cookie. So a change of account in one tab is a change in all of them, and each takes
+effect in every tab before anything of the previous account is drawn or used again. The
+changes are a sign-in, a sign-out, a session the server refuses, a check that names another
+account, and the sign-in hint's lapse time passing. Each writes a new
+`agent-interface:auth-epoch` record: before a sign-in or sign-out request can change the
+cookie (marked as under way), and again when it settles. A tab compares the stored record with
+the one it acts under when another tab writes it, when a page comes back from the back-forward
+cache, when it is shown or focused, and before and after every request, live-update event and
+upload. Once they differ, the tab unmounts everything it held for the account, including its
+reads, live connections, drafts in memory and cached responses, discards any answer still on
+its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
+sign-in after a sign-out, and never the previous account's rows. A sign-in that the server
+refuses puts the record back, so other tabs read the same account again. A record left marked
+as under way by a tab that closed mid-request stops counting after 65 seconds. See
+`src/app/account-epoch.ts`.
+
+When another account signs in over one that never signed out here, that account's
+notifications on screen close and the browser's push subscription ends, since the server would
+keep sending the old account's notifications to it. A sign-out closes them too.
+
+What the browser keeps, in localStorage unless noted:
+
+| Record | Holds | Removed |
+| --- | --- | --- |
+| `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
+| `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
+| `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
+| `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
+| `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |
+| `agent-interface:group-send:<account>:<room>` and its `:draft` | A group message on its way, a group draft | Sign-out, or once sent |
+| `agent-interface:group-create:<account>` | A group being made: name, assistants | Sign-out, or once made |
+| `agent-interface:form-reply:<account>:…` | A form's answers | Sign-out |
+| `agent-interface:routine-trial:<account>:<routine>`, `automation-goal-resume:<account>:<assistant>` | A request ID, so a retry is checked rather than repeated | Kept |
+| `agent-interface:notifications-prompt:v2:<account>` | Whether the notification prompt was shown | Kept |
+| `agent-interface:approval:<account>:…` (sessionStorage) | An approval decision on its way | With the tab |
+| `integration-flow:<account>:<profile>` (sessionStorage) | An integration sign-in flow ID | With the tab |
+| `wildbots.device-id` | This profile's device ID | Kept; it names the device, not a member |
+| `computer.trackpad` | A trackpad preference | Kept |
+
+Every record that belongs to an account has the account's ID in its name, and the app reads
+only the signed-in account's, so no member's records are read under another account. A
+sign-out removes the ones that hold what a member wrote. Records that hold only a request ID
+or a choice stay, so an uncertain request is checked, not sent twice, after the member signs
+in again. Records that outlive a session are as private as the browser profile: anyone who can
+open the profile can read its storage.
+
+One change is out of a browser's sight: a session revoked from another device, or a member
+removed from the household, while this browser is offline or has not yet asked the server.
+This browser keeps showing what it already shows until its first answer from the server, which
+refuses the session and so becomes the refused-session change above.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
