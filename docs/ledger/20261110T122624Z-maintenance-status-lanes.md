@@ -149,3 +149,48 @@ request in between refuses for the listing, as `status` would. The lock there co
 already takes it, and is kept so both transitions read the same way.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS, production, and the release tool.
+
+## Second review round
+
+GPT-6.1 Sol re-reviewed `73adc02`: ready after fixes, no P1. It cleared the production code, both paused boundary probes,
+the lock order and every mutation. One P2, in a test; the production code is unchanged in this round.
+
+- P2, the boundary test raced its observer. In the acquire case `test_maintenance_sees_a_send_listed_whenever_its_reservation_is_held`
+  started its observer, resumed the sender and required the observer to have seen the send `queued`, but once the sender
+  left the maintenance lock the lane worker could start the send's job and mark it `admitting` before the observer got
+  the lock. That order is valid, and the production invariant held in it. The reviewer saw 3 failures in 30 fresh
+  processes; here, before the fix, the test alone failed 4 of 100 fresh processes (runs 3, 53, 69 and 88), each
+  `[('slow', 'admitting')] != [('slow', 'queued')]`. A new helper, `hold_send_jobs`, makes each send-lane job wait on an
+  Event at the send pool before it starts, as when every send worker is busy; the job is already queued in its lane, so
+  the send stays `queued`. The acquire case sets that Event only after the observer has finished, and checks that it has,
+  so maintenance sees the state the send paused in. The reservation and listing assertions are unchanged.
+
+## Second review round checks
+
+Source fingerprint sha256:2dd08b075bca0d038358a65ddfed65d77c6dfa5eb1d92eae398a70cea1abc74b (1697 source files); `src/hermes` alone sha256:6ee032a194cd9433af9a2f3085720f874304814c11aa74b1ac826d1285c2ae6d (20 source files), unchanged from the first round. Same host and versions (Python 3.14.10).
+
+- `tests/hermes_send_lanes_test.py` 100 times, each in a fresh process with bytecode writing off (`python3 -B`,
+  `PYTHONDONTWRITEBYTECODE=1`), on an otherwise idle loop: 100 passed, 0 failed (17 minutes). A first loop of 100 ran
+  while mutant runs loaded the host: 98 passed. Both failures, runs 14 and 15, were
+  `test_a_send_waiting_for_a_compaction_holds_up_no_other_assistant` from `t3/send-lanes`, whose `wait` timing
+  threshold read 101.6 and 345.9 ms against 100; the boundary test passed in all 100.
+- `npm run test:py`: 43 files passed, 1 failed (452 s, load average near 100 from other work on the host). The failure
+  was `tests/system_terminal_test.py`, a known flake under load, timing out waiting for terminal output; alone it passed.
+  `tests/hermes_send_lanes_test.py` passed: 16 tests.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed. `npm ci` ran once for both branches,
+  whose lockfiles are identical.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+## Second review round red proof
+
+The boundary mutants were applied again with a scripted text replacement, the boundary test run without writing bytecode,
+and the source restored, checked by hash, and every `__pycache__` deleted. Each is still red:
+
+| Broken | Red |
+| --- | --- |
+| The send listed after the lock and its reservation | the acquire case: `[] != [('slow', 'queued')]` |
+| The send unlisted before the lock and its release | the release case: `[] != [('slow', 'admitting')]` |
+| The release outside the maintenance lock | the release case: maintenance saw `[('slow', 'admitting')]` mid-release |
+
+Not run: real Hermes, the qualification run, `npm test`, iOS, production, and the release tool.
