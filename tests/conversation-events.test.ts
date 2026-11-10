@@ -314,19 +314,32 @@ describe("conversation change stream", () => {
       response.on("data", chunk => { text += chunk; });
       await events(() => text.includes("retry"));
       response.pause();
+      // What the server writes, and whether the socket still held an earlier write when it did. How much the
+      // kernel takes before the socket fills differs between machines, so nothing here counts on a size for it.
+      const socket = responses[0], write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+      let largest = 0;
+      const writtenWhileFull: number[] = [];
+      vi.spyOn(socket, "write").mockImplementation(((...args: unknown[]) => {
+        const size = typeof args[0] === "string" && args[0].startsWith("event: ") ? Buffer.byteLength(args[0]) : 0;
+        if (size && socket.writableNeedDrain) writtenWhileFull.push(size);
+        largest = Math.max(largest, size);
+        return write(...args);
+      }) as typeof socket.write);
       // Each tick grows the reply by half a megabyte, far more than loopback buffers hold over 40 ticks.
       const piece = "x".repeat(512 * 1024);
-      let reply = "", reads = 0, queued = 0;
+      let reply = "", reads = 0;
       for (let tick = 0; tick < 40; tick++) {
         reply += piece;
         const value = live(reply);
         s.runtime.inflight = () => { reads++; return value; };
         s.change("shared", "inflight");
         await pass(LIVE_TICK_MS);
-        queued = Math.max(queued, responses[0].writableLength);
+        // The socket never holds more than the one update it has not finished sending. That update is everything
+        // the client missed, so it can be several ticks' growth when the kernel took the one before it.
+        expect(socket.writableLength).toBeLessThanOrEqual(largest + socket.writableHighWaterMark);
       }
-      // At most one update past the buffer, and the ticks after it read nothing.
-      expect(queued).toBeLessThan(piece.length + 64 * 1024);
+      // No update was written on top of one the client had not taken, and the ticks in between read nothing.
+      expect(writtenWhileFull).toEqual([]);
       expect(reads).toBeLessThan(40);
       response.resume();
       // Wait until the stream has delivered every byte of the reply, however it was split.
