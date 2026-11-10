@@ -80,3 +80,28 @@ the roster changed. Nothing was changed for them; the test holds each below 0.1.
 | A fresh page reads during a pending sign-out | failed: the later-page case, once it ran in its own module copy; it survived while the file's earlier tests left the generation above zero |
 | Offline sign-out without the mark | failed: 1 case |
 | The saved copy shows activity | failed: 2 cases |
+
+## Measurement
+
+From the same first-load run as `t3/early-bootstrap`'s ledger, 30 loads per build per load kind,
+this branch at `cd32bfb` against `t3/account-transitions` at `148d8ef`: roster painted at 5651, 577
+and 293 ms (cold, warm, worker), 317, 281 and 401 ms sooner, each interval clear of zero. The tool
+refused to call it a result: the load average rose from 7.1 to 13.2 during the run, from other
+agents' work on this shared machine. See `20261110T190000Z-early-bootstrap-review-fixes.md`.
+
+## Application tests
+
+- `npm ci`, `npm run typecheck`, `npm run lint` and `ruff check .` (ruff 0.17.3) passed.
+- `tests/saved-roster-ui.test.ts`: 66 tests passed.
+- `npm test`: 195 files, 3,320 tests passed.
+- `npm run build`, then `npm run test:e2e`: 31 Chromium tests passed, including the eight layout
+  shift cases. The first run failed one case, "the app opens offline from the service worker",
+  which still looked for the rail's old status role; it now reads the rail's text and the one
+  announcer, and the second run passed whole.
+
+## Not exercised
+
+- Safari, Firefox, a real back-forward-cache restore, an installed home-screen app and a real phone:
+  not run. Only Chromium runs here; `pageshow` and visibility are exercised in jsdom.
+- The accepted limit itself: a session revoked from another device while this one is offline shows
+  the saved home until the server answers. Not closed, by decision.

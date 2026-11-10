@@ -39,9 +39,11 @@ test("the app opens offline from the service worker, then recovers when the netw
   // browser's error page.
   await page.reload();
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
-  await expect(page.locator(".bot-rail").getByRole("status")).toHaveText("Offline");
+  await expect(page.locator(".bot-rail .home-sync")).toHaveText("Offline");
   await expect(page.getByText("Fence check is done.")).toHaveCount(0);
-  await expect(page.getByRole("status").filter({ hasText: "Can't reach the app right now" })).toBeVisible();
+  await expect(page.getByText("Can't reach the app right now")).toBeVisible();
+  // The app's one connection live region says it too, once.
+  await expect(page.getByRole("status").filter({ hasText: "You're offline" })).toHaveCount(1);
 
   await context.setOffline(false);
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
