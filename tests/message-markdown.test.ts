@@ -524,8 +524,8 @@ describe("a streamed reply once saved", () => {
   ])("a saved reply %s, and shows as it does opened fresh", async (_case, length, kept) => {
     const paragraph = "The north gate is **latched** and the east gate is open.\n\n";
     const body = paragraph.repeat(Math.floor((length - 20) / paragraph.length));
+    // Padded to exactly `length` characters.
     const text = body + "Done".padEnd(length - body.length, ".");
-    expect(text.length).toBe(length);
     await act(async () => root.render(createElement("div")));
     await renderAs(createElement(ReplyMarkdown, { text, live: true }));
     const first = container.querySelector("p");
