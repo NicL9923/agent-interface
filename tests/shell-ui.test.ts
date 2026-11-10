@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
+import { ShortcutsDialog } from "../src/app/ShortcutsDialog";
 import { api, uploadFile, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
@@ -371,6 +372,85 @@ describe("composer", () => {
     await act(async () => sendButton().click());
     const sent = vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages");
     expect(sent.map(([, body]) => (body as { text: string }).text)).toEqual(["Feed the horses"]);
+  });
+
+  describe("Return", () => {
+    // A phone or tablet with no keyboard: its only pointer is a finger.
+    const touchOnly = () => stubMatchMedia(query => query === "(any-pointer: coarse)");
+    const sends = () => vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages")
+      .map(([, body]) => (body as { text: string }).text);
+    const hint = () => field().getAttribute("enterkeyhint");
+    /**
+     * Presses a key in the message box, then does what a browser does when the page leaves the key
+     * alone: Enter inserts a line break at the caret. Returns whether the page left it alone.
+     */
+    const press = (init: KeyboardEventInit) => act(async () => {
+      const unhandled = field().dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+      if (unhandled && init.key === "Enter" && init.keyCode !== 229) {
+        const value = `${field().value}\n`;
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field(), value);
+        field().dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return unhandled;
+    });
+
+    it("starts a new line on a touch screen, and the Send button sends", async () => {
+      touchOnly();
+      await render();
+      expect(hint()).toBe("enter");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+      await typeInto(field(), "Feed the horses\nand the dogs");
+      await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+      expect(sends()).toEqual(["Feed the horses\nand the dogs"]);
+    });
+
+    it("sends on Enter and starts a new line on Shift+Enter with a mouse or trackpad", async () => {
+      // A touch-screen laptop: a finger and a trackpad.
+      stubMatchMedia(query => query === "(any-pointer: coarse)" || query === "(any-pointer: fine)");
+      await render();
+      expect(hint()).toBe("send");
+      await typeInto(field(), "Feed the horses");
+      expect(await press({ key: "Enter", shiftKey: true, keyCode: 13 })).toBe(true);
+      expect(field().value).toBe("Feed the horses\n");
+      expect(sends()).toEqual([]);
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(false);
+      expect(sends()).toEqual(["Feed the horses\n"]);
+    });
+
+    it("sends on Enter on a touch screen once a key only a hardware keyboard has is pressed", async () => {
+      touchOnly();
+      await render();
+      await typeInto(field(), "Feed the horses");
+      // The Shift held for a capital letter.
+      await press({ key: "Shift", shiftKey: true });
+      expect(hint()).toBe("send");
+      expect(await press({ key: "Enter", keyCode: 13 })).toBe(false);
+      expect(sends()).toEqual(["Feed the horses"]);
+    });
+
+    it("says in the shortcut list what Return does on a touch screen, and only there", async () => {
+      const note = () => document.body.querySelector(".shortcuts-dialog")?.textContent?.includes("Return starts a new line");
+      touchOnly();
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(note()).toBe(true);
+      await mount.render(createElement("div"));
+      stubMatchMedia();
+      await mount.render(createElement(ShortcutsDialog, { onClose: () => {} }));
+      expect(note()).toBe(false);
+    });
+
+    it.each([["a hardware keyboard", () => stubMatchMedia()], ["a touch screen", touchOnly]])(
+      "leaves the Enter that confirms an IME word to the input method with %s", async (_, device) => {
+        device();
+        await render();
+        await typeInto(field(), "こんにちは");
+        expect(await press({ key: "Enter", isComposing: false, keyCode: 229 })).toBe(true);
+        expect(field().value).toBe("こんにちは");
+        expect(sends()).toEqual([]);
+      });
   });
 
   it("never recalls into a draft while its send is in flight", async () => {
