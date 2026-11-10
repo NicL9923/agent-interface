@@ -38,53 +38,51 @@ logical cores), records the load average at the start and end, and gives each bu
 medians from the first with a 95% bootstrap interval. Above a quarter of the logical cores (8 here)
 it refuses to call a comparison a result unless `--allow-busy` says otherwise.
 
-Run: `--runs 5 --rounds 6`, 30 loads per build per load kind, three builds: `base`, `t3/account-
-transitions` at `148d8ef` (what this branch merges, without `boot.js`); `branch`, this branch at
-`700efda`; and `roster`, `t3/saved-roster` at `cd32bfb`, for that branch's ledger. Chromium, Slow 4G
-(150 ms, 1.6 Mbps down) and 4x CPU, dark theme on a light system. Started 18:43 UTC after waiting
-for the 1-minute load average to drop below 8.
+Two runs, each `--runs 5 --rounds 6`: 30 loads per build per load kind, three builds. `base` is
+`t3/account-transitions` at `148d8ef` (what this branch merges, without `boot.js`); `branch` is this
+branch at `700efda`; `roster` is `t3/saved-roster` at `cd32bfb`, for that branch's ledger. Chromium,
+Slow 4G (150 ms, 1.6 Mbps down) and 4x CPU, dark theme on a light system.
 
-**Not a result, by the tool's own rule.** The load average was 7.1 at the start and 13.2 at the end:
-other agents' compilers on this shared machine came back during the run. The quartiles are narrow
-(a cold load's roster spread 30 to 60 ms), which suggests the pinned cores were not badly contended,
-but the comparison below is reported as what this machine measured, not as a settled figure. The
-quietest window available today did not last 15 minutes.
+- Run 1, 18:43 UTC: load average 7.1 at the start and 13.2 at the end, as other agents' work on this
+  shared machine came back. The tool refused to call it a result.
+- Run 2, 19:03 UTC, seed 1188585740: load average 4.7 at the start and 3.2 at the end, below the
+  bound of 8. This is the result below. It agrees with run 1 within 25 ms on every figure quoted.
 
-Medians (first to third quartile), ms from navigation start, n = 30 each:
+Run 2, medians (first to third quartile), ms from navigation start, n = 30 each:
 
 | Load | Build | Bootstrap sent | First paint | Theme | Roster painted | Light shown |
 | --- | --- | --- | --- | --- | --- | --- |
-| No worker, cold cache | base | 5609 (5601 to 5628) | 2460 (2456 to 2468) | 5963 | 5968 (5951 to 6009) | 3502 |
-| | branch | 3292 (3285 to 3302) | 2388 (2380 to 2392) | 452 | 5862 (5843 to 5877) | 0 |
-| No worker, warm cache | base | 494 (478 to 509) | 218 (212 to 227) | 857 | 858 (826 to 890) | 635 |
-| | branch | 331 (329 to 338) | 342 (340 to 352) | 332 | 836 (821 to 849) | 0 |
-| Worker's cached shell | base | 338 (324 to 352) | 64 (57 to 75) | 688 | 694 (680 to 713) | 625 |
-| | branch | 55 (51 to 58) | 78 (61 to 84) | 55 | 566 (547 to 612) | 0 |
+| No worker, cold cache | base | 5596 (5593 to 5617) | 2454 (2452 to 2460) | 5953 | 5956 (5946 to 5989) | 3501 |
+| | branch | 3296 (3286 to 3304) | 2384 (2369 to 2399) | 453 | 5852 (5840 to 6070) | 0 |
+| No worker, warm cache | base | 484 (476 to 498) | 216 (212 to 231) | 836 | 837 (826 to 854) | 619 |
+| | branch | 333 (331 to 337) | 344 (340 to 356) | 333 | 836 (816 to 853) | 0 |
+| Worker's cached shell | base | 326 (319 to 334) | 60 (56 to 71) | 679 | 681 (668 to 694) | 618 |
+| | branch | 57 (53 to 66) | 78 (64 to 88) | 57 | 561 (544 to 666) | 0 |
 
-Branch minus base, difference of medians with its 95% interval:
+Branch minus base, difference of medians with its 95% bootstrap interval:
 
 | Load | Roster painted | First paint | Light shown |
 | --- | --- | --- | --- |
-| No worker, cold cache | -106 (-144 to -91) | -72 (-80 to -68) | -3502 |
-| No worker, warm cache | -22 (-38 to 5), within noise | +124 (116 to 132), later | -635 |
-| Worker's cached shell | -128 (-151 to -88) | +14 (0 to 20), within noise | -625 |
+| No worker, cold cache | -104 (-125 to -13) | -70 (-80 to -60) | -3501 |
+| No worker, warm cache | -1 (-23 to 12), within noise | +128 (116 to 136), later | -619 |
+| Worker's cached shell | -120 (-129 to -77) | +18 (6 to 28), later | -618 |
 
-What this supports, with the caveat above:
+What this supports:
 
-- The theme without a flash, clearly: the light page a dark-theme member saw shrinks from 3.5 s,
-  0.6 s and 0.6 s to none in every load kind.
-- Bootstrap starts earlier in every kind, by 0.2 to 2.3 s.
-- Time to roster: within noise on a warm load without the worker; about 0.1 s sooner cold and under
-  the worker, intervals clear of zero, but measured on a machine past the tool's load bound, so this
-  branch should be described as the theme without a flash and bootstrap started earlier, with no
-  settled gain in time to roster.
-- The cost: the blocking script delays first paint by 124 ms (116 to 132) on a warm load without
-  the worker, where `boot.js` is revalidated; the earlier ledger's 84 ms was a single-run median on
-  a loaded machine. Under the worker it costs nothing measurable. Cold, the page painted 72 ms
-  sooner; the cause was not established.
+- The theme without a flash: the light page a dark-theme member saw, 3.5 s cold and 0.6 s warm or
+  under the worker, is gone in every load kind.
+- Bootstrap starts earlier in every kind, by 0.15 to 2.3 s.
+- Time to roster: no gain on a warm load without the worker (within noise). About 0.1 s sooner cold
+  and under the worker; the cold interval reaches -13 ms, so that gain is real here but small and
+  not tight. On this machine and network model the branch is the theme without a flash and an
+  earlier bootstrap, with a modest roster gain on cold and worker loads and none on warm ones.
+- The cost: the blocking script delays first paint by 128 ms (116 to 136) on a warm load without
+  the worker, where `boot.js` is revalidated, and by 18 ms (6 to 28) under the worker. The earlier
+  ledger's 84 ms was a single-run median on a loaded machine. Cold, the page painted 70 ms sooner;
+  the cause was not established.
 
-For `t3/saved-roster`, from the same run: roster painted 5651 cold, 577 warm and 293 under the
-worker, 317, 281 and 401 ms sooner than base, intervals clear of zero, with the same caveat.
+For `t3/saved-roster`, from run 2: roster painted 5648 cold, 567 warm and 300 under the worker,
+308, 271 and 381 ms sooner than base, each interval clear of zero.
 
 Every load in every build counted two bootstrap reads within 800 ms after bootstrap answered: the
 first, and the one the household stream makes as it connects, by design. None counted more.
