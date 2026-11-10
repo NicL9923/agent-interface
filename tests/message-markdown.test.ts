@@ -237,8 +237,27 @@ describe("streaming Markdown", () => {
   });
 
   it("parses the whole reply when a rule spans it", () => {
-    for (const text of ["Cards\n\n```agent-ui\n{}\n```", "See [docs][1].\n\n[1]: https://example.test",
-      "Note[^1]\n\n[^1]: Footnote", "<!--\n\nhidden\n-->"]) expect(streamingBlocks(text)).toBeNull();
+    expect(streamingBlocks("Cards\n\n```agent-ui\n{}\n```")).toBeNull();
+  });
+
+  // Outside a fence each line ties blocks together; inside one it is code and the blocks hold.
+  it.each([
+    ["a reference-link definition", "[1]: https://example.test"],
+    ["a footnote definition", "[^1]: Footnote"],
+    ["a footnote definition in a quote", "> [^1]: Footnote"],
+    ["an HTML comment", "<!--\n\nhidden\n-->"],
+    ["a raw script block", "<script>\n\nlet x = 1;\n</script>"],
+  ])("keeps blocks for %s inside a fence and parses whole outside one", (_rule, line) => {
+    expect(streamingBlocks(`See [docs][1].\n\n${line}`)).toBeNull();
+    const code = "```\n" + line + "\n```";
+    expect(streamingBlocks(`Sample:\n\n${code}\n\nDone`)).toEqual(["Sample:", code, "Done"]);
+    // A fence still open at the end holds the rest of the reply.
+    expect(streamingBlocks(`Sample:\n\n~~~\n${line}`)).toEqual(["Sample:", `~~~\n${line}`]);
+  });
+
+  it("keeps blocks for a footnote-shaped regex with no definition, and treats an inline ``` line as prose", () => {
+    expect(streamingBlocks("Match `/[^a-z]/` once.\n\nThen [^b] again.")).toEqual(["Match `/[^a-z]/` once.", "Then [^b] again."]);
+    expect(streamingBlocks("```js``` is inline.\n\n[1]: https://example.test")).toBeNull();
   });
 
   it("renders a growing reply the same as the saved reply", async () => {
@@ -248,6 +267,8 @@ describe("streaming Markdown", () => {
       "Steps:\n\n1. Soak\n\n1. Rinse\n\n1. Simmer\n\nEnjoy.",
       "- Beans\n\n- Cornbread\n\n* Greens",
       "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
+      // Code that looks like a definition, comment or footnote keeps its blocks and renders the same.
+      "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
     ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
 });

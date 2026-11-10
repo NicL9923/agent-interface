@@ -181,19 +181,27 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
   );
 });
 
-const fence = /^ {0,3}(`{3,}|~{3,})/;
+// A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
+const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+/**
+ * Lines outside code fences that make one block depend on another. A reference-link or footnote
+ * definition resolves uses anywhere in the reply; a use without one is literal text in both parses,
+ * so only the definition matters. An HTML comment or a raw pre, script, style or textarea block
+ * may contain blank lines. Each may sit in a quote or list item; matching an indented code line
+ * too only costs a full parse.
+ */
+const spansReply = /^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])[ \t]))*[ \t]*(?:\[[^\]]+\]:|<!--|<(?:pre|script|style|textarea)\b)/i;
 /**
  * Splits a reply that is still arriving into blocks that are finished and the one still growing,
  * so each update parses only the last. Splits fall on blank lines outside code fences that are
  * followed by a line at the margin, which starts a new block, unless that line is a list item,
- * which may continue a loose list above it. Returns null when a rule
- * spans the whole reply: reply cards and inline pages are judged together, reference links and
- * footnotes resolve anywhere, and HTML comments or raw blocks may contain blank lines.
+ * which may continue a loose list above it. Returns null when a rule spans the whole reply: reply
+ * cards and inline pages are judged together, and `spansReply` lines outside code fences tie
+ * blocks together. Inside a fence those lines are code, so a code-heavy reply keeps its blocks.
  */
 export function streamingBlocks(text: string): string[] | null {
-  if (/^ {0,3}(`{3,}|~{3,})\s*(agent-ui|wildbots-html)\b/m.test(text) || /^ {0,3}\[[^\]]+\]:/m.test(text)
-    || text.includes("[^") || text.includes("<!--") || /^ {0,3}<(pre|script|style|textarea)\b/im.test(text)) return null;
+  if (/^ {0,3}(`{3,}|~{3,})\s*(agent-ui|wildbots-html)\b/m.test(text)) return null;
   const lines = text.split("\n"), blocks: string[] = [];
   let start = 0, open: string | undefined;
   for (let index = 0; index < lines.length; index++) {
@@ -203,6 +211,7 @@ export function streamingBlocks(text: string): string[] | null {
       else if (marker[0] === open[0] && marker.length >= open.length && !lines[index].trim().slice(marker.length).trim()) open = undefined;
       continue;
     }
+    if (!open && spansReply.test(lines[index])) return null;
     const next = lines[index + 1];
     if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
     blocks.push(lines.slice(start, index).join("\n"));
