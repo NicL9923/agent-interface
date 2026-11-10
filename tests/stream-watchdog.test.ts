@@ -443,6 +443,23 @@ describe("stream health", () => {
     expect(heard).toEqual([false, true, false, undefined]);
   });
 
+  it("is unlisted while suspended and down again while a resumed stream waits for its retry, so the notice counts from the show", () => {
+    const { stream, heard } = watched();
+    live().fail();
+    expect(heard).toEqual([false]);
+    // A hidden page: the stream holds no connection and says nothing about the server.
+    stream.suspend();
+    expect(heard).toEqual([false, undefined]);
+    // Shown before the first retry, 1.5 s after the refusal: no attempt yet, and down while it waits.
+    vi.advanceTimersByTime(500);
+    stream.open();
+    expect(opened()).toBe(1);
+    expect(heard).toEqual([false, undefined, false]);
+    vi.advanceTimersByTime(1_000);
+    expect(opened()).toBe(2);
+    expect(heard, "the attempt changes nothing it already reported").toEqual([false, undefined, false]);
+  });
+
   // The reviewer's reproduction: a watchdog replacement that sends headers and `retry: 3000`, then nothing.
   it("never reports a replacement up that sent only its headers, however long it stays open", () => {
     const { heard } = watched();
