@@ -8,6 +8,7 @@ import type { Store } from "./store.js";
 import type { User } from "../shared/types.js";
 import { installNativeAuth } from "./native-auth.js";
 import { isApiRequest, routePattern } from "./route-path.js";
+import { SESSION_MAX_AGE_MS } from "../shared/session.js";
 // The only 401 that means this person's session is gone. Clients clear a stored
 // credential on this code alone, never on a bare 401.
 const signInRequired = { error: "Sign in required", code: "session_expired" };
@@ -117,14 +118,14 @@ export async function installAuth(
     store.user(user);
     const value = randomBytes(32).toString("hex"),
       csrf = randomBytes(32).toString("hex");
-    store.session(hash(value), user.id, csrf, Date.now() + 7 * 86400000);
+    store.session(hash(value), user.id, csrf, Date.now() + SESSION_MAX_AGE_MS);
     if (confirmedAt) store.confirmSession(hash(value), confirmedAt);
     reply.setCookie("session", value, {
       httpOnly: true,
       secure: config.production || new URL(config.origin).protocol === "https:",
       sameSite: "strict",
       path: "/",
-      maxAge: 7 * 86400,
+      maxAge: SESSION_MAX_AGE_MS / 1000,
     });
     return { user, csrfToken: csrf };
   };

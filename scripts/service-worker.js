@@ -112,6 +112,46 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
 });
 
+// A note in this release's cache that the server now has another shell. It lives and dies with the
+// cache, so a stopped and restarted worker still sees it, and the next release starts without one.
+// No request is ever answered from it: the fetch handler serves only the files listed above.
+const OUTDATED = '/.shell-outdated';
+
+// Today's rule, and the rule once the cached shell is known to be out of date: the server's shell,
+// or this release's copy when the network fails.
+async function networkShell(request, cache) {
+  try { return await fetch(request); } catch { return (await cache.match('/index.html')) || Response.error(); }
+}
+
+// Compares the server's shell with this release's copy after the copy has answered. The server sends
+// index.html as the file on disk, with nothing added per request, so the same release always sends
+// the same text. Bodies are compared rather than ETags, which change whenever the file is copied.
+// A different text notes it and runs the update check now. Anything but a 200, such as a redirect
+// (not followed, so it is not ok), a refusal, a server error or no network, says nothing about the
+// release and changes nothing: no window reloads and the worker stays.
+async function revalidate(cache, copy) {
+  try {
+    const response = await fetch('/index.html', { cache: 'no-store', redirect: 'manual' });
+    if (!response.ok) return;
+    if (await response.text() === await copy.text()) return;
+    await cache.put(OUTDATED, new Response(''));
+  } catch { return; }
+  await self.registration.update().catch(() => {});
+}
+
+// The app shell opens from this release's cache, which install fills all or nothing, so the page and
+// every file it loads first come from one release, and a slow network never delays opening. Once the
+// worker has seen a newer shell on the server, it opens the network's instead, so a person sees an
+// old release at most once after a deploy, even when the new worker never manages to install.
+async function openShell(event) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match('/index.html');
+  if (!cached || await cache.match(OUTDATED)) return networkShell(event.request, cache);
+  // Copied before the page reads the body, which can only be read once.
+  event.waitUntil(revalidate(cache, cached.clone()));
+  return cached;
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -119,10 +159,7 @@ self.addEventListener('fetch', (event) => {
   // Never intercept authenticated endpoints, including streams and downloads.
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
-    event.respondWith(fetch(request).catch(async () => {
-      const shell = await (await caches.open(CACHE)).match('/index.html');
-      return shell || Response.error();
-    }));
+    event.respondWith(openShell(event));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {
@@ -188,16 +225,110 @@ self.addEventListener('push', (event) => {
   ]));
 });
 
-async function openChat(url) {
-  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
-  if (existing) {
-    if (existing.url !== url) await existing.navigate(url);
-    await existing.focus();
-  } else {
-    await self.clients.openWindow(url);
-  }
+// How long an open window has to say it switched to the chat. A live page answers within a few
+// milliseconds (at most 2.1 ms over 30 tries in Chromium), or after the task it is busy with, so this
+// allows a quarter-second stall. It must stay well under a second: Firefox lets a worker open or
+// focus a window for one second after a tap, and on a tap of a notification that came back the
+// fallbacks below, the last of which opens a new window, run after this wait.
+const OPEN_ACK_MS = 250;
+
+// Asks an open window to switch to the chat in place, as a click in it would, without reloading the
+// app. Resolves true if the page says it did within OPEN_ACK_MS, otherwise false; an answer after
+// that is not heard. src/app/worker-opens.ts answers it.
+function askToOpen(client, url) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const done = (opened) => { clearTimeout(timer); channel.port1.close(); resolve(opened); };
+    const timer = setTimeout(() => done(false), OPEN_ACK_MS);
+    channel.port1.onmessage = () => done(true);
+    try { client.postMessage({ type: 'OPEN_CHAT', url }, [channel.port2]); } catch { done(false); }
+  });
 }
+
+// Opens a tapped notification's chat. Every tap ends one of two ways: a window known to be in front
+// shows the chat, or the notification is on screen again. "In front" means the window was focused
+// already or its focus() succeeded; a browser covered by another application still reports itself
+// visible, so visible is not enough. A window just opened with openWindow is in front.
+//
+// | Rule | Window this worker controls          | Then                                                           |
+// | ---- | ------------------------------------ | -------------------------------------------------------------- |
+// | 1    | none                                 | openWindow. If that fails, the notification comes back.        |
+// | 2    | answers within OPEN_ACK_MS           | The chat is open in it. In front: done. If not, it comes back. |
+// | 3    | no answer in time, first tap         | The window is left as it is and a focus attempted. The         |
+// |      |                                      | notification comes back, marked as having come back.           |
+// | 4    | no answer in time, tap on a marked   | navigate the window, or openWindow if that fails. Then, unless |
+// |      | notification                         | a window is known to be in front, the notification comes back. |
+//
+// A first tap never replaces the document of a window that has not answered: its page may be busy
+// with an edited form a reload would lose. If that page answers late, the chat opens and the
+// notification that came back stays until the person dismisses it, or taps it and gets a prompt
+// answer. The notification comes back only as the direct result of a tap, so it cannot loop on its
+// own. A tap on a chat that already has an attempt in flight joins that attempt, so two taps never
+// ask, navigate, open a window or bring the notification back twice.
+// A tap that arrives while the attempt is bringing the notification back may be a tap on that very
+// notification, so it starts a new attempt at once, without waiting for the display, and later taps
+// join the new one. The replaced attempt's taps end when the new attempt does, or sooner, so its
+// display never keeps the worker alive longer than the new attempt, which waits on its own display
+// for at most RESTORE_MS. Every notification brought back for a chat carries that chat's one tag,
+// so a late display and the new attempt's leave one notification, not two.
+// Bringing the notification back is retried once. Two cases the invariant does not cover, both
+// ending every tap on the attempt with nothing on screen: the retry fails too, or the browser has
+// neither shown the notification nor refused it by RESTORE_MS. In the second the worker only stops
+// waiting, so the notification still appears if the browser finishes later.
+const attempts = new Map();
+function openChat(notification) {
+  const url = conversationUrl(notification.data?.url);
+  const current = attempts.get(url);
+  if (current && !current.restoring) return current.done;
+  const attempt = { restoring: false, done: undefined, replace: undefined };
+  const replaced = new Promise((resolve) => { attempt.replace = resolve; });
+  const run = reach(notification, url)
+    // A way of opening that failed unexpectedly has not reached the person either.
+    .catch(() => false)
+    .then((inFront) => inFront || restore(notification, url, attempt));
+  // A replaced attempt's display may settle before its replacement ends, and must not clear it.
+  attempt.done = Promise.race([run, replaced]).finally(() => { if (attempts.get(url) === attempt) attempts.delete(url); });
+  current?.replace(attempt.done);
+  attempts.set(url, attempt);
+  return attempt.done;
+}
+
+// How long a tap waits for the notification it brings back to be stored. That takes milliseconds,
+// and browsers may show the notification before showNotification() settles, so a display that never
+// settles would only keep the worker running until the browser stopped it. Ten seconds leaves a slow
+// phone plenty of room.
+const RESTORE_MS = 10_000;
+
+// Chromium rejects showNotification when it cannot store the notification, so it is tried once more.
+async function restore(notification, url, attempt) {
+  attempt.restoring = true;
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(resolve, RESTORE_MS); });
+  const shown = showAgain(notification, url).catch(() => showAgain(notification, url)).catch(() => {});
+  await Promise.race([shown, deadline]);
+  clearTimeout(timer);
+}
+
+// Follows the table above. True when a window known to be in front shows the chat.
+async function reach(notification, url) {
+  // Only a window this worker controls runs code that answers, and only such a window can be navigated.
+  const windows = await self.clients.matchAll({ type: 'window' });
+  const existing = windows.find((client) => client.focused) ?? windows.find((client) => client.visibilityState === 'visible') ?? windows[0];
+  if (!existing) return openNew(url);
+  // Focused first, since the browser allows it only shortly after the tap.
+  const focusing = existing.focus().then(() => true, () => false);
+  const answered = await askToOpen(existing, url);
+  const front = existing.focused || await focusing;
+  if (answered) return front;
+  if (!notification.data?.reshown) return false;
+  try {
+    await existing.navigate(url);
+    return front;
+  } catch { /* Closed meanwhile, or no longer this worker's. */ }
+  return openNew(url);
+}
+
+const openNew = (url) => self.clients.openWindow(url).then(() => true, () => false);
 
 async function decline(notification) {
   const url = conversationUrl(notification.data?.url);
@@ -219,11 +350,28 @@ async function decline(notification) {
   });
 }
 
+// No window known to be in front shows the chat. The notification is already closed, so it comes
+// back, quietly and marked, for the person to tap again; a tap on it is rule 4 above. Its tag names
+// the chat, so it replaces only a notification brought back for the same chat. The server tags each
+// push with its own event ID, and a failed decline's notification ends in ":decline", which no
+// address does, so it never replaces news the person has not seen.
+async function showAgain(notification, url) {
+  await self.registration.showNotification(notification.title, {
+    body: notification.body,
+    icon: notification.icon,
+    badge: notification.badge,
+    tag: 'reshown:' + url,
+    actions: notification.actions,
+    silent: true,
+    data: { ...notification.data, reshown: true },
+  });
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   if (event.action === 'decline' && event.notification.data?.declineToken) {
     event.waitUntil(decline(event.notification));
     return;
   }
-  event.waitUntil(openChat(conversationUrl(event.notification.data?.url)));
+  event.waitUntil(openChat(event.notification));
 });

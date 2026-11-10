@@ -10,10 +10,12 @@ export function hasSession() {
   return csrf !== "";
 }
 // GET bodies by exact path. A 304, or a 200 with identical text, returns the same object so React can skip the update.
-type Cached = { etag: string | null; text: string; data: unknown };
+// `started` is the start order of the read that last vouched for the body: reads finish out of
+// order, and the server saw the most when the latest-started one left.
+type Cached = { etag: string | null; text: string; data: unknown; started: number };
 const responses = new Map<string, Cached>();
 const MAX_RESPONSES = 64, MAX_CACHED_CHARS = 4_000_000;
-let cachedChars = 0, generation = 0;
+let cachedChars = 0, generation = 0, reads = 0;
 /** The last body read for a GET path, to show while it is fetched again. */
 export function cachedResponse<T>(path: string) {
   return responses.get(path)?.data as T | undefined;
@@ -27,7 +29,9 @@ export function clearResponseCache() {
   cachedChars = 0;
   generation++;
 }
+/** Caches a body unless the entry already holds one from a read that started later. */
 function remember(path: string, entry: Cached) {
+  if ((responses.get(path)?.started ?? -1) > entry.started) return;
   forget(path);
   if (entry.text.length > MAX_CACHED_CHARS) return;
   responses.set(path, entry);
@@ -66,7 +70,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
   const get = !init.method || init.method === "GET";
   const timer = setTimeout(() => controller.abort(), get ? 20_000 : 60_000);
   const cached = get ? responses.get(path) : undefined;
-  const scope = generation;
+  const scope = generation, started = ++reads;
   if (cached?.etag) headers.set("If-None-Match", cached.etag);
   const request = () => fetch(`/api${path}`, {
     ...init,
@@ -79,7 +83,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     let response = await request();
     if (get && response.status === 304) {
       if (cached?.etag) {
-        if (scope === generation && responses.get(path) === cached) remember(path, cached);
+        if (scope === generation) remember(path, { ...cached, started });
         return cached.data as T;
       }
       // Only a request carrying our validator can be answered from memory.
@@ -89,7 +93,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
     }
     const body = await response.text();
     if (get && response.ok && cached?.text === body) {
-      if (scope === generation) remember(path, { ...cached, etag: response.headers.get("ETag") });
+      if (scope === generation) remember(path, { ...cached, etag: response.headers.get("ETag"), started });
       return cached.data as T;
     }
     let data: Record<string, any> = {};
@@ -107,7 +111,7 @@ export async function api<T>(path: string, init: RequestInit = {}, retried = fal
         data?.confirmRequired,
         data,
       );
-    if (get && scope === generation) remember(path, { etag: response.headers.get("ETag"), text: body, data });
+    if (get && scope === generation) remember(path, { etag: response.headers.get("ETag"), text: body, data, started });
     return data as T;
   } catch (error) {
     if (error instanceof ApiError || init.signal?.aborted) throw error;

@@ -8,6 +8,7 @@ import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
+import { streamingHoldBack } from "./streaming-hold-back";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -32,7 +33,8 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
   const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
   return document && context && document.cards.every(card => context.actionableIds.has(card.id))
     ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
-    : <CodeBlock key={code} code={code} language={language} finished={!!closed} />;
+    // A finished block is keyed by its code; one still streaming keeps its node, and any selection in it.
+    : <CodeBlock key={closed ? code : "open"} code={code} language={language} finished={!!closed} />;
 }
 
 /**
@@ -40,24 +42,27 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
  * alone never changes the layout. A fence still streaming in stays plain until its closing line arrives.
  */
 function CodeBlock({ code, language, finished }: { code: string; language?: string; finished: boolean }) {
-  const [copyState, setCopyState] = useState<
-    "idle" | "copying" | "copied" | "failed"
-  >("idle");
+  // Feedback belongs to the code it copied; once a growing block changes, it no longer applies.
+  const [copied, setCopied] = useState<{ state: "idle" | "copying" | "copied" | "failed"; code: string }>({ state: "idle", code });
+  const copyState = copied.code === code ? copied.state : "idle";
   const highlightable = finished && !!language;
   const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
-  // The block is keyed by its code, so a result can only ever belong to this code.
+  // A finished block is keyed by its code, so a result can only ever belong to this code.
   useEffect(() => {
     if (!highlightable || html !== null) return;
     loadHighlighter().then(module => setHtml(module.highlight(code, language!)), () => { /* Plain code still reads fine. */ });
   }, [highlightable, html, code, language]);
 
   async function copy() {
-    setCopyState("copying");
+    const text = code;
+    // A copy still pending when the code changes reports nothing, since it copied the older text.
+    const settle = (state: "copied" | "failed") => setCopied(current => current.code === text ? { state, code: text } : current);
+    setCopied({ state: "copying", code: text });
     try {
-      await navigator.clipboard.writeText(code);
-      setCopyState("copied");
+      await navigator.clipboard.writeText(text);
+      settle("copied");
     } catch {
-      setCopyState("failed");
+      settle("failed");
     }
   }
 
@@ -247,11 +252,16 @@ export function streamingBlocks(text: string): string[] | null {
 
 /**
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
- * grows, so a long reply no longer re-parses from the top several times a second. The saved
- * reply replaces this and is parsed whole.
+ * grows, so a long reply no longer re-parses from the top several times a second. A short
+ * unfinished marker, link or table header at the growing end is held back until it is whole, so it
+ * does not flash as raw Markdown. The saved reply replaces this and is parsed whole.
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
-  const blocks = useMemo(() => streamingBlocks(props.text), [props.text]);
-  if (!blocks) return <MessageMarkdown {...props} />;
+  const blocks = useMemo(() => {
+    const split = streamingBlocks(props.text);
+    return split ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : null;
+  }, [props.text]);
+  const whole = useMemo(() => blocks ? "" : streamingHoldBack(props.text), [blocks, props.text]);
+  if (!blocks) return <MessageMarkdown {...props} text={whole} />;
   return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });

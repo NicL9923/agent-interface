@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, clearResponseCache, request, setCsrf, uploadFile } from '../src/client-api.js';
+import { api, cachedResponse, clearResponseCache, request, setCsrf, uploadFile } from '../src/client-api.js';
 
 beforeEach(()=>{vi.useFakeTimers();setCsrf('current-session-csrf');clearResponseCache();});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();setCsrf('');});
@@ -108,6 +108,41 @@ describe('conditional reads',()=>{
     clearResponseCache();finish(json({user:'one'},'W/"one"'));await pending;
     const next=api('/bootstrap');await vi.advanceTimersByTimeAsync(0);finish(json({user:'two'}));await next;
     expect(validator(fetch,1)).toBeNull();
+  });
+
+  // Reads of one path finish out of order. The cache keeps the body of the latest-started read that
+  // has finished, whichever order they land in, and each caller still gets its own body.
+  const orders=[[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
+  it.each(orders)('keeps the latest-started read of a path when three overlapping reads finish in the order %i, %i, %i',async(...order)=>{
+    const finish:((response:Response)=>void)[]=[];
+    vi.stubGlobal('fetch',vi.fn((_path:string,_init:RequestInit)=>new Promise<Response>(resolve=>finish.push(resolve))));
+    const reads=[0,1,2].map(()=>api<{read:number}>('/bots/ranch/conversation?turns=20').then(data=>data.read));
+    await vi.advanceTimersByTimeAsync(0);
+    let latest=-1;
+    for(const index of order){
+      finish[index](json({read:index}));
+      await expect(reads[index]).resolves.toBe(index);
+      latest=Math.max(latest,index);
+      expect(cachedResponse<{read:number}>('/bots/ranch/conversation?turns=20')?.read).toBe(latest);
+    }
+  });
+
+  // A later-started read that confirms the cached body vouches for it as of its own start, whether it
+  // lands before or after an earlier-started read that brought another body.
+  const confirmations=[
+    {answer:'a 304',confirm:()=>notModified(),order:[2,1]},{answer:'a 304',confirm:()=>notModified(),order:[1,2]},
+    {answer:'the same body',confirm:()=>json({day:'kept'},'W/"kept"'),order:[2,1]},{answer:'the same body',confirm:()=>json({day:'kept'},'W/"kept"'),order:[1,2]},
+  ];
+  it.each(confirmations)('keeps the body a later-started read answered with $answer confirmed, finishing in the order $order',async({confirm,order})=>{
+    const finish:((response:Response)=>void)[]=[];
+    vi.stubGlobal('fetch',vi.fn((_path:string,_init:RequestInit)=>new Promise<Response>(resolve=>finish.push(resolve))));
+    const first=api('/today');await vi.advanceTimersByTimeAsync(0);finish[0](json({day:'kept'},'W/"kept"'));const kept=await first;
+    const reads=[first,api('/today'),api('/today')];await vi.advanceTimersByTimeAsync(0);
+    for(const index of order){
+      finish[index](index===2?confirm():json({day:'older'},'W/"older"'));await reads[index];
+    }
+    await expect(reads[2]).resolves.toBe(kept);
+    expect(cachedResponse('/today')).toBe(kept);
   });
 
   it('bounds the cache by count and size, evicting the least recently used path',async()=>{

@@ -14,6 +14,12 @@ const FRESH_MS = 5_000;
 const MAX_PREFETCHES = 2;
 const inflight = new Map<string, Promise<Page>>();
 const readAt = new Map<string, number>();
+/**
+ * The read a link started as the page loaded (see linked-chat.ts). It is the one finished read a
+ * chat may open from, because nothing a person does can come before the first chat load after the
+ * page loaded. That load takes it or discards it, whichever chat it is for.
+ */
+let startup: { path: string; read: Promise<Page> } | undefined;
 // Reads belong to the account they were made for. A new account starts with none to join.
 let scope = responseScope();
 function current() {
@@ -21,12 +27,29 @@ function current() {
   scope = responseScope();
   inflight.clear();
   readAt.clear();
+  startup = undefined;
 }
 
-/** The latest page being prefetched, so opening the chat joins that read instead of repeating it. */
+/**
+ * What a chat's first load may take instead of reading: the read a link started as the page
+ * loaded, on its way or finished, if this is the first chat load since; otherwise a prefetch still
+ * on its way. A prefetch that finished only filled the response cache, which the chat shows while
+ * it reads again. Call it once per chat load that may take one, since it uses up the startup read.
+ */
 export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
   current();
-  return inflight.get(firstPage(botId));
+  const path = firstPage(botId);
+  const linked = startup?.path === path ? startup.read : undefined;
+  startup = undefined;
+  return linked ?? inflight.get(path);
+}
+
+/** Reads the chat a link names as the page loads, for that chat's first load to open from. */
+export function prefetchLinkedPage(botId: string) {
+  prefetchFirstPage(botId);
+  const path = firstPage(botId);
+  const read = inflight.get(path);
+  startup = read && { path, read };
 }
 
 /**

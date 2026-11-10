@@ -77,6 +77,71 @@ device gets it as before. Security alerts always reach every device. See
 [Device activity](docs/native-api.md#device-activity).
 <!-- END device activity -->
 
+Tapping a web notification while the app is open in a window switches that window to the
+chat, as choosing it there would, and brings the window forward without reloading it. Every
+tap ends one of two ways: a window known to be in front shows the chat, or the notification
+is back on screen, quietly, to tap again. A window counts as in front only when it was focused
+already, it came forward when asked, or the worker just opened it; a browser covered by
+another application still reports itself visible. The worker follows four rules:
+
+1. No window the worker controls: it opens a new one. If the browser refuses, the
+   notification comes back.
+2. The page answers its `OPEN_CHAT` message within 250 ms: the chat is open there. If the
+   window is in front, that is all; if not, the notification comes back. No second window
+   opens, so the chat never shows twice.
+3. The page does not answer in time, on a first tap: it may be busy with something a reload
+   would lose, such as an edited settings form, so the window is left as it is and asked to
+   come forward, and the notification comes back marked as having come back. If the page
+   opens the chat late after all, the notification simply stays until it is dismissed or
+   tapped; a tap then gets a prompt answer.
+4. The page does not answer in time, on a tap of a notification that came back: that is the
+   person asking again, so the worker loads the chat's address into the window, or opens a
+   new window when that fails. Unless a window is then known to be in front, the
+   notification comes back again.
+
+A window running a release from before pages answered gets the notification back on the
+first tap and the chat on the second, as taps always did. A notification comes back only
+because of a tap, so it never loops on its own. A second tap on the same chat while the
+first is still being handled joins it, so nothing opens, loads or comes back twice. A tap
+while the notification is coming back may be a tap on that notification, so it starts a new
+try at once, and later taps join that one. A notification that comes back is tagged with its
+chat, so it replaces one already back for that chat and never a new notification. The worker
+waits at most 10 seconds for the browser to say a notification is back. Two cases the rules
+cannot cover leave nothing on screen: the browser refuses to show the notification again and
+refuses the worker's one further try, or it has neither shown nor refused it after those 10
+seconds, when the worker stops waiting and the notification still appears if the browser
+finishes later. Each fallback ends well
+inside the one second Firefox allows a worker to open a window after a tap.
+
+An open assistant settings sheet or Settings closes the way its close button does before the
+chat opens. An edited assistant asks whether to discard the changes, and the chat opens only
+if the person discards them. A section name being typed in Settings is saved, or, if it
+cannot be, Settings stays open with the reason. The page answers the worker either way, so
+the worker never reloads the window over the form. A chat waiting on a sheet belongs to that
+sheet and account: if the sheet goes without closing, as when another tab signs in as someone
+else, the chat never opens.
+
+A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
+web app checks the sign-in, instead of after. It does so only when this browser signed in
+within the session's seven days and that sign-in's last check named the account and listed
+the chat, so a signed-out browser or a chat you may not see usually sends no request that
+would be refused. Two cases still cost one refused read: a session the server ended early,
+such as an account removed from the household, and an assistant made private since the
+last check. The app then shows what it shows today: the sign-in screen, or its notice that
+the assistant is no longer available. The read is tagged with the account the record names,
+and the chat shows it only if the sign-in check answers as that same account and no other
+tab has signed out or in meanwhile; otherwise the chat reads again. The early read answers
+only the first chat load after the page loads, once, whether it has finished or not; nothing a
+person does can come before that load. Every later open of any chat, however soon, reads
+fresh, and the chat's change stream reads fresh as it connects. A row's hover or press read
+is joined only while it is still on its way; once finished it only fills the response cache,
+which the chat shows while it reads again. The response cache keeps the body of the
+latest-started read of each path, so a slower, older read that finishes last never replaces
+it. The browser keeps only the lapse time, the account ID and the chat IDs, in
+`agent-interface:sign-in-hint`, and drops them at sign-out, a refused session, or a check
+that finds another account. A link to a message, Today or a group chat waits for the check
+as before. See `src/app/linked-chat.ts`.
+
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
 approval notification offers **Review** and **Decline** where the browser supports
@@ -173,7 +238,12 @@ The rest of this section is web-only. The avatar conductor and pose math that iO
 ### Crash reports
 
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
-Reload instead of a blank screen. Chat and group drafts are written to the device on
+Reload instead of a blank screen. A lazy screen that cannot load, as when a tab stayed
+open across a deploy and the screen's file is gone, says "This screen could not load" with
+Reload, and the rest of the app keeps working. The server answers a missing `/assets/` path
+with an uncached plain-text 404, never the app shell. The page never reloads itself; Reload
+loads the release the server has now, since the worker fetches the app shell from the network
+first. Chat and group drafts are written to the device on
 every edit, so a reload keeps them. While someone is signed in, the web client sends
 that crash, uncaught errors and unhandled rejections to `POST /api/client-errors`: each
 distinct report once, at most five per page load, and never chunk-load failures the
@@ -199,6 +269,28 @@ Installing a release copies every hashed `assets/name-HASH.ext` file already hel
 earlier release's cache instead of downloading it again. The pages, icons, manifest and
 unhashed files are always fetched fresh. The worker's hashed-name rule must match
 `src/server/static-cache.ts`; a test compares them.
+
+The worker opens the app shell (`/` and `/index.html`) from its own release's cache, without
+waiting on the network, while it has no sign that the cached shell is out of date. Install
+fills that cache all or nothing, so the shell and the code it loads first come from one
+release. After each such open the worker fetches the server's `index.html` in the background
+and compares the text. The server sends the file as it is on disk, so the text differs only
+when a release changed it.
+
+- A different shell means a new release. The worker notes that in its own cache, which
+  survives the worker being stopped, and runs the update check at once. From the next load
+  on it opens the network's shell, with the cached one as the offline fallback, as it did
+  before this change. So after a deploy the old shell opens until one background check has
+  finished, which is one load in ordinary use, even if the new worker cannot install. Two
+  windows opened before that check finishes both get the old shell. The new release's worker
+  starts with a new cache and no note.
+- A redirect, 401, 403, server error or no network changes nothing. No window reloads and
+  the worker stays, so one bad answer never costs a person their work.
+- With no cached shell, as on a first visit or after storage is cleared, the network answers.
+
+A release that finishes installing is offered with **Refresh**, as before; the worker never
+switches releases under an open page. The shell is not fetched with navigation preload,
+since the cached copy usually answers first.
 
 Tailwind 4 uses the app's CSS tokens through `src/ui.css`. Utilities have a `tw:`
 prefix so they cannot collide with existing semantic class names. Preflight is
@@ -440,6 +532,12 @@ your draft. A failed turn can be retried once, by anyone, from any device: a sec
 tap, tab or phone gets the first retry's result instead of starting another turn.
 
 After you send, your message moves near the top and the reply grows below it.
+While it grows, a short stretch of bold, italics, strikethrough, inline code or a link waits at
+the end and appears whole once its closing marker arrives, instead of flashing as raw Markdown.
+One longer than about a short sentence shows as typed until it closes. A table header waits
+while its line is typed, shows as typed while the delimiter row, the `| --- |` line under it,
+arrives, and becomes a table once that row is recognized. Code blocks show every character as
+it arrives, and a code block still arriving keeps your text selection.
 Scrolling up stops the view from following; it follows again once you return to
 the end. Each finished turn folds its tool calls and delegated work into one row,
 such as "Worked for 2m 14s · 3 tool calls". Expand it for the details. While the
@@ -556,7 +654,11 @@ first, and `npx playwright install chromium` once per Playwright version. `e2e/s
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
 with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
 network. It covers sign-in, sending a message and receiving the reply over the live event
-stream, the service worker opening the app offline and recovering, and no page errors,
+stream, the service worker opening the app offline and recovering, a deploy whose new shell
+reaches the next load and whose release is offered until taken, a deploy whose worker cannot
+install still reaching the next load, a lazy screen whose file a deploy retired offering
+Reload without reloading on its own, a notification's chat opening in the open window
+without a reload, and no page errors,
 console errors or CSP violation reports. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.

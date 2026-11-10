@@ -62,6 +62,8 @@ export const routineTrialKey = (user: string, routine: string) => `agent-interfa
 export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;
 /** A form card's answers on their way to the assistant, or sent, so a reload neither loses nor resends them. */
 export const formReplyKey = (user: string, bot: string, message: string, card: string) => `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
+/** When this browser's sign-in lapses and which chats it could open. See linked-chat.ts. */
+export const signInHintKey = "agent-interface:sign-in-hint";
 export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
 export function localRead<T>(key: string): T | null {
   try {

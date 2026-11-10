@@ -1130,6 +1130,201 @@ class ReadQueueTests(unittest.TestCase):
             self.assertIn("result", server.dispatch({"id": 3, "method": "agent-interface.receipt", "params": {"request_id": "none"}}, Replies()))
 
 
+class GatedHermes(PooledHermes):
+    """PooledHermes where each of the slow assistant's activations waits until the test releases that one."""
+    def __init__(self):
+        super().__init__()
+        self.held.set()
+        self.gates, self.started = [], threading.Condition()
+        pooled = self.server.handle_request
+        def handle(request):
+            params = request.get("params") or {}
+            if request["method"] in ("session.activate", "session.resume") and params.get("profile") == "slow":
+                gate = {"go": threading.Event(), "fail": False}
+                with self.started:
+                    self.gates.append(gate)
+                    self.started.notify_all()
+                if not gate["go"].wait(10):
+                    raise RuntimeError("The test never released this activation")
+                if gate["fail"]:
+                    raise RuntimeError("Synthetic activation failure")
+            return pooled(request)
+        self.server.handle_request = handle
+
+    def activations(self, count):
+        """Wait until ``count`` activations have started; True if they did."""
+        with self.started:
+            return self.started.wait_for(lambda: len(self.gates) >= count, 3)
+
+    def release(self, index, fail=False):
+        self.gates[index]["fail"] = fail
+        self.gates[index]["go"].set()
+
+    def settled(self):
+        """Admission reservations still held once answered reads release theirs, waiting up to 3 seconds."""
+        deadline = time.monotonic() + 3
+        while self.active[0] and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return self.active[0]
+
+    def open(self, rid, replies, **params):
+        self.server.dispatch({"id": rid, "method": "agent-interface.open", "params": {"profile": "slow", **params}}, replies)
+
+
+class ReadMergeTests(unittest.TestCase):
+    def test_identical_opens_waiting_behind_a_running_one_share_one_computation(self):
+        with GatedHermes() as hermes:
+            replies = Replies()
+            hermes.open("running", replies)
+            self.assertTrue(hermes.activations(1))
+            hermes.open("a", replies, window={"turns": 20})
+            hermes.open("b", replies, window={"turns": 20})
+            hermes.release(0)
+            self.assertTrue(hermes.activations(2))
+            hermes.release(1)
+            self.assertTrue(replies.wait("running", "a", "b"))
+            self.assertEqual(len(hermes.gates), 2)
+            a, b = (replies.answers[rid] for rid in ("a", "b"))
+            self.assertEqual((a["id"], b["id"]), ("a", "b"))
+            self.assertEqual({**a["result"], "app_timing": None}, {**b["result"], "app_timing": None})
+            self.assertEqual(hermes.settled(), 0)
+
+    def test_a_request_arriving_after_its_twin_started_gets_its_own_computation(self):
+        with GatedHermes() as hermes:
+            replies = Replies()
+            hermes.open("running", replies)
+            self.assertTrue(hermes.activations(1))
+            hermes.open("a", replies)
+            hermes.release(0)
+            self.assertTrue(hermes.activations(2))
+            # The running read may already have read what this request needs to see changed.
+            hermes.open("b", replies)
+            hermes.release(1)
+            self.assertTrue(hermes.activations(3))
+            hermes.release(2)
+            self.assertTrue(replies.wait("a", "b"))
+            self.assertEqual(len(hermes.gates), 3)
+
+    def test_waiting_opens_merge_only_with_the_same_parameters_connection_and_method(self):
+        cases = {
+            "parameters": lambda hermes, replies: (hermes.open("a", replies, window={"turns": 20}), hermes.open("b", replies, window={"turns": 10})),
+            # Native activation binds the session to its caller's connection.
+            "connection": lambda hermes, replies: (hermes.open("a", replies), hermes.open("b", other)),
+        }
+        for name, queue in cases.items():
+            with self.subTest(name), GatedHermes() as hermes:
+                replies, other = Replies(), Replies()
+                hermes.open("running", replies)
+                self.assertTrue(hermes.activations(1))
+                queue(hermes, replies)
+                for index in range(3):
+                    self.assertTrue(hermes.activations(index + 1))
+                    hermes.release(index)
+                self.assertTrue(replies.wait("running", "a"))
+                self.assertTrue((other if name == "connection" else replies).wait("b"))
+                self.assertEqual(len(hermes.gates), 3)
+        # A queued read outside the merge list never shares a computation.
+        with patch.object(extension, "MERGED_READS", frozenset()), GatedHermes() as hermes:
+            replies = Replies()
+            hermes.open("running", replies)
+            self.assertTrue(hermes.activations(1))
+            hermes.open("a", replies)
+            hermes.open("b", replies)
+            for index in range(3):
+                self.assertTrue(hermes.activations(index + 1))
+                hermes.release(index)
+            self.assertTrue(replies.wait("a", "b"))
+            self.assertEqual(len(hermes.gates), 3)
+
+    def test_a_merged_failure_answers_every_request_with_its_own_id(self):
+        with GatedHermes() as hermes:
+            replies = Replies()
+            hermes.open("running", replies)
+            self.assertTrue(hermes.activations(1))
+            hermes.open("a", replies)
+            hermes.open("b", replies)
+            hermes.release(0)
+            self.assertTrue(hermes.activations(2))
+            hermes.release(1, fail=True)
+            self.assertTrue(replies.wait("a", "b"))
+            for rid in ("a", "b"):
+                answer = replies.answers[rid]
+                self.assertEqual((answer["id"], answer["error"]["code"]), (rid, -32000))
+                self.assertIn("Synthetic activation failure", answer["error"]["message"])
+            self.assertEqual(len(hermes.gates), 2)
+            self.assertEqual(hermes.settled(), 0)
+
+    def test_an_open_reports_the_time_it_waited_in_the_queue_within_its_total(self):
+        with GatedHermes() as hermes:
+            replies = Replies()
+            hermes.open("running", replies)
+            self.assertTrue(hermes.activations(1))
+            hermes.open("waiting", replies)
+            time.sleep(0.2)
+            hermes.release(0)
+            self.assertTrue(hermes.activations(2))
+            hermes.release(1)
+            self.assertTrue(replies.wait("running", "waiting"))
+            running, waiting = (replies.answers[rid]["result"]["app_timing"] for rid in ("running", "waiting"))
+            self.assertEqual(list(waiting), ["queued", "wait", "activate", "decorate", "window", "total"])
+            # The held activation is the running read's own time; the second read spent it in the queue.
+            self.assertLess(running["queued"], 100)
+            self.assertGreaterEqual(running["activate"], 150)
+            self.assertGreaterEqual(waiting["queued"], 150)
+            self.assertLess(waiting["activate"], 100)
+            self.assertGreaterEqual(waiting["total"], waiting["queued"] + waiting["activate"])
+
+    def test_identical_discovers_waiting_behind_a_running_one_share_one_routine_scan(self):
+        jobs = [{"id": "job", "name": "[bot:default] Daily AI news"}]
+        run = {"id": "execution", "status": "completed", "claimed_at": "2026-10-31T07:00:00-05:00"}
+        scans, entered, go = [], threading.Event(), threading.Event()
+
+        def list_jobs(profile):
+            # Each scan lists every profile's jobs, so this records one entry per profile per scan.
+            scans.append(profile)
+            return jobs
+
+        def list_executions(job_id, limit):
+            # Hermes's cron ledger; the first read holds the discovery lane until the test releases it.
+            if not entered.is_set():
+                entered.set()
+                if not go.wait(10):
+                    raise RuntimeError("The test never released the first scan")
+            return [run]
+        with PooledHermes() as hermes:
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = list_executions, Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=list_jobs),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules):
+                replies = Replies()
+                discover = lambda rid: hermes.server.dispatch({"id": rid, "method": "agent-interface.discover", "params": {"cursor": "0", "full": True}}, replies)
+                discover("running")
+                self.assertTrue(entered.wait(3))
+                discover("a")
+                discover("b")
+                go.set()
+                self.assertTrue(replies.wait("running", "a", "b"))
+            # One forced scan of both profiles for the running request, one for both waiting ones.
+            self.assertEqual(scans, ["slow", "fast", "slow", "fast"])
+            a, b = (replies.answers[rid] for rid in ("a", "b"))
+            self.assertEqual((a["id"], b["id"]), ("a", "b"))
+            self.assertEqual(a["result"], b["result"])
+            self.assertEqual([(event["botId"], event["routineId"]) for event in a["result"]["events"]], [("slow", "job"), ("fast", "job")])
+            # Each profile's run was recorded once, as two separate scans would have left it.
+            self.assertEqual(hermes.journal.db.execute("SELECT profile FROM events WHERE routine_id='job' ORDER BY id").fetchall(), [("slow",), ("fast",)])
+            self.assertEqual(hermes.active[0], 0)
+
+    def test_a_response_without_timings_only_takes_its_own_id(self):
+        error = {"jsonrpc": "2.0", "id": "first", "error": {"code": -32000, "message": "failed"}}
+        self.assertEqual(extension.answered(error, "second", 0.5), {**error, "id": "second"})
+        self.assertIsNone(extension.answered(None, "second", 0.5))
+        found = {"jsonrpc": "2.0", "id": "first", "result": {"cursor": "3", "events": []}}
+        self.assertEqual(extension.answered(found, "second", 0.5)["result"], found["result"])
+
+
 class BotDeliveryInstallTests(unittest.TestCase):
     def test_native_consumer_hermes_keeps_native_delivery_and_owes_only_addon_receipts(self):
         with FakeHermes([]) as hermes:
