@@ -68,7 +68,7 @@ An independent reviewer (GPT-6.1 Sol) verified two findings with reproductions a
 `t3/send-lanes` is merged in with a normal merge commit after its own review fixes, so this branch also carries the
 turn-claim binding rule ([20261110T094510Z-receipt-turn-binding.md](20261110T094510Z-receipt-turn-binding.md)) and
 the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lanes.md)). Source fingerprint
-`sha256:8022e337ba3d76dbe4ce9b80d4b39619edd86df56293a04007c515a9d194896a` (1688 files); `src/hermes` alone `sha256:ecaf02b4cd90992e8290e60302e7c01a8e3d54b89a2dcc9f3e86b1a69b5c93f6`. Same host and versions as above.
+`sha256:dd42b1575e7beda274dd527f152e9bfdb70eba1012153f903df899dfcecefd23` (1688 files); `src/hermes` alone `sha256:2d5b3797b154db20f88c9d1cc4a339f29bb8f441e9581b7e8712002a9ea3c5eb`. Same host and versions as above.
 
 - P2, a missing `turn` did not always mean a turn started. Read from `ed1afb0`, native `prompt.submit` answers
   success in five shapes: `streaming` when it started the turn (`tui_gateway/methods_prompt.py:973`, and
@@ -103,6 +103,8 @@ the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lan
 - `npm run lint:py` with ruff 0.17.3: passed.
 - `npm run typecheck`: passed. `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts`:
   2 files, 233 tests passed.
+- After those runs, only a code comment's citation changed; `AdmissionTurnTests` ran again and passed. The
+  fingerprint above is of the committed code.
 
 ## Review red proof
 
