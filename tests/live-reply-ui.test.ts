@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { clearResponseCache } from "../src/client-api";
 import { CATCH_UP_MS } from "../src/components/streaming-reveal";
-import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, type InflightDelta, type Message, type ToolCall } from "../src/shared/types";
+import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, type InflightDelta, type Message, type ToolCall, type TurnEvent } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
@@ -25,6 +25,9 @@ const bootstrap: Bootstrap = {
 const question: Message = { id: "u1", role: "user", text: "Is the north gate latched?", sender: { id: "one", name: "One" }, createdAt: "2026-11-10T14:59:00Z" };
 const running = { state: "working", runId: "run-1" } as const;
 let server: Conversation;
+// Reads and turn events carry a structural version, `boot:epoch:generation`, as the server sends them.
+let generation: number;
+const version = () => `boot:0:${generation}`;
 let unexpected: string[];
 let mount: Mount;
 const respond = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -41,7 +44,8 @@ beforeEach(() => {
   // jsdom has no layout. The Quote button measures a selection in a reply.
   Range.prototype.getBoundingClientRect ??= () => new DOMRect();
   unexpected = [];
-  server = { botId: "home", messages: [question], approvals: [], files: [], activity: running };
+  generation = 1;
+  server = { botId: "home", messages: [question], approvals: [], files: [], activity: running, version: version() };
   vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input, location.origin);
     const call = `${init.method ?? "GET"} ${url.pathname.replace(/^\/api/, "")}`;
@@ -73,14 +77,25 @@ async function open() {
   await advance(0);
 }
 const live = (text: string): Inflight => ({ botId: "home", message: { id: "s1-inflight", role: "assistant", text }, activity: running, toolCalls: [] });
-async function send(type: "inflight" | "inflight-delta", value: Inflight | InflightDelta) {
+async function send(type: "inflight" | "inflight-delta" | "turn", value: Inflight | InflightDelta | TurnEvent) {
   await act(async () => stream().emit(type, JSON.stringify(value)));
 }
 /** The next read has these rows after the question, and the stream says something changed. */
 async function save(messages: Message[], activity: Conversation["activity"] = { state: "idle" }) {
-  server = { ...server, messages: [question, ...messages], activity };
+  generation++;
+  server = { ...server, messages: [question, ...messages], activity, version: version() };
   await act(async () => stream().emit("message", "change"));
   await advance(0);
+}
+/**
+ * A change to the running turn's structure as a `?inflight=3` stream sends it: the turn's saved rows
+ * after the question, and its live reply, from one read at a newer version.
+ */
+async function turn(messages: Message[], text: string, activity: Conversation["activity"] = running) {
+  generation++;
+  server = { ...server, messages: [question, ...messages], activity, version: version() };
+  await send("turn", { botId: "home", message: { id: "s1-inflight", role: "assistant", text }, activity, toolCalls: [], version: version(),
+    messages, after: question.id });
 }
 const row = (id: string) => mount.container.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
 const replyText = (id: string) => row(id)?.querySelector(".message-markdown")?.textContent;
@@ -143,7 +158,9 @@ describe("a live reply's row when it is saved", () => {
     await send("inflight", live("The north gate is latched."));
     const first = row("m2")!, last = row("s1-inflight")!;
     expect(last).not.toBe(first);
-    await save([saved("m2", "Checking the gate log."), toolRow("completed"), saved("m3", "The north gate is latched.")]);
+    // The turn ends with a turn event that saves the last segment.
+    await turn([saved("m2", "Checking the gate log."), toolRow("completed"), saved("m3", "The north gate is latched.")], "", { state: "idle" });
+    expect(row("s1-inflight")).toBeNull();
     expect(row("m2")).toBe(first);
     expect(row("m3")).toBe(last);
     expect(replyText("m2")).toBe("Checking the gate log.");
@@ -154,11 +171,13 @@ describe("a live reply's row when it is saved", () => {
     await open();
     await send("inflight", live("Checking the gate log."));
     const segment = row("s1-inflight")!;
-    // Hermes saves the reply so far when a tool starts; the turn is still running.
-    await save([saved("m2", "Checking the gate log."), toolRow("running")], running);
+    // Hermes saves the reply so far when a tool starts; the turn is still running, its live reply empty.
+    await turn([saved("m2", "Checking the gate log."), toolRow("running")], "");
     expect(row("m2")).toBe(segment);
     expect(row("s1-inflight")).toBeNull();
-    await send("inflight", live("The north gate is latched."));
+    // Text resumes after the tool as growth of the turn event's empty live reply.
+    await send("inflight-delta", { botId: "home", messageId: "s1-inflight", baseTextLength: 0, baseReasoningLength: 0,
+      appendText: "The north gate is latched.", activity: running });
     const next = row("s1-inflight")!;
     expect(next).not.toBe(segment);
     expect(row("m2")).toBe(segment);
