@@ -229,3 +229,49 @@ test("a notification tapped while the app is open switches its chat without relo
   expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
   expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
 });
+
+test.describe("on a phone held sideways with its on-screen keyboard up", () => {
+  test.use({ viewport: { width: 844, height: 390 }, isMobile: true, hasTouch: true });
+
+  test("a long draft scrolls inside the message box and Send stays on screen to tap", async ({ page }) => {
+    // Chromium shows no keyboard. Safari reports one as a visual viewport shorter than the page, so this one
+    // shrinks to 190px, what a landscape iPhone leaves above its keyboard, and then to 140px.
+    await page.addInitScript(() => {
+      const viewport = Object.assign(new EventTarget(), { height: innerHeight, width: innerWidth, scale: 1, pageTop: 0, pageLeft: 0, offsetTop: 0, offsetLeft: 0 });
+      Object.defineProperty(window, "visualViewport", { value: viewport });
+      (window as unknown as { openKeyboard(height: number): void }).openKeyboard = height => {
+        viewport.height = height;
+        viewport.dispatchEvent(new Event("resize"));
+      };
+    });
+    await signIn(page);
+    await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+    const field = page.getByRole("textbox", { name: "Message Ranch Hand" });
+    await field.tap();
+    const draft = Array.from({ length: 8 }, (_, line) => `Line ${line + 1} of the feed order`).join("\n");
+    await field.fill(draft);
+    const send = page.getByRole("button", { name: "Send message" });
+    // 140px leaves less than the header and the composer need together, so the header gives way, not Send.
+    for (const visible of [190, 140]) {
+      await page.evaluate(height => (window as unknown as { openKeyboard(height: number): void }).openKeyboard(height), visible);
+      const box = (await send.boundingBox())!;
+      expect({ top: box.y >= 0, bottom: box.y + box.height <= visible }, `Send at ${box.y} to ${box.y + box.height} of ${visible}`)
+        .toEqual({ top: true, bottom: true });
+      // Nothing covers it, so a tap at its center reaches it.
+      expect(await send.evaluate(button => {
+        const { left, top, width, height } = button.getBoundingClientRect();
+        return button.contains(document.elementFromPoint(left + width / 2, top + height / 2));
+      })).toBe(true);
+      // The draft scrolls inside its own box, and the app fits the frame without the shell scrolled to show it.
+      expect(await field.evaluate(input => {
+        const own = input.getBoundingClientRect(), form = input.closest("form")!.getBoundingClientRect();
+        return { scrolls: input.scrollHeight > input.clientHeight, inForm: own.top >= form.top && own.bottom <= form.bottom,
+          shellScrolled: document.querySelector(".app-shell")!.scrollTop };
+      })).toEqual({ scrolls: true, inForm: true, shellScrolled: 0 });
+    }
+
+    await send.tap();
+    await expect(conversation(page).getByText(`Howdy, partner. You said: ${draft}`)).toBeAttached();
+    await expect(field).toBeFocused();
+  });
+});

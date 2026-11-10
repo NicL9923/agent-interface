@@ -101,16 +101,26 @@ export function draftLineage(id: string): { draft: string; revises?: string } {
  * are never matched. A card naming itself or a later card revises nothing.
  */
 export function draftRevisions(messages: { id: string; role: string; text: string }[]): Map<string, EmailCard> {
-  const drafts = new Map<string, EmailCard>(), revisions = new Map<string, EmailCard>();
+  return continueDraftRevisions(startDraftRevisions(), messages).revisions;
+}
+/** draftRevisions part way through a conversation: the latest card of each draft, and the revisions so far. */
+export type DraftRevisionsState = { drafts: ReadonlyMap<string, EmailCard>; revisions: Map<string, EmailCard> };
+export const startDraftRevisions = (): DraftRevisionsState => ({ drafts: new Map(), revisions: new Map() });
+/**
+ * Reads `messages` after `state`, which it leaves as it was. Messages without an email card return
+ * `state` itself, so the map of revisions keeps its identity while only a reply without one grows.
+ */
+export function continueDraftRevisions(state: DraftRevisionsState, messages: { id: string; role: string; text: string }[]): DraftRevisionsState {
+  let drafts: Map<string, EmailCard> | undefined, revisions: Map<string, EmailCard> | undefined;
   for (const message of messages) {
     if (message.role !== "assistant") continue;
     for (const card of replyCardsFromText(message.text)) {
       if (card.type !== "email") continue;
       const { draft, revises } = draftLineage(card.id);
-      const previous = revises ? drafts.get(revises) : undefined;
-      if (previous) revisions.set(draftKey(message.id, card.id), previous);
-      drafts.set(draft, card);
+      const previous = revises ? (drafts ?? state.drafts).get(revises) : undefined;
+      if (previous) (revisions ??= new Map(state.revisions)).set(draftKey(message.id, card.id), previous);
+      (drafts ??= new Map(state.drafts)).set(draft, card);
     }
   }
-  return revisions;
+  return drafts ? { drafts, revisions: revisions ?? state.revisions } : state;
 }

@@ -18,6 +18,7 @@ import { largePasteFile } from "./large-paste";
 import { formatBytes } from "../shared/uploads";
 import { clearDecline, useDeclined } from "./decline-handoff";
 import { imeKey } from "./ime";
+import { sendsOnKey, useEnterSends } from "./enter-key";
 
 /** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
 export function useStopResponse(botId: string, report: (message: string) => void) {
@@ -208,6 +209,13 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     : sending ? "Wait a moment for your message to send."
     : slots <= 0 ? `A message can carry up to ${MAX_ATTACHMENTS} attachments.` : undefined;
   const submitting = sending || pending !== null;
+  // A press on Send or Stop leaves focus in the message box, so a phone keeps its keyboard up
+  // between messages. Focus moves as the default of mousedown, which a touch also fires; a click,
+  // a key, a screen reader and voice control still activate the button.
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
+  // On a touch screen with no mouse or trackpad, Return starts a new line. Ctrl+Enter and Cmd+Enter
+  // send everywhere. See enter-key.ts.
+  const enterSends = useEnterSends();
   const [attachNotice, setAttachNotice] = useState<string[]>([]);
   const addFiles = (files: File[]) => {
     if (!files.length) return;
@@ -397,7 +405,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               recallTo(recall.draft, null, "end");
               return;
             }
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (sendsOnKey(event.nativeEvent, enterSends)) {
               event.preventDefault();
               if (
                 !(
@@ -415,6 +423,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             }
           }}
           rows={1}
+          // Labels the on-screen keyboard's Return key with what it does here.
+          enterKeyHint={enterSends ? "send" : "enter"}
           disabled={!draftReady || draft.botId !== botId}
         />
 
@@ -428,7 +438,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               </button>}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
-          {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
+          {stopVisible ? <button type="button" className="send-button" aria-label="Stop response" onMouseDown={keepFocus}
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}
             onClick={onStop}>
@@ -436,6 +446,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           </button> : <button
             className="send-button"
             aria-label={active ? "Send guidance" : "Send message"}
+            onMouseDown={keepFocus}
             aria-busy={submitting}
             disabled={
               !draftReady ||

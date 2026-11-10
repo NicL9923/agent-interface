@@ -49,12 +49,20 @@ export function wireOrigin(message: Message, row: Record<string, unknown>): Mess
 }
 /** Responses inherit provenance until the next user prompt, including desktop prompts. */
 export function withMessageOrigins(messages: Message[], seed?: MessageOrigin): Message[] {
+  return continueOrigins(messages, seed).messages;
+}
+/**
+ * withMessageOrigins, with the provenance a message after these would inherit. Passing it as the next
+ * list's seed gives what one call over both lists gives, so the messages before a live reply are read once.
+ */
+export function continueOrigins(messages: Message[], seed?: MessageOrigin): { messages: Message[]; prompt?: MessageOrigin } {
   let prompt = seed;
-  return messages.map(message => {
+  const shown = messages.map((message): Message => {
     const own = messageOrigin(message);
     if (message.role === "user") prompt = own?.kind === "human" ? undefined : own;
     if (own || message.role !== "assistant" || !prompt) return own ? { ...message, origin: own } : message;
-    const visibility = ["agent", "diagnostic"].includes(prompt.kind) ? "activity" : "conversation";
+    const visibility: MessageOrigin["visibility"] = ["agent", "diagnostic"].includes(prompt.kind) ? "activity" : "conversation";
     return { ...message, origin: { ...prompt, visibility } };
   });
+  return { messages: shown, prompt };
 }
