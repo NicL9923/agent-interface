@@ -189,6 +189,169 @@ class DeploymentTests(unittest.TestCase):
                 replies[path] = saved
 
 
+class AcquireThenStopTests(unittest.TestCase):
+    """The release's cutover start: the app's gate, then Hermes's lease, then the app stop.
+
+    The add-on's maintenance RPC is faked at its call; systemctl is a fake executable that
+    records what the host looked like when each call arrived and fails on any other unit or verb.
+    """
+    PREVIOUS = b'{"phase": "idle", "maintenance": false}\n'
+    BLOCKED = b'{"phase": "blocked", "maintenance": true, "operationId": "op-1"}\n'
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.host = Fixture(Path(temporary.name))
+        self.addCleanup(self.host.close)
+        self.d = self.host.deployment
+        state = self.host.root / "upgrade"
+        (state / "requests").mkdir(parents=True)
+        self.status, self.requests = state / "status.json", state / "requests"
+        self.status.write_bytes(self.PREVIOUS)
+        self.host.config["upgradeStateDir"] = str(state)
+        self.events = self.host.root / "events.jsonl"
+        # What a stop also does on the host, standing in for an app request the stop cut short.
+        self.on_stop = self.host.root / "on-stop.json"
+        self.on_stop.write_text("{}")
+        self.d.systemctl = str(executable(self.host.root / "systemctl", f"""
+import json, os, sys
+from pathlib import Path
+def phase():
+    path = Path({str(self.host.ops / "phase.json")!r})
+    return json.loads(path.read_text())["phase"] if path.exists() else None
+if sys.argv[1:] != ["--user", "stop", "agent-interface.service"]:
+    sys.exit("unexpected systemctl call: " + " ".join(sys.argv[1:]))
+with open({str(self.events)!r}, "a") as events:
+    events.write(json.dumps(["stop", phase(), Path({str(self.status)!r}).read_text(), os.path.lexists({str(self.d.lease)!r})]) + "\\n")
+for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): Path(path).write_text(text)
+"""))
+        self.answers = {}
+
+    def rpc(self, action):
+        """The add-on's maintenance RPC. Each test configures the actions it expects."""
+        phase = self.host.ops / "phase.json"
+        with self.events.open("a") as events:
+            events.write(json.dumps([action, json.loads(phase.read_text())["phase"] if phase.exists() else None,
+                                     self.status.read_text(), os.path.lexists(self.d.lease)]) + "\n")
+        if action not in self.answers:
+            raise AssertionError("unexpected maintenance RPC: " + action)
+        return self.answers[action]()
+
+    def acquired(self):
+        self.d.lease.write_text(json.dumps({"operationId": "op-1"}))
+        return {"active": True, "operationId": "op-1", "busy": []}
+
+    def released(self, busy=()):
+        if self.d.lease.exists():
+            self.d.lease.unlink()
+        return {"active": False, "operationId": None, "busy": list(busy)}
+
+    def busy(self):
+        # The add-on answers 409 and writes no lease; the RPC script then exits nonzero.
+        raise RuntimeError("A deployment command failed; private log retained")
+
+    def run_steps(self):
+        self.d.acquire_then_stop_app(self.rpc, self.BLOCKED, self.PREVIOUS)
+
+    def recorded(self):
+        return [json.loads(line) for line in self.events.read_text().splitlines()] if self.events.exists() else []
+
+    def phase(self):
+        return json.loads((self.host.ops / "phase.json").read_text())["phase"]
+
+    def test_acquires_under_the_apps_closed_gate_before_stopping_the_app(self):
+        self.answers["acquire"] = self.acquired
+        self.run_steps()
+        blocked = self.BLOCKED.decode()
+        # [call, journal phase, update status, lease present] at the moment of each call.
+        self.assertEqual(self.recorded(), [["acquire", "maintenance-acquiring", blocked, False],
+                                           ["stop", "owned-maintenance-acquired", blocked, True]])
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "owned-maintenance-acquired"))
+
+    def test_status_an_app_request_wrote_during_the_stop_is_replaced_by_the_blocked_status(self):
+        self.answers["acquire"] = self.acquired
+        self.on_stop.write_text(json.dumps({str(self.status): '{"phase": "checking", "maintenance": false}'}))
+        self.run_steps()
+        self.assertEqual(self.status.read_bytes(), self.BLOCKED)
+
+    def test_update_request_admitted_before_the_stop_holds_the_release_for_review(self):
+        self.answers["acquire"] = self.acquired
+        self.on_stop.write_text(json.dumps({str(self.requests / "r.json"): '{"status": "pending"}'}))
+        with self.assertRaisesRegex(deploy_common.Fence, "^pending update requests complete after the app stopped$"):
+            self.run_steps()
+        # Not a harmless refusal: the lease stays held and the release is held for review.
+        self.assertTrue(self.d.lease.exists())
+
+    def test_busy_work_at_acquire_releases_restores_the_status_and_never_stops_the_app(self):
+        self.answers.update(acquire=self.busy, release=lambda: self.released([{"profile": "nic", "state": "queued"}]))
+        with self.assertRaisesRegex(deploy_common.Refused, '"profile": "nic"') as caught:
+            self.run_steps()
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+
+    def test_lost_acquire_answer_is_released_before_the_refusal(self):
+        def lost():
+            self.acquired()
+            raise subprocess.TimeoutExpired("python", 40)
+        self.answers.update(acquire=lost, release=self.released)
+        with self.assertRaises(deploy_common.Refused):
+            self.run_steps()
+        # The release ran while the lost acquire's lease was still held, and removed it.
+        self.assertEqual([event[0::3] for event in self.recorded()], [["acquire", False], ["release", True]])
+        self.assertEqual((self.status.read_bytes(), self.d.lease.exists()), (self.PREVIOUS, False))
+
+    def test_unexpected_acquire_answers_are_refusals_once_released(self):
+        def other_lease():
+            self.d.lease.write_text(json.dumps({"operationId": "op-1", "owner": "someone else"}))
+            return {"active": True, "operationId": "op-1", "busy": []}
+        for answer, why in ((lambda: {**self.acquired(), "busy": [{"profile": "nic"}]}, "maintenance acquired by this operation with no busy work"),
+                            (other_lease, "maintenance lease names this operation")):
+            with self.subTest(why=why):
+                self.status.write_bytes(self.PREVIOUS)
+                self.answers.update(acquire=answer, release=self.released)
+                with self.assertRaises(deploy_common.Refused) as caught:
+                    self.run_steps()
+                self.assertEqual(str(caught.exception.__cause__), why)
+                self.assertEqual(self.status.read_bytes(), self.PREVIOUS)
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_uncertain_refusal_keeps_the_blocked_status_for_review(self):
+        pending = self.requests / "r.json"
+        cases = (
+            ("refused: maintenance released", lambda: None, lambda: {"active": True, "operationId": "op-1", "busy": []}),
+            ("refused: no maintenance lease remains", lambda: None, lambda: (self.acquired(), {"active": False, "busy": []})[1]),
+            ("refused: update status is still this operation's blocked status",
+             lambda: self.status.write_text('{"phase": "installing", "maintenance": true}'), self.released),
+            ("refused: pending update requests are complete", lambda: pending.write_text('{"status": "pending"}'), self.released),
+        )
+        for why, during_acquire, release in cases:
+            with self.subTest(why=why):
+                self.status.write_bytes(self.PREVIOUS)
+                pending.unlink(missing_ok=True)
+                self.d.lease.unlink(missing_ok=True)
+                def acquire(during_acquire=during_acquire):
+                    during_acquire()
+                    return self.busy()
+                self.answers.update(acquire=acquire, release=release)
+                with self.assertRaisesRegex(deploy_common.Fence, "^" + why + "$") as caught:
+                    self.run_steps()
+                self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+                self.assertNotEqual(self.status.read_bytes(), self.PREVIOUS)
+                self.assertEqual(self.phase(), "maintenance-acquiring")
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_a_failed_release_is_not_a_refusal(self):
+        def release():
+            raise RuntimeError("A deployment command failed; private log retained")
+        self.answers.update(acquire=self.busy, release=release)
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_steps()
+        self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+
 class FenceTests(unittest.TestCase):
     def test_fence_names_the_guard_and_still_counts_as_an_assertion(self):
         deploy_common.fence(True, "unused")
@@ -258,6 +421,20 @@ class ToolWiringTests(unittest.TestCase):
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + gateway[0].args[1].value))
         self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + gateway[1].args[1].value))
         self.assertFalse(idle.BUSY.search("deploy_common.Fence: release serves the configured web build"))
+
+    def test_guarded_check_exits_before_any_step_that_changes_the_host(self):
+        # --check promises no service changes: under the update claim, everything before its exit
+        # only reads. The cutover steps run inside the try that follows it.
+        tree = ast.parse((TOOLS / "deploy-guarded-app-release.py").read_text())
+        claim = next(node for node in ast.walk(tree) if isinstance(node, ast.With))
+        check = next(index for index, node in enumerate(claim.body) if isinstance(node, ast.If) and ast.unparse(node.test) == "args.check")
+        self.assertEqual(ast.unparse(claim.body[check].body[-1]), "sys.exit(0)")
+        calls = [node for statement in claim.body[:check] for node in ast.walk(statement) if isinstance(node, ast.Call)]
+        names = {ast.unparse(node.func) for node in calls}
+        self.assertFalse(names & {"atomic", "journal", "system", "d.acquire_then_stop_app", "native"}, names)
+        self.assertEqual({ast.unparse(node) for node in calls if ast.unparse(node.func) == "rpc"}, {"rpc('status')"})
+        self.assertIsInstance(claim.body[check + 1], ast.Try)
+        self.assertIn("d.acquire_then_stop_app", {ast.unparse(node.func) for node in ast.walk(claim.body[check + 1]) if isinstance(node, ast.Call)})
 
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
         stage = load_source(".agents/tools/stage-recovery-tools.py", "stage_recovery")

@@ -435,6 +435,29 @@ read-only check pinned. Every native call sets `HERMES_HOME` to the configured h
 Hermes bootstrap pins the process identity, as the gateway wrapper does, so an inherited value
 cannot send a drain request to another home.
 
+The guarded activation, `deploy-guarded-app-release.py`, checks under the update claim that
+the maintenance gate is free and nothing is busy, that the gateway is idle, and that Google
+sign-in and the app work. `--check` stops there and changes nothing. Activation then:
+
+1. Writes the blocked update status. From here the app refuses sends, update checks and
+   installs with "Hermes is being upgraded. Your draft is saved; send it after the update finishes."
+2. Journals `maintenance-acquiring` and takes Hermes's maintenance lease while the app still
+   runs. A send admitted since the check, or any other active work, makes this refuse.
+3. Journals `owned-maintenance-acquired`, stops the app, requires every update request the app
+   admitted to be complete, and writes the blocked status again, so an app request that was
+   already past its own checks cannot leave its status behind.
+4. Backs up the app, drains the gateway, stops the native owners and switches the release.
+
+When the lease is refused, or its answer is lost, the tool releases it, which removes this
+operation's lease if acquire took one, and requires no lease to remain, the blocked status to be
+its own and no update request to be pending. It then restores the saved status, journals
+`maintenance-refused` and exits 75. Nothing stopped, so the household keeps the app and the work
+that refused the lease finishes as usual; `release-app.py activate` leaves the stage prepared to
+run again. Any other failure, including a failed release or a status the app rewrote, journals
+`maintenance-held-needs-review`, exits 2 and keeps the blocked status. The app may then still be
+running behind it. Before this order, the app stopped first, so a send in that window made the
+acquire refuse with the app already down and the operation held for review.
+
 Host programs travel as Python source in `REMOTE*` string constants, which `compileall`
 cannot see. `tests/host_programs_test.py` finds every such constant, composes it exactly as
 it is sent, including `release-app.py`'s prelude and payload line, compiles it and refuses a

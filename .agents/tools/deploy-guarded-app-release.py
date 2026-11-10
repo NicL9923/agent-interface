@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Activate a built app release under the existing native upgrade guards."""
-import argparse,datetime,fcntl,hashlib,json,os,runpy,stat,subprocess,sys,time,uuid
+import argparse,datetime,fcntl,hashlib,json,os,runpy,stat,subprocess,sys,time,traceback,uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 sys.dont_write_bytecode=True  # Keep the release tree exactly as archived.
-from deploy_common import Deployment,fence,tripped
+from deploy_common import Deployment,Refused,fence,tripped
 os.umask(0o077)
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config",type=Path,required=True)
@@ -33,7 +33,7 @@ fcntl.flock(worker_lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 old_state=Path(c["upgradeStateDir"])/"status.json"
 state=json.loads(old_state.read_text())
 fence(state["phase"] not in ("checking","qualifying","installing","verifying") and state.get("maintenance") is False, "no Hermes update running or in maintenance")
-fence(all(json.loads(p.read_text()).get("status")=="complete" for p in (Path(c["upgradeStateDir"])/"requests").glob("*.json")), "pending update requests are complete")
+fence(d.requests_complete(), "pending update requests are complete")
 (ops/"previous-status.json").write_bytes(old_state.read_bytes())
 (ops/"previous-worker.json").write_bytes((base/"shared/hermes-worker.json").read_bytes())
 fence(hashlib.sha256((release/"scripts/hermes-upgrade-linux.py").read_bytes()).hexdigest()==c["fixedHelperSha256"], "release upgrade helper matches fixedHelperSha256")
@@ -78,17 +78,9 @@ with claim:
   print(json.dumps({"nativeAndWorkerOwnership":True,"idleGatewayVerified":True,"originalGoogleVerified":True,"noServiceChanges":True}));sys.exit(0)
  try:
   state.update(phase="blocked",maintenance=True,operationId=operation,message="The installer is applying a verified app release.",updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat())
-  atomic(old_state,(json.dumps(state)+"\n").encode())
-  system("stop","agent-interface.service")
-  fence(all(json.loads(p.read_text()).get("status")=="complete" for p in (Path(c["upgradeStateDir"])/"requests").glob("*.json")), "pending update requests complete after the app stopped")
-  # Eliminate an already awaited API request racing the private status write.
-  atomic(old_state,(json.dumps(state)+"\n").encode())
-  journal("maintenance-acquiring")
-  # The RPC may hold admission even if its response is lost. On any failure,
-  # leave native owners running and retain the blocked state for diagnosis.
-  gate=rpc("acquire");fence(gate["active"] is True and gate["operationId"]==operation and gate["busy"]==[], "maintenance acquired by this operation with no busy work")
-  fence(json.loads(lease.read_text())=={"operationId":operation}, "maintenance lease names this operation")
-  journal("owned-maintenance-acquired")
+  # Acquire before stopping the app: a send since the status check refuses with nothing stopped.
+  # On any other failure, leave native owners running and retain the blocked state for diagnosis.
+  d.acquire_then_stop_app(rpc,(json.dumps(state)+"\n").encode(),(ops/"previous-status.json").read_bytes())
   run([c["node"],str(release/".agents/tools/backup-app.mjs"),str(base/"shared/app.sqlite"),str(ops/"database")])
   request=json.loads(native("import json; from gateway.drain_control import write_drain_request; print(json.dumps(write_drain_request(principal="+repr(operation)+",suppress_notification=True)))"))
   requested_at=datetime.datetime.fromisoformat(request["requested_at"]).timestamp()
@@ -127,6 +119,8 @@ with claim:
   atomic(Path(c["upgradeStateDir"])/"status.json",(json.dumps({"phase":"idle","maintenance":False,"checks":[],"current":{"revision":c["hermesRevision"],"version":c["hermesRevision"][:12],"notesUrl":"https://github.com/NousResearch/hermes-agent/commit/"+c["hermesRevision"]},"message":"Check for a Hermes update when you're ready.","updatedAt":datetime.datetime.now(datetime.timezone.utc).isoformat()})+"\n").encode())
   result={"webBuild":c["webBuild"],"hermesRevision":c["hermesRevision"],"hermesVersionUnchanged":True,"repairPreserved":True,"profileSettingsPreserved":True,"originalGoogleHttpAndFreshWebsocket":True,"gatewayGuardVerified":True,"bothDiscordConnected":True,"actualInstallerMaintenanceRpc":True}
   atomic(ops/"result.json",(json.dumps(result,indent=2)+"\n").encode());journal("complete");print(json.dumps(result))
+ except Refused as refused:
+  traceback.print_exc(file=log);log.flush();print("Release not started: "+str(refused)+tripped(refused.__cause__)+" Nothing was stopped and the update status was restored. Activate again when Hermes is idle.");sys.exit(75)
  except BaseException:
-  import traceback;traceback.print_exc(file=log);log.flush();journal("admission-needs-review" if opened else "maintenance-held-needs-review");print("Release activation needs review; native owners preserved and private phase recorded."+tripped(sys.exc_info()[1]));sys.exit(2)
+  traceback.print_exc(file=log);log.flush();journal("admission-needs-review" if opened else "maintenance-held-needs-review");print("Release activation needs review; native owners preserved and private phase recorded."+tripped(sys.exc_info()[1]));sys.exit(2)
  finally:log.close();worker_lock.close()

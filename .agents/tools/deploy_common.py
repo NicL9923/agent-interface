@@ -36,6 +36,11 @@ if not __debug__:
 """
 
 
+class Refused(Exception):
+    """Hermes refused maintenance while the app still ran. Nothing was stopped, no lease is
+    held and the saved update status is back, so the operation can simply run again."""
+
+
 def tripped(error):
     """Operator-facing name of the fence behind an error, or an empty string."""
     while error is not None:
@@ -102,6 +107,49 @@ class Deployment:
         directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try: os.fsync(directory)
         finally: os.close(directory)
+
+    def requests_complete(self):
+        """Whether every Hermes update request the app admitted has finished."""
+        return all(json.loads(path.read_text()).get("status") == "complete"
+                   for path in (Path(self.c["upgradeStateDir"]) / "requests").glob("*.json"))
+
+    def acquire_then_stop_app(self, rpc, blocked, previous):
+        """Close the app's gate, take the maintenance lease while the app still runs, then stop it.
+
+        ``rpc`` calls the add-on's maintenance RPC. ``blocked`` is this operation's blocked update
+        status and ``previous`` the status it replaces. The app refuses sends, update checks and
+        installs once the blocked status is written, telling the sender the draft is saved, so no
+        one meets Hermes's own refusal. Work that arrived since the caller's status check makes
+        acquire refuse here, before anything stops.
+
+        Raises Refused once a release proves no lease remains, the saved status is restored and
+        the app never stopped. Any other failure propagates with the blocked status kept for review.
+        """
+        status = Path(self.c["upgradeStateDir"]) / "status.json"
+        self.atomic(status, blocked)
+        self.journal("maintenance-acquiring")
+        try:
+            gate = rpc("acquire")
+            fence(gate["active"] is True and gate["operationId"] == self.operation and gate["busy"] == [], "maintenance acquired by this operation with no busy work")
+            fence(json.loads(self.lease.read_text()) == {"operationId": self.operation}, "maintenance lease names this operation")
+        except Exception as refusal:
+            # The RPC may hold admission even if its response is lost. Release clears this
+            # operation's lease, if any, and reports what was busy.
+            released = rpc("release")
+            fence(released["active"] is False, "refused: maintenance released")
+            fence(not os.path.lexists(self.lease), "refused: no maintenance lease remains")
+            # The app still runs, but holding the update worker's lock keeps it from writing a
+            # new status. One it wrote anyway is kept for review instead of overwritten.
+            fence(status.read_bytes() == blocked, "refused: update status is still this operation's blocked status")
+            fence(self.requests_complete(), "refused: pending update requests are complete")
+            self.atomic(status, previous)
+            self.journal("maintenance-refused")
+            raise Refused("Maintenance was not acquired. Busy work at release: " + json.dumps(released.get("busy"))) from refusal
+        self.journal("owned-maintenance-acquired")
+        self.system("stop", "agent-interface.service")
+        fence(self.requests_complete(), "pending update requests complete after the app stopped")
+        # Eliminate an already awaited API request racing the private status write.
+        self.atomic(status, blocked)
 
     def native(self, code):
         # Set the native root before bootstrap can latch process identity, so native
