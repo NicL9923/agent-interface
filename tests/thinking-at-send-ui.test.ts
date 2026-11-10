@@ -373,7 +373,8 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     expect(status()).toBe("Shared is thinking...");
     expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
   });
-  // A turn can end before the chat ever reads it running. Its own outcome then replaces the early row at once.
+  // A turn can end before the chat ever reads it running. The read that brings the copy may still report the turn
+  // before, so the row stays through it, and the turn's own outcome replaces it from the next read.
   it.each<[string, "failed" | "interrupted" | "done", (shown: HTMLElement | null) => void]>([
     ["failed, with its Retry", "failed", shown => {
       expect(shown?.textContent).toContain("Shared couldn't finish.");
@@ -381,13 +382,18 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     }],
     ["interrupted", "interrupted", shown => expect(shown?.textContent).toContain("Shared's task was interrupted.")],
     ["finished", "done", shown => expect(shown).toBeNull()],
-  ])("shows the turn %s when Hermes reports it with the copy, instead of thinking", async (_, state, check) => {
+  ])("keeps thinking, without Retry, through a %s report in the read that brings the copy, and shows it from the next read", async (_, state, check) => {
+    conversation = { ...conversation, version: "boot:0:4" };
     await open();
     await send();
     await act(async () => sent!.resolve({}));
     expect(status()).toBe("Shared is thinking...");
-    // A settled turn's report carries no run ID, as Hermes reports one.
-    await report({ messages: [prompt, answer, copy()], activity: { state } });
+    // A settled turn's report carries no run ID, as Hermes reports one. The chat showed an idle assistant at the send,
+    // so this outcome differs from it, and it can still be the last turn's.
+    await report({ messages: [prompt, answer, copy()], activity: { state }, version: "boot:0:5" });
+    expect(status()).toBe("Shared is thinking...");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
+    await report({ version: "boot:0:6" });
     check(row());
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Activity, Message, SubmissionReceipt, User } from "../shared/types";
+import type { Message, SubmissionReceipt, User } from "../shared/types";
 import { compareVersions } from "../shared/inflight";
 import { isSentCopy, sameDraft } from "./storage";
 import type { Draft, Pending, SavedConversation } from "./storage";
@@ -42,8 +42,6 @@ export type SentEcho = {
   /** When Hermes's copy arrived while the chat showed no work yet, and the version of that read; see handingOff. */
   copiedAt?: number;
   copiedVersion?: string;
-  /** The report the chat showed when it was sent: a finished, failed or interrupted turn here is the last one's. */
-  before?: Pick<Activity, "state" | "runId">;
 };
 const active = (state: string) => ["thinking", "working", "waiting", "blocked"].includes(state);
 /** Whether Hermes's own copy of the message is in the conversation. */
@@ -77,7 +75,6 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
     next = {
       request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending", sendingSince: now,
       ...(conversation?.botId === pending.botId && active(conversation.activity.state) ? { duringWork: true } : {}),
-      ...(conversation?.botId === pending.botId ? { before: { state: conversation.activity.state, ...conversation.activity.runId ? { runId: conversation.activity.runId } : {} } } : {}),
       // A live reply's row is replaced as it is saved, so it cannot anchor anything.
       after: conversation?.botId === pending.botId
         ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined,
@@ -132,7 +129,7 @@ export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
  * fails, is given up or comes back uncertain (the echo leaves or reads as unconfirmed), while its request
  * has been out longer than SENDING_ROW_MS (it returns if Hermes then accepts it), when Hermes steers it
  * into a running task, when the chat shows the turn's work, when Hermes's copy is followed by a reply or by
- * nothing for COPY_HANDOFF_MS, when Hermes reports the turn finished, failed or interrupted, and at the latest
+ * nothing for COPY_HANDOFF_MS, when a read after the copy's reports the turn finished, failed or interrupted, and at the latest
  * when the echo's own patience runs out. While the chat shows work, that work's row is already there, so a
  * message sent then never adds one. Both bounds are read from `now`, so a render never shows a row whose bound
  * passed before its timer stepped the echo, as on returning from another chat.
@@ -156,15 +153,13 @@ function handingOff(echo: SentEcho, conversation: SavedConversation) {
 /**
  * Whether the chat reports this message's turn finished, failed or interrupted, so its own row, with its Retry,
  * replaces the early one. While Hermes admits a message it has saved the copy but not opened the run, and a read
- * then still reports the turn before: the outcome the chat showed when the message was sent. So a settled report
- * counts as this turn's when it differs from that one, in state or run ID, or when it comes from a read that began
- * after the one that brought the copy, by the server's structural version. The same outcome in the very read that
- * brought the copy cannot be told from the last turn's; the handoff bound ends that case.
+ * then still reports the turn before. Nothing in that report names its turn: a settled one carries no run ID, and
+ * what the chat showed at the send may be a cached copy or nothing. So a settled report counts as this turn's only
+ * from a read that began after the one that brought the copy, by the server's structural version. In the read that
+ * brought the copy it never does; the next read or the handoff bound ends the row.
  */
 function settledHere(echo: SentEcho, conversation: SavedConversation) {
-  const { state, runId } = conversation.activity;
-  if (!["done", "failed", "interrupted"].includes(state)) return false;
-  if (state !== echo.before?.state || runId !== echo.before.runId) return true;
+  if (!["done", "failed", "interrupted"].includes(conversation.activity.state)) return false;
   return (compareVersions(conversation.version, echo.copiedVersion) ?? 0) > 0;
 }
 /** The conversation with its echoes at the end, as the person's own messages. */

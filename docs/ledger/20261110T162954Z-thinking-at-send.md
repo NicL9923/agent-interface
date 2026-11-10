@@ -243,3 +243,46 @@ case.
 `npx vitest run tests/thinking-at-send-ui.test.ts tests/sent-echo.test.ts`: 2 files, 56 tests passed; `npm test`:
 193 files, 3,240 tests passed; `npm run build` passed; `npm run test:e2e` (`E2E_PORT=4321`): 21 passed in Chromium.
 Safari, Firefox, screen-reader speech and a real phone: not run.
+
+## Third review fix round: Grok 4.7's re-review of `848bc91`
+
+One P2, fixed by the orchestrator (Claude Fable 5.2). The image and avatar branches had no findings.
+
+**The finding.** `settledHere` counted a finished, failed or interrupted report as this turn's when its state or run
+ID differed from what the chat showed at the send. While Hermes admits a message it has saved the copy and not opened
+the run (`src/hermes/extension.py`, `SHOWN_RUN` skips a receipt still in `admitting`), so the read that brings the
+copy can report the turn before. What the chat showed at the send is not a reliable record of that turn: a cached chat
+can show `done` where the last turn failed, and a chat not yet loaded shows nothing. The reviewer ran `nextEcho`,
+`awaitingTurn` and `retryTarget`: sent from `done`, `interrupted`, `idle`, no conversation or another chat, a `failed`
+report on the copy's read removed the row and put Retry on the new message.
+
+**The fix.** A settled report counts as this turn's only from a read the server's version orders after the one that
+brought the copy. The read that brings the copy never ends the row. `before` is gone from the echo. A settled report
+carries no run ID (`SHOWN_RUN` reads only receipts with `terminal=0`), so nothing in the report can name its turn.
+
+**What it costs.** A turn that fails or is interrupted before any read sees it running, with no reply, shows thinking
+until the next read or the 5 seconds, where it showed the outcome on the copy's read before. A finished turn has its
+reply after the copy, which ends the row at once as before.
+
+**What remains.** Two reads inside one admission, the second ordered after the first, would still end the row on the
+last turn's report. `main` shows the last turn's Retry on the new message through that whole window today. Closing it
+needs the server to say whether a send's turn has opened, which the admission answer's `turn` field allows once the
+server reads it; that is a separate change.
+
+### Tests and red proof
+
+`tests/sent-echo.test.ts`: the row stays through `failed`, `interrupted` and `done` on the copy's read, for a message
+sent from an idle chat, a finished turn, the same failure, no conversation and another chat; a later read ends it; the
+same version, an older one, another process's and a missing one do not; a copy read without a version ends only at the
+bound. `tests/thinking-at-send-ui.test.ts`: the three outcome cases now keep thinking without Retry on the copy's
+read and show the outcome from the next read.
+
+Written first against `848bc91`'s rule: 9 failed. Then each line broken by hand and restored, 60 tests in the 2 files:
+
+| Break | Red |
+| --- | --- |
+| Every settled report ends the row | 10: the five copy-read cases, the later-read case, the three UI outcomes, the UI stale test |
+| `>= 0`, so the copy's own read counts as later | the same 10 |
+| An unordered version counts as later | the same 10 |
+| A later read never ends the row | 5: the later-read case, the three UI outcomes, the UI stale test |
+| The copy's version is not stored | the same 10 as the first |
