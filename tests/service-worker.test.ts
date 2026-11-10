@@ -43,18 +43,27 @@ type Stores = Map<string, Map<string, unknown>>;
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
  * run left, as when the browser stops an idle worker and starts it again for the next event.
  */
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean } = {}) {
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number } } = {}) {
   const options_ = options;
   const handlers: Record<string, (event: any) => void> = {};
-  const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
+  // The badge as the person sees it: the last call wins.
+  const badge = { count: undefined as number | undefined };
+  const setAppBadge = vi.fn(async (count: number) => { badge.count = count; }), clearAppBadge = vi.fn(async () => { badge.count = 0; });
   // Notifications on screen, as getNotifications lists them. Showing one with a tag replaces the last.
   // A browser lists a notification only once it is on screen, when showNotification resolves; with
-  // `holdShows`, each stays on its way until the test calls releaseShows.
+  // `holdShows`, each stays on its way until the test calls releaseShows, or releaseShow for one of
+  // them, which can also refuse it as Chromium does when it cannot store the notification.
   const shown: Shown[] = [];
-  const onTheirWay: (() => void)[] = [];
-  const releaseShows = () => { for (const release of onTheirWay.splice(0)) release(); };
+  const onTheirWay: { title: string; resolve(): void; reject(error: Error): void }[] = [];
+  const releaseShows = () => { for (const { resolve } of onTheirWay.splice(0)) resolve(); };
+  const releaseShow = (title: string, { refuse = false } = {}) => {
+    const index = onTheirWay.findIndex(each => each.title === title);
+    expect(index, `a notification "${title}" on its way`).toBeGreaterThanOrEqual(0);
+    const [held] = onTheirWay.splice(index, 1);
+    if (refuse) held!.reject(new TypeError('Failed to store the notification')); else held!.resolve();
+  };
   const showNotification = vi.fn(async (title: string, options: any = {}) => {
-    await new Promise<void>(resolve => { if (options_.holdShows) onTheirWay.push(resolve); else resolve(); });
+    await new Promise<void>((resolve, reject) => { if (options_.holdShows) onTheirWay.push({ title, resolve, reject }); else resolve(); });
     const notification: Shown = { title, tag: options.tag, data: options.data, close: vi.fn(() => { shown.splice(shown.indexOf(notification), 1); }) };
     if (options.tag) shown.splice(0, shown.length, ...shown.filter(other => other.tag !== options.tag));
     shown.push(notification);
@@ -71,13 +80,31 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   for (const [name, entries] of Object.entries(options.older ?? {})) stores.set(name, new Map(Object.entries(entries)));
   const match = vi.fn();
   const put = vi.fn();
+  // With `holdAccount`, the first reads and writes of the saved account wait for releaseAccount.
+  const accountHolds = { reads: options.holdAccount?.reads ?? 0, puts: options.holdAccount?.puts ?? 0 };
+  const accountHeld: { kind: 'read' | 'put'; release(): void }[] = [];
+  const holdingAccount = (name: string, kind: 'read' | 'put') => {
+    if (name !== 'wildbots-account' || accountHolds[`${kind}s`] <= 0) return undefined;
+    accountHolds[`${kind}s`]--;
+    return new Promise<void>(release => accountHeld.push({ kind, release }));
+  };
+  const releaseAccount = (kind: 'read' | 'put') => {
+    const index = accountHeld.findIndex(each => each.kind === kind);
+    expect(index, `a held account ${kind}`).toBeGreaterThanOrEqual(0);
+    accountHeld.splice(index, 1)[0]!.release();
+  };
   const open = async (name: string) => {
     if (!stores.has(name)) stores.set(name, new Map());
     const store = stores.get(name)!;
     return {
       // Like the Cache API, each match is a new response whose body can be read on its own.
-      match: async (key: string) => { if (name === 'agent-interface-test') match(key); const value = store.get(key); return value instanceof Response ? value.clone() : value; },
-      put: async (key: string, value: unknown) => { put(key, value); store.set(key, value); },
+      match: async (key: string) => {
+        if (name === 'agent-interface-test') match(key);
+        const value = store.get(key);
+        await holdingAccount(name, 'read');
+        return value instanceof Response ? value.clone() : value;
+      },
+      put: async (key: string, value: unknown) => { put(key, value); await holdingAccount(name, 'put'); store.set(key, value); },
     };
   };
   const context = {
@@ -123,7 +150,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
-  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, shown, openWindow, setAppBadge, clearAppBadge, update, unregister, signedIn };
+  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
 }
 
 describe('service worker privacy and return path', () => {
@@ -1092,7 +1119,7 @@ describe('service worker pushes for the account signed in here', () => {
     expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
   });
 
-  it('closes a notification that reached the screen only after its account signed out, and clears the badge its push set', async () => {
+  it('closes a notification that reached the screen only after its account signed out, and never sets the badge its push carried', async () => {
     // The reviewer's order: the push is inside showNotification, not yet listed, when the page says no one is signed in.
     const sw = worker({ holdShows: true });
     await sw.signedIn('one');
@@ -1100,10 +1127,105 @@ describe('service worker pushes for the account signed in here', () => {
     sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
     await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ body: 'Gate code is 4471' })));
     await sw.signedIn(null);
-    expect(sw.setAppBadge).toHaveBeenCalledWith(1);
     sw.releaseShows();
     await done;
     expect(sw.shown).toEqual([]);
+    expect(sw.setAppBadge).not.toHaveBeenCalled();
+  });
+
+  // Fourth review, P2: the badge is set only once the push is on screen and its account is still the
+  // latest, so a push of a departed account can neither set it nor clear the next account's.
+  it("keeps member two's badge when member one's push, overtaken by the switch, reaches the screen last", async () => {
+    const forTwo = { ...forOne, title: 'Barn Cat', body: 'Barn door sticks', tag: 'event-2', badge: 4, account: marker('two') };
+    const sw = worker({ holdShows: true });
+    await sw.signedIn('one');
+    let doneOne: Promise<unknown> | undefined, doneTwo: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { doneOne = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
+    await sw.signedIn('two');
+    sw.handlers.push({ data: { json: () => forTwo }, waitUntil: (value: Promise<unknown>) => { doneTwo = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Barn Cat', expect.anything()));
+    sw.releaseShow('Barn Cat');
+    await doneTwo;
+    expect(sw.badge.count).toBe(4);
+    sw.releaseShow('Ranch Hand');
+    await doneOne;
+    expect(sw.badge.count).toBe(4);
+    expect(sw.setAppBadge).not.toHaveBeenCalledWith(1);
+    expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']);
+  });
+
+  it('settles a push whose notification the browser refused, checking its account again, and sets no badge for an account that left', async () => {
+    const sw = worker({ holdShows: true });
+    await sw.signedIn('one');
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
+    await sw.signedIn(null);
+    sw.releaseShow('Ranch Hand', { refuse: true });
+    await expect(done).resolves.toBeUndefined();
+    expect(sw.setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("sets the badge of a push the browser refused to show while its account stays signed in, since the server's count still stands", async () => {
+    const sw = worker({ holdShows: true });
+    await sw.signedIn('one');
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
+    sw.releaseShow('Ranch Hand', { refuse: true });
+    await expect(done).resolves.toBeUndefined();
+    expect(sw.badge.count).toBe(1);
+  });
+
+  // Fourth review, P1: each account step runs after the one before it, and one that a newer word
+  // overtook writes nothing and closes nothing.
+  const savedAccount = async (sw: ReturnType<typeof worker>) => {
+    const saved = sw.stores.get('wildbots-account')?.get('/account');
+    return saved instanceof Response ? saved.clone().json() : saved;
+  };
+  it("keeps member two as the saved account when member one's word, sent first, was still reading the saved account", async () => {
+    const sw = worker({ holdAccount: { reads: 1 } });
+    const first = sw.signedIn('one');
+    await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
+    const second = sw.signedIn('two');
+    // Give member two's word every chance to finish before member one's read does.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    sw.releaseAccount('read');
+    await Promise.all([first, second]);
+    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    // A worker the browser starts again on that cache shows member two's push and drops member one's.
+    const restarted = worker({ stores: sw.stores });
+    await push(restarted, forOne);
+    await push(restarted, { ...forOne, title: 'Barn Cat', account: marker('two') });
+    expect(restarted.shown.map(each => each.title)).toEqual(['Barn Cat']);
+  });
+
+  it("keeps member two saved, and their notification on screen, when a sign-out's write that member two overtook lands last", async () => {
+    const first = worker();
+    await first.signedIn('one');
+    const sw = worker({ stores: first.stores, holdAccount: { puts: 1 } });
+    const signOut = sw.signedIn(null);
+    await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
+    const two = sw.signedIn('two');
+    const forTwo = { ...forOne, title: 'Barn Cat', tag: 'event-2', badge: 4, account: marker('two') };
+    let shownTwo: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => forTwo }, waitUntil: (value: Promise<unknown>) => { shownTwo = value; } });
+    await vi.waitFor(() => expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']));
+    sw.releaseAccount('put');
+    await Promise.all([signOut, two, shownTwo]);
+    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']);
+    expect(sw.badge.count).toBe(4);
+  });
+
+  it("clears the badge member one's push set when member two signs in, even after the browser restarted the worker", async () => {
+    const first = worker();
+    await first.signedIn('one');
+    await push(first, forOne);
+    expect(first.badge.count).toBe(1);
+    const sw = worker({ stores: first.stores });
+    await sw.signedIn('two');
     expect(sw.clearAppBadge).toHaveBeenCalled();
   });
 
@@ -1117,7 +1239,7 @@ describe('service worker pushes for the account signed in here', () => {
     sw.releaseShows();
     await done;
     expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
-    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+    expect(sw.badge.count).toBe(1);
   });
 
   it('judges a push still reading the saved account by the sign-out a page sent meanwhile', async () => {

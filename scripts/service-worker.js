@@ -118,18 +118,48 @@ self.addEventListener('message', (event) => {
 // The server names each push's account with the same marker as its APNs payloads (src/server/apns.ts),
 // a hash of the account ID. It is kept in a cache of its own, which survives the worker being stopped
 // and a release replacing it; its name does not start with 'agent-interface-', so activation keeps it.
+//
+// The order of the account's steps. Each ACCOUNT message takes a new generation as it arrives, and
+// `account` becomes its word at once, so a push that reads the account from then on reads that word.
+// Every step that writes the saved account, closes a notification or sets or clears the badge runs
+// on one chain (`serially`), one step at a time in the order they were queued, and after each await
+// it stops without acting if a newer message has arrived: that message's own step is queued behind
+// it and does the work for the newer word. A badge call is made with no await between it and the
+// check that allows it. So, once the chain is idle, relative to the latest ACCOUNT message:
+// - Cache Storage holds its word, so a worker started again judges pushes by it.
+// - No notification of another account is listed: the latest word's step closed what was listed, and
+//   a push whose notification was still on its way checks again on the chain once it is listed.
+// - No notification of its account was closed after it arrived: a step for an older word stops first.
+// - The badge is unset or was set by a push for that account. A push sets it only on the chain while
+//   its account is the latest, and a step for a new word clears a badge a push of another account
+//   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
+//   latest account's. The worker changes the badge only for a push: a badge the page set is the
+//   page's (src/app/badge.ts).
 const ACCOUNT_CACHE = 'wildbots-account';
 const ACCOUNT_KEY = '/account';
+let generation = 0;
+// What the cache holds, as this worker last read or wrote it.
+let saved;
+const readSaved = () => saved ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
+  .then((found) => found ? found.json() : null).catch(() => null);
+// The latest word: the saved one until a page says.
 let account;
-const loadAccount = () => account ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
-  .then((saved) => saved ? saved.json() : null).catch(() => null);
-// The latest word: a read that a page's ACCOUNT message overtakes while it waits follows that message's.
+const loadAccount = () => account ??= readSaved();
+// The latest word, for a read that a page's ACCOUNT message overtakes while it waits.
 async function readAccount() {
   for (;;) {
     const reading = loadAccount();
     const state = await reading;
     if (reading === account) return state;
   }
+}
+
+let chain = Promise.resolve();
+// Runs `step` after every step queued before it. Resolves with its result, or undefined if it threw.
+function serially(step) {
+  const run = chain.then(step).catch(() => undefined);
+  chain = run;
+  return run;
 }
 
 async function accountMarker(user) {
@@ -145,23 +175,74 @@ function mayShow(state, named) {
   return typeof named !== 'string' || named === state.marker;
 }
 
-// A push that reads the account from now on, or is still waiting on an earlier read, waits for this
-// word. One already being shown is checked again once it is on screen (see the push handler), since
-// getNotifications below does not list it yet.
+// The account whose push set the badge, as { named }, or null when no push set one that is still up.
+// It is kept beside the account, so a worker started again clears only a badge a push of its set, and
+// a page's own badge is the page's to change.
+const BADGE_KEY = '/badge';
+let badgeFor;
+const readBadge = () => badgeFor ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(BADGE_KEY))
+  .then((found) => found ? found.json() : null).catch(() => null);
+// Recorded once the badge changed, in the same step, so the next step reads the owner of the badge
+// on screen. The browser keeps the worker running until the step ends.
+async function keepBadgeFor(owner) {
+  badgeFor = Promise.resolve(owner);
+  const cache = await caches.open(ACCOUNT_CACHE);
+  await cache.put(BADGE_KEY, new Response(JSON.stringify(owner)));
+}
+function clearBadge() {
+  void self.navigator?.clearAppBadge?.().catch(() => {});
+  return keepBadgeFor(null);
+}
+
 function setAccount(user) {
-  const before = loadAccount();
-  const next = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
+  const at = ++generation;
+  account = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
     // A browser that cannot hash keeps today's rule rather than dropping every notification.
     .catch(() => null);
-  account = next;
-  return (async () => {
-    const [previous, state] = await Promise.all([before, next]);
-    if (JSON.stringify(previous) === JSON.stringify(state)) return;
+  return serially(() => settleAccount(at));
+}
+
+// Brings the cache, the screen and the badge to the word of generation `at`. It stops at a newer word,
+// whose own step, queued behind this one, finishes the work.
+async function settleAccount(at) {
+  const state = await loadAccount();
+  const previous = await readSaved();
+  const owner = await readBadge();
+  if (at !== generation) return;
+  if (JSON.stringify(previous) !== JSON.stringify(state)) {
     const cache = await caches.open(ACCOUNT_CACHE);
+    if (at !== generation) return;
     await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
-    // Notifications already on screen for another account, or any once signed out, close.
-    for (const shown of await self.registration.getNotifications()) if (!mayShow(state, shown.data?.account)) shown.close();
-  })().catch(() => {});
+    saved = Promise.resolve(state);
+    if (at !== generation) return;
+  }
+  if (owner && !mayShow(state, owner.named)) {
+    await clearBadge();
+    if (at !== generation) return;
+  }
+  const shown = await self.registration.getNotifications();
+  if (at !== generation) return;
+  // Notifications on screen for another account, or any once signed out, close.
+  for (const notification of shown) if (!mayShow(state, notification.data?.account)) notification.close();
+}
+
+// A push whose notification is on screen, or failed to show, once every step queued before it has
+// run. Its account may have changed meanwhile: then what it showed closes, and its badge is never set.
+// A word that arrives during this step queues its own step behind it, which closes the notification
+// if that word does not allow it.
+function settlePush(named, count) {
+  return serially(async () => {
+    const at = generation;
+    const state = await loadAccount();
+    if (at !== generation) return;
+    if (!mayShow(state, named)) return settleAccount(at);
+    // The server counts the badge with the push; a payload without one leaves the badge alone.
+    if (!Number.isInteger(count) || count < 0 || !self.navigator?.setAppBadge) return;
+    if (!count) return clearBadge();
+    // No await between the check above and the call.
+    void self.navigator.setAppBadge(count).catch(() => {});
+    return keepBadgeFor({ named });
+  });
 }
 
 // A note in this release's cache that the server now has another shell. It lives and dies with the
@@ -261,13 +342,6 @@ function conversationUrl(value) {
   }
 }
 
-// The server counts the badge with the push; a payload without one leaves the badge alone.
-function showBadge(count) {
-  const badges = self.navigator;
-  if (!Number.isInteger(count) || count < 0 || !badges?.setAppBadge) return Promise.resolve();
-  return (count ? badges.setAppBadge(count) : badges.clearAppBadge()).catch(() => {});
-}
-
 // An approval can be declined from the notification. Its push carries a single-use token, since
 // a service worker has no session or CSRF token; Review opens the chat like a tap does.
 function canAct() {
@@ -284,23 +358,17 @@ self.addEventListener('push', (event) => {
   const named = typeof data.account === 'string' ? data.account : undefined;
   event.waitUntil((async () => {
     if (!mayShow(await readAccount(), named)) return;
-    await Promise.all([
-      self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
+    try {
+      await self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
         body: String(data.body || 'Your assistant has an update.').slice(0, 240),
         icon: '/icon-192.png',
         badge: '/icon-192.png',
         tag: typeof data.tag === 'string' ? data.tag : undefined,
         data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
         ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
-      }),
-      showBadge(data.badge),
-    ]);
-    // The account may have changed while the notification was on its way to the screen, after
-    // setAccount closed what was listed. It goes now, with the badge this push set.
-    const state = await readAccount();
-    if (mayShow(state, named)) return;
-    for (const shown of await self.registration.getNotifications()) if (!mayShow(state, shown.data?.account)) shown.close();
-    if (Number.isInteger(data.badge)) await self.navigator?.clearAppBadge?.().catch(() => {});
+      });
+    } catch { /* Nothing on screen, but the count still stands for the account it is for. */ }
+    await settlePush(named, data.badge);
   })());
 });
 

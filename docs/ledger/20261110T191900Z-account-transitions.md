@@ -323,3 +323,165 @@ sign-in would have lost an address opened while signed out when another tab sign
 - A real push service: the late notification is checked in the worker run in a vm, as before.
 - A bootstrap that names another account than the record without a change this browser saw keeps
   its generation, and its address, as before. Only storage that refuses writes reaches it.
+
+## Fourth round: the Grok 4.7 review of `ae7f13a`
+
+`origin/main` at `145104f` merged in first, as `4375e95`, with no conflict.
+
+Rounds three and four each found a new order of the same few asynchronous steps in the service
+worker. This round puts every one of those steps under one discipline and checks it with a test
+that enumerates orders instead of naming them.
+
+### The worker's ordering discipline
+
+Each `ACCOUNT` message takes a new generation as it arrives, and the latest word replaces the
+in-memory account at once. Every step that writes the saved account, writes the badge's owner,
+closes a notification or sets or clears the badge runs on one promise chain (`serially`), one at a
+time, and stops after any await once a newer message has arrived; the newer message's own step is
+queued behind it. The invariants, as written at the top of that code in
+`scripts/service-worker.js`, once the chain is idle and relative to the latest `ACCOUNT` message:
+
+- Cache Storage holds its word, so a worker started again judges pushes by it.
+- No notification of another account is listed.
+- No notification of its account was closed after it arrived.
+- The badge is unset or was set by a push for that account. No push of a departed account can set
+  the badge or clear the latest account's. The worker changes the badge only for a push; a badge
+  the page set is the page's.
+
+### Changes
+
+- P1, a late account write: `setAccount` now queues `settleAccount` on the chain. It reads the
+  latest word, and checks the generation after the reads, after opening the cache, after the
+  write, after a badge clear and after `getNotifications`.
+- P2, the badge: a push sets the badge only in its chain step, once `showNotification` settled,
+  with no await between the account check and `setAppBadge`. A push whose account left meanwhile
+  closes what that account showed and never sets its badge. A refused `showNotification` no longer
+  rejects `waitUntil`: the push still runs its check, and sets its badge if its account is still
+  signed in, since the server's count still stands.
+- A step for a new account clears a badge a push of another account set. Whose push set the badge
+  is recorded beside the account (`/badge` in `wildbots-account`), after the badge changes and in
+  the same step, so a restarted worker knows it. The first draft guessed it from the saved account
+  after a restart instead, which also cleared badges the page set, and crashed every e2e sign-in:
+  Playwright's headless shell crashes the renderer on any Badging API call from a service worker.
+  Full Chromium 156 (`channel: 'chromium'`) clears the badge without a crash in the same repro.
+  With no badge from a push, the worker now makes no badge call at all.
+- P3, the address: a changing mark now says whether it began signed out (`fromSignedOut`, set when
+  nothing was stored or the record was a sign-out). Such a mark names no account, even when it
+  carries the last account's name, so a page that opens during it keeps its address for the next
+  sign-in, as one opened signed out does. The reviewer's smaller fix, null for a mark with no
+  user, would still have dropped the address when the mark carried the last account's name after a
+  sign-out, and would have kept an address for anyone under a mark that began with an account no
+  record named.
+
+How each nameless mark resolves for a page that opens during it:
+
+| Mark | Began with | Address owner | Settles as another member | Put back |
+| --- | --- | --- | --- | --- |
+| `fromSignedOut`, no user | a fresh or signed-out browser | none | kept | kept |
+| `fromSignedOut`, user one | a sign-out of member one | none | kept | kept |
+| no flag, no user | an account no record named (a sign-in answer without an ID, before any bootstrap) | an unnamed account | dropped | dropped: the browser cannot tell it is the same account |
+| either, gone stale | | the account it began with, or none | bootstrap decides | |
+
+A sign-out begins from a tab that drew its account, whose bootstrap names the record first, so a
+nameless sign-out mark needs storage that refused that write. It falls in the third row and drops
+the address.
+
+### The enumeration test
+
+`tests/service-worker-orderings.test.ts` runs the real worker script, compiled once and started as
+a function per worker, over fakes of Cache Storage, notifications, the badge and the hash. Each of
+4000 seeded walks picks a saved account (none, member one, member two or signed out, with that
+account's badge), a page order of three words from `one`, `two` and none with no word twice in a
+row (12 orders), a push for each member and an idle restart at random places. Every cache read and
+write, hash, `showNotification` (refused one time in four) and `getNotifications` is held, and the
+walk releases a random ready step until none is left. Then it checks the invariants above, that
+every `waitUntil` resolved, and that a worker started again shows only the latest account's push.
+A failure prints its seed, the words and the order of steps; `SW_ORDER_SEED` and `SW_ORDER_RUNS`
+replay it.
+
+- Coverage: 220 ordered pairs of steps that were ready together. Every pair ready together at
+  least 20 times ran both ways round; 2 pairs were ready together fewer times than that.
+- Run time: 0.4 to 0.6 s on NicolasLaptop.
+- Against the worker at `ae7f13a`, 2274 of the 4000 orders broke an invariant: the cache named an
+  older word in 851, a restarted worker showed another account's push in 851, a departed account's
+  push set the badge in 1024, `waitUntil` rejected in 809, the latest account's notification was
+  closed after its word in 493, its badge was cleared after its word in 55, and another account's
+  notification stayed on screen in 36.
+- Against this round's worker: none.
+
+### The page side
+
+What a tab does with each record another tab can leave, by what the tab shows. Cells the UI tests
+already covered keep those tests; `tests/account-epoch.test.ts` adds one case per branch for the
+rest.
+
+| This tab | Record another tab left | Address | Test |
+| --- | --- | --- | --- |
+| Opening | Mark from member one, then one put back | kept | account-epoch: "a mark that began with member one signed in, put back" |
+| Opening | Mark from member one, then a sign-out | dropped | UI: "drops member one's address from a page that opened while another tab was signing them out" |
+| Opening | Mark from member one, then member two | dropped | same branch as the sign-out row |
+| Opening | Mark from signed out, no user, then member two | kept | UI: "keeps an address the person opened while another tab was signing in from signed out" (P3) |
+| Opening | Mark from signed out after member one, then member two | kept | account-epoch: "a mark that began signed out after member one" |
+| Opening | Mark from an unnamed account, then member two | dropped | account-epoch: "a mark that began with an unnamed account" |
+| Opening | A mark gone stale, from member one or from signed out | kept; bootstrap decides | account-epoch: both stale rows |
+| Opening | Settled, unreadable or nothing | kept: the page opened with it | every UI test that opens with an address |
+| Connecting, record names member one | Mark, then a sign-out | dropped | UI: "drops an address member one opened while still connecting" and the fragment-alone test |
+| Showing member one | Mark, then one put back | kept | UI: "keeps member one's address, open chat and fragment when another tab's sign-in fails" |
+| Showing member one | Mark, then member two | dropped | UI: "opens member two's own chat, not the one member one was at" |
+| Showing member one | Mark, then a sign-out | dropped | UI: "leaves no address of member one's on the sign-in screen" |
+| Showing member one | Settled member two with no mark first | dropped | account-epoch |
+| Showing member one | Settled with no account named | dropped | account-epoch |
+| Showing member one | Storage cleared | dropped | account-epoch |
+| Showing member one | Unreadable | dropped, and bootstrap asked | same branch as storage cleared; UI: "treats a record it cannot read as a change" |
+| Showing member one | Same account, new ID (the hint lapsed) | kept | same branch as the put-back row; UI: the hint-lapse test |
+| Showing member one | A mark from signed out, gone stale | dropped | account-epoch: "drops the address when a sign-in that began signed out goes stale" |
+| Sign-in screen | Any record | kept | UI: both "keeps an address the person opened while signed out" tests |
+| Any | A write storage refused | the old record stays, so other tabs see nothing; the writing tab acts alone | UI: "drops member one at its own sign-out when storage refuses every write" |
+
+The mark's flag over each record a sign-in or sign-out can begin from (nothing, a sign-out, member
+one, unreadable) is one table in account-epoch.test.ts.
+
+### Red runs
+
+The named tests against `ae7f13a`: the seven new worker tests and the five new page cases all
+failed, each for the reason the review gave: the saved account was member one, or signed out,
+instead of member two; the badge was 0 instead of member two's 4; `waitUntil` rejected with the
+refused notification; the address went to `/` and the default chat.
+
+Each line of this round's code broken by hand, both worker test files or both account test files
+run, the line restored:
+
+| Mutation | Result |
+| --- | --- |
+| No generation check after the reads | passed: the check after the write stops the step, and the next step writes the latest word over the stale one |
+| No check after opening the cache | passed, for the same reason |
+| Neither of those two | passed: they only skip a write the next step overwrites |
+| No check after the write | failed: enumeration, the latest account's badge cleared in 66 orders |
+| No check after `getNotifications` | failed: enumeration, the latest account's notification closed in 36 orders |
+| No check after the badge clear | passed: the check after `getNotifications` follows it |
+| None of the four checks in the account step | failed: the overtaken sign-out test, and 432 orders |
+| No chain | failed: the overtaken sign-out test, and 280 orders (cache 234) |
+| Push sets its badge without the second account check | failed: three named badge tests, and 505 orders |
+| Push step goes on after a newer word arrived | failed: enumeration, 2 orders set a departed account's badge |
+| A refused `showNotification` rejects `waitUntil` | failed: both refused-show tests, and 799 orders |
+| No badge clear at a new account | failed: the restart badge test, and 854 orders |
+| Badge owner kept only in memory | failed: the restart badge test, and 492 orders |
+| Owner recorded before the badge is set | failed: enumeration, 19 orders (this round's first draft) |
+| A mark that began signed out names its account | failed: the P3 UI test and both account-epoch rows that depend on it |
+| The writer counts nothing stored as signed in | failed: the "nothing stored" writer row |
+| The writer counts a sign-out as signed in | failed: the sign-out writer row |
+| The writer counts an unreadable record as signed out | failed: the unreadable writer row |
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 198 files, 3332
+tests. `npm run build`: pass. `npm run test:e2e`: 27 passed.
+
+### Not exercised
+
+- A real push service and a real badge: the worker's badge is checked in the vm fakes, and e2e
+  sends no push with a count. Playwright's headless shell cannot run a worker's Badging API call
+  at all, so an e2e test of it would need `channel: 'chromium'`.
+- The page and the worker both write the app badge, in no shared order. After a switch the
+  worker's clear of the old account's badge can land after the new account's page set its count,
+  which leaves no badge until the count next changes; it never shows the old account's.

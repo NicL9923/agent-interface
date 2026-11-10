@@ -210,8 +210,9 @@ sign-in after a sign-out, and never the previous account's rows, unread count or
 address belongs to the account the record named when its screen started, even one still
 connecting, or to the account the saved home or its check drew since. A check that names another
 account than the saved home drew starts the app again. It is reset to `/`, fragment included,
-before a sign-out or another account draws; an address opened while signed out is kept for the
-next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
+before a sign-out or another account draws; an address opened while signed out, or while another
+tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that
+the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
 is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
@@ -236,14 +237,18 @@ web push names the account it is for, as APNs payloads do (a hash of the account
 service worker shows it only for the account its pages last said is signed in: none while a
 change is under way or after a sign-out. A notification for another account offers no working
 Decline, and a tap on it opens the app without its chat. A push that names no account, from a
-server before this change, shows as before while someone is signed in.
+server before this change, shows as before while someone is signed in. The worker sets the app
+badge from a push only once its notification is on screen and its account is still the one
+signed in, and clears a badge another account's push set when the account changes; it records
+in Cache Storage whose push set the badge, and never changes a badge the page set. Its account
+steps run one at a time, so a late step for an earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:
 
 | Record | Holds | Removed |
 | --- | --- | --- |
 | `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
-| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may | Never; each change replaces it |
+| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push set the app badge | Never; each change replaces it |
 | `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
 | `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
 | `agent-interface:roster` | The home last shown: assistants, order, group chats and their members, the member's name and picture | With the hint, and at any sign-in |
@@ -598,7 +603,7 @@ Its **Automations** tab lists next runs, recent execution or delivery failures, 
 
 The avatar at the top of home opens your profile menu: **Usage**, **Settings** and **Sign out**. **Usage** shows plan limits and credits for each provider account your assistants run on, as Hermes reads them from the provider: ChatGPT session and weekly limits with banked resets, Claude sign-in session and weekly limits, OpenRouter credits and key quota, Nous Portal credits, and any provider plugin that reports usage. Each account shows once, with the assistants that use it and whether it is only a fallback. A banked ChatGPT reset can be spent after a confirmation, which warns when no limit is used up yet. Providers without a usage endpoint say so. Usage reads each account at most once a minute, or every 15 seconds with Refresh.
 
-Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include.
+Attach images, PDFs, and text files with the paperclip, by pasting a screenshot or copied file into the message box, or by dropping files anywhere on the conversation. Markdown and CSV files are sent as plain text. Each attachment shows a thumbnail or file card with its upload progress; select an image to preview it. A message holds up to 10 files of up to 20 MB each. Unsupported files are explained instead of uploaded, and a failed upload offers Retry and blocks Send until you retry or remove it, so a message never goes out without a file you meant to include. Images in the conversation hold their space while they load. A sent image keeps the shape its preview had; an image this tab has not shown before, such as a reply's generated picture, holds a 4:3 frame while it loads, and if its own shape is more than 10% off it takes that shape once loaded. While you are scrolled up with that image's message in view, it waits until the message leaves the view or you return to the end of the chat, so nothing you are reading moves; in a chat too short for the message ever to leave the view, it takes its shape at once, and what follows it moves by the difference. A tall image, such as a phone screenshot, sits in a narrower card at the 400 px height cap instead of between bars. An image that fails to load keeps its frame and says it couldn't load. Hermes reports no image sizes.
 
 An empty conversation on web and iOS offers a role discussion using the assistant's description and adds it to the draft. Settings include a start page, quiet hours in your timezone, and notification batching. Quiet hours delay notifications except security alerts; decisions and failures skip batching outside them. Digest notifications open Today.
 
@@ -816,7 +821,23 @@ its update routes refuse with a message pointing to the app. Running
 describes recovery.
 
 Conversations show an animated avatar inline after the latest message while
-Hermes thinks or uses tools. Thinking keeps the character visible with a gentle
+Hermes thinks or uses tools. A message sent while nothing is running shows the
+assistant thinking at once, beside the message, and Hermes's own report takes over
+the same row without a second announcement, also when Hermes's saved copy of the
+message arrives one read before that report. That early row goes if the send is
+refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
+when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
+copy arrives and no report of the turn follows within 5 seconds. A reply already
+after the copy ends the row on that read. A failed or interrupted report in the
+read that brings the copy may still be the last turn's, since Hermes saves the
+message before it opens the run. So the row keeps thinking through that read,
+until the next read or the 5 seconds; a turn that fails before any read sees it
+running therefore shows its failure, and its Retry, that much late. A message sent
+while the assistant works adds none. Stop appears once Hermes reports the turn.
+One case still shows thinking for the echo's 30 seconds with nothing running:
+Hermes's typed stop phrase, which acts only while Hermes's own voice mode is on
+for the session. WildBots never turns that mode on, and the add-on reports the
+phrase as accepted like any message. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning
