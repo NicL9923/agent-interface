@@ -156,20 +156,39 @@ cache, when it is shown or focused, and before and after every request, live-upd
 upload. Once they differ, the tab unmounts everything it held for the account, including its
 reads, live connections, drafts in memory and cached responses, discards any answer still on
 its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
-sign-in after a sign-out, and never the previous account's rows. A sign-in that the server
-refuses puts the record back, so other tabs read the same account again. A record left marked
-as under way by a tab that closed mid-request stops counting after 65 seconds. See
-`src/app/account-epoch.ts`.
+sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
+address that named the last account's chat, panel or room is reset to `/`; an address opened
+while signed out is kept. A sign-in that the server refuses puts the record back, so other tabs
+read the same account again. A record left marked as under way by a tab that closed
+mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
+is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
+reads and writes the record under one lock, so another tab's step cannot land between. Storage
+that refuses writes leaves each tab on its own: it still takes its own changes, but cannot
+tell other tabs. See `src/app/account-epoch.ts`.
+
+A page in the back-forward cache hears nothing while it is frozen, and a browser can show it
+again before its script runs. So as a page leaves, the account's screens are hidden in place,
+with the plain title and theme; nothing is unmounted. Coming back with the same account, they
+show again at once with their scroll, drafts and open panels. After a change they stay hidden
+until the next screen replaces them. Chromium restores this app from the cache, signed in, with
+its live connections and service worker; `e2e/back-forward-cache.spec.ts` checks both cases.
 
 When another account signs in over one that never signed out here, that account's
 notifications on screen close and the browser's push subscription ends, since the server would
-keep sending the old account's notifications to it. A sign-out closes them too.
+keep sending the old account's notifications to it. A sign-out closes them too. Until the
+server learns the subscription is gone, a push can still arrive for the old account, so each
+web push names the account it is for, as APNs payloads do (a hash of the account ID), and the
+service worker shows it only for the account its pages last said is signed in: none while a
+change is under way or after a sign-out. A notification for another account offers no working
+Decline, and a tap on it opens the app without its chat. A push that names no account, from a
+server before this change, shows as before while someone is signed in.
 
 What the browser keeps, in localStorage unless noted:
 
 | Record | Holds | Removed |
 | --- | --- | --- |
 | `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
+| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may | Never; each change replaces it |
 | `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
 | `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
 | `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |

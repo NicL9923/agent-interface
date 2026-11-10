@@ -110,7 +110,49 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
+  if (event.data?.type === 'ACCOUNT') event.waitUntil(setAccount(event.data.user));
 });
+
+// Which account this browser may show notifications for, as its pages last said (src/app/account-epoch.ts):
+// { marker } for a signed-in account, { signedOut: true } for none, or null before any page has said.
+// The server names each push's account with the same marker as its APNs payloads (src/server/apns.ts),
+// a hash of the account ID. It is kept in a cache of its own, which survives the worker being stopped
+// and a release replacing it; its name does not start with 'agent-interface-', so activation keeps it.
+const ACCOUNT_CACHE = 'wildbots-account';
+const ACCOUNT_KEY = '/account';
+let account;
+const readAccount = () => account ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
+  .then((saved) => saved ? saved.json() : null).catch(() => null);
+
+async function accountMarker(user) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('wildbots-account:' + user));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+// A push or notification is for the account signed in here: before any page said, as before; signed
+// out, none; otherwise one that names this account, or names none, as a push from an older server.
+function mayShow(state, named) {
+  if (!state) return true;
+  if (state.signedOut) return false;
+  return typeof named !== 'string' || named === state.marker;
+}
+
+// A push that arrives meanwhile waits for the new account, so it is judged by the latest word.
+function setAccount(user) {
+  const before = readAccount();
+  const next = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
+    // A browser that cannot hash keeps today's rule rather than dropping every notification.
+    .catch(() => null);
+  account = next;
+  return (async () => {
+    const [previous, state] = await Promise.all([before, next]);
+    if (JSON.stringify(previous) === JSON.stringify(state)) return;
+    const cache = await caches.open(ACCOUNT_CACHE);
+    await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
+    // Notifications already on screen for another account, or any once signed out, close.
+    for (const shown of await self.registration.getNotifications()) if (!mayShow(state, shown.data?.account)) shown.close();
+  })().catch(() => {});
+}
 
 // A note in this release's cache that the server now has another shell. It lives and dies with the
 // cache, so a stopped and restarted worker still sees it, and the next release starts without one.
@@ -207,22 +249,25 @@ function canAct() {
   return (self.Notification?.maxActions ?? 0) >= 2;
 }
 
+// A push for an account that is not signed in here, which the server can send until it learns the
+// subscription is gone, shows nothing and leaves the badge alone.
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data?.json() || {}; } catch { /* A malformed payload still opens the app. */ }
   const url = conversationUrl(data.url);
   const declineToken = data.kind === 'approval' && typeof data.declineToken === 'string' && canAct() ? data.declineToken : undefined;
-  event.waitUntil(Promise.all([
+  const named = typeof data.account === 'string' ? data.account : undefined;
+  event.waitUntil(readAccount().then((state) => mayShow(state, named) && Promise.all([
     self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
       body: String(data.body || 'Your assistant has an update.').slice(0, 240),
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       tag: typeof data.tag === 'string' ? data.tag : undefined,
-      data: { url, ...(declineToken ? { declineToken } : {}) },
+      data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
       ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
     }),
     showBadge(data.badge),
-  ]));
+  ])));
 });
 
 // How long an open window has to say it switched to the chat. A live page answers within a few
@@ -367,11 +412,19 @@ async function showAgain(notification, url) {
   });
 }
 
+// A notification for an account no longer signed in here acts for nobody: Decline sends nothing,
+// and a tap brings the app forward without opening that account's chat.
+async function openApp() {
+  const [existing] = await self.clients.matchAll({ type: 'window' });
+  if (existing) await existing.focus().catch(() => {});
+  else await self.clients.openWindow(self.location.origin + '/').catch(() => {});
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  if (event.action === 'decline' && event.notification.data?.declineToken) {
-    event.waitUntil(decline(event.notification));
-    return;
-  }
-  event.waitUntil(openChat(event.notification));
+  event.waitUntil(readAccount().then((state) => {
+    if (!mayShow(state, event.notification.data?.account)) return event.action === 'decline' ? undefined : openApp();
+    if (event.action === 'decline' && event.notification.data?.declineToken) return decline(event.notification);
+    return openChat(event.notification);
+  }));
 });

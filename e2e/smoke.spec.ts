@@ -145,6 +145,8 @@ test.describe("after a deploy retires a lazy screen's file", () => {
 // old shell at most once: from the next load on, the old worker opens the network's shell, as it would
 // with no cached copy, until the new release takes over.
 const releaseMark = (page: Page) => page.locator('meta[name="release"]');
+// The releases' caches. The worker also keeps which account may see notifications, in a cache every release keeps.
+const releaseCaches = (page: Page) => page.evaluate(async () => (await globalThis.caches.keys()).filter(key => key.startsWith("agent-interface-")));
 const shellNoted = (page: Page) => page.evaluate(async () => {
   for (const key of await caches.keys()) if (await (await caches.open(key)).match("/.shell-outdated")) return key;
   return null;
@@ -154,7 +156,7 @@ test("after a deploy, the next load opens the new shell, and the new release is 
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
-  const caches = () => page.evaluate(() => globalThis.caches.keys());
+  const caches = () => releaseCaches(page);
   const [current] = await caches();
   expect(current).toMatch(/^agent-interface-[0-9a-f]{16}$/);
 
@@ -184,7 +186,7 @@ test("a new release whose worker cannot install still reaches the person on thei
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
-  const [current] = await page.evaluate(() => globalThis.caches.keys());
+  const [current] = await releaseCaches(page);
 
   await deployNextRelease({ installs: false });
   await page.reload();
@@ -193,7 +195,7 @@ test("a new release whose worker cannot install still reaches the person on thei
   await expect(releaseMark(page)).toHaveCount(1);
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   // The old worker still serves, and nothing offers a release that never installed.
-  expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
+  expect(await releaseCaches(page)).toEqual([current]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
 
