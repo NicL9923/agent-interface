@@ -208,6 +208,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     : sending ? "Wait a moment for your message to send."
     : slots <= 0 ? `A message can carry up to ${MAX_ATTACHMENTS} attachments.` : undefined;
   const submitting = sending || pending !== null;
+  // A press on Send or Stop leaves focus in the message box, so a phone keeps its keyboard up
+  // between messages. Focus moves as the default of mousedown, which a touch also fires; a click,
+  // a key, a screen reader and voice control still activate the button.
+  const keepFocus = (event: React.MouseEvent) => event.preventDefault();
   const [attachNotice, setAttachNotice] = useState<string[]>([]);
   const addFiles = (files: File[]) => {
     if (!files.length) return;
@@ -428,7 +432,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               </button>}
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
-          {stopVisible ? <button type="button" className="send-button" aria-label="Stop response"
+          {stopVisible ? <button type="button" className="send-button" aria-label="Stop response" onMouseDown={keepFocus}
             disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
             title={boot.capabilities.stop.reason || "Stop response"}
             onClick={onStop}>
@@ -436,6 +440,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
           </button> : <button
             className="send-button"
             aria-label={active ? "Send guidance" : "Send message"}
+            onMouseDown={keepFocus}
             aria-busy={submitting}
             disabled={
               !draftReady ||

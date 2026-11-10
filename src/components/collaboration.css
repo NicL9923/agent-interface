@@ -7,7 +7,20 @@
 .routine-results-dialog .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .routine-results-dialog label { margin-top: 16px; }
 .routine-output { margin-top: 20px; overflow-wrap: anywhere; }
-.group-panel { padding: 24px clamp(16px, 4vw, 48px); overflow: auto; flex: 1; }
+/*
+ * The group composer sticks to the end of the panel, so it shows whole only when it fits the panel's content box,
+ * less its 20px top margin, which counts while the room is scrolled to its start. As in .composer-area, the draft
+ * scrolls inside its box before Send leaves the screen: the message box is capped at the content box's height
+ * (100cqh) less that margin and the composer's other rows (`--group-chrome`: border and padding, the 46px row with
+ * Send, and the 74px "Replying in thread" banner when it shows), and keeps one line. The panel keeps room for that
+ * floor, so in a frame too short for it, the header is cut from the top instead.
+ */
+.group-panel { padding: 24px clamp(16px, 4vw, 48px); overflow: auto; flex: 1;
+  container-type: size; --group-chrome: 76px; min-height: calc(44px + var(--group-chrome) + 48px); }
+.group-panel:has(.group-composer > .group-thread) { --group-chrome: 150px; }
+.composer.group-composer textarea { max-height: min(200px, 30vh, max(44px, calc(100cqh - var(--group-chrome) - var(--group-notes, 0px)))); }
+/* Holds its children's margins, so its height is the room the notes take. GroupChats.tsx reports it as --group-notes. */
+.group-notes { display: flow-root; }
 .group-panel button:not(.send-button) { font-size: 0.8125rem; padding: 7px 12px; }
 .group-panel > section { max-width: 860px; }
 .group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
@@ -26,7 +39,8 @@
 .group-panel button.group-reply { border: 0; padding: 2px 0; font-size: 0.8125rem; color: var(--accent); }
 .group-panel button.group-reply:hover:enabled { background: transparent; color: var(--accent); }
 .group-panel .group-more { margin-top: 12px; }
-.group-composer { margin-top: 20px; position: sticky; bottom: 0; }
+/* Two classes, so `.composer`'s `position: relative` in styles.css cannot undo the sticking. */
+.composer.group-composer { margin-top: 20px; position: sticky; bottom: 0; }
 .composer.group-composer { grid-template-columns: minmax(0, 1fr); grid-template-areas: "thread" "input" "lead"; }
 .composer.group-composer > .group-thread { grid-area: thread; }
 .composer.group-composer .composer-tools { margin-left: 0; justify-self: stretch; justify-content: space-between; padding: 0 4px 2px 10px; }

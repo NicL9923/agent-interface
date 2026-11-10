@@ -999,6 +999,47 @@ describe("scroll intent", () => {
       expect(container.querySelector(".jump-latest")).not.toBeNull();
     } finally { height.mockRestore(); view.mockRestore(); }
   });
+
+  // A phone's keyboard or a taller composer shrinks the view and moves no content. A browser keeps
+  // scrollTop, so the end drops below the fold unless the view itself is observed.
+  describe("when the view shrinks", () => {
+    let viewHeight = 300;
+    const observed: { target: Element; callback: () => void }[] = [];
+    const shrink = (to: number) => act(async () => {
+      viewHeight = to;
+      for (const { target, callback } of observed) if (target.classList.contains("transcript")) callback();
+    });
+    beforeEach(() => {
+      viewHeight = 300;
+      observed.length = 0;
+      vi.stubGlobal("ResizeObserver", class {
+        constructor(private callback: () => void) {}
+        observe(target: Element) { observed.push({ target, callback: this.callback }); }
+        disconnect() {}
+      });
+      vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? 2000 : 0; });
+      vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? viewHeight : 0; });
+      conversation = { ...conversation, messages: [prompt("q", "Hello"), answer("a", "Hi")] };
+    });
+
+    it("keeps a follower at the latest message", async () => {
+      await render();
+      const transcript = container.querySelector<HTMLElement>(".transcript")!;
+      // Where the browser leaves a view that was at the end before it lost 150px.
+      transcript.scrollTop = 2000 - 300;
+      await shrink(150);
+      expect(transcript.scrollTop).toBe(2000);
+    });
+
+    it("leaves a reader who scrolled up where they were", async () => {
+      await render();
+      const transcript = container.querySelector<HTMLElement>(".transcript")!;
+      transcript.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      transcript.scrollTop = 900;
+      await shrink(150);
+      expect(transcript.scrollTop).toBe(900);
+    });
+  });
 });
 
 describe("send anchor", () => {
@@ -1045,6 +1086,39 @@ describe("send anchor", () => {
     content = 2000;
     await show([...own, answer("reply", "Two bags of pellets")]);
     expect(hook.endSpace.current!.style.height).toBe("");
+  });
+
+  // A phone's keyboard opening and closing shrinks and restores the view while nothing new arrives. A smaller view
+  // needs less space below the message, which is not what follows the message filling the view.
+  it("gives the reserved space back when a view that shrank grows again", async () => {
+    layout({ q: 400, a: 600, mine: 1800 });
+    let view = 400;
+    const reserved = () => Number.parseFloat(hook.endSpace.current?.style.height || "0") || 0;
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(() => 2000 + reserved());
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) { return this.classList.contains("transcript") ? view : 0; });
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      return this === hook.endSpace.current ? reserved() : 0;
+    });
+    const observed: { target: Element; callback: () => void }[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: () => void) {}
+      observe(target: Element) { observed.push({ target, callback: this.callback }); }
+      disconnect() {}
+    });
+    const resize = (to: number) => act(async () => {
+      view = to;
+      for (const { target, callback } of observed) if (target.classList.contains("transcript")) callback();
+    });
+    conversation = { ...conversation, messages: [prompt("q", "Question"), answer("a", "Reply")] };
+    await act(async () => root.render(createElement(Harness)));
+    await act(async () => hook.history.anchorSend("request-1"));
+    await show([...conversation.messages, prompt("mine", "Check the feed order")]);
+    expect(hook.endSpace.current!.style.height).toBe("176px");
+    await resize(200);
+    expect(hook.endSpace.current!.style.height).toBe("");
+    await resize(400);
+    expect(hook.endSpace.current!.style.height).toBe("176px");
+    expect(top("mine")).toBe(24);
   });
 
   it("keeps this person's sent message near the top when another member posts after it", async () => {
