@@ -143,3 +143,126 @@ On `7c9041e` plus the new tests:
 - A real notification tap. Playwright cannot click one, so the e2e calls the worker's `openChat`.
 - Firefox, Safari and an installed iOS web app: not run. The Firefox timing comes from its source
   and the reviewer's replay, not from Firefox.
+
+## November 10 second review round
+
+GPT-6.1 Sol's second review verified three findings at `928363b`, in Chromium against the built
+app or with a failing test through the real `App`. This round changed the code at `d4d7b02`. It
+does not merge `main`; that waits for `perf/cache-first-shell` to merge. Checks ran on
+NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromium).
+
+### Findings and changes
+
+- P1, the acknowledgement timeout could reload over an edited settings form. A missing answer no
+  longer authorizes replacing the document. `openChat` now takes the notification:
+  - First tap, no answer within 250 ms: the window stays as it is, focused, and the
+    notification comes back through `showAgain`, marked `reshown: true` and silent, as before.
+  - The worker keeps listening on the port for `OPEN_LATE_MS`, 10 seconds. A late answer means
+    the page opened the chat, so `closeShownAgain` closes the brought-back notification: only one
+    marked `reshown` for the same address, found with `getNotifications`. This covers both
+    orders: an answer while `showNotification` is still pending closes it once shown, and one
+    after it is on screen closes it then.
+  - A tap on a `reshown` notification is the person asking again: the worker asks the page
+    again, and only if it still does not answer in 250 ms calls `navigate()`, then
+    `openWindow()`. A window running an older bundle, which never answers, therefore gets the
+    chat on the second tap, as every tap on `main` does today.
+  - Answers are counted per window ID and address. A second tap does not navigate when the page
+    answered the first tap while the second waited, so the chat never opens twice.
+  - A `reshown` notification is never shown again, as before.
+- P2, a failed focus consumed the tap. The focus result is kept. A window that answers but whose
+  `focus()` rejects, and was not visible, gets `openWindow(url)`; if that rejects too, the
+  notification comes back once. A visible window that answered already shows the chat, so
+  nothing more opens.
+- P2, a waiting destination outlived its sheet and account. `useCloseRequest` offers a
+  `SheetClose` with a token made once per mount. `waitingOnClose()` in `close-request.ts` binds
+  the destination to that token and the account ID. A sheet's close takes it only when both
+  match, and every close empties it, so a sheet that goes without closing, by an account switch
+  or by its assistant leaving the roster, leaves a destination nothing can take.
+- README: the paragraphs on taps with the app open describe the first and second tap, the late
+  answer, the hidden window, and the destination bound to its sheet. The e2e calls the worker's
+  `openChat` with a notification instead of an address.
+
+### Choices
+
+- Ten seconds of late listening. A page stalled longer is likely frozen. If it answers later, the
+  notification stays; tapping it asks the page again, which answers in place, so nothing
+  reloads.
+- A first tap whose window neither answers nor takes focus still only brings the notification
+  back. Opening a new window there could open the chat twice if the page then answered late.
+- The focus fallback skips a visible window. The e2e found this: Chromium refuses `focus()`
+  without a tap's activation, so the visible, answering window then tried `openWindow()`, which
+  was refused too. A visible window already shows the chat in place.
+- The account binding compares the account ID at the close. An account switch also unmounts
+  the sheet, so in the app the sheet token catches it first; the unit test covers the account
+  check alone.
+- The worker test fakes `MessageChannel`, delivering in a later microtask and dropping messages
+  once the port is closed, so tests set when a late answer lands. They also fake
+  `getNotifications` over the notifications shown, with a tag replacing the last one.
+
+### Red before the fix
+
+On `928363b` plus the new tests:
+
+- `npx vitest run tests/service-worker.test.ts`: 7 failed. "leaves a window that does not
+  answer in time as it is…" failed with "expected "vi.fn()" to be called once with arguments:
+  [ 'Ranch Hand', ObjectContaining{…} ]": nothing came back, and the window was navigated. Both
+  late-answer orders and both second-tap cases failed because nothing came back. Both hidden
+  focus-failure cases failed with `openWindow` not called.
+- `npx vitest run tests/worker-opens-ui.test.ts`: 2 failed. "drops a waiting chat when its sheet
+  closes with the account it was raised for" failed with "expected 'ranch says howdy' to contain
+  'home says howdy'": the old notification's chat opened when Settings closed. "drops a waiting
+  destination when its sheet goes without closing, for the same account" failed with "expected
+  'today' to be null".
+- "closes only the notification it brought back…" and "opens a new window on the second tap…"
+  pass on `928363b`: the first guards the filter in `closeShownAgain`, the second the second-tap
+  fallback that keeps `main`'s behavior.
+
+### Mutants
+
+Each line was broken by hand, the three focused files run, and the source restored.
+
+| Mutation | Result |
+| --- | --- |
+| A first tap without an answer navigates | failed: 5 cases |
+| No re-show on a first tap without an answer | failed: 5 cases |
+| A late answer does not close the brought-back notification | failed: 3 cases |
+| The close ignores the `reshown` mark, or the address | failed: "closes only the notification it brought back…" |
+| A second tap ignores a late answer to the first | failed: "does not load the chat on a second tap…" |
+| Answers not counted | failed: the same |
+| A focus failure ignored | failed: both hidden focus cases |
+| The focus fallback also for a visible window | failed: "…a visible one opens nothing more" |
+| A refused window not re-shown (outer catch) | failed: 3 re-show cases |
+| Late listening 10 s changed to 5 s | failed: "leaves a window that does not answer in time…" |
+| Answer wait 250 ms changed to 1,000 | failed: 6 cases |
+| A second tap does not navigate | failed: both second-tap cases |
+| A failed `getNotifications` re-thrown | survived |
+| The close takes with no sheet | failed: 5 page cases |
+| The wait records no account | failed: 2 page cases |
+| One sheet token for every mount | failed: "…goes without closing, for the same account" |
+| The sheet's cleanup keeps its close | failed: "opens the chat at once after the person has already discarded…" |
+| Sheet or account not compared | failed: their `close-request.test.ts` cases |
+| An older stay cancels a newer wait | failed: "is cancelled by its own stay…" |
+| A close keeps the wait | failed: 4 `close-request.test.ts` cases |
+
+The survivor: a rejected `getNotifications` reaches the tap's outer `catch`, which calls
+`showAgain` on a notification without `reshown`, showing it once more. The `catch` in
+`closeShownAgain` stops that, but every fake here lists notifications. It stays: a browser
+without `getNotifications` would otherwise bring back a notification for a chat already open.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
+  tests/close-request.test.ts tests/app-update.test.ts`: 4 files, 98 tests passed, before the
+  visible-window change; `tests/service-worker.test.ts` after it: 65 passed.
+- `npm test`: 173 files, 2,705 tests passed, after the last change.
+- `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed. The first e2e run failed on
+  the in-place case, which led to the visible-window choice above; one later run waited for port
+  4173, held by another worktree's server.
+
+### Not exercised
+
+- A real notification tap, and a real page busy past 250 ms. The worker cases fake the browser
+  APIs at their boundary; the e2e calls `openChat`.
+- Firefox, Safari and an installed iOS web app: not run.
+- How long Safari keeps a worker alive for the ten-second late listen.
