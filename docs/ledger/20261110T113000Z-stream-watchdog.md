@@ -172,6 +172,58 @@ stream mid-backoff and expects it to connect at once when shown.
 - Server, through the real app: a value numerically equal to 10 made fast (2); no ping at open (1); a
   fast stream at the old interval (1); fallback pings saying 10 (12).
 
+## Second review round: repeated revival signals (P2)
+
+GPT-6.1 Sol found that `reconnect` cleared the retry deadline whenever no stream was open. Through the
+real conversation hook, a refused stream and 100 `online` events at a standing clock made 101 attempts.
+A manual retry could not overlap another check but had no gap between finished ones.
+
+- The first signal of an outage, the network returning or a manual retry that reached the server, still
+  drops the backoff and connects at once.
+- Later signals in the same outage are coalesced. The next forced attempt starts no sooner than 2 to 4
+  seconds after the last one (`FORCED_GAP_MS` 4 seconds, equal jitter as `retryDelay`), and never later
+  than the ordinary retry: an attempt already set sooner answers the signal, and one set later is brought
+  forward to the gap's end. A signal after the gap has passed connects at once.
+- The outage ends, and the next signal connects at once again, when a stream proves itself by the rule
+  that resets the backoff, or when the owner closes the stream.
+- Why 4 seconds: twice the first retry's ceiling, so a person who presses Retry twice waits at most 4
+  seconds, and a flapping network interface forces at most one attempt per stream every 2 to 4 seconds.
+  The gap does not grow, so the ordinary backoff still governs a long outage between signals.
+
+Attempts, from `tests/stream-revival-ui.test.ts` through the real `useConversation`, with the clock pinned
+at 2026-11-10T12:00:00Z and `Math.random` at 0.5:
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Stream refused, 100 `online` events, clock standing | 101 | 2: the opening and the first signal's |
+| 100 `online` events 0.1 s apart, each attempt refused | 100 in 10 s | 5 in 10 s after the opening, at 0.1, 1.6, 3.1, 6.1, 9.1 s |
+
+The household and room owners call the same `reconnect`, so the rule covers all three streams.
+
+### Checks, second round
+
+On the commit that adds this section, NicolasLaptop, Chromium only:
+
+- `npm run typecheck`, `npm run lint`: passed.
+- Touched and related test files: `stream-revival-ui` (new, 5), `stream-watchdog` (33), `connection-ui`,
+  `group-watch`, `app-ui`, `home-groups-ui`, `collaboration-ui`: 214 passed.
+- `npm test`: 185 files, 3,085 tests passed. Neither known flaky test failed.
+- `npm run build`: passed.
+- `npm run test:e2e`: 19 passed.
+
+### Red proofs, second round
+
+The new hook tests ran first against the old `reconnect`: all 4 then written failed, the first with
+"expected 101 to be 2", the reviewer's count. A scratch script then broke each protected line by hand,
+ran `stream-revival-ui` and `stream-watchdog`, and restored the source. All 9 went red.
+
+- Recovery keeping the gap (1 red, after the test moved proof inside the gap: a 10-second ping takes
+  5 seconds to prove a stream, longer than any gap, so the first version could not fail); `close`
+  keeping the gap (1, new `stream-watchdog` test); no jitter in the gap (2); every signal connecting at
+  once (4); the first signal keeping the backoff count (3); a later signal never bringing the attempt
+  forward (1); a later signal pushing back a sooner ordinary retry (2); a signal after the gap waiting a
+  tick (1, after a case was added for it); a greeting counted as recovery (1).
+
 ## Not exercised
 
 - The iOS app, Safari, Firefox, real phone radios, sleeping laptops and real Hermes: not run. A sleep

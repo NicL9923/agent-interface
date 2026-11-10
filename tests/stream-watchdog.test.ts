@@ -280,6 +280,17 @@ describe("the stream watchdog", () => {
     expect(opened()).toBe(before + 2);
   });
 
+  it("ends an outage when its owner closes it, so the next signal after the page is shown connects at once", () => {
+    const { stream } = start();
+    live().fail();
+    stream.reconnect();
+    live().fail();
+    // A hidden page's owner closes the stream; the network returns as it is shown again.
+    stream.close();
+    stream.reconnect();
+    expect(opened(), "no forced gap carries over a close").toBe(3);
+  });
+
   it("waits for queued events before judging, so a ping held behind the timer by a long task keeps the stream", () => {
     start();
     const first = live();

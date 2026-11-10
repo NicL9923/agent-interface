@@ -196,6 +196,14 @@ export function retryDelay(failures: number, random: () => number) {
   return ceiling / 2 + ceiling / 2 * random();
 }
 /**
+ * The least time between two forced attempts in one outage. A signal that the failures are stale, the
+ * network returning or a manual retry, connects at once the first time; later ones wait until a random
+ * half or more of this has passed since the last forced attempt, unless the ordinary retry comes sooner.
+ * Four seconds is twice the first retry's ceiling: a second press of Retry is answered within 4 seconds,
+ * and a flapping network interface forces at most one attempt every 2 to 4 seconds.
+ */
+export const FORCED_GAP_MS = 4_000;
+/**
  * A watchdog timer this late was held by a sleeping device or a page frozen far longer than a busy main
  * thread holds one, so the silence it measured says nothing about the stream.
  */
@@ -218,8 +226,11 @@ export type StreamOptions = {
  * healthy for longer than its greeting: data at least half a ping interval after it opened, which only a
  * ping after the greeting can be, allowing for delivery jitter. A server that
  * greets and then stalls keeps backing off. `close` ends the episode, so a page shown again connects at
- * once, and `reconnect` drops the backoff for a sign the failures are stale, such as the network
- * returning or a manual retry that reached the server.
+ * once. `reconnect` is for a sign the failures are stale, such as the network returning or a manual retry
+ * that reached the server: the first in an outage drops the backoff and connects at once, and later ones
+ * are coalesced, starting the next attempt no sooner than `FORCED_GAP_MS` (jittered) after the last forced
+ * one and never later than the ordinary retry. A connection that proves itself, by the rule that resets
+ * the backoff, ends the outage.
  *
  * The watchdog judges silence only after the stream's queued events have run, and a timer that fires
  * far later than it was set for, as on waking from sleep, restarts the deadline once instead of
@@ -235,6 +246,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   // Whether this connection has proved itself, and whether its watchdog already forgave one late timer.
   let recovered = false, graced = false;
   let failures = 0, retryAt = 0;
+  // The earliest moment another forced attempt may start in this outage; 0 until the first one.
+  let forcedNext = 0;
   // One timer per stream: the watchdog while a stream is open, the retry while none is.
   let timer: ReturnType<typeof setTimeout> | undefined, due = 0;
   const deadline = () => since + streamSilence(pingMs);
@@ -253,6 +266,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (!recovered && since - openedAt >= pingMs / 2) {
       recovered = true;
       failures = 0;
+      forcedNext = 0;
     }
     if (deadline() < due) arm(deadline(), check);
   };
@@ -292,6 +306,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     drop();
     failures = 0;
     retryAt = 0;
+    forcedNext = 0;
   };
   /** Starts a connection unless one is open or a retry is already set, never before the retry deadline. */
   const open = () => {
@@ -299,15 +314,24 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (Date.now() >= retryAt) connect();
     else arm(retryAt, connect);
   };
+  const force = () => {
+    forcedNext = Date.now() + FORCED_GAP_MS / 2 + FORCED_GAP_MS / 2 * random();
+    connect();
+  };
   const reconnect = () => {
     if (typeof EventSource === "undefined") return;
     // A live connection stays. One still waiting to prove itself would be replaced by an equally new one.
     if (source) return;
-    failures = 0;
-    retryAt = 0;
-    clearTimeout(timer);
-    timer = undefined;
-    connect();
+    if (!forcedNext) {
+      failures = 0;
+      retryAt = 0;
+      force();
+      return;
+    }
+    // Later in the same outage: once the gap has passed it connects at once, and before then an attempt
+    // already set at least as soon answers it.
+    if (Date.now() >= forcedNext) force();
+    else if (!timer || due > forcedNext) arm(forcedNext, force);
   };
   const connect = () => {
     clearTimeout(timer);

@@ -405,8 +405,10 @@ seconds after the first failure, doubling to at most 5 minutes, each wait a rand
 ceiling so a household's tabs do not reconnect in step. Periodic checks never start an attempt sooner.
 The count starts over once a stream stays healthy past its opening ping, so a server that greets and
 then stalls keeps backing off. A timer that fires far late, as after a laptop wakes, gives the stream
-one more deadline instead of replacing it. A hidden tab replaces nothing, and showing it, the network
-returning or a manual reconnect connects at once. The transport bounds
+one more deadline instead of replacing it. A hidden tab replaces nothing, and showing it connects at
+once. The network returning or a manual reconnect connects at once the first time in an outage; repeats
+start the next attempt 2 to 4 seconds after the last one they forced, or sooner if the ordinary retry
+is due first, until a stream proves itself. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
