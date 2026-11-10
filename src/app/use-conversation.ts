@@ -413,9 +413,11 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const stopPolling = pollWhileVisible(() => {
       if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
     }, CHAT_POLL_MS);
-    // A new canonical session: the server's stream state for this chat followed the old one.
+    // A new canonical session: the server's stream state for this chat followed the old one. The stream is
+    // suspended, not closed, so it keeps its retry budget: the bootstrap read that named the session says
+    // nothing about whether this stream's endpoint recovered. A stream that never failed reopens at once.
     rebind.current = () => {
-      stream.close();
+      stream.suspend();
       if (document.visibilityState !== "hidden") stream.open();
       void load();
     };

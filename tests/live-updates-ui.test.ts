@@ -167,6 +167,28 @@ describe('live updates and the connection notice', () => {
     expect(FakeEventSource.created.filter(url => url.includes('/bots/'))).toHaveLength(1);
   });
 
+  // A successful bootstrap read says nothing about the chat's stream, so a new session must not forgive that
+  // stream's failures. A roster that names two sessions in turn used to connect again on every change.
+  it("keeps the chat stream's retry budget when bootstrap keeps naming a new canonical session", async () => {
+    boot = { ...boot, bots: [{ ...boot.bots[0], sessionId: 'session-one' }, boot.bots[1]] };
+    await live();
+    const attempts = () => FakeEventSource.created.filter(url => url.includes('/bots/')).length;
+    const refuse = () => act(async () => { for (const item of [...FakeEventSource.streams]) if (item.url.includes('/bots/')) item.fail(); });
+    await refuse();
+    const before = attempts();
+    // Twenty changes in 400 ms, inside the first retry's wait of a second or more.
+    for (let change = 0; change < 20; change++) {
+      const sessionId = change % 2 ? 'session-one' : 'session-two';
+      conversation = { ...conversation, sessionId, messages: [{ id: `answer-${sessionId}`, role: 'assistant', text: `Answer in ${sessionId}` }] };
+      boot = { ...boot, bots: [{ ...boot.bots[0], sessionId }, boot.bots[1]] };
+      await act(async () => household().emit('roster', 'roster')); await advance(20);
+      await refuse();
+    }
+    // The chat still reloads for each new session.
+    expect(container.textContent).toContain('Answer in session-one');
+    expect(attempts() - before, 'chat stream attempts made by the session changes').toBe(0);
+  });
+
   it('shows one panel, not two, in a chat with no assistant once the connection is lost', async () => {
     boot = { ...boot, bots: [] };
     await live();

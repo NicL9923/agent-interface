@@ -104,6 +104,21 @@ describe('a failed conversation read', () => {
     expect(shown()).toBe(false);
   });
 
+  // The app's one connection announcement follows what the chat shows, not the first failed read, so a
+  // blip that changes nothing on screen says nothing to a screen reader either.
+  it('announces the connection is down only once the chat shows it', async () => {
+    await opened();
+    const announced = () => container.querySelector('[data-connection-announcer]')!.textContent;
+    failure = blip(); await read();
+    expect(shown()).toBe(false);
+    expect(announced()).toBe('');
+    await read();
+    expect(shown()).toBe(true);
+    expect(announced()).not.toBe('');
+    failure = undefined; await read();
+    expect(announced()).toBe('');
+  });
+
   it('shows the connection is down on a second failure in a row', async () => {
     await opened();
     failure = blip(); await read();
