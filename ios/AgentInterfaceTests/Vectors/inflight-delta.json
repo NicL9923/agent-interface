@@ -1,0 +1,699 @@
+{
+ "comment": "Shared by tests/inflight-delta.test.ts (src/shared/inflight.ts) and InflightDeltaTests.swift (Inflight.extended in Models.swift), so the web and iOS clients grow a live reply identically. held: the reply the client holds, or null. delta: an inflight-delta event from a stream opened with ?inflight=2. result: the grown reply, or null when the client must reload and reconnect. Base lengths count UTF-16 code units. Strings are \\u-escaped so no editor can recompose them.",
+ "cases": [
+  {
+   "name": "appends text and reasoning and keeps tool calls the notice leaves out",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": " there",
+    "appendReasoning": ", ok"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello there",
+     "reasoning": "Hm, ok"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "replaces tool calls when the notice carries them",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "completed",
+      "result": "3 results"
+     }
+    ]
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "completed",
+      "result": "3 results"
+     }
+    ]
+   }
+  },
+  {
+   "name": "an empty tool call list replaces them too",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": []
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": []
+   }
+  },
+  {
+   "name": "starts reasoning on a reply that had none",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendReasoning": "Thinking"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Thinking"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "leaves reasoning absent when none arrives",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello!"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "counts an emoji as two code units",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Howdy \ud83e\udd20"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 8,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": " partner"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Howdy \ud83e\udd20 partner"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "counts a combining accent as its own code unit",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "cafe\u0301",
+     "reasoning": "na\u0308ive"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 6,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": " au lait",
+    "appendReasoning": " guess"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "cafe\u0301 au lait",
+     "reasoning": "na\u0308ive guess"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "counts CJK by code unit, two for an ideograph outside the basic plane",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "\u65e5\u672c \ud842\udfb7"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "\u91ce\u5bb6"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "\u65e5\u672c \ud842\udfb7\u91ce\u5bb6"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "counts a joined emoji family by code units, not characters or scalars",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 8,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": " home"
+   },
+   "result": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67 home"
+    },
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   }
+  },
+  {
+   "name": "refuses an emoji base counted in characters",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Howdy \ud83e\udd20"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 7,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": " partner"
+   },
+   "result": null
+  },
+  {
+   "name": "refuses a notice when nothing is held",
+   "held": null,
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": null
+  },
+  {
+   "name": "refuses a notice for another message",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "other-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": null
+  },
+  {
+   "name": "refuses a notice for another assistant",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "other",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": null
+  },
+  {
+   "name": "refuses a text base that disagrees",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 4,
+    "baseReasoningLength": 2,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": null
+  },
+  {
+   "name": "refuses a reasoning base that disagrees",
+   "held": {
+    "botId": "shared",
+    "message": {
+     "id": "sid-inflight",
+     "role": "assistant",
+     "text": "Hello",
+     "reasoning": "Hm"
+    },
+    "activity": {
+     "state": "thinking",
+     "runId": "run"
+    },
+    "toolCalls": [
+     {
+      "id": "call",
+      "name": "web_search",
+      "arguments": "{}",
+      "status": "running"
+     }
+    ]
+   },
+   "delta": {
+    "botId": "shared",
+    "messageId": "sid-inflight",
+    "baseTextLength": 5,
+    "baseReasoningLength": 0,
+    "activity": {
+     "state": "working",
+     "runId": "run"
+    },
+    "appendText": "!"
+   },
+   "result": null
+  }
+ ]
+}

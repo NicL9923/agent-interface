@@ -139,6 +139,12 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             stream.send("event: inflight\ndata: {\"botId\":\"bot\",\"message\":{\"id\":\"sid-inflight\",\"role\":\"assistant\",\"text\":\"Live native reply\"},\"activity\":{\"state\":\"thinking\",\"runId\":\"live-run\"},\"toolCalls\":[]}\n\n")
         }
     }
+    /// The conversation streams the app opened, oldest first.
+    var conversationStreams: [FakeExchange] { lock.withLock { streams }.filter { $0.request.url?.path == "/api/bots/bot/events" } }
+    /// Writes one named event on the newest conversation stream, as the server writes it.
+    func sendLive(_ event: String, _ data: [String: Any]) {
+        conversationStreams.last?.send("event: \(event)\ndata: \(String(decoding: Self.json(data), as: UTF8.self))\n\n")
+    }
     func notifyRoster() { notifyHousehold("roster") }
     /// A named notice on the household stream, such as `roster`, `groups` or one this app does not know.
     func notifyHousehold(_ name: String) { for stream in householdStreams() { stream.send("event: \(name)\ndata: \(name)\n\n") } }
@@ -1309,6 +1315,100 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await until { server.requestCount("/api/bootstrap") > bootstraps }
         XCTAssertEqual(server.requestCount("/api/bootstrap"), bootstraps + 1)
         XCTAssertEqual(server.conversationQueries.count, reads, "Neither notice reads the conversation")
+    }
+
+    /// Follows "bot" while run "live-run" streams, with its stream open and every read the connect started finished.
+    private func openLiveStream(_ server: NativeMockServer, _ value: AppStore) async throws {
+        server.startRun("live-run")
+        server.serveEventStreams()
+        _ = await value.pollOnce()
+        try await until { server.conversationStreams.count == 1 && server.conversationQueries.count >= 2 && value.conversationReadsInFlight == 0 }
+    }
+    private func live(_ value: AppStore) -> Message? { value.conversation?.messages.first { $0.id == "sid-inflight" } }
+    /// An `inflight` event: the live reply whole.
+    private func wholeReply(_ text: String, reasoning: String? = nil, toolCalls: [[String: Any]] = []) -> [String: Any] {
+        var message: [String: Any] = ["id": "sid-inflight", "role": "assistant", "text": text]
+        if let reasoning { message["reasoning"] = reasoning }
+        return ["botId": "bot", "message": message, "activity": ["state": "thinking", "runId": "live-run"], "toolCalls": toolCalls]
+    }
+    /// An `inflight-delta` event growing a reply whose text and reasoning have these UTF-16 lengths.
+    private func growth(textLength: Int, reasoningLength: Int, _ changes: [String: Any]) -> [String: Any] {
+        let base: [String: Any] = ["botId": "bot", "messageId": "sid-inflight", "baseTextLength": textLength,
+                                   "baseReasoningLength": reasoningLength, "activity": ["state": "thinking", "runId": "live-run"]]
+        return base.merging(changes) { _, change in change }
+    }
+
+    func testGrowthNoticesExtendTheWholeLiveReplyWithoutRereading() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        try await openLiveStream(server, value)
+        XCTAssertEqual(server.conversationStreams.first?.request.url?.query, "inflight=2", "The app asks for growth instead of the whole reply on every tick")
+        let reads = server.conversationQueries.count
+        let running: [String: Any] = ["id": "call-1", "name": "web_search", "status": "running"]
+        // An emoji, a combining accent and an ideograph outside the basic plane: 11 UTF-16 code
+        // units, as the server's JavaScript counts them, but 8 characters.
+        let text = "\u{1F920} cafe\u{301} \u{20BB7}"
+        server.sendLive("inflight", wholeReply(text, reasoning: "Hm", toolCalls: [running]))
+        try await until { live(value)?.text == text }
+        server.sendLive("inflight-delta", growth(textLength: 11, reasoningLength: 2, ["appendText": " howdy", "appendReasoning": ", ok"]))
+        try await until { live(value)?.text == text + " howdy" }
+        XCTAssertEqual(live(value)?.reasoning, "Hm, ok")
+        XCTAssertEqual(value.conversation?.toolCalls?.map(\.status), ["running"], "A notice without tool calls keeps the ones held")
+        let finished: [String: Any] = ["id": "call-1", "name": "web_search", "status": "completed", "result": "3 results"]
+        server.sendLive("inflight-delta", growth(textLength: 17, reasoningLength: 6, ["toolCalls": [finished]]))
+        try await until { value.conversation?.toolCalls?.first?.status == "completed" }
+        XCTAssertEqual(value.conversation?.toolCalls?.map(\.result), ["3 results"], "A notice with tool calls replaces them")
+        XCTAssertEqual(live(value)?.text, text + " howdy")
+        XCTAssertEqual(server.conversationQueries.count, reads, "Growth reads nothing")
+        XCTAssertEqual(server.conversationStreams.count, 1, "Growth that fits keeps the stream")
+    }
+
+    func testAGrowthNoticeThatDoesNotContinueTheHeldReplyReloadsOnceAndReconnects() async throws {
+        let refusals: [(name: String, whole: Bool, changes: [String: Any])] = [
+            ("nothing held", false, [:]),
+            ("a text base that disagrees", true, ["baseTextLength": 4]),
+            ("a reasoning base that disagrees", true, ["baseReasoningLength": 1]),
+            ("another message", true, ["messageId": "other-inflight"]),
+            ("another assistant", true, ["botId": "family"]),
+        ]
+        for refusal in refusals {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            try await openLiveStream(server, value)
+            if refusal.whole {
+                server.sendLive("inflight", wholeReply("Howdy"))
+                try await until { live(value)?.text == "Howdy" }
+            }
+            let reads = server.conversationQueries.count
+            server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, refusal.changes.merging(["appendText": " partner"]) { change, _ in change }))
+            try await until {
+                server.conversationStreams.count == 2 && server.conversationStreams.first?.stopped == true
+                    && server.conversationQueries.count == reads + 1 && value.conversationReadsInFlight == 0
+            }
+            XCTAssertNil(live(value), "\(refusal.name): the read replaces the reply this app could not extend")
+            // Absence check: no second reload or reconnect follows the first.
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertEqual(server.conversationQueries.count, reads + 1, "\(refusal.name): one reload")
+            XCTAssertEqual(server.conversationStreams.count, 2, "\(refusal.name): one reconnect")
+            // The new stream starts from a whole reply, and growth of it applies again.
+            server.sendLive("inflight", wholeReply("Howdy"))
+            server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+            try await until { live(value)?.text == "Howdy partner" }
+        }
+    }
+
+    func testAChangeNoticeDropsTheHeldReplySoGrowthOfItIsRefused() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        try await openLiveStream(server, value)
+        server.sendLive("inflight", wholeReply("Howdy"))
+        try await until { live(value)?.text == "Howdy" }
+        let reads = server.conversationQueries.count
+        server.notifyChange()
+        try await until { server.conversationQueries.count == reads + 1 && value.conversationReadsInFlight == 0 }
+        XCTAssertNil(live(value), "The read after a change notice is not overlaid with the old live reply")
+        // The server sends the next live reply whole after a change, so growth of the old one means
+        // the two disagree.
+        server.sendLive("inflight-delta", growth(textLength: 5, reasoningLength: 0, ["appendText": " partner"]))
+        try await until { server.conversationStreams.count == 2 }
+        XCTAssertNil(live(value), "Growth of a dropped reply is not applied")
     }
 
     func testAGroupsNoticeRereadsTheGroupCatalogAndUnknownNoticesChangeNothing() async throws {
