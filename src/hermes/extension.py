@@ -562,6 +562,29 @@ READ_WORKERS = 4
 # only the wait for a compaction to stop runs beside them, and the idle compactor runs one
 # compaction at a time, so a second assistant's send never waits for a worker behind it.
 SEND_WORKERS = 4
+# What Hermes did with a new task it did not start at once, by native prompt.submit's successful
+# answer at ed1afb0. Over a running session (tui_gateway/session_auto_continue.py _handle_busy_submit),
+# "queued" is the busy queue's disposition: the text was queued, merged into a queued prompt, or
+# dropped as a copy of the running prompt, so it promises no separate later turn; a session another
+# gateway owns queues it in that owner's queue (methods_prompt.py _submit_to_ledger_owner). "steered"
+# and "redirected" put it into the running turn, which gives it no turn of its own. See admission_turn.
+ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined"}
+
+
+def admission_turn(result):
+    """What a new task's successful prompt.submit answer says about its turn; None only for a started turn.
+
+    Only "streaming" says Hermes started the turn (methods_prompt.py:973; compute_host_bridge.py:327
+    for an isolated turn). A typed stop phrase while the session's voice mode is on ends the voice
+    chat and admits nothing: {"voice_stopped": true} (methods_prompt.py:265-268, checked first at :835-836, and :760-761), "none".
+    Any answer this does not know is "unknown", never taken for a started turn.
+    """
+    status = result.get("status")
+    if status == "streaming":
+        return None
+    if status is None and result.get("voice_stopped") is True:
+        return "none"
+    return ADMISSION_TURN.get(status, "unknown")
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity, journal mutation and native
@@ -1663,44 +1686,77 @@ class Bridge:
 
     # Admission: one durable receipt per app request, before native execution.
 
-    def admitted(self, rid, request_id, message=None):
+    def admitted(self, rid, request_id, message=None, turn=None):
         # Save the complete response in the same transaction as its final
         # admission state. receipt() remains the mutable status projection.
         value = self.journal.receipt(request_id)
         value.update(app_run_id=value["runId"], admission="canonical")
         if message is not None:
             value["message"] = message
+        if turn is not None:
+            # A new task Hermes did not start at once: see admission_turn.
+            value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
         return self.server._ok(rid, value)
 
     def stage_images(self, sid, profile, attachments, staged):
-        """Attach image attachments natively, recording each addition in ``staged``."""
+        """Attach image attachments natively, recording in ``staged`` the one entry each of this request's calls added.
+
+        Native image.attach appends one entry, the resolved path, and answers it as ``path``
+        (``methods_prompt.py:1020-1023`` and ``:1351-1355`` at ed1afb0, ``:749-752`` and ``:1093-1097`` at b9cb268
+        and d23cc6b). It takes no lock, so another client's attach can append beside it while it reads the image's
+        header (``server.py:754-763`` at ed1afb0, ``:840-849`` at the others), and not every entry new since the call
+        began is this request's. An error after the append answers 5027 with no path (``methods_prompt.py:1024-1025``
+        at ed1afb0, ``:753-754`` at the others). Its entry is then known only for an absolute path without ``$`` or
+        ``\\``: native appends that path with symlinks resolved (``hermes_cli/cli_terminal_input.py:86-137``). Native
+        joins a relative path to ``TERMINAL_CWD``, which need not be this process's directory, and expands ``$`` and
+        ``\\ ``, so such a path claims nothing and its image stays staged rather than removing an entry this request
+        cannot prove its own. The app sends absolute upload paths.
+        """
         sessions = self.server._sessions
         for attachment in attachments:
             if str(attachment.get("mime", "")).startswith("image/"):
+                path = attachment["path"]
                 prior = list(sessions[sid].get("attached_images", []))
+                result = None
                 try:
-                    self.native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
+                    result = self.native("image.attach", {"session_id": sid, "profile": profile, "path": path})
                 finally:
-                    # Native image.attach can append before its result formatter fails.
-                    remaining = list(prior)
-                    for image in sessions[sid].get("attached_images", []):
-                        if image in remaining:
-                            remaining.remove(image)
-                        else:
-                            staged.append(image)
+                    answered = result.get("path") if isinstance(result, dict) else None
+                    # Native reads the path as str(path).strip() (methods_prompt.py:1005 at ed1afb0, :734 at the others).
+                    raw = str(path or "").strip()
+                    if isinstance(answered, str):
+                        own = {answered}
+                    elif os.path.isabs(raw) and "$" not in raw and "\\" not in raw:
+                        own = {os.path.realpath(raw)}
+                    else:
+                        own = set()
+                    added = list(sessions[sid].get("attached_images", []))
+                    for image in prior:
+                        if image in added:
+                            added.remove(image)
+                    # One entry at most: an identical path another client attached meanwhile is not told apart.
+                    mine = next((image for image in reversed(added) if image in own), None)
+                    if mine is not None:
+                        staged.append(mine)
 
     def unstage_images(self, sid, staged):
-        # Remove only additions from this preparation and preserve pre-existing staged images.
+        """Remove this request's staged images from the live list, keeping every other entry.
+
+        Native image.attach appends without a lock, so this never writes back a copy: it deletes each entry in place
+        under ``history_lock``, which Hermes's own readers take to snapshot and clear the list (``prompt_turn.py:138-152``
+        and ``session_auto_continue.py:413-420`` at ed1afb0, ``:134-143`` and ``:388-393`` at the others). An append
+        lands at the end, so the index found in one copy of the list still names the same entry when it is deleted.
+        """
         session = self.server._sessions.get(sid)
         if session is None or not staged:
             return
         with session["history_lock"]:
-            images = list(session.get("attached_images", []))
+            images = session.get("attached_images", [])
             for image in reversed(staged):
-                if image in images:
-                    images.pop(len(images) - 1 - images[::-1].index(image))
-            session["attached_images"] = images
+                snapshot = images[:]
+                if image in snapshot:
+                    del images[len(snapshot) - 1 - snapshot[::-1].index(image)]
 
     def turn_request(self, sid, request_id, text):
         """A request ID of its own for the prompt.submit that carries this receipt's prompt.
@@ -1907,15 +1963,26 @@ class Bridge:
         timed("native", mark)
         mark = time.perf_counter()
         status = "rejected" if result.get("status") == "rejected" else "accepted"
+        # Steering already joins the running task, and native session.steer answers "queued" when it
+        # accepts, so only a new task's answer says whether its turn started. A refusal has no turn.
+        turn = None if steering or status == "rejected" else admission_turn(result)
+        # A typed stop admitted nothing, so nothing will settle its receipt: it is settled now, and
+        # never holds up the next send as a task Hermes is finishing.
+        settled = steering or status == "rejected" or turn == "none"
+        if turn == "none":
+            # Hermes answers a typed stop before it reads the session, so this request's images stay staged and the
+            # next turn would take them (methods_prompt.py:835-836 at ed1afb0, :580 at b9cb268 and d23cc6b). An
+            # unknown answer keeps them: a turn Hermes started takes them on its own thread after it answers.
+            self.unstage_images(sid, staged)
         if not steering:
             self.turn_started(sid, native_rid, result.get("status") == "streaming")
         with journal.lock, journal.db:
-            journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
-            if interrupted and status == "accepted":
+            journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), settled, request_id))
+            if interrupted and status == "accepted" and turn != "none":
                 journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
-            response = self.admitted(rid, request_id)
+            response = self.admitted(rid, request_id, "Hermes ended its voice chat. Nothing was sent to the assistant." if turn == "none" else None, turn=turn)
             self.admitting.discard(request_id)
         timed("journal", mark)
         return response
@@ -2082,7 +2149,7 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
