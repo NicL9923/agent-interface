@@ -95,9 +95,11 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
         } catch { refresh(); }
       },
     });
-    const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.close(); };
-    // The network returning makes the stream's earlier failures stale, so it connects without its backoff.
-    const revive = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.reconnect(); else stream.close(); };
+    // A hidden page or an offline device pauses the stream, keeping its retry budget for when it wakes.
+    const wake = () => { if (document.visibilityState !== 'hidden' && navigator.onLine !== false) stream.open(); else stream.suspend(); };
+    // The network returning makes the stream's earlier failures stale, so it connects without its backoff,
+    // or, on a hidden page, when the page is shown.
+    const revive = () => stream.reconnect();
     wake();
     const retry = setInterval(wake, 45_000);
     window.addEventListener('online', revive); window.addEventListener('focus', wake); document.addEventListener('visibilitychange', wake);

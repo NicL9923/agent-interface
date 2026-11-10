@@ -175,15 +175,14 @@ export function useSession(events: SessionEvents) {
     // roster notice does not read the group catalog itself.
     const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } },
       undefined, { onHealth: up => reportStream("household", up) });
+    // A hidden page or an offline device pauses the stream, keeping its retry budget for when it wakes.
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
-      else stream.close();
+      else stream.suspend();
     };
-    // The network returning, or a manual retry that reached the server, makes earlier failures stale.
-    const revive = () => {
-      if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.reconnect();
-      else stream.close();
-    };
+    // The network returning, or a manual retry that reached the server, makes earlier failures stale. The
+    // stream holds a signal that arrives while the page is hidden until it is shown.
+    const revive = () => stream.reconnect();
     wake();
     const retry = setInterval(wake, 45_000);
     window.addEventListener("online", revive);

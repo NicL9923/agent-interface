@@ -280,15 +280,30 @@ describe("the stream watchdog", () => {
     expect(opened()).toBe(before + 2);
   });
 
-  it("ends an outage when its owner closes it, so the next signal after the page is shown connects at once", () => {
+  it("ends an outage when its owner closes it, so the next signal connects at once", () => {
     const { stream } = start();
     live().fail();
     stream.reconnect();
     live().fail();
-    // A hidden page's owner closes the stream; the network returns as it is shown again.
+    // An owner done with the stream closes it.
     stream.close();
     stream.reconnect();
     expect(opened(), "no forced gap carries over a close").toBe(3);
+  });
+
+  it("keeps the forced gap across a suspension, so a page hidden and shown cannot force attempts faster", () => {
+    const { stream } = start();
+    live().fail();
+    stream.reconnect();
+    live().fail();
+    // A hidden page's owner suspends the stream; the network returns as it is shown again.
+    stream.suspend();
+    stream.reconnect();
+    expect(opened(), "the gap from the last forced attempt still holds").toBe(2);
+    vi.advanceTimersByTime(1_499);
+    expect(opened()).toBe(2);
+    vi.advanceTimersByTime(1);
+    expect(opened(), "the ordinary retry, sooner than the gap's end").toBe(3);
   });
 
   it("waits for queued events before judging, so a ping held behind the timer by a long task keeps the stream", () => {
@@ -351,8 +366,8 @@ describe("the stream watchdog", () => {
     visibility = "hidden";
     vi.advanceTimersByTime(10 * 60_000);
     expect(opened()).toBe(1);
-    // Owners close a hidden page's stream, which ends the episode: showing it connects without waiting.
-    stream.close();
+    // Owners suspend a hidden page's stream. One that never failed connects at once when shown.
+    stream.suspend();
     visibility = "visible";
     stream.open();
     expect(opened()).toBe(2);
@@ -360,7 +375,7 @@ describe("the stream watchdog", () => {
     expect(opened(), "a second wake handler finds the new stream").toBe(2);
   });
 
-  it("connects at once when shown after its owner closed it mid-backoff, then backs off from the first failure", () => {
+  it("connects at once after its owner closed it mid-backoff, then backs off from the first failure", () => {
     const { stream } = start();
     for (let failure = 0; failure < 6; failure++) { live().fail(); vi.runOnlyPendingTimers(); }
     // The sixth failure in a row waits about a minute.
@@ -386,14 +401,14 @@ describe("the stream watchdog", () => {
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
-  it("stops watching once closed, leaving no timer behind, whether a stream or a retry was pending", () => {
+  it.each(["close", "suspend"] as const)("stops watching once it is told to %s, leaving no timer behind, whether a stream or a retry was pending", end => {
     const { stream } = start();
-    stream.close();
+    stream[end]();
     expect(vi.getTimerCount()).toBe(0);
     stream.open();
     live().fail();
     expect(vi.getTimerCount()).toBe(1);
-    stream.close();
+    stream[end]();
     expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(10 * 60_000);
     expect(opened()).toBe(2);

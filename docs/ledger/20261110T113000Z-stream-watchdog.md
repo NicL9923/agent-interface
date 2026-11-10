@@ -46,7 +46,8 @@ EventSource's own `retry: 3000`. Now every new connection after a failure waits 
 - Decision: the browser's own reconnects come under the policy. A drop closes the stream and retries in
   1 to 2 seconds, faster than the 3 seconds before, so a brief blip costs nothing. A server that stays
   down sees the same backoff as one that refuses.
-- `close` ends the episode, so a page shown again connects at once. `reconnect`, which the owners call
+- `close` ends the episode, so a page shown again connects at once. The third round replaced this for a
+  hidden page, which now suspends its stream and keeps the budget. `reconnect`, which the owners call
   for the browser's `online` event and for the manual reconnect, drops the backoff and connects unless a
   stream is open. Both are evidence that the old failures are stale. Without it, a phone back from a
   long offline stretch could wait up to 5 minutes for a stream while its polls ran.
@@ -75,7 +76,7 @@ or all of its ceiling, so a refusing server sees 10 attempts in 10 minutes at th
 - A timer that fires more than 10 seconds late, as after a laptop sleeps or a page is frozen, restarts
   the deadline once instead of replacing the stream. An event clears that grace. A second late timer
   with no event between replaces it.
-- A hidden page replaces nothing. Owners close a hidden page's stream anyway.
+- A hidden page replaces nothing. Owners suspend a hidden page's stream anyway.
 
 ## What old clients see
 
@@ -223,6 +224,101 @@ ran `stream-revival-ui` and `stream-watchdog`, and restored the source. All 9 we
   once (4); the first signal keeping the backoff count (3); a later signal never bringing the attempt
   forward (1); a later signal pushing back a sooner ordinary retry (2); a signal after the gap waiting a
   tick (1, after a case was added for it); a greeting counted as recovery (1).
+
+## Third review round: hiding the page reset the budget (P2)
+
+GPT-6.1 Sol found that a hidden page's owner called `close`, which cleared `failures`, the retry deadline
+and the forced gap, so showing the page connected at once. Through the real conversation hook, a refused
+stream hidden and shown 100 times at a standing clock made 101 attempts. Through the real `App` the
+household, chat and room streams did the same.
+
+- `changeStream` now returns `suspend` beside `close`. `suspend` closes the connection and its timer and
+  keeps the failures, the retry deadline and the forced gap. `close` also clears them, for an owner that
+  is done with the stream: the chat's hook on unmount or a chat switch, the session hook on unmount or an
+  account change, the room view on unmount. Each of those builds a new stream next anyway.
+- The chat, household and room owners suspend on hide, and the household and room owners suspend when
+  offline. They close only in their cleanup.
+- `open` after a suspension obeys the budget: it connects at once if the deadline passed while hidden,
+  or arms a timer for it. A stream that never failed has no deadline and connects at once.
+- A stream that proves itself now clears the retry deadline as well as the count. A forced attempt can
+  start before the retry it beat was due, and without this a page hidden after it proved itself would
+  wait for that stale deadline when shown. The growth-notice path's `drop` and `open` had the same trap.
+- `reconnect` inside the forced gap restores the ordinary retry before comparing it with the gap's end,
+  because a suspension cleared its timer. Without this, a signal right after a show waited for the gap
+  when the ordinary retry was due sooner. The unit test written for the suspension found it.
+- Decision: a revival signal that arrives while the page is hidden or the device offline is held, not
+  dropped. The household and room owners used to `close` the stream when `online` arrived on a hidden
+  page, which cleared the budget, so showing it connected at once; that was the one other caller that
+  relied on `close` clearing it. With `suspend` the signal would be lost, and a phone that switched apps
+  while its network came back could wait out several minutes of backoff. `reconnect` now checks the page
+  itself: on a hidden page or an offline device it suspends and records the signal, and the next `open`
+  answers it as `reconnect` would, once. The owners call `reconnect` unconditionally.
+
+Attempts, from `tests/stream-hide-ui.test.ts` through the real `App` (household and chat streams) and the
+real `GroupRoomView` (room stream), with the clock pinned at 2026-11-10T12:00:00Z and `Math.random` at
+0.5. Each cell is household, chat, room. Before is `af63bd5` with the same tests.
+
+| Scenario | Before | After |
+| --- | --- | --- |
+| Opening refused, then 100 hide and show cycles, clock standing | 101, 101, 101 | 1, 1, 1 |
+| Then 100 `online` events, each attempt refused | 102, 102, 102 | 2, 2, 2 |
+| Then 100 more hide and show cycles | 202, 202, 202 | 2, 2, 2 |
+| 100 cycles over 100 seconds, hidden half of each second, every attempt refused | 101, 101, 101 | 7, 7, 7 |
+| `online` while hidden, shown, refused, hidden and shown again | 3, 3, 3 | 2, 2, 2 |
+
+Seven in 100 seconds is the same as a page left open: attempts at 0, 1.5, 4.5, 10.5, 22.5, 46.5 and
+94.5 seconds. Real Chromium request counts, `node .agents/tools/count-stream-requests.mjs --only
+cold,wake`: cold load 10 and wake after 70 seconds hidden 12, unchanged; the idle scenarios were not
+rerun, since nothing they count changed.
+
+### The three cases
+
+- A tab hidden for a long time during an outage connects at once when shown. The deadline is measured
+  from the failure that set it, not from the show, so after an hour hidden it passed long ago. The test
+  refuses a chat 10 times, hides it for an hour, shows it and sees the attempt at once; refused again, it
+  waits 3.75 minutes from that refusal, because the count is still 11. Before, the count reset and the
+  next attempt came 1.5 seconds later.
+- A tab hidden and shown rapidly with a healthy server is not slowed. A stream with no failures has no
+  deadline, so each show connects at once; the test does it 100 times on all three streams and sees one
+  new connection per show. A stream that proved itself has no deadline either, including one forced
+  ahead of its retry. Request counts for waking a tab are unchanged.
+- Time spent hidden does not count toward the backoff. A hidden page makes no attempt, so hiding is no
+  evidence about the server, and growing the ceiling with hidden time would hold a tab back from a
+  server that came back while it was hidden. The hour-long outage is still covered: each tab makes one
+  attempt when shown and then waits the full backoff its kept count earned. Tabs come back when people
+  show them, which spreads them out, and the equal jitter spreads every retry after that. The chat also
+  reloads its transcript when shown, so the stream adds at most one request to the one the show
+  already makes.
+
+### Checks, third round
+
+On the commit that adds this section, NicolasLaptop, Chromium only:
+
+- `npm run typecheck`, `npm run lint`: passed.
+- Touched and related test files: `stream-hide-ui` (new, 11), `stream-watchdog` (35),
+  `stream-revival-ui`, `connection-ui`, `app-ui`, `collaboration-ui`, `home-groups-ui`,
+  `session-preferences-ui`, `group-watch`: 9 files, 228 tests passed.
+- `npm test`: 186 files, 3,098 tests passed.
+- `npm run build`: passed.
+- `npm run test:e2e`: 19 passed.
+
+### Red proofs, third round
+
+The new tests ran first against `af63bd5`'s source: 5 of the 10 then written failed, the first with
+"expected [ 101, 101, 101 ] to deeply equal [ 1, 1, 1 ]", the reviewer's count. The five that passed
+protect behavior the old code already had: a healthy stream connecting at once, a forced attempt that
+proved itself, the deadline passing while hidden, and the two unmount cases. A scratch script then broke
+each protected line by hand, ran `stream-hide-ui`, `stream-watchdog` and `stream-revival-ui`, and
+restored the source. All 15 went red.
+
+- `suspend` clearing the budget (7 red); recovery keeping the retry deadline (1, after the test was moved
+  to a forced attempt inside the gap: the first signal already zeroes the deadline, so the first version
+  could not fail); `reconnect` not restoring the retry after a suspension (1); `open` ignoring the
+  deadline (6); a signal while hidden dropped (1); a held signal not answered by `open` (1); a signal
+  while hidden connecting anyway (1); a held signal never cleared (red through unbounded recursion, a
+  stack overflow that fails the run); the chat, household and room owners closing on hide (6, 3 and 3);
+  the chat ignoring a signal while hidden (1); the chat and room views leaving their stream open on
+  unmount (1 each); `close` keeping the retry deadline (1).
 
 ## Not exercised
 

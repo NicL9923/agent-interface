@@ -347,15 +347,16 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       stream.open();
       void load();
     };
-    // The network returning, or a manual retry that reached the server, makes the stream's earlier failures stale.
+    // The network returning, or a manual retry that reached the server, makes the stream's earlier failures
+    // stale. The stream holds a signal that arrives while the page is hidden until it is shown.
     const revive = () => {
-      if (navigator.onLine === false || document.visibilityState === "hidden") return;
       stream.reconnect();
+      if (navigator.onLine === false || document.visibilityState === "hidden") return;
       void load();
     };
     // Change notices drive updates, and this poll is their safety net: every 30 seconds while the stream is
     // down, as from a cut until its watchdog reconnects it, and every LIVE_POLL_MS while it is live. Showing
-    // the page reads too: a hidden page closed the stream, so it is not up then.
+    // the page reads too: a hidden page suspended the stream, so it is not up then.
     const stopPolling = pollWhileVisible(() => {
       if (!streamUp(chatStream(botId)) || Date.now() - lastRead >= LIVE_POLL_MS) wake();
     }, CHAT_POLL_MS);
@@ -365,8 +366,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (document.visibilityState !== "hidden") stream.open();
       void load();
     };
-    // A hidden page holds no stream; showing it again reloads and reopens one.
-    const hide = () => { if (document.visibilityState === "hidden") stream.close(); };
+    // A hidden page holds no stream; showing it again reloads and reopens one when its retry budget allows.
+    const hide = () => { if (document.visibilityState === "hidden") stream.suspend(); };
     window.addEventListener("online", revive);
     window.addEventListener("agent-interface:reconnect", revive);
     document.addEventListener("visibilitychange", hide);
