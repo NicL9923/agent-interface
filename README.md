@@ -225,7 +225,8 @@ still win.
   each of the server's updates, up to four a second. Each update is revealed within about a third
   of a second of arriving, however long it is, with at most 30 paints a second, and a reply
   already under way when the chat opens shows at once. A caret at the text's logical end, right of
-  Latin text and left of Arabic or Hebrew, pulses until the reply is saved, and follows a code
+  Latin text and left of Arabic or Hebrew, or past the line's end where text of the other direction
+  touches that edge with no space, pulses until the reply is saved, and follows a code
   block or table scrolled sideways. The text shows at once in a hidden tab, and under reduced
   motion, where the caret stays lit and still.
 - When a streamed reply is saved under Hermes's own ID, its row usually stays in place: React

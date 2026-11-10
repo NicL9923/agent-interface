@@ -137,3 +137,43 @@ Each was watched failing, then restored:
 - The six files above: 202 tests passed.
 - `npm test`: 181 files, 2935 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 14 passed in Chromium.
+
+## Review round 2 (GPT-6.1 Sol)
+
+One finding on this branch, fixed over `da17e8c`.
+
+1. The caret still covered a glyph where two writing directions meet with no space. In `عام2026`
+   the digits' trailing edge touches the Arabic, and in `helloمرحبا` the Arabic's trailing edge
+   touches the Latin `o`, so the fixed gap put the caret inside the other run. The rule, in
+   `clearEnd`: the caret goes past the logical end as before unless another glyph on the line lies
+   within its gap and width there. Then it goes past the end of the line in the paragraph's
+   direction, beyond every glyph on it, the right end in this app's left-to-right paragraphs, which
+   is also where the next word goes when it runs that way. Drawing it on the boundary cannot clear
+   both glyphs, since their boxes touch. The line's glyphs are its words measured whole without the
+   spaces between them, read back from the end until a word lies on a line above, so a space
+   between Arabic and a number still leaves the caret in it, as cleared.
+
+### Browser, Chromium
+
+`e2e/live-reply.spec.ts` gained both unspaced cases and a wrapped line whose last word has a
+longer word above it. Every case now asserts that the caret's box meets no box of a grapheme of
+the reply other than spaces. The screenshots show the caret right of the line's last glyph in both
+unspaced cases and unchanged in the cleared ones: Arabic alone, Hebrew then Latin, Arabic then
+digits with a space, Latin alone, the wrapped line. Safari and Firefox: not run.
+
+### Red proof
+
+- The e2e suite on `da17e8c`: both unspaced cases fail, the caret at 477.8 to 479.8 over the `o` at
+  472.9 to 481.8.
+- `clearEnd` never moving the caret, and moving it to the wrong end: "moves past the line's right
+  end when a glyph touches the logical end" and "… left end in a right-to-left paragraph" fail.
+- The line walk counting words on lines above: the wrapped-line case fails, the caret pushed past
+  the longer word above.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `tests/streaming-reveal.test.ts`, `tests/live-reply-ui.test.ts`, `tests/message-markdown.test.ts`:
+  82 tests passed.
+- `npm test`: 181 files, 2939 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 17 passed in Chromium.
