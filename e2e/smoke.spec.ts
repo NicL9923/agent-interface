@@ -1,4 +1,5 @@
-import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import type { Page } from "@playwright/test";
+import { assistants, conversation, deployNextRelease, expect, signIn, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -59,6 +60,97 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await expect(page.getByRole("alertdialog", { name: "Use a banked reset?" })).toBeVisible();
   await page.getByRole("alertdialog").getByRole("button", { name: "Cancel" }).click();
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
+});
+
+test.describe("after a deploy retires a lazy screen's file", () => {
+  // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
+  test.use({ serviceWorkers: "block" });
+
+  test("the screen offers Reload and leaves the page alone until the person takes it", async ({ page, allowConsoleError }) => {
+    // Chromium logs the refused file, and React the screen error the prompt handles. Nothing else is excused.
+    allowConsoleError.push(/status of 404/, /dynamically imported module/);
+    await signIn(page);
+    // The page asks for a name this build never had, as a page from the previous release would, and the real server answers.
+    const retired = /\/assets\/UsagePanel-[^/]+\.js$/;
+    await page.route(retired, route => route.continue({ url: route.request().url().replace(/UsagePanel-[^/]+\.js$/, "UsagePanel-retired0.js") }));
+    let loads = 0;
+    page.on("load", () => { loads++; });
+    const openUsage = async () => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Usage/ }).click();
+    };
+
+    await openUsage();
+    const prompt = page.getByRole("alert").filter({ hasText: "This screen could not load." });
+    await expect(prompt).toBeVisible();
+    await expect(prompt).toContainText("The app may have been updated");
+    // Nothing reloaded under the person: the rest of the app is still the page they had.
+    expect(loads).toBe(0);
+    await expect(assistants(page)).toBeVisible();
+
+    // Reload asks the server for the app again, and the screen opens from what it has now.
+    await page.unroute(retired);
+    await prompt.getByRole("button", { name: "Reload" }).click();
+    await expect.poll(() => loads).toBe(1);
+    await openUsage();
+    await expect(page.getByText("2 banked resets")).toBeVisible();
+  });
+});
+
+// The worker opens the shell from its cache, then checks the server's. After a deploy a person sees the
+// old shell at most once: from the next load on, the old worker opens the network's shell, as it would
+// with no cached copy, until the new release takes over.
+const releaseMark = (page: Page) => page.locator('meta[name="release"]');
+const shellNoted = (page: Page) => page.evaluate(async () => {
+  for (const key of await caches.keys()) if (await (await caches.open(key)).match("/.shell-outdated")) return key;
+  return null;
+});
+
+test("after a deploy, the next load opens the new shell, and the new release is offered until it is taken", async ({ page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  const caches = () => page.evaluate(() => globalThis.caches.keys());
+  const [current] = await caches();
+  expect(current).toMatch(/^agent-interface-[0-9a-f]{16}$/);
+
+  await deployNextRelease();
+  // This load opens the cached shell, and the check behind it finds the new one.
+  await page.reload();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(releaseMark(page)).toHaveCount(0);
+  await expect.poll(() => shellNoted(page)).toBe(current);
+  // The update check it ran installed the release, which waits for the person, as on main.
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toBeVisible();
+
+  await page.reload();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(releaseMark(page)).toHaveCount(1);
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toBeVisible();
+
+  // Taking it moves to the new worker, whose cache starts with no note. The page reloads meanwhile.
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect.poll(() => caches().catch(() => null)).toEqual([current.replace("agent-interface-", "agent-interface-next-")]);
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
+  expect(await shellNoted(page)).toBeNull();
+});
+
+test("a new release whose worker cannot install still reaches the person on their next load", async ({ page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  const [current] = await page.evaluate(() => globalThis.caches.keys());
+
+  await deployNextRelease({ installs: false });
+  await page.reload();
+  await expect.poll(() => shellNoted(page)).toBe(current);
+  await page.reload();
+  await expect(releaseMark(page)).toHaveCount(1);
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  // The old worker still serves, and nothing offers a release that never installed.
+  expect(await page.evaluate(() => globalThis.caches.keys())).toEqual([current]);
+  await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
 });
 
 test("a reply keeps growing across a tool call, and its saved segment never disappears or doubles", async ({ page }) => {

@@ -46,9 +46,20 @@ describe("client cache headers", () => {
 
   it("serves the shell, never a cached asset, for a route the client handles", async () => {
     const app = await client();
-    const response = await app.inject("/assets/gone-AbC12345.js");
-    expect(response.headers["cache-control"]).toBe("no-cache");
-    expect(response.headers["content-type"]).toContain("text/html");
+    for (const url of ["/today", "/assetsgone-AbC12345.js", "/?bot=ranch&view=today"]) {
+      const response = await app.inject(url);
+      expect([url, response.statusCode, response.headers["cache-control"], response.headers["content-type"]])
+        .toEqual([url, 200, "no-cache", expect.stringContaining("text/html")]);
+    }
+  });
+
+  it("answers a bundle a release retired with an uncached 404 that is not the shell", async () => {
+    const app = await client();
+    for (const url of ["/assets/gone-AbC12345.js", "/assets/gone-AbC12345.css?v=1", "/assets/nested/gone.js"]) {
+      const response = await app.inject(url);
+      expect([url, response.statusCode, response.headers["cache-control"], response.headers["content-type"], response.body])
+        .toEqual([url, 404, "no-store", "text/plain; charset=utf-8", "Not found"]);
+    }
   });
 
   it("recognizes hashed assets only inside the assets directory", () => {
