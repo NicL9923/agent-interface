@@ -485,19 +485,6 @@ DECORATED_LIMIT = 32
 ROW_CACHE_LIMIT = 20000
 
 
-def file_identity(path):
-    """``(st_dev, st_ino)`` of ``path``, or None; Hermes's test for a replaced state.db.
-
-    Mirrors ``stat_db_file_identity`` (``hermes_state_common.py:338`` at ed1afb0): an inode of 0
-    names no file, so it counts as unknown.
-    """
-    try:
-        info = os.stat(path)
-    except (OSError, TypeError, ValueError):
-        return None
-    return (info.st_dev, info.st_ino) if info.st_dev and info.st_ino else None
-
-
 class RowCache:
     """Per-row results an open computed for one canonical session that no later write can change.
 
@@ -505,20 +492,12 @@ class RowCache:
     these instead of redoing work that grows with the transcript. Each table answers only
     from its own key; none depends on redaction state or the journal mutation count.
 
-    ``originals``: a visible row ID -> the earliest row ID with its ``message_uid`` in this
-    stored session. Hermes's ``messages.id`` is AUTOINCREMENT, writes serialize, and no writer
-    changes a stored ``message_uid`` except to fill a NULL with a fresh random one, so once a
-    row is readable every lower ID is final. Only rows the lookup found are kept.
     ``tool_results``: a tool row ID -> (its content, that content parsed). Hermes's proactive
     prune rewrites a row's content under the same ID, so a hit needs the same content.
     ``tool_records``: a journal ``tools.id`` -> its parsed record. The add-on only inserts them.
 
-    Those rules hold only within one database file's history. ``store`` is the state.db
-    generation ``originals`` describe: Hermes's own test for a replaced file, its inode and the
-    generation stamp it writes to the header's application_id. ``newest`` is the highest row
-    that table learned, with its uid: a snapshot of the same file restored in place keeps both,
-    and then still holds that row only if it also holds every row below it. ``journal`` is the
-    ``PRAGMA data_version`` of the journal connection ``tool_records`` came from; only another
+    Which row a compaction copy copies is not kept; ``original_rows`` says why.
+    ``journal`` is the ``PRAGMA data_version`` of the journal connection ``tool_records`` came from; only another
     connection's commit, such as a restore, moves it. That connection stays on the file it opened
     for the life of the process, so a journal replaced by rename is never read until a restart,
     which starts every cache empty. A changed mark empties its table before the table answers.
@@ -530,8 +509,8 @@ class RowCache:
 
     def __init__(self, scope):
         self.scope = scope
-        self.originals, self.tool_results, self.tool_records = {}, {}, {}
-        self.store = self.newest = self.journal = None
+        self.tool_results, self.tool_records = {}, {}
+        self.journal = None
 
     @staticmethod
     def keep(table, key, value):
@@ -1182,49 +1161,34 @@ class Bridge:
         value["app_run_id"] = current[0] if current else None
         value["app_task_state"] = {"completed": "done", "failed": "failed", "interrupted": "interrupted"}.get(terminal[0]) if terminal and not current else None
 
-    def original_rows(self, session, messages, rows):
+    def original_rows(self, session, messages):
         """Show each copy native in-place compaction makes under the row ID of the message it copies.
 
         Compaction archives every row and stores its kept head and tail again as new rows. Every
         copy keeps the message's ``message_uid``. Without this, the copies of recent messages would
         lose their receipts (sender, files, run) and every copy would change its message ID.
-        ``rows`` is the session's RowCache, or None; the store is asked only about rows it lacks.
+
+        The store is asked on every open; nothing here is cached. A snapshot restored into the
+        live file keeps its inode and generation stamp, yet its copies can reuse these row IDs
+        for other messages. Checking that a copy and its recorded original still hold their uid
+        is not enough either: Hermes's ``replace_messages`` can move a message's first row in one
+        history and not in a restored one. Only a changed database or WAL signature would say when
+        to look again, and a running turn changes it before nearly every open.
         """
+        ids = [m["row_id"] for m in messages if type(m.get("row_id")) is int]
         key = session.get("session_key")
-        visible = [m["row_id"] for m in messages if type(m.get("row_id")) is int]
-        if not visible or not key or not callable(getattr(self.server, "_session_db", None)):
+        if not ids or not key or not callable(getattr(self.server, "_session_db", None)):
             return
-        # A cache filled for another stored session is not this one's.
-        cache = rows if rows is not None and rows.scope == key else RowCache(key)
         with self.server._session_db(session) as db:
             if db is None:
                 return
-            # Proves the file still holds what the cache learned from it, in one read.
-            newest = cache.newest[0] if cache.newest else None
-            stamp, uid = db._read_all("SELECT (SELECT application_id FROM pragma_application_id()),(SELECT message_uid FROM messages WHERE id=?)", (newest,))[0]
-            store = (file_identity(getattr(db, "db_path", None)), stamp)
-            if cache.store != store or (cache.newest and cache.newest[1] != uid):
-                cache.originals.clear()
-                cache.store, cache.newest = store, None
-            known = cache.originals
-            # This open's answer, taken before filling the table can evict any of it.
-            answer = {row_id: known[row_id] for row_id in visible if row_id in known}
-            missing = [row_id for row_id in visible if row_id not in answer]
-            if missing:
-                ids = json.dumps(missing)
-                # The session index finds every copy; a uid join instead takes seconds on a long chat.
-                first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
-                                          "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, ids)))
-                uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, ids)))
-                # Only rows the store returned are kept: one it cannot read yet is asked again next open.
-                for row_id, uid in uids.items():
-                    original = first.get(uid)
-                    answer[row_id] = original if type(original) is int and original < row_id else row_id
-                    RowCache.keep(known, row_id, answer[row_id])
-                    if cache.newest is None or row_id > cache.newest[0]:
-                        cache.newest = (row_id, uid)
+            visible = json.dumps(ids)
+            # The session index finds every copy; a uid join instead takes seconds on a long chat.
+            first = dict(db._read_all("SELECT message_uid,MIN(id) FROM messages WHERE session_id=? AND message_uid IN "
+                                      "(SELECT message_uid FROM messages WHERE id IN (SELECT value FROM json_each(?))) GROUP BY message_uid", (key, visible)))
+            uids = dict(db._read_all("SELECT id,message_uid FROM messages WHERE session_id=? AND id IN (SELECT value FROM json_each(?))", (key, visible)))
         for message in messages:
-            original = answer.get(message.get("row_id"))
+            original = first.get(uids.get(message.get("row_id")))
             if type(original) is int and original < message["row_id"]:
                 message["row_id"] = original
 
@@ -1418,7 +1382,7 @@ class Bridge:
         rows = self.row_cache(sid, session)
         if cached is None:
             # Reads the session store, so never under journal.lock, which native writers take.
-            self.original_rows(session, value.get("messages", []), rows)
+            self.original_rows(session, value.get("messages", []))
         with journal.lock:
             if cached is None:
                 messages, bound_mutation, cacheable = self.attribute(profile, sid, value, rows)
