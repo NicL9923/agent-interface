@@ -250,4 +250,21 @@ describe("streaming Markdown", () => {
       "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
     ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
+
+  it("shows a half-written strong marker as bold while streaming, and the saved reply as typed", async () => {
+    await renderAs(StreamingMarkdown, "Feed the **bo");
+    expect(container.querySelector("strong")?.textContent).toBe("bo");
+    expect(container.textContent).not.toContain("*");
+    await renderAs(MessageMarkdown, "Feed the **bo");
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).toBe("Feed the **bo");
+  });
+
+  it("keeps an unfinished code block's node across updates", async () => {
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')");
+    const code = container.querySelector("pre code")!;
+    await renderAs(StreamingMarkdown, "Here:\n\n```python\nprint('hay')\nprint('oats')");
+    expect(container.querySelector("pre code")).toBe(code);
+    expect(code.textContent).toBe("print('hay')\nprint('oats')\n");
+  });
 });

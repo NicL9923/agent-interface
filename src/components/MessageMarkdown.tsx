@@ -8,6 +8,7 @@ import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
+import { completeStreamingTail } from "./streaming-tail";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -32,7 +33,8 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
   const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
   return document && context && document.cards.every(card => context.actionableIds.has(card.id))
     ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
-    : <CodeBlock key={code} code={code} language={language} finished={!!closed} />;
+    // A finished block is keyed by its code; one still streaming keeps its node, and any selection in it.
+    : <CodeBlock key={closed ? code : "open"} code={code} language={language} finished={!!closed} />;
 }
 
 /**
@@ -45,7 +47,7 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
   >("idle");
   const highlightable = finished && !!language;
   const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
-  // The block is keyed by its code, so a result can only ever belong to this code.
+  // A finished block is keyed by its code, so a result can only ever belong to this code.
   useEffect(() => {
     if (!highlightable || html !== null) return;
     loadHighlighter().then(module => setHtml(module.highlight(code, language!)), () => { /* Plain code still reads fine. */ });
@@ -214,11 +216,16 @@ export function streamingBlocks(text: string): string[] | null {
 
 /**
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
- * grows, so a long reply no longer re-parses from the top several times a second. The saved
- * reply replaces this and is parsed whole.
+ * grows, so a long reply no longer re-parses from the top several times a second. The growing
+ * end is completed for display, so a half-written marker, link or table header does not flash as
+ * raw Markdown. The saved reply replaces this and is parsed whole from its raw text.
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
-  const blocks = useMemo(() => streamingBlocks(props.text), [props.text]);
-  if (!blocks) return <MessageMarkdown {...props} />;
+  const blocks = useMemo(() => {
+    const split = streamingBlocks(props.text);
+    return split ? [...split.slice(0, -1), completeStreamingTail(split.at(-1)!)] : null;
+  }, [props.text]);
+  const whole = useMemo(() => blocks ? "" : completeStreamingTail(props.text), [blocks, props.text]);
+  if (!blocks) return <MessageMarkdown {...props} text={whole} />;
   return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });
