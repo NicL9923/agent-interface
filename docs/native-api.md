@@ -184,7 +184,7 @@ Read the lines on the host with
 
 Clients may opt in with `/api/bots/:id/events?inflight=1`. Token, reasoning,
 status and tool-start frames then send `event: inflight` at most four times a
-second, with JSON `{botId, message, activity, toolCalls}`. `message` is the
+second (every 250 ms, `LIVE_TICK_MS` in `src/server/conversation-routes.ts`), with JSON `{botId, message, activity, toolCalls}`. `message` is the
 synthetic assistant row whose ID ends in `-inflight`, including optional
 `reasoning` and `origin`. Replace that row, or remove it if both text and
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
@@ -228,7 +228,7 @@ stream open and reconnect; the server sends no initial notice. Streams without t
 one-change-per-second streaming cadence.
 
 `?inflight=2` opts in to the same stream with growth sent as deltas, so a long
-reply is not resent whole every 250 ms. The iOS app uses it, and so do web bundles
+reply is not resent whole every 250 ms. It keeps the same 250 ms between updates. The iOS app uses it, and so do web bundles
 cached from before the web client moved to `?inflight=3`. `?inflight=1` is unchanged
 and stays served, because iOS builds released before the iOS app moved to
 `?inflight=2` and older cached web bundles still use it. A `?inflight=2` stream
@@ -252,6 +252,12 @@ decode a whole event, so the next delta reconnects. Its first reconnect after a
 refused delta is immediate; while no delta applies between refusals, each further
 one waits 3 seconds longer, up to 30. A server that predates `?inflight=2` treats it
 as no opt-in and sends only change notices, which clients already handle.
+
+On every `?inflight=` stream, a client that has not yet read what the server wrote,
+past the socket's buffer, gets no live update until it has. The next one then
+carries everything since the last it got: the whole reply on `?inflight=1`, and on
+`?inflight=2` and `?inflight=3` a delta based on what it last received, so a slow
+connection never makes the server hold an unbounded queue of updates.
 
 `?inflight=3` opts in to turn events, so a reply keeps streaming across tool calls
 without waiting for a refetch. The web client uses it. `?inflight=1` and
@@ -287,7 +293,10 @@ messages, after?, message, activity, toolCalls}`:
 - `version`: that read's structural version.
 
 Growth of that reply arrives as `inflight-delta`, as on `?inflight=2`, based on the
-last `turn` event's `message`. The server sends a whole `turn` event instead
+last `turn` event's `message`, at most ten times a second (every 100 ms,
+`TURN_TICK_MS`). A `turn` event from the server's own read goes as soon as that
+read lands, without waiting for the next 100 ms, so the finished turn's saved reply
+is not held back. The server sends a whole `turn` event instead
 whenever the read the reply is built on changed, in every case where `?inflight=2`
 sends a whole `inflight` except after a `data: change` notice, and on a new stream.
 `data: change` notices still follow every structural change at most once a second.
