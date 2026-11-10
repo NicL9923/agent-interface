@@ -44,7 +44,8 @@ export function prefetchedFirstPage(botId: string): Promise<Page> | undefined {
  * every prefetch of the chat made before that moment, finished or still on its way, so the next
  * first load reads fresh. A prefetch still on its way is stopped, so its older page never lands in
  * the response cache over the newer one either; a first load that had joined it reads again. The
- * send path calls this as a send leaves, and the chat's read path as each of its own reads lands.
+ * send path calls this as a send leaves, Live Talk as each spoken request leaves, and the chat's read
+ * path as each of its own reads lands.
  */
 export function supersedePrefetch(botId: string) {
   current();

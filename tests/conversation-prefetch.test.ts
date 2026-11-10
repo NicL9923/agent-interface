@@ -227,6 +227,34 @@ describe("opening a chat after a prefetch", () => {
     expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Opened");
   });
 
+  // The prefetch's abort comes too late once both bodies are being read: the newer read's body ends,
+  // then the older one's in the same turn, and both land before the newer read's caller can retire
+  // the prefetch. The cache must still keep the newer page, which a reopened chat shows first.
+  it("keeps the newer read's page cached when an older prefetch's body ends just after it", async () => {
+    const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
+    respond = path => Promise.resolve(path.includes("/conversation")
+      ? new Response(new ReadableStream<Uint8Array>({ start: controller => { bodies.push(controller); } }), { status: 200 })
+      : new Response("{}", { status: 200 }));
+    const { firstQuery, prefetchFirstPage, prefetchedFirstPage, supersedePrefetch } = await import("../src/app/conversation-page");
+    const { request } = await import("../src/client-api");
+    prefetchFirstPage("barn");
+    const newer = request("GET /bots/:id/conversation", { params: { id: "barn" }, query: firstQuery })
+      .then(read => { supersedePrefetch("barn"); return read; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bodies).toHaveLength(2);
+    const end = (body: ReadableStreamDefaultController<Uint8Array>, text: string) => {
+      body.enqueue(new TextEncoder().encode(JSON.stringify(page("barn", text))));
+      body.close();
+    };
+    end(bodies[1], "Newer");
+    end(bodies[0], "Older");
+    expect((await newer).messages[0].text).toBe("Newer");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Newer");
+    // Nor may the older read become the chat's next first load.
+    expect(prefetchedFirstPage("barn")).toBeUndefined();
+  });
+
   it("reads again itself when the prefetch fails", async () => {
     let calls = 0;
     respond = path => path.includes("/conversation")

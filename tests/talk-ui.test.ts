@@ -105,6 +105,30 @@ describe("live talk", () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // A spoken request is sent to the chat, so a page prefetched before it may not open the chat after.
+  it("retires the chat's prefetched page before a spoken request leaves", async () => {
+    const { api } = await import("../src/client-api");
+    const { prefetchFirstPage, prefetchedFirstPage } = await import("../src/app/conversation-page");
+    vi.mocked(api).mockResolvedValue({ botId: "ranch", messages: [] });
+    let usableAtAsk: unknown = "not asked";
+    write.mockImplementation(async (path: string) => {
+      if (path.endsWith("/talk/session")) return session;
+      usableAtAsk = prefetchedFirstPage("ranch");
+      return { state: "done", text: "Gate's shut." };
+    });
+    prefetchFirstPage("ranch");
+    await act(async () => {});
+    expect(prefetchedFirstPage("ranch")).toBeDefined();
+    const mount = mountRoot();
+    await mount.render(createElement(Harness, { botId: "ranch" }));
+    await act(async () => talk.start());
+    const message = JSON.stringify({ type: "response.function_call_arguments.done", name: "ask_assistant", call_id: "c1", arguments: JSON.stringify({ request: "Shut the gate" }) });
+    await act(async () => (peers[0]!.channel.onmessage as (event: { data: string }) => void)({ data: message }));
+    expect(write).toHaveBeenCalledWith("/bots/ranch/talk/ask", expect.objectContaining({ request: "Shut the gate" }));
+    expect(usableAtAsk).toBeUndefined();
+    await press("End talk");
+  });
+
   it("ends when the assistant changes", async () => {
     write.mockResolvedValue(session);
     const mount = mountRoot();

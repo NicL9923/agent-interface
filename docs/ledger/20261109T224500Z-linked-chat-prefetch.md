@@ -200,3 +200,89 @@ holding the order of two settled reads to one microtask is not something the fak
 ### Not exercised
 
 - Safari, Firefox and an installed iOS web app: not run.
+
+## November 10 third review round
+
+GPT-6.1 Sol's third review verified two findings at `32b9bd0`. No merge from `origin/main` this
+round. Checks ran on NicolasLaptop (Fedora, Linux x64, Node 24.22.2).
+
+### Findings and changes
+
+- P2, Live Talk skipped the rule. A spoken request goes to `POST /bots/:id/talk/ask`, which the
+  server submits like a typed message, but never called `supersedePrefetch()`. `use-talk.ts` now
+  calls it in the `ask` callback before the request leaves; the payload and abort signal are
+  unchanged.
+- P2, an older read's body could overwrite a newer cached one. Two reads of the same path both
+  awaiting their bodies, the newer one's ending first and the older one's in the same turn, both
+  wrote the response cache before the newer read's caller could abort the prefetch. `api()` in
+  `src/client-api.ts` now numbers each request as it starts, and each cache entry keeps the number
+  of the read that last vouched for its body. `remember()` refuses a body from a read that started
+  before the one the entry holds. The rule knows nothing about prefetching.
+- The cache cases it touches: a 304 answered from memory, and a 200 whose text matches the cached
+  body, both vouch for the body as of their own start, so each re-stores the entry with its own
+  number and returns the same object as before. The 304 path no longer checks that the entry is
+  still the one it started with; the order rule decides instead, so a later-started 304 now
+  restores its body over an earlier-started read that landed first. Sign-out still clears every
+  entry and bumps the scope, so an in-flight read writes nothing. The count and size limits run
+  after the order check, unchanged.
+- README: the linked chat paragraph names Live Talk and the cache order rule.
+
+### Other requests that submit to a chat
+
+| Request | Caller | Result |
+| --- | --- | --- |
+| `POST /bots/:id/messages` | `sendMessage()`: composer send and retry, turn retry, form reply | already covered |
+| `POST /bots/:id/talk/ask` | `use-talk.ts` | fixed this round |
+| `POST /bots/:id/steer` | no web caller; the composer steers through `/messages` | nothing to change |
+| `POST /bots/:id/requests/:approvalId` | clarify answers in `AttentionCard.tsx` | left as decided last round: not a send |
+| `POST /bots/:id/approvals/:approvalId`, `POST /push/actions` | approval cards, the worker's notification actions | left: not a send; the worker has no page state |
+| `POST /bots/:id/stop` | Stop | left: not a send |
+| `POST /routines/:id/run` | "Try once" in `RoutineEnhancements.tsx` | left: the run's output arrives later as a delivery, like any reply, so retiring at start would not cover it; the change stream reads it |
+| `POST /bots/:id/automation/goal/resume`, `.../tasks/:taskId/actions` | `AutomationPanel.tsx` | left: same as a routine run |
+| `POST /groups/:id/messages` | `GroupChats.tsx` | not a prefetched path; only `/bots/:id/conversation` is prefetched |
+| Main assistant's Ask | `CommandPalette.tsx` | puts text in a draft; sends nothing |
+
+### Red before the fix
+
+On `32b9bd0` plus the new tests, with the source change reverted:
+
+- `npx vitest run tests/client-api.test.ts`: 8 failed. Five of the six finishing orders of three
+  overlapping reads failed, for example order 2, 1, 0 with "expected 1 to be 2"; order 0, 1, 2
+  passes on both. A later-started 304 in both orders and a later-started same body landing first
+  failed, for example "expected { day: 'older' } to be { day: 'kept' }".
+- `npx vitest run tests/conversation-prefetch.test.ts`: "keeps the newer read's page cached when an
+  older prefetch's body ends just after it", built on real `Response` bodies from
+  `ReadableStream`, failed with "expected 'Older' to be 'Newer'".
+- `npx vitest run tests/talk-ui.test.ts` with the Talk call removed: "retires the chat's
+  prefetched page before a spoken request leaves" failed with "expected Promise{…} to be
+  undefined".
+
+### Mutants
+
+Each line was broken by hand, the focused file run, and the source restored.
+
+| Mutation | Result |
+| --- | --- |
+| Order check in `remember()` removed | failed: 5 finishing orders, both "…finishing in the order [ 2, 1 ]" |
+| 304 keeps the old identity check beside the order rule | failed: "…answered with a 304 confirmed, finishing in the order [ 1, 2 ]" |
+| 304 re-stores the entry with its old number | failed: both 304 cases |
+| Same body re-stores the entry with its old number | failed: both same-body cases |
+| Talk does not call the rule | failed: "retires the chat's prefetched page before a spoken request leaves" |
+| A finished prefetch stored without checking it is still current | failed: "keeps the newer read's page cached…", at `prefetchedFirstPage` |
+| The rule keeps the entry of a prefetch on its way | failed: the same test |
+
+The last two were the survivors of the second round. The new test holds two settled bodies to one
+turn with real streams, which the second round's fakes could not.
+
+### Checks
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/client-api.test.ts tests/conversation-prefetch.test.ts
+  tests/talk-ui.test.ts tests/linked-chat-ui.test.ts`: 4 files, 75 tests passed.
+- `npm test`: 172 files, 2,690 tests passed.
+- `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
+
+### Not exercised
+
+- A real Live Talk call; the test drives the data channel with a fake peer.
+- Safari, Firefox and an installed iOS web app: not run.
