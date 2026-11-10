@@ -484,6 +484,15 @@ def parsed_result(result):
     return result
 
 
+def turn_extent(row_ids):
+    """A turn's committed rows, or None unless they are a list of row IDs.
+
+    Checked when a completion is saved and again when the stored copy is read, which may be damaged."""
+    if isinstance(row_ids, list) and all(type(row) is int and row > 0 for row in row_ids):
+        return row_ids
+    return None
+
+
 def approval_id(row):
     # The approval's native request ID, which its event identity ends with, lets a notification decide it.
     prefix = f"{row[3]}:approval:"
@@ -985,12 +994,14 @@ class Bridge:
         """Bind the receipt this thread's turn claimed to the prompt row its completion reports.
 
         Only a turn that claimed the receipt at its start binds it, once, and only an unbound
-        receipt: Hermes's own answer to prompt.submit names the row whenever it staged one.
+        receipt: Hermes's own answer to prompt.submit names the row whenever it staged one, and
+        that row stays even when the turn could not adopt it and reports a row of its own.
         Every other completion, such as another client's turn, a queued or redirected send's
         neighbor, a resumed turn or a goal continuation, binds nothing.
 
         The same completion lists every committed row of the turn (``persisted_turn.row_ids``),
-        kept as the receipt's turn: a steer is bound later only to a row inside it.
+        kept as the receipt's turn: a steer is bound later only to a row inside it. A value that is
+        not a list of row IDs keeps no turn.
         """
         claim = self.turn_claim.get()
         if claim is None or claim["sid"] != sid or claim["used"]:
@@ -1000,7 +1011,8 @@ class Bridge:
         row_id, row_ids = persisted.get("user_row_id"), persisted.get("row_ids")
         if type(row_id) is not int:
             return
-        extent = json.dumps(row_ids) if isinstance(row_ids, list) else None
+        extent = turn_extent(row_ids)
+        extent = None if extent is None else json.dumps(extent)
         with self.journal.lock, self.journal.db:
             self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
@@ -1431,12 +1443,20 @@ class Bridge:
         has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
         only when exactly one user row inside those rows holds its words, no receipt holds that
         row, and no other receipt of the run, bound or not, sent the same words.
-        Anything else leaves it unbound and its row shows unattributed. Callers hold journal.lock.
+        Anything else leaves it unbound and its row shows unattributed. Known limit: a native
+        client's identical words in the same turn can still take the steer's place, because
+        Hermes names no steer's row (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
         """
         journal = self.journal
         steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
         for request_id, text, run_id, extent in steers:
-            extent = set(json.loads(extent))
+            try:
+                extent = turn_extent(json.loads(extent))
+            except ValueError:
+                continue
+            if extent is None:
+                continue
+            extent = set(extent)
             found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
                      and message["row_id"] in extent and message.get("text") == text]
             # The root's own row is held by the root's receipt, so the second test also excludes it.
