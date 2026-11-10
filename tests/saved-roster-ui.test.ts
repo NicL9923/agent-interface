@@ -425,6 +425,55 @@ describe("the saved home held in memory", () => {
   });
 });
 
+// The saved home is drawn before bootstrap answers, so it is the account's screen a page can leave with.
+describe("the saved home in the back-forward cache", () => {
+  const html = document.documentElement;
+  const covered = () => html.hasAttribute("data-account-covered");
+  const transition = (type: "pagehide" | "pageshow") =>
+    act(async () => { window.dispatchEvent(new PageTransitionEvent(type, { persisted: true })); });
+  let setAppBadge: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    setAppBadge = vi.fn(async () => {});
+    Object.defineProperties(navigator, { setAppBadge: { configurable: true, value: setAppBadge }, clearAppBadge: { configurable: true, value: vi.fn(async () => {}) } });
+  });
+  afterEach(() => { for (const name of ["setAppBadge", "clearAppBadge"]) Reflect.deleteProperty(navigator, name); });
+
+  it("has the plain title and no badge, is covered as the page leaves, and comes back as it was with the account unchanged", async () => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    // What the copy should never hold, as the last visit's unread mark and activity, counts for nothing.
+    store(savedRosterKey, { ...savedOne, bots: savedOne.bots.map(bot => ({ ...bot, unread: true, activity: "waiting" })) });
+    await open();
+    const ranch = row("Ranch Hand");
+    expect([document.title, html.dataset.theme]).toEqual(["WildBots", "dark"]);
+    expect(setAppBadge.mock.calls.filter(([count]) => count > 0)).toEqual([]);
+    await transition("pagehide");
+    expect([covered(), document.title, html.dataset.theme]).toEqual([true, "WildBots", "system"]);
+    await transition("pageshow");
+    expect([covered(), document.title, html.dataset.theme]).toEqual([false, "WildBots", "dark"]);
+    expect(row("Ranch Hand")).toBe(ranch);
+    expect(reads("GET /bootstrap")).toHaveLength(1);
+  });
+
+  it("stays covered after another tab signed out meanwhile, until sign-in has replaced it", async () => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    await open();
+    await transition("pagehide");
+    // A frozen page hears no storage events.
+    localStorage.removeItem(savedThemeKey);
+    await signedOutElsewhere(false);
+    let atShow: { covered: boolean; home: boolean } | undefined;
+    window.addEventListener("pageshow", () => { atShow = { covered: covered(), home: showsSavedHome() }; }, { once: true });
+    await transition("pageshow");
+    await advance(0);
+    // The saved home was still in the document when the page showed again, and covered.
+    expect(atShow).toEqual({ covered: true, home: true });
+    expect([covered(), showsSavedHome(), html.dataset.theme]).toEqual([false, false, "system"]);
+    expect(button("Enter local workspace")).toBeDefined();
+  });
+});
+
 describe("the first answer that refuses the session", () => {
   it("removes the copy, the hint and the theme, and shows sign-in in this tab", async () => {
     signedInAsOne();
@@ -557,6 +606,27 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     expect(reads("POST /auth/logout")).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ logout: true });
     expect(button("Enter local workspace")).toBeDefined();
+  });
+
+  it("signs nobody out when another tab already changed the account, and draws that tab's account instead", async () => {
+    signedInAsOne();
+    store(savedThemeKey, { v: 1, user: "one", theme: "dark" });
+    await open();
+    await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+    // Another tab signed member two in, and its storage event has not arrived.
+    localStorage.removeItem(savedRosterKey);
+    localStorage.removeItem(savedThemeKey);
+    store(signInHintKey, { until: NOW + 60_000, bots: [] });
+    const twoSettled = JSON.stringify({ id: "two-settled", at: NOW, user: "two" });
+    localStorage.setItem(authEpochKey, twoSettled);
+    await act(async () => button("Sign out of this device").click());
+    await advance(0);
+    // Refused before it wrote anything: member two's sign-in stands, and this tab reads it.
+    expect(localStorage.getItem(authEpochKey)).toBe(twoSettled);
+    expect(localStorage.getItem(signInHintKey)).not.toBeNull();
+    expect(showsSavedHome()).toBe(false);
+    await answer("GET /bootstrap?roster=lean", 200, two);
+    expect(railText()).toContain("Garden Helper");
   });
 
   it("is not offered while the app is still connecting", async () => {
