@@ -338,8 +338,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
   };
   type Native = {
     s: Setup;
-    /** Hermes streams text, which its snapshot of the native turn accumulates too. */
-    say(text: string): Promise<void>;
+    /** Hermes streams text, which its snapshot of the native turn accumulates too. `shown` false: it shows nothing yet. */
+    say(text: string, shown?: boolean): Promise<void>;
     /** A change to the turn's structure, then the client's read on its change notice, as the app does. */
     structural(change: () => void): Promise<void>;
     /** Hermes starts a native turn with this prompt: a person's message, or guidance it queued instead of steering in. */
@@ -355,18 +355,20 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
    * The real app through `?inflight=MODE` and the conversation read, with Hermes's frames, saved rows and its snapshot of the
    * native turn (`inflight.user`, `inflight.assistant`) moving as Hermes moves them. The app run `run-2` spans every native turn.
    */
-  async function nativeTurns(mode: string, script: (turn: Native) => Promise<void>) {
+  async function nativeTurns(mode: string, script: (turn: Native) => Promise<void>, prompt?: [Record<string, unknown>, string]) {
     const s = await setup();
     midTurn(s);
+    if (prompt) s.hermes.history[2] = prompt[0];
     const events = await stream(s, s.one, mode);
     await s.get(s.one);
     const changes = () => events.events().filter(([name]) => name === "change").length;
     const turn: Native = {
       s,
-      async say(text) {
+      async say(text, shown = true) {
         s.hermes.inflight.assistant += text;
         s.hermes.frame("message.delta", { text });
-        await events.until(() => live(events.events()).endsWith(text.trim()));
+        if (shown) await events.until(() => live(events.events()).endsWith(text.trim()));
+        else await vi.advanceTimersByTimeAsync(500);
       },
       async structural(change) {
         const before = changes();
@@ -392,7 +394,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         s.hermes.history.push(row(id, "user", text, { app_request_id: requestId, app_run_id: "run-2", app_steering: true }));
       },
     };
-    await turn.begin("Check the barn");
+    await turn.begin(prompt?.[1] ?? "Check the barn");
     await script(turn);
     const read = await s.get(s.one);
     const result = { live: live(events.events()), read, turn: events.turns().at(-1) };
@@ -401,7 +403,12 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
   }
   /** Saved text the person sees, each saved row and the live row once, in order. */
   const shown = (messages: Message[]) => messages.filter(message => message.role !== "tool").map(message => message.text);
-  const cases: { name: string; script: (turn: Native) => Promise<void>; live: string; turn: string[]; shown: string[] }[] = [
+  const pdf = { path: "/uploads/a.pdf", name: "a.pdf", mime: "application/pdf" };
+  /** A hidden prompt Hermes saved for a native turn it started itself, such as a goal continuation. No read shows it. */
+  const hidden = (turn: Native) => turn.s.hermes.history.push(row(5, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }));
+  const cases: { name: string; script: (turn: Native) => Promise<void>; live: string; turn: string[]; shown: string[];
+    /** The native turn's saved prompt row and the prompt Hermes reports for it, in place of "Check the barn". */
+    prompt?: [Record<string, unknown>, string] }[] = [
     {
       // The reviewer's order. Hermes queued the guidance instead of steering it in, so it started a native turn of its own
       // under the same app run, and that turn's live text holds only what it said.
@@ -487,10 +494,69 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       live: "Done.", turn: ["steer-two", "6", "7"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Check the loft", "Checked.", "Loft dry.", "Done."],
     },
+    {
+      // The reviewer's order. The app sent a newline and the reference, which the add-on leaves out of the saved prompt's
+      // text. Hermes strips the whole prompt, so it reports only the reference, with no newline before it.
+      name: "a file sent alone",
+      prompt: [row(3, "user", '\n@file:"/uploads/a.pdf"', { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [pdf] }),
+        '@file:"/uploads/a.pdf"'],
+      async script(turn) {
+        await turn.say("Read it.");
+        await turn.segment(4, "Read it.");
+        await turn.say(" Two pages.");
+      },
+      live: "Two pages.", turn: ["req-2", "4"],
+      shown: ["Fence?", "Fixed.", "", "Read it.", "Two pages."],
+    },
+    {
+      // The reviewer's order. The continuation's prompt is hidden, so the boundary falls back to the last shown prompt, as on
+      // main, and the two "Checked." segments are both stripped from the front of the live text.
+      name: "a hidden continuation that saves what the turn before it saved",
+      async script(turn) {
+        await turn.say("Checked.");
+        await turn.segment(4, "Checked.");
+        await turn.end();
+        hidden(turn);
+        await turn.begin("Continue toward the goal.");
+        // Until it says more, the live "Checked." is the earlier turn's saved one, so nothing shows, as on main.
+        await turn.say("Checked.", false);
+        await turn.segment(6, "Checked.");
+        await turn.say(" Loft dry.");
+      },
+      live: "Loft dry.", turn: ["req-2", "4", "6"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Checked.", "Loft dry."],
+    },
+    {
+      name: "a hidden continuation that saved nothing yet",
+      async script(turn) {
+        await turn.say("Checked.");
+        await turn.segment(4, "Checked.");
+        await turn.end();
+        hidden(turn);
+        await turn.begin("Continue toward the goal.");
+        await turn.say("Loft dry.");
+      },
+      live: "Loft dry.", turn: ["req-2", "4"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Loft dry."],
+    },
+    {
+      // A prompt Hermes reports before it saved it falls back to the last prompt too. The earlier turn's "Checked." does not
+      // match this turn's first words, so stripping stops there. The known gap is a turn whose live text starts with them.
+      name: "a prompt not saved yet, whose reply starts with other words than the turn before",
+      async script(turn) {
+        await turn.say("Checked.");
+        await turn.segment(4, "Checked.");
+        await turn.end();
+        await turn.begin("Check the loft");
+        await turn.say("Loft dry.");
+      },
+      live: "Loft dry.", turn: ["req-2", "4"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Loft dry."],
+    },
   ];
-  describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts }) => {
+  describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts, prompt }) => {
     it.each(["1", "2", "3"])("?inflight=%s and the conversation read show each saved segment once", async mode => {
-      const result = await nativeTurns(mode, script);
+      const result = await nativeTurns(mode, script, prompt);
       expect(result.live).toBe(expected);
       expect(result.read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: expected });
       expect(shown(result.read.messages)).toEqual(texts);

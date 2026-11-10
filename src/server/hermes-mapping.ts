@@ -279,26 +279,42 @@ export function historyRows(sid: string, history: Wire[], files: (row: Wire) => 
   });
   return {messages, starts};
 }
-/** The prompt of the native turn Hermes reports running, `inflight.user`, without the file references its saved text drops. '' for none. */
-export const nativePrompt = (inflight: Wire | undefined): string =>
-  typeof inflight?.user === 'string' ? inflight.user.replace(/(?:\n@file:"(?:[^"\\]|\\.)*")+\s*$/, '').trim() : '';
+// The app sends a prompt's text, then a newline and a quoted reference for each file. The add-on saves the text without them.
+// Hermes strips the whole prompt, so a file sent alone is reported as its references with no newline before the first.
+const trailingFiles = /(?:(?:^|\n)@file:"(?:[^"\\]|\\.)*")+\s*$/;
 /**
- * Where the native turn Hermes is running starts: the index of the last prompt, at or after `from`, whose text is that turn's
- * prompt (`nativePrompt`). Hermes sets the prompt when a native turn starts, from a person's message or from guidance it queued
- * instead of steering in, and keeps it when guidance is steered into the running turn. The turn's live text accumulates from
- * that same start, so the turn's saved messages and the live reply's removal of saved text both start here. -1 when the prompt
- * is not among `messages`, as before Hermes saved it. With no prompt reported, as between native turns, the last prompt.
+ * The prompt of the native turn Hermes reports running, `inflight.user`, as its saved row shows it: trimmed, without the file
+ * references the add-on leaves out. An image sent alone is '', since images are staged and never referenced in the text.
+ * Undefined when Hermes reports no prompt, as between native turns.
  */
-export function turnStart(messages: Message[], prompt: string, from = 0): number {
-  return messages.findLastIndex((message, index) => index >= from && message.role === 'user' && (!prompt || message.text.trim() === prompt));
+export const nativePrompt = (inflight: Wire | undefined): string | undefined =>
+  typeof inflight?.user === 'string' ? inflight.user.replace(trailingFiles, '').trim() : undefined;
+/** The index of the last prompt, at or after `from`, whose text is `prompt` (`nativePrompt`). -1 when none is. */
+export const promptRow = (messages: Message[], prompt: string | undefined, from = 0): number =>
+  prompt === undefined ? -1 : messages.findLastIndex((message, index) => index >= from && message.role === 'user' && message.text.trim() === prompt);
+/**
+ * Where the native turn Hermes is running starts. Hermes sets its prompt when a native turn starts, from a person's message or
+ * from guidance it queued instead of steering in, and keeps it when guidance is steered into the running turn. The turn's live
+ * text accumulates from that same start, so the turn's saved messages and the live reply's removal of saved text both start
+ * at the last prompt with that text (`promptRow`).
+ *
+ * When no shown prompt has it, the last prompt, as on main. A hidden prompt, such as a goal continuation, and one Hermes has
+ * not saved yet look the same here. For a hidden one this is right: its turn's saved segments follow the last shown prompt.
+ * For one not saved yet it is right unless the new turn's live text starts with the same words as a segment the earlier
+ * native turn saved under the same app run, since stripping goes on until a segment does not match. Telling the two apart
+ * needs the add-on to mark where a native turn starts. With no prompt reported, the last prompt too. -1 when there is none.
+ */
+export function turnStart(messages: Message[], prompt: string | undefined, from = 0): number {
+  const matched = promptRow(messages, prompt, from);
+  return matched >= 0 ? matched : messages.findLastIndex((message, index) => index >= from && message.role === 'user');
 }
 /**
  * The running native turn's saved messages in a read's shown messages: from where it starts (`turnStart`) to the end, without
  * the live reply `liveId`. `windowStart` is where the read's own window begins, after the earlier messages a cut window keeps
  * for files and origins, which are never part of a turn. `after` is the message just before the turn, null when the turn starts
- * the whole history, and absent when the read began inside it. Without the turn's prompt in the window, the whole window.
+ * the whole history, and absent when the read began inside it. Without a prompt in the window, the whole window.
  */
-export function turnRows(shown: Message[], prompt: string, liveId: string, windowStart: number, cut: boolean): TurnRows {
+export function turnRows(shown: Message[], prompt: string | undefined, liveId: string, windowStart: number, cut: boolean): TurnRows {
   const saved = shown.at(-1)?.id === liveId ? shown.slice(0, -1) : shown;
   let start = turnStart(saved, prompt, windowStart);
   if (start < 0) start = Math.min(windowStart, saved.length);
@@ -407,14 +423,13 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   // The run ID proves rows belong to this task, and queued follow-ups share it, so only
   // rows after the native turn's prompt count (`turnStart`): guidance steered into the
   // turn keeps its segments, and guidance Hermes queued starts a native turn of its own.
-  // A prompt not saved yet has no saved rows. Without a run ID, nothing is removed.
+  // A prompt no shown row has falls back to the last prompt, as on main. Without a run ID, nothing is removed.
   const run = active && typeof value.app_run_id === 'string' ? value.app_run_id : undefined;
   const prompt = nativePrompt(inflight);
-  const start = turnStart(rows, prompt);
   // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
-  // the saved turn too, unless the snapshot names a prompt not saved yet.
-  const savedPrompt = !prompt || start >= 0;
-  const lastTurn = savedPrompt ? rows.slice(start + 1).filter(row => row.role === 'assistant') : [];
+  // the saved turn too, unless the snapshot names a prompt no shown row has.
+  const savedPrompt = !prompt || promptRow(rows, prompt) >= 0;
+  const lastTurn = rows.slice(turnStart(rows, prompt) + 1).filter(row => row.role === 'assistant');
   const persisted = run ? lastTurn.filter(row => row.runId === run) : !active && savedPrompt ? lastTurn : [];
   const text = unseen(inflight.assistant || (active ? state?.text : undefined), persisted.map(row => row.text));
   const reasoning = unseen(typeof inflight.reasoning === 'string' ? inflight.reasoning : active ? state?.reasoning : undefined,

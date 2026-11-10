@@ -334,14 +334,49 @@ describe("turn reads for streams that follow turns", () => {
 });
 
 describe("the live reply's saved text", () => {
-  // Hermes names the native turn's prompt before it saved it. Nothing saved belongs to that turn yet, so the earlier
-  // native turn's "Checked." under the same app run is not this turn's, though its live text starts the same.
-  it("removes nothing while the native turn's prompt is not saved", async () => {
+  // Hermes names the native turn's prompt before it saved it. No saved row matches, so the boundary falls back to the last
+  // prompt, as on main. That is the one known gap: the earlier native turn's "Checked." under the same app run is stripped
+  // from this turn's live text when it starts with the same words. Closing it needs the add-on to mark a native turn's start.
+  it("falls back to the last prompt while the native turn's prompt is not saved", async () => {
     midTurn();
     saveSegment(4, "Checked.");
     Object.assign(hermes, { inflight: { user: "Check the loft", assistant: "Checked. Loft" } });
     const read = await runtime.conversation("shared", { window: { turns: 20 } });
-    expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Checked. Loft" });
+    expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Loft" });
+  });
+  // The fallback is the last shown prompt, not the app run's first: queued guidance started a native turn of its own under the
+  // same run, and the earlier turn's "Barn is dry." would stop stripping before either "Checked.".
+  it("falls back to the last shown prompt for a hidden one, so the turn before it in the same run is not stripped", async () => {
+    midTurn();
+    saveSegment(4, "Barn is dry.");
+    hermes.history.push(row(5, "user", "Check the loft", { app_request_id: "steer-2", app_run_id: "run-2", app_steering: true }));
+    saveSegment(6, "Checked.");
+    hermes.history.push(row(7, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }));
+    saveSegment(8, "Checked.");
+    Object.assign(hermes, { inflight: { user: "Continue toward the goal.", assistant: "Checked. Loft dry." } });
+    const read = await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Loft dry." });
+  });
+  // How the add-on saves a prompt's text and how Hermes reports it differ by form. Guidance steered in place after a saved
+  // segment makes the match matter: the last prompt is the guidance, so only the turn's own prompt strips "Read it.".
+  const pdf = { path: "/uploads/a.pdf", name: "a.pdf", mime: "application/pdf" };
+  const other = { path: "/uploads/b two.pdf", name: "b two.pdf", mime: "application/pdf" };
+  const photo = { path: "/uploads/c.png", name: "c.png", mime: "image/png" };
+  it.each([
+    // The app sends text, a newline and the references; the add-on saves the text, and Hermes strips the whole prompt.
+    ["a file sent alone", '\n@file:"/uploads/a.pdf"', "", [pdf], '@file:"/uploads/a.pdf"'],
+    ["text with spaces around it and two files", ' Read these \n@file:"/uploads/a.pdf"\n@file:"/uploads/b two.pdf"', " Read these ", [pdf, other],
+      'Read these \n@file:"/uploads/a.pdf"\n@file:"/uploads/b two.pdf"'],
+    // Images are staged, never referenced in the text, so an image sent alone is an empty prompt, not a missing one.
+    ["an image sent alone", "@image:/uploads/c.png", "", [photo], ""],
+  ])("finds the native turn's prompt for %s, so a segment saved before a steer shows once", async (_name, text, display, files, reported) => {
+    midTurn();
+    hermes.history[2] = row(3, "user", text, { app_request_id: "req-2", app_run_id: "run-2", app_display_text: display, app_attachments: files });
+    saveSegment(4, "Read it.");
+    hermes.history.push(row(5, "user", "Summarize it", { app_request_id: "steer-2", app_run_id: "run-2", app_steering: true }));
+    Object.assign(hermes, { inflight: { user: reported, assistant: "Read it. Two pages." } });
+    const read = await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Two pages." });
   });
 });
 
@@ -354,9 +389,9 @@ describe("turnRows", () => {
     ["guidance steered into it", "u2", { after: "a1", messages: shown.slice(2, 6) }],
     ["guidance Hermes queued as a native turn of its own", "s1", { after: "a2", messages: shown.slice(5, 6) }],
     // Between native turns Hermes names none, and the live text has been cleared.
-    ["no prompt reported", "", { after: "a2", messages: shown.slice(5, 6) }],
-    // Before Hermes saved the prompt, the window is all the read can say.
-    ["a prompt not saved yet", "u3", { after: null, messages: shown.slice(0, 6) }],
+    ["no prompt reported", undefined, { after: "a2", messages: shown.slice(5, 6) }],
+    // Before Hermes saved the prompt, or for a hidden one, the last prompt, as on main.
+    ["a prompt not saved yet", "u3", { after: "a2", messages: shown.slice(5, 6) }],
   ])("starts at the native turn's prompt with %s, keeps progress lines, and leaves out the live reply", (_name, prompt, rows) => {
     expect(turnRows(shown, prompt, "live-inflight", 0, false)).toEqual(rows);
   });
