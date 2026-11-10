@@ -148,20 +148,26 @@ each row says "Shared assistant" or "Personal assistant" in place of its latest 
 chat names its members, and no row is marked unread or busy. Account, Search, New, row menus and
 the main assistant suggestion wait for bootstrap. A tap on an assistant opens its chat once
 bootstrap answers, and starts reading it at the tap as a linked chat does; Today and group chats
-open once bootstrap answers. Bootstrap's answer redraws the same rows in place, so scroll and
+open once bootstrap answers, and read nothing before. The saved home is the account's screen too:
+it shows the plain title and no app badge, and the back-forward cache covers it as it does the
+rest. Bootstrap's answer redraws the same rows in place, so scroll and
 focus stay, and the saved group chats stay until the group list answers, except a group chat with
 an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
 fails. The copy belongs to one account: it is drawn only while the sign-in record names that
 account, read once per account generation (see Accounts in one browser below), so every change
 of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
 off the page, and it is removed with the sign-in record, so a second member never sees the
-first's home. Every field is checked as the server would accept it, and every name and list has
-a bound; a copy past one, a stored value over 200,000 characters, one this release cannot read,
+first's home. Every field is checked as the server would accept it: assistant, section and group
+chat names take the server's own bounds, and the account's and group members' names, which the
+server does not bound, a generous one. A copy past any bound, a stored value over 200,000 characters, one this release cannot read,
 or storage that fails falls back to the welcome screen. When the first check fails, the saved
 home offers **Sign out of this device**: it signs out at once in every tab, removes this device's
 copy, sign-in record and theme, and shows sign-in. Since the server could not be reached, the
 account record notes that the server's session may still be live; until it is ended there, which
-the sign-in screen does as soon as the server answers, nothing reads as that account. See
+the sign-in screen does as soon as the server answers, nothing reads as that account. That note is
+written, and found in storage, before anything is removed. If storage refuses it or does not keep
+it, the record goes back, the copies stay, and the saved home says the sign-out could not be
+completed on this device. See
 `src/app/saved-roster.ts`.
 
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
