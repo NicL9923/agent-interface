@@ -584,7 +584,8 @@ describe("conversation state", () => {
     });
     expect(container.textContent).toContain("Old tail");
     conversation = { ...conversation, activity: { state: mode === "done" ? "done" : "thinking", runId: mode === "done" ? "run" : "next-run" }, messages: [{ id: "saved", role: "assistant", text: "Persisted reply" }] };
-    await advance(30_000);
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
     expect(container.textContent).not.toContain("Old tail");
     expect(container.textContent).toContain("Persisted reply");
   });
@@ -688,13 +689,26 @@ describe("conversation state", () => {
     expect(container.querySelector<HTMLDialogElement>(".hermes-upgrade-panel")?.open).toBe(false);
   });
 
-  it("does not re-render the app when bootstrap and conversation polls are unchanged", async () => {
+  it("does not re-render the app when bootstrap and conversation reads find nothing new", async () => {
     await render();
+    // Live streams: each greets as it connects and is up once it pings again 10 seconds later.
+    await act(async () => { for (const stream of FakeEventSource.streams) { stream.connect(); stream.emit("ping", "10"); } });
+    await advance(10_000);
+    await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
     await advance(2000);
     const settled = renders.avatar;
     expect(settled).toBeGreaterThan(0);
-    await advance(90_000);
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length).toBeGreaterThanOrEqual(3);
+    const bootstraps = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length;
+    const before = bootstraps();
+    // Six minutes of live streams, as a server that pings every 10 seconds keeps them: the bootstrap
+    // fallback reads once, and a change notice reads the conversation.
+    for (let tick = 0; tick < 36; tick++) {
+      await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
+      await advance(10_000);
+    }
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    expect(bootstraps()).toBeGreaterThan(before);
     expect(renders.avatar).toBe(settled);
   });
 

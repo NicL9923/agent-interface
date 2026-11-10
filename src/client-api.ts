@@ -213,6 +213,12 @@ const withPing = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ping
 export type StreamOptions = {
   /** The jitter's random source, in [0, 1). Tests pin it; the app uses Math.random. */
   random?: () => number;
+  /**
+   * Hears whether the stream is live: true once a connection proves itself with data well after its
+   * headers, as for resetting the backoff, false from each connect or failure until then and while a
+   * resumed stream waits for its retry, and undefined once closed or suspended. Opening alone never counts: a replacement that sends its headers and then nothing is down.
+   */
+  onHealth?: (up: boolean | undefined) => void;
 };
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
@@ -244,6 +250,12 @@ export type StreamOptions = {
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
   onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
   const random = options.random ?? Math.random;
+  let health: boolean | undefined;
+  const report = (up: boolean | undefined) => {
+    if (health === up) return;
+    health = up;
+    options.onHealth?.(up);
+  };
   let source: EventSource | undefined;
   // When this connection opened (was created, until its headers arrive), the moment its silence counts
   // from, and the interval its pings name.
@@ -276,6 +288,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       // A forced attempt can prove itself before the retry it beat was due.
       retryAt = 0;
       forcedNext = 0;
+      report(true);
     }
     if (deadline() < due) arm(deadline(), check);
   };
@@ -299,21 +312,27 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (deadline() <= due) fail();
     else arm(deadline(), check);
   };
-  /** Closes the connection and its timer. The retry budget stays, so this is also `suspend`. */
+  /** Closes the connection and its timer. */
   const drop = () => {
     clearTimeout(timer);
     timer = undefined;
     source?.close();
     source = undefined;
   };
+  /** Pauses the stream, as `drop` does, keeping the retry budget. A paused stream reports no health. */
+  const suspend = () => {
+    drop();
+    report(undefined);
+  };
   const fail = () => {
     drop();
+    report(false);
     failures++;
     retryAt = Date.now() + retryDelay(failures, random);
     arm(retryAt, connect);
   };
   const close = () => {
-    drop();
+    suspend();
     failures = 0;
     retryAt = 0;
     forcedNext = 0;
@@ -325,8 +344,10 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   const open = () => {
     if (typeof EventSource === "undefined" || source || timer) return;
     if (revived) { reconnect(); return; }
-    if (Date.now() >= retryAt) connect();
-    else arm(retryAt, connect);
+    if (Date.now() >= retryAt) { connect(); return; }
+    // Resumed mid-outage: down while it waits, as it would be had it connected and failed again.
+    arm(retryAt, connect);
+    report(false);
   };
   const force = () => {
     forcedNext = Date.now() + FORCED_GAP_MS / 2 + FORCED_GAP_MS / 2 * random();
@@ -336,7 +357,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (typeof EventSource === "undefined") return;
     // A hidden page or an offline device holds no stream. The signal waits for the next `open`.
     if (document.visibilityState === "hidden" || navigator.onLine === false) {
-      drop();
+      suspend();
       revived = true;
       return;
     }
@@ -363,6 +384,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
     pingMs = DEFAULT_PING_MS;
     recovered = graced = false;
+    report(false);
     arm(deadline(), check);
     // Only the stream this one opened last speaks for it: a replaced one's late events change nothing.
     const on = (name: string, handle: (data: string) => void) =>
@@ -403,7 +425,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       onChange();
     });
   };
-  return { open, suspend: drop, close, reconnect };
+  return { open, suspend, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {

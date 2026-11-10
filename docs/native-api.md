@@ -356,8 +356,11 @@ previews. The server evaluates the cheap roster at most once per second and
 notifies each viewer only when their visible roster changes. Private activity
 does not notify other household members. Clients fetch on open; there is no
 initial roster notice. The stream pings every 25 seconds, or 10 with `?ping=10`, and ends on sign-out. Refresh on
-reconnect and foreground as well. A 45-second bootstrap poll covers missed
-notices and changes made outside this app. The server shares one read of the
+reconnect and foreground as well. A bootstrap poll covers missed notices and
+changes no stream announces, such as preferences saved on another device. The iOS
+app reads bootstrap every 45 seconds. The web client reads it every 45 seconds
+while its household stream is down, and every 5 minutes while the stream is live,
+since that stream announces roster changes and Hermes outages. The server shares one read of the
 assistant list, capabilities and connection status among bootstraps for 1.5
 seconds, so many devices answering one notice cost one Hermes round trip. It drops
 that read when this app writes an assistant, a routine, an integration, a Hermes
