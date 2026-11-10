@@ -259,3 +259,67 @@ alone. A future cleanup without a fence of its own is what the separate commit i
 - A dropped push shows no notification. Chrome may show its own "updated in the background"
   notice for one, and Safari revokes a subscription after three; outside a change under way, the
   subscription is one the browser already ended.
+
+## Third round: the Grok 4.7 review of `58307d5`
+
+`origin/main` at `e7cd5ac` merged in first, as `8b7e374`, with no conflict.
+
+### Changes
+
+- A push already inside `showNotification` when a page says another account, or none, is not
+  listed yet, so `setAccount` closed nothing and member one's notification and badge stayed. The
+  push handler now reads the account again once its notification is on screen; if that account
+  left, it closes the notifications `mayShow` refuses and clears the badge the push set.
+  `readAccount` follows a newer `ACCOUNT` message while it waits, instead of the promise it began
+  with. The test fake lists a notification only once `showNotification` resolves, and can hold
+  it on its way.
+- The address belonged to "a generation a bootstrap drew", and was reset at the next start
+  whatever came next. It now belongs to the account the record named when the generation
+  started, or the account its bootstrap named since, and the next settled record resets it unless
+  it names that same account.
+
+| Case | Before | Now |
+| --- | --- | --- |
+| Same account put back by another tab's failed sign-in | reset to `/`, chat and fragment lost | kept |
+| Another account settles | reset | reset |
+| Sign-out, here or in another tab | reset | reset |
+| Address opened while signed out, then a sign-in here or in another tab | kept | kept |
+| Connecting screen, record names member one, then sign-out or another account | kept | reset |
+| Page opened during another tab's change, which then settles elsewhere | kept | reset |
+
+- Finding 4: on this branch the online sign-out already ends the push subscription, on the server
+  and in the browser, through `notifications.disable()` before `signOutOf` (`src/App.tsx`, as on
+  `main`). This branch has no offline sign-out, so nothing changes here; see the saved-roster
+  ledger.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .`: pass. `npm test`: 193 files, 3250 tests.
+`npm run build`: pass. `npm run test:e2e`: 23 passed.
+
+### Red runs
+
+Each line broken by hand, the suite run, the line restored.
+
+| Mutation | Result |
+| --- | --- |
+| Push not checked again once shown | failed: the held-show sign-out test |
+| Badge not cleared for a late push | failed: the held-show sign-out test |
+| Late push closes whatever the account | failed: the same-account held-show test and the badge test |
+| `readAccount` returns the promise it began with | failed: the in-flight read test |
+| Same-account comparison removed (`!!before`) | failed: the failed-sign-in test |
+| A start takes no account from the record | failed: both connecting-screen tests |
+| `location.hash ||` removed from the reset | failed: the fragment-alone test |
+| The page that opens during a change takes no account | failed: the opened-during-a-change test |
+| The waiting start overwrites a signed-out address (`??=`) | failed: the other-tab sign-in test |
+| A bootstrap's account not recorded | failed: the unnamed-record test |
+| This branch's account-epoch.ts before the change | five new tests failed |
+
+The `??=` row was a bug in the first draft of this change, which the mutation found: a page on
+sign-in would have lost an address opened while signed out when another tab signed in.
+
+### Not exercised
+
+- A real push service: the late notification is checked in the worker run in a vm, as before.
+- A bootstrap that names another account than the record without a change this browser saw keeps
+  its generation, and its address, as before. Only storage that refuses writes reaches it.
