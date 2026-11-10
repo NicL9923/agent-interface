@@ -12,6 +12,7 @@ import contextvars
 import datetime
 import hashlib
 import json
+import math
 import logging
 import os
 import sqlite3
@@ -131,7 +132,7 @@ class Journal:
             self.db.execute("ALTER TABLE receipts ADD COLUMN input_text TEXT")
         if "steering" not in columns:
             self.db.execute("ALTER TABLE receipts ADD COLUMN steering INTEGER NOT NULL DEFAULT 0")
-        for column in ("stored_session", "attachments", "admission_response"):
+        for column in ("stored_session", "attachments", "admission_response", "turn_rows"):
             if column not in columns:
                 self.db.execute(f"ALTER TABLE receipts ADD COLUMN {column} TEXT")
         if "artifacts" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
@@ -484,6 +485,15 @@ def parsed_result(result):
     return result
 
 
+def turn_extent(row_ids):
+    """A turn's committed rows, or None unless they are a list of row IDs.
+
+    Checked when a completion is saved and again when the stored copy is read, which may be damaged."""
+    if isinstance(row_ids, list) and all(type(row) is int and row > 0 for row in row_ids):
+        return row_ids
+    return None
+
+
 def approval_id(row):
     # The approval's native request ID, which its event identity ends with, lets a notification decide it.
     prefix = f"{row[3]}:approval:"
@@ -578,6 +588,14 @@ class Bridge:
         self.reads = ReadQueue(READ_WORKERS)
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
+        # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
+        # to the turn it starts for that prompt, and only to that turn first, so the turn that ran a
+        # receipt's prompt is known by it. Native ID -> (session, receipt request ID, text).
+        self.turn_requests = {}
+        self.turn_requests_lock = threading.Lock()
+        # The receipt whose prompt this thread's native turn runs, or None. Set around Hermes's
+        # _run_prompt_submit, whose turn thread runs with a copy of the caller's context.
+        self.turn_claim = contextvars.ContextVar("agent_interface_turn_claim", default=None)
         self.maintenance_lock = threading.RLock()
         self.maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
         self.keepers = {}
@@ -764,8 +782,8 @@ class Bridge:
 
     # Native seams: tool detail, inline guidance, frames and turn settlement.
 
-    def native(self, method, params):
-        response = self.server.handle_request({"jsonrpc": "2.0", "id": "extension-native", "method": method, "params": params})
+    def native(self, method, params, rid="extension-native"):
+        response = self.server.handle_request({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         if "error" in response:
             raise NativeResponseError(response["error"])
         return response["result"]
@@ -888,7 +906,7 @@ class Bridge:
 
     def install_inline_guidance(self):
         # Add client rendering guidance at model-call time, without changing SOUL,
-        # persisted user text, receipt digests, image recovery, or steering matches.
+        # persisted user text, receipt digests, or steering matches.
         server = self.server
         self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
         # Said on every app turn, because a model skips a one-time rule about half the time. Hermes shows the line
@@ -916,6 +934,65 @@ class Bridge:
                 return self.with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args,
                                                  guidance_profile=self.live_profile_for(sid), **kwargs)
             server._run_prompt_submit = run
+
+    def claim_turn(self, rid, sid, text, display_kind, author):
+        """The receipt a native turn starting under request ID ``rid`` runs the prompt of, or None.
+
+        Hermes's prompt.submit hands its own request ID to the turn it starts. A queue drain or a
+        goal continuation started after that turn reuses the same ID for a turn that runs another
+        prompt, so an ID names a receipt once, for the first turn that starts with it. That turn
+        must also run exactly the text the receipt sent, unmarked: anything else is not the
+        receipt's prompt, and the receipt stays unbound.
+        """
+        if not isinstance(rid, str):
+            return None
+        with self.turn_requests_lock:
+            sent = self.turn_requests.pop(rid, None)
+        if sent is None or sent[0] != sid or sent[2] != text or display_kind is not None or author is not None:
+            return None
+        return {"sid": sid, "request_id": sent[1], "used": False}
+
+    def install_turn_claims(self):
+        server = self.server
+        if not hasattr(server, "_run_prompt_submit"):
+            return
+        original = server._run_prompt_submit
+        def run(rid, sid, session, *args, **kwargs):
+            claim = self.claim_turn(rid, sid, kwargs.get("text", args[0] if args else None), kwargs.get("display_kind"), kwargs.get("turn_author"))
+            # Set even when None: a drain or continuation runs on the thread of the turn that just
+            # finished, and must never pass that turn's receipt to its own.
+            token = self.turn_claim.set(claim)
+            try:
+                return original(rid, sid, session, *args, **kwargs)
+            finally:
+                self.turn_claim.reset(token)
+        server._run_prompt_submit = run
+
+    def bind_turn_row(self, sid, payload):
+        """Bind the receipt this thread's turn claimed to the prompt row its completion reports.
+
+        Only a turn that claimed the receipt at its start binds it, once, and only an unbound
+        receipt: Hermes's own answer to prompt.submit names the row whenever it staged one, and
+        that row stays even when the turn could not adopt it and reports a row of its own.
+        Every other completion, such as another client's turn, a queued or redirected send's
+        neighbor, a resumed turn or a goal continuation, binds nothing.
+
+        The same completion lists every committed row of the turn (``persisted_turn.row_ids``),
+        kept as the receipt's turn: a steer is bound later only to a row inside it. A value that is
+        not a list of row IDs keeps no turn.
+        """
+        claim = self.turn_claim.get()
+        if claim is None or claim["sid"] != sid or claim["used"]:
+            return
+        claim["used"] = True
+        persisted = payload.get("persisted_turn") or {}
+        row_id, row_ids = persisted.get("user_row_id"), persisted.get("row_ids")
+        if type(row_id) is not int:
+            return
+        extent = turn_extent(row_ids)
+        extent = None if extent is None else json.dumps(extent)
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
@@ -970,13 +1047,10 @@ class Bridge:
         event_kind = {"complete": "completed", "error": "failed", "interrupted": "interrupted"}.get(payload.get("status")) if kind == "message.complete" else None
         if frame.get("method") == "approval":
             event_kind = "approval"
-        if sid and kind == "message.complete" and type((payload.get("persisted_turn") or {}).get("user_row_id")) is int:
-            # Image-only admission has no staged row. Native completion provides its
-            # actual committed row identity, without any textual inference.
-            with journal.lock, journal.db:
-                pending = journal.db.execute("SELECT request_id FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND row_id IS NULL ORDER BY created LIMIT 1", (sid,)).fetchone()
-                if pending:
-                    journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (payload["persisted_turn"]["user_row_id"], pending[0]))
+        if sid and kind == "message.complete":
+            # Image-only admission has no staged row. Native completion reports the turn's
+            # committed rows, which bind the receipt only if this turn ran its prompt.
+            self.bind_turn_row(sid, payload)
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
@@ -1036,6 +1110,7 @@ class Bridge:
         self.native_history = server._history_to_messages
         server._history_to_messages = self.detailed_history
         self.install_inline_guidance()
+        self.install_turn_claims()
         self.native_write = server.write_json
         server.write_json = self.write
         self.native_followups = server._run_post_turn_followups
@@ -1272,19 +1347,17 @@ class Bridge:
     def attribute(self, profile, sid, value, rows=None):
         """Bind app receipts, files and tool details to native history rows.
 
-        Returns (messages, journal mutation after binding, whether the result is cacheable).
-        App attribution follows Hermes's durable row identity, never a rewritten body.
-        Read each journal table once per poll, not once per message. Binding only fills
-        a NULL row_id, so the unbound snapshot can only overstate candidates, and only
-        a row ID bound here needs a reread. Callers hold journal.lock, which native
+        Returns (messages, journal mutation after binding). App attribution follows
+        Hermes's durable row identity, never a rewritten body. Read each journal table once
+        per poll, not once per message. The only binding made here is a steer's, from these
+        rows and the journal alone, so a later read of the same rows and journal binds
+        nothing new and the result can be cached. Callers hold journal.lock, which native
         writers also take, so none lands mid-poll. ``rows`` is the session's RowCache, or None.
         """
         journal, server = self.journal, self.server
         stored = value["canonical_stored_session_id"]
         messages = value.get("messages", [])
-        unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, stored)).fetchall()
-        steering_texts = {text for steering, text, _ in unbound if steering}
-        image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
+        self.bind_steers(profile, stored, messages)
         attributed = {}
         for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
@@ -1293,34 +1366,13 @@ class Bridge:
         tool_records = {}
         for record_id, record in self.tool_records(list(calls), rows).items():
             tool_records.setdefault(calls[record_id], []).append(record)
-        rebound = set()
         current_run = None
         for message in messages:
             if message.get("role") == "user":
                 current_run = None
-            if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
-                # Native steering persists a correction later, without an admission row ID.
-                # Pair equal corrections in admission order within this canonical owner.
-                candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, stored, message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
-                if candidate:
-                    with journal.db:
-                        journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
-                    rebound.add(message["row_id"])
-            if message.get("role") == "user" and message.get("row_id") is not None and image_pending:
-                # Recovery for image-only turns completed before this binding hook.
-                # Match the official persisted image-ref representation within the
-                # admitted owner and time window, never arbitrary marker text.
-                candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, stored, float(message.get("timestamp") or time.time()) + 1)).fetchall()
-                for request_id, input_text, raw_attachments in candidates:
-                    images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
-                    if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
-                        with journal.lock, journal.db:
-                            journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
-                        rebound.add(message["row_id"])
-                        break
             if message.get("row_id") is None:
                 row = None
-            elif type(message["row_id"]) is int and message["row_id"] not in rebound:
+            elif type(message["row_id"]) is int:
                 row = attributed.get(message["row_id"])
             else:
                 row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
@@ -1355,7 +1407,52 @@ class Bridge:
                     detail = tool[2]
                     if len(recorded) == 1 and isinstance(detail, dict) and detail.get("name") == message.get("name") and tool[3] == (message.get("args") or {}):
                         message["app_tool_call"] = detail
-        return messages, journal.mutation, not unbound
+        return messages, journal.mutation
+
+    def bind_steers(self, profile, stored, messages):
+        """Bind each unbound steer whose row can only be its own.
+
+        Hermes answers session.steer with no row and no request ID, and writes the steer later as
+        a user row holding its words, beside any other client's correction with the same words
+        (``tui_gateway/methods_session_interrupt.py:114-130`` and ``agent/agent_runtime_helpers.py:3668-3703``
+        at ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn
+        has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
+        only when exactly one user row inside those rows holds its words and was not saved more
+        than a second before the steer was sent, no receipt holds that row, and no other receipt
+        of the run, bound or not, sent the same words. The second is the slack between the
+        add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
+        time cannot be read or compared binds nothing.
+        Anything else leaves it unbound and its row shows unattributed. Known limit: a native
+        client's identical words in the same turn, saved after the steer was sent or within that
+        second, can still take the steer's place, because Hermes names no steer's row
+        (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
+        """
+        journal = self.journal
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        def saved(row_id):
+            # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
+            # zero one as now. None for a time that cannot be read or compared, which binds nothing.
+            stamp = next(message for message in messages if message.get("row_id") == row_id).get("timestamp")
+            try:
+                at = float(stamp or time.time())
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return at if math.isfinite(at) else None
+        for request_id, text, run_id, extent, sent in steers:
+            try:
+                extent = turn_extent(json.loads(extent))
+            except ValueError:
+                continue
+            if extent is None:
+                continue
+            extent = set(extent)
+            found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
+                     and message["row_id"] in extent and message.get("text") == text]
+            # The root's own row is held by the root's receipt, so the second test also excludes it.
+            if len(found) != 1 or (at := saved(found[0])) is None or sent > at + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
+                continue
+            with journal.db:
+                journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (found[0], request_id))
 
     def unrepresented_tool_calls(self, session, messages):
         # Standard native tools flush before completion; Codex can expose
@@ -1432,7 +1529,7 @@ class Bridge:
             self.original_rows(session, value.get("messages", []))
         with journal.lock:
             if cached is None:
-                messages, bound_mutation, cacheable = self.attribute(profile, sid, value, rows)
+                messages, bound_mutation = self.attribute(profile, sid, value, rows)
         # Never acquire history_lock while holding journal.lock: native flushes
         # emit frames under history_lock and the frame hook needs journal.lock.
         after = self.history_identity(session) if not omit else None
@@ -1443,7 +1540,7 @@ class Bridge:
             if cached is None:
                 cache = self.decorated
                 with self.cache_lock:
-                    if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
+                    if not omit and identity is not None and after == identity and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
                         now = time.monotonic()
                         cache[sid] = (identity, journal.mutation, messages, now, now)
@@ -1518,6 +1615,31 @@ class Bridge:
                     images.pop(len(images) - 1 - images[::-1].index(image))
             session["attached_images"] = images
 
+    def turn_request(self, sid, request_id, text):
+        """A request ID of its own for the prompt.submit that carries this receipt's prompt.
+
+        Registered before Hermes is called: the turn can start before the call returns.
+        """
+        native_rid = "agent-interface-submit:" + uuid.uuid4().hex
+        with self.turn_requests_lock:
+            self.turn_requests[native_rid] = (sid, request_id, text)
+        return native_rid
+
+    def turn_started(self, sid, native_rid, streaming):
+        """Hermes answered prompt.submit. Only a started turn can still claim the ID.
+
+        Any other answer, a refusal, a queue, a redirect, starts no turn with this ID. Once a turn
+        starts, the session's earlier unclaimed IDs are dropped so the table stays small: Hermes
+        admits one turn at a time, so their turns either ran or failed to start. Dropping an ID
+        can only leave a receipt unbound, never bind one. Called under submission_lock.
+        """
+        with self.turn_requests_lock:
+            if not streaming:
+                self.turn_requests.pop(native_rid, None)
+                return
+            for key in [key for key, sent in self.turn_requests.items() if sent[0] == sid and key != native_rid]:
+                del self.turn_requests[key]
+
     def submit(self, rid, params):
         server, journal = self.server, self.journal
         request_id = params.get("request_id")
@@ -1582,6 +1704,7 @@ class Bridge:
                     with journal.db:
                         journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
                         return self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
+                native_rid = self.turn_request(sid, request_id, text) if not steering else "extension-native"
                 try:
                     method = "session.steer" if steering else "prompt.submit"
                     native = {"session_id": sid, "profile": profile, "text": text}
@@ -1589,11 +1712,12 @@ class Bridge:
                     # running turn, whose route is already bound, so it carries no voice mark.
                     if params.get("voice_turn") is True and not steering:
                         native["voice_turn"] = True
-                    result = self.native(method, native)
+                    result = self.native(method, native, native_rid)
                 except Exception as exc:
                     # Known native admission refusals happen before invoking or queueing a turn.
                     # Crashes and unrecognized errors may follow side effects, so stay uncertain.
                     if isinstance(exc, NativeResponseError) and exc.refused_admission:
+                        self.turn_started(sid, native_rid, False)
                         self.unstage_images(sid, staged)
                         logging.getLogger(__name__).warning("Native message admission refused with code %s", exc.code)
                         with journal.db:
@@ -1602,6 +1726,8 @@ class Bridge:
                     with journal.db:
                         return self.admitted(rid, request_id, str(exc)[:500])
                 status = "rejected" if result.get("status") == "rejected" else "accepted"
+                if not steering:
+                    self.turn_started(sid, native_rid, result.get("status") == "streaming")
                 with journal.db:
                     journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
                     if interrupted and status == "accepted":
