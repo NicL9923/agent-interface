@@ -210,8 +210,10 @@ when a release changed it.
 - A different shell means a new release. The worker notes that in its own cache, which
   survives the worker being stopped, and runs the update check at once. From the next load
   on it opens the network's shell, with the cached one as the offline fallback, as it did
-  before this change. A person sees the old shell at most once after a deploy, even if the
-  new worker cannot install. The new release's worker starts with a new cache and no note.
+  before this change. So after a deploy the old shell opens until one background check has
+  finished, which is one load in ordinary use, even if the new worker cannot install. Two
+  windows opened before that check finishes both get the old shell. The new release's worker
+  starts with a new cache and no note.
 - A redirect, 401, 403, server error or no network changes nothing. No window reloads and
   the worker stays, so one bad answer never costs a person their work.
 - With no cached shell, as on a first visit or after storage is cleared, the network answers.
