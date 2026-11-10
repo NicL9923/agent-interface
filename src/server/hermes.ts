@@ -29,6 +29,12 @@ const supported = (value: boolean, reason?: string) => ({supported: value,
   ...(!value ? {reason: reason ?? 'The connected Hermes backend does not expose this capability.'} : {})});
 // Frames that only extend a running turn. Anything else changes the conversation's structure.
 const deltaEvents = ['message.delta', 'reasoning.delta', 'thinking.delta', 'tool.generating', 'status.update', 'tool.start'];
+type TurnEventName = 'start' | 'text' | 'end';
+type TurnListener = (botId: string, event: TurnEventName, at?: number) => void;
+// The frames a send is timed by: its turn's start, streamed text or reasoning, and end.
+const turnEvents = new Map<unknown, TurnEventName>([
+  ['message.start', 'start'], ['message.delta', 'text'], ['reasoning.delta', 'text'], ['message.complete', 'end']]);
+const UNOWNED_SESSIONS = 16;
 const settledStates = ['done', 'failed', 'interrupted'];
 // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
 // It stays short: writers outside this socket, such as another gateway process or the CLI, send it no frame.
@@ -105,7 +111,11 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   };
   const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
   // An array, not a Set, so calling them on every token allocates no iterator.
-  const textListeners: ((botId: string) => void)[] = [];
+  const turnListeners: TurnListener[] = [];
+  // Turn events of sessions no assistant owns yet, by session ID. Hermes attaches the socket before it
+  // answers a first open, so an open's answer names the owner later. Only the latest turn is kept, and
+  // the oldest session is forgotten past the limit, so frames for sessions nobody claims stay bounded.
+  const unowned = new Map<string, {start: boolean; text?: number; end: boolean}>();
   const structuralGenerations = new Map<string, number>();
   const structuralGenerationOf = (botId: string) => `${changeEpoch}:${structuralGenerations.get(botId) ?? 0}`;
   const structurallyChanged = (botId: string) => { structuralGenerations.set(botId, (structuralGenerations.get(botId) ?? 0) + 1); };
@@ -153,6 +163,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     disconnected(verified) {
       live.clear();
       owners.clear();
+      unowned.clear();
       descriptions.clear();
       capabilityCache = undefined;
       rosterReuse = undefined;
@@ -207,10 +218,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Opening a conversation attaches this socket to its session, so its frames arrive here.
     const botId = owners.get(sid);
     const delta = frame.method === "event" && deltaEvents.includes(params.type);
-    const text = delta && (params.type === 'message.delta' || params.type === 'reasoning.delta');
-    if (text && textListeners.length) {
-      if (botId !== undefined) streamedText(botId);
-      else for (const pending of opening.keys()) streamedText(pending);
+    const turn = frame.method === 'event' ? turnEvents.get(params.type) : undefined;
+    if (turn !== undefined && turnListeners.length) {
+      if (botId !== undefined) turnEvent(botId, turn);
+      else holdTurnEvent(sid, turn);
     }
     if (botId !== undefined) {
       if (delta && state.state !== previousActivity) rosterChanged();
@@ -221,10 +232,33 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     // Hermes attaches the socket before it answers a first open, so early frames name no assistant yet.
     else for (const pending of opening.keys()) changed(pending, delta && params.type !== 'tool.start' ? "inflight" : undefined);
   }
-  function streamedText(botId: string): void {
-    for (let index = 0; index < textListeners.length; index++) {
-      try { textListeners[index](botId); } catch { /* A listener never stops frame processing. */ }
+  function turnEvent(botId: string, event: TurnEventName, at?: number): void {
+    for (let index = 0; index < turnListeners.length; index++) {
+      try { turnListeners[index](botId, event, at); } catch { /* A listener never stops frame processing. */ }
     }
+  }
+  function holdTurnEvent(sid: string, event: TurnEventName): void {
+    let held = unowned.get(sid);
+    // After the first text frame, a token costs this one lookup.
+    if (event === 'text' && held?.text !== undefined) return;
+    if (held === undefined || event === 'start') {
+      unowned.delete(sid);
+      if (unowned.size >= UNOWNED_SESSIONS) unowned.delete(unowned.keys().next().value!);
+      held = {start: false, end: false};
+      unowned.set(sid, held);
+    }
+    if (event === 'start') held.start = true;
+    else if (event === 'end') held.end = true;
+    else held.text = performance.now();
+  }
+  /** An open named the session's owner. Its held turn events go to that assistant, in order. */
+  function claimTurnEvents(sid: string, botId: string): void {
+    const held = unowned.get(sid);
+    if (held === undefined) return;
+    unowned.delete(sid);
+    if (held.start) turnEvent(botId, 'start');
+    if (held.text !== undefined) turnEvent(botId, 'text', held.text);
+    if (held.end) turnEvent(botId, 'end');
   }
   async function voiceReply(path: string, payload: Wire): Promise<Wire> {
     const response = await http(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)});
@@ -277,7 +311,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     for (const [session, owner] of owners) {
       if (owner === botId && session !== live.get(botId)) owners.delete(session);
     }
-    if (live.get(botId) === value.session_id) owners.set(value.session_id, botId);
+    if (live.get(botId) === value.session_id) {
+      owners.set(value.session_id, botId);
+      claimTurnEvents(value.session_id, botId);
+    }
     if (superseded) {
       supersededOpens.add(value);
       return value;
@@ -1086,11 +1123,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         : state.state;
       return {botId, message, activity: {...saved.activity, state: activity, detail: state.detail ?? saved.activity.detail}, toolCalls: state.tools};
     },
-    watchStreamedText(listener) {
-      textListeners.push(listener);
+    watchTurns(listener) {
+      turnListeners.push(listener);
       return () => {
-        const index = textListeners.indexOf(listener);
-        if (index >= 0) textListeners.splice(index, 1);
+        const index = turnListeners.indexOf(listener);
+        if (index >= 0) turnListeners.splice(index, 1);
+        if (!turnListeners.length) unowned.clear();
       };
     },
     watch(botId, listener) {

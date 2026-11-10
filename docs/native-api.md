@@ -99,21 +99,36 @@ A send answered from its recorded receipt never reaches Hermes and carries only
 `total`. One that Hermes did not answer carries `prepare` and `total`.
 
 Streamed text arrives after the response, so the server logs it instead. For each
-send Hermes accepts, including a spoken Talk request, it writes one `info` line,
-`Send timing`, once the first `inflight` or `inflight-delta` event for that
-assistant is written to any open event stream. Its `sendTiming` field holds
-`route` (`messages`, `steer` or `talk`), `botId`, `requestId`, `steered`, and
-moments counted from the request's arrival: `prepareMs` (the admission call
-began), `admissionMs` (Hermes answered), `firstFrameMs` (the first
-`message.delta` or `reasoning.delta` from Hermes after admission) and
-`firstLiveMs` (the first live event written). Subtract neighbours for the time
-each stage took; `firstLiveMs` is what a person watching an open chat waited.
-A missing `firstFrameMs` means the first live event was a tool or status change.
-With no open stream, or no live event within two minutes, the line is
-`Send timing: no live event before the deadline`, with `firstLiveMs` absent and
-`gaveUpAfterMs`. A steer joins a running reply, so its frame and live event are the
-next growth of that reply, not an answer to the steer. The line never carries
-message text. The app logs at `info` by default ([Hosting](Hosting.md#logs-and-health)).
+send Hermes accepts, including a spoken Talk request, it writes one `info` line
+about the send's own turn. Measuring starts before Hermes is asked, because Hermes
+starts the turn and can stream before it answers. A send binds to the next turn
+Hermes starts for that assistant (`message.start`). A steer, or a send that
+arrives while a turn runs and that Hermes steers, joins the running turn instead,
+so its frame and live event are the next growth of that reply, not an answer to
+the steer. Frames from a session no assistant has opened yet are held by session,
+for the 16 newest such sessions, and credited once an open names the owner. Its `sendTiming` field holds
+`route` (`messages`, `steer` or `talk`), `botId`, `requestId`, `steered`, `ended`,
+and moments counted from the request's arrival: `prepareMs` (the admission call
+began), `admissionMs` (Hermes answered), `firstFrameMs` (the turn's first
+`message.delta` or `reasoning.delta` from Hermes, which can come before
+`admissionMs`) and `firstLiveMs` (the turn's first `inflight` or `inflight-delta`
+event written to any open event stream). Subtract neighbours for the time each
+stage took; `firstLiveMs` is what a person watching an open chat waited.
+
+`ended` says why the line was written:
+
+- `measured`: both `firstFrameMs` and `firstLiveMs` were recorded. A tool or
+  status event that was written first does not end it; the line waits for text.
+- `turn`: the turn ended (`message.complete`). A missing `firstFrameMs` means the
+  turn streamed no text, as a turn that only ran a tool or failed.
+- `next-turn`: a newer turn started and this turn's end was never reported.
+- `deadline`: two minutes passed after admission, with `gaveUpAfterMs`.
+
+The message is `Send timing` when `firstLiveMs` is present, `Send timing: no
+live event before the deadline` at the deadline without one, and `Send timing:
+no live event in its turn` otherwise, as with no open stream. The line never
+carries message text. The app logs at `info` by default
+([Hosting](Hosting.md#logs-and-health)).
 Read the lines on the host with
 `journalctl -u <app service> -o cat | jq -c 'select(.sendTiming) | .sendTiming'`.
 

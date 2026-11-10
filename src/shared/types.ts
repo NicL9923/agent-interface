@@ -537,11 +537,12 @@ export interface Runtime {
   watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
   inflight?(botId: string): Inflight | undefined;
   /**
-   * Calls the listener with the assistant's ID for each streamed text or reasoning frame, so a send can
-   * be timed to its first live text. It runs on every token, so a listener must stay cheap. Unsubscribe
-   * with the returned function.
+   * Calls the listener with the assistant's ID when one of its turns starts, streams text or reasoning,
+   * or ends, so a send can be timed to its own turn's first live text. A frame from a session no
+   * assistant owned yet is reported once an open names its owner, with at, the performance.now() time
+   * it arrived. It runs on every token, so a listener must stay cheap. Unsubscribe with the returned function.
    */
-  watchStreamedText?(listener: (botId: string) => void): () => void;
+  watchTurns?(listener: (botId: string, event: "start" | "text" | "end", at?: number) => void): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
   lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;

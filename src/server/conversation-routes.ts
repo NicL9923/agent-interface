@@ -116,10 +116,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   requireCapability: (key: CapabilityKey) => Promise<void>;
 }) {
   const { config, runtime, store, roster, streams, requireCapability } = collaborators;
-  // Each admitted send is timed to its first streamed text and its first live event on a stream.
+  // Each admitted send is timed to its turn's first streamed text and first live event on a stream.
   const timings = new SendTimings(app.log);
-  const unwatchText = runtime.watchStreamedText?.(botId => timings.frame(botId));
-  app.addHook("onClose", async () => { unwatchText?.(); timings.close(); });
+  const unwatchTurns = runtime.watchTurns?.((botId, event, at) => timings.turn(botId, event, at));
+  app.addHook("onClose", async () => { unwatchTurns?.(); timings.close(); });
   apiRoute(app, "GET /bots/:id/conversation", {}, async (req, _body, reply) => {
     const started = performance.now(), timing: ReadTiming = {};
     // Without a window, as for the native app, the whole history is returned.
@@ -405,17 +405,23 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     if (!intent.created && !reviewedUncertain && !retryInterruption) return intent.receipt;
     if (conversation?.activity.runId)
       for (const userId of new Set([input.senderId, requesterId])) store.participate(conversation.activity.runId, userId);
+    // Measuring starts before Hermes is asked, because Hermes starts the turn and may stream before it answers.
+    const timing = timings.begin(input.botId, input.requestId, phases.arrival, steering);
     try {
       // The voice mark goes only to Hermes. It is not part of the recorded request, so asking again
       // with the same ID never conflicts with a request recorded before Talk carried it.
       phases.hermesStart = performance.now();
-      const receipt = await (steering
-        ? runtime.steer({ ...input, reviewedInterruption })
-        : runtime.submit({ ...input, reviewedInterruption, ...(voice ? { voice: true } : {}) }));
+      let receipt: SubmissionReceipt;
+      try {
+        receipt = await (steering
+          ? runtime.steer({ ...input, reviewedInterruption })
+          : runtime.submit({ ...input, reviewedInterruption, ...(voice ? { voice: true } : {}) }));
+      } catch (error) { timings.discard(timing); throw error; }
       phases.admitted = performance.now();
       if (receipt.status === "accepted")
-        timings.admitted(voice ? "talk" : explicitSteering ? "steer" : "messages", input.botId, input.requestId,
+        timings.admitted(timing, voice ? "talk" : explicitSteering ? "steer" : "messages",
           receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted });
+      else timings.discard(timing);
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
       return receipt;
