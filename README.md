@@ -293,9 +293,9 @@ still win.
 - The chat header lifts with a border and shadow once messages scroll under it. This uses
   scroll-driven animations where the browser supports them.
 - While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
-- While a reply streams, its text appears at a steady pace instead of jumping a line or two at
-  each of the server's updates, up to four a second. Each update is revealed within about a third
-  of a second of arriving, however long it is, with at most 30 paints a second, and a reply
+- While a reply streams, its text appears at a steady pace instead of jumping at each of the
+  server's updates, up to ten a second. Each update is revealed within about a third of a second
+  of arriving, however long it is, with at most 30 paints a second, and a reply
   already under way when the chat opens shows at once. A caret at the text's logical end, right of
   Latin text and left of Arabic or Hebrew, or past the line's end where text of the other direction
   touches that edge with no space, pulses until the reply is saved, and follows a code
