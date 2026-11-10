@@ -282,6 +282,7 @@
   .season-ambience { display: none; }
 }
 
+@keyframes message-send { from { opacity: 0; transform: translateY(14px) scale(0.96); } }
 @keyframes caret-pulse { 50% { opacity: 0.2; } }
 @keyframes tape-in { from { opacity: 0; transform: scale(0.4); } }
 @keyframes tape-settle { 40% { transform: scale(1.18); } }
