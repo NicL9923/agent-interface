@@ -8,6 +8,7 @@ import type { SubmissionReceipt } from "../shared/types";
 import { formReplyKey, localRead, localSave } from "../app/storage";
 import { TranscriptTools } from "../app/ReplyActions";
 import { useReceiptCheck } from "../app/use-receipt-check";
+import { sendMessage } from "../app/conversation-page";
 import { reactAvatar } from "./avatar-attention";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -221,8 +222,8 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
       // same request ID still keeps a second Send from being admitted.
       save({ attempt, answers, state: "checking", requestId: from.id });
       try {
-        settle(from, await request("POST /bots/:id/messages", { params: { id: botId },
-          body: { requestId: from.id, text, attachments: [], ...(tools?.reviewedInterruption && { reviewedInterruption: true }) } }));
+        settle(from, await sendMessage(botId,
+          { requestId: from.id, text, attachments: [], ...(tools?.reviewedInterruption && { reviewedInterruption: true }) }));
       } catch (cause) {
         if (cause instanceof ApiError && cause.code === "submission_conflict") {
           // Another tab or device sent different answers under this attempt's ID. Follow that one.

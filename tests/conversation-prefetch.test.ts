@@ -35,7 +35,14 @@ beforeEach(() => {
   paths = [];
   held = [];
   respond = path => json(path.includes("/conversation") ? page(path.split("/")[3]) : {});
-  vi.stubGlobal("fetch", vi.fn((url: string) => { paths.push(url); return respond(url); }));
+  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit = {}) => {
+    paths.push(url);
+    // As a browser's fetch does, a read stopped on its way rejects.
+    return new Promise<Response>((resolve, reject) => {
+      init.signal?.addEventListener("abort", () => reject(new DOMException("The read was stopped.", "AbortError")), { once: true });
+      respond(url).then(resolve, reject);
+    });
+  }));
   vi.stubGlobal("EventSource", FakeEventSource);
   FakeEventSource.reset();
 });
@@ -191,7 +198,33 @@ describe("opening a chat after a prefetch", () => {
     expect(conversationReads()).toHaveLength(2);
     expect(container.textContent).toBe("First reply");
     await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
-    expect(conversationReads()).toHaveLength(3);
+    // The notice reads the window from its first message, a newer transcript read than the prefetch.
+    expect(conversationReads().at(-1)).toBe("/api/bots/barn/conversation?start=barn-1");
+  });
+
+  // The open chat reads for itself while an older prefetch of it is still out. Its read is newer, so
+  // the prefetch may neither answer the chat's next first load nor land in the cache over it.
+  it("drops a prefetch still on its way when a newer read of the chat completes", async () => {
+    respond = path => path.includes("/conversation") ? hold() : json({});
+    const { prefetchFirstPage, prefetchedFirstPage } = await import("../src/app/conversation-page");
+    const container = await open();
+    held[0](new Response(JSON.stringify(page("barn", "Opened")), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    prefetchFirstPage("barn");
+    expect(prefetchedFirstPage("barn")).toBeDefined();
+    await act(async () => { FakeEventSource.notifyAll(); await vi.advanceTimersByTimeAsync(0); });
+    // The notice reads the window from its first message, a newer transcript read than the prefetch.
+    expect(conversationReads().at(-1)).toBe("/api/bots/barn/conversation?start=barn-1");
+    held[2](new Response(JSON.stringify(page("barn", "Newer")), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(container.textContent).toBe("Newer");
+    expect(prefetchedFirstPage("barn")).toBeUndefined();
+    held[1](new Response(JSON.stringify(page("barn", "Older")), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(prefetchedFirstPage("barn")).toBeUndefined();
+    // The first page's cache keeps the chat's own read, not the stopped prefetch's older one.
+    expect(cachedResponse<{ messages: { text: string }[] }>(firstPage("barn"))?.messages[0].text).toBe("Opened");
   });
 
   it("reads again itself when the prefetch fails", async () => {

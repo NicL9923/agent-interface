@@ -87,7 +87,10 @@ last check. The app then shows what it shows today: the sign-in screen, or its n
 the assistant is no longer available. The read is tagged with the account the record names,
 and the chat shows it only if the sign-in check answers as that same account and no other
 tab has signed out or in meanwhile; otherwise the chat reads again. Only the chat's first
-load uses the early read: its change stream and later loads always read fresh. The browser
+load uses the early read: its change stream and later loads always read fresh. A send to
+the chat, or any read of it that finishes, retires an early or hover read made before it,
+even one still on its way, so returning to the chat within seconds never shows a page from
+before. The browser
 keeps only the lapse time, the account ID and the chat IDs, in
 `agent-interface:sign-in-hint`, and drops them at sign-out, a refused session, or a check
 that finds another account. A link to a message, Today or a group chat waits for the check

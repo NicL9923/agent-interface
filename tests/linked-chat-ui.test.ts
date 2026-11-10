@@ -9,7 +9,7 @@ import { SESSION_MAX_AGE_MS } from "../src/shared/session";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { quietConsoleErrors } from "./act-guard";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, button, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 // The app runs whole, through the real client API, against a fake server at fetch. A request the
 // test did not configure is recorded and refused, and the test fails on it after it ends.
@@ -91,6 +91,10 @@ beforeEach(() => {
       "GET /mac/devices": { available: false, reason: "Not in this test.", devices: [] },
     };
     if (call in empty) return respond({ status: 200, body: empty[call] });
+    // A send Hermes takes, and the draft saves around it.
+    if (/^POST \/bots\/[^/]+\/messages$/.test(call))
+      return respond({ status: 200, body: { requestId: JSON.parse(String(init.body)).requestId, status: "accepted" } });
+    if (/^PUT \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: { revision: 1 } });
     if (/^GET \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: null });
     if (/^GET \/bots\/[^/]+\/routine-runs$/.test(call)) return respond({ status: 200, body: { runs: [], unavailable: [] } });
     // Reading reports and sign-in and out, which these tests do not inspect.
@@ -290,5 +294,43 @@ describe("what this browser remembers about its sign-in", () => {
     await open("/");
     await answerBootstrap(bootstrap);
     expect(hint()).toBeNull();
+  });
+});
+
+describe("returning to a chat", () => {
+  const row = (name: string) => [...container.querySelectorAll<HTMLButtonElement>("button.bot-item")].find(item => item.textContent?.includes(name))!;
+  const empty: Conversation = { ...page("ranch", ""), messages: [] };
+
+  const sent: Conversation = { ...empty, messages: [{ id: "ranch-2", role: "user", text: "Shut the north gate" }] };
+
+  // An empty chat is read early and opened from that read, then sent to. Back within the five
+  // seconds a finished prefetch is joinable, the chat must not take that read again: neither after
+  // a fresh read showed the message, nor when the person left before any read landed.
+  it.each([
+    ["after the chat read the transcript that holds it", true],
+    ["when the person left before any read landed", false],
+  ])("shows the person's message on return, never a page read before they sent it, %s", async (_name, readFirst) => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
+    await open("/?bot=ranch");
+    await answerChat("ranch", empty);
+    await answerBootstrap(bootstrap);
+    expect(conversationReads()).toHaveLength(1);
+    await typeInto(container.querySelector("textarea")!, "Shut the north gate");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+    await advance(0);
+    expect(calls).toContain("POST /bots/ranch/messages");
+    if (readFirst) {
+      await act(async () => FakeEventSource.notifyAll());
+      await answerChat("ranch", sent);
+      expect(transcript()).toContain("Shut the north gate");
+    }
+    await act(async () => row("Home").click());
+    await answerChat("home", page("home", "Morning."));
+    await act(async () => row("Ranch Hand").click());
+    await advance(0);
+    // The returning chat asks the server rather than taking the prefetch.
+    expect(conversationReads().filter(read => read.startsWith("GET /bots/ranch/"))).toHaveLength(readFirst ? 3 : 2);
+    if (!readFirst) await answerChat("ranch", sent);
+    expect(transcript()).toContain("Shut the north gate");
   });
 });

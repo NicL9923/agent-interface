@@ -9,7 +9,7 @@ import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 import { DRAFT_EVENT } from "./use-draft";
-import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
+import { firstPage, firstQuery, prefetchedFirstPage, supersedePrefetch, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
@@ -161,8 +161,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         // A prefetch of the latest page, on its way or just finished, is the first load; if it fails, read again.
         const joined = !opened && query === firstQuery ? prefetchedFirstPage(botId) : undefined;
         opened = true;
-        const result = await joined?.catch(() => undefined)
-          ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
+        let result = await joined?.catch(() => undefined);
+        if (!result) {
+          result = await request("GET /bots/:id/conversation", { params: { id: botId }, query });
+          // This read is newer than any prefetch of the chat, so none may answer a later first load.
+          supersedePrefetch(botId);
+        }
         if (!live) return;
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {

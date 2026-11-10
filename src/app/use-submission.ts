@@ -5,6 +5,7 @@ import { ApiError, request as apiRequest } from "../client-api";
 import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
 import type { Draft, Pending } from "./storage";
 import { contentHash } from "./draft-merge";
+import { sendMessage } from "./conversation-page";
 import { restoreSent } from "./sent-echo";
 // A submission whose outcome is unknown stays pending (and blocks sending) until Hermes confirms it.
 export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError }: {
@@ -125,7 +126,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     start(request);
     onStart?.(request);
     try {
-      const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
+      const result = await sendMessage(botId, request);
       if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
       if (result.status === "accepted") {
@@ -161,7 +162,7 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     const current = () => epoch === identityEpoch.current &&
       activeBotRef.current === requestBot;
     start(request);
-    void apiRequest("POST /bots/:id/messages", { params: { id: pending.botId }, body: { ...pending, reviewedUncertain: true } })
+    void sendMessage(pending.botId, { ...pending, reviewedUncertain: true })
       .then((result) => { if (current()) setReceipt(result); })
       .catch((e) => { if (current()) setError(e.message); })
       .finally(() => {

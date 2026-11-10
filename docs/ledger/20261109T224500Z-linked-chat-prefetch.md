@@ -131,3 +131,72 @@ Each line was broken by hand, the two focused files run, and the source restored
 - A false match needs the cookie to change from A to B, then back, between this page reading the
   record and bootstrap leaving, with no storage event in between. Not tested; it needs two
   sign-ins inside one round trip.
+
+## November 10 second review round
+
+GPT-6.1 Sol's second review verified one finding at `da60ee9`. This round merged `origin/main` at
+`2d461e3` (merge commit `21cb37f`) and then changed the code. Checks ran on NicolasLaptop (Fedora,
+Linux x64, Node 24.22.2).
+
+### Finding and change
+
+- P2, returning to a chat could show a page from before a send. A finished prefetch stayed
+  joinable for five seconds whatever happened after it, so a chat prefetched empty, opened, sent
+  to and left could come back to the empty page until another read landed.
+- `supersedePrefetch(botId)` in `src/app/conversation-page.ts` is the one rule: a prefetched page
+  stops being usable the moment anything newer exists for its chat. A send, or any transcript read
+  of the chat that completes, drops every prefetch of it begun before, finished or still on its
+  way. One still on its way is aborted, so its older page never lands in the response cache over
+  the newer read, and a first load that joined it reads again.
+- The send path calls it through `sendMessage()`, which every `POST /bots/:id/messages` in the
+  client now uses: the composer's send and retry, a turn retry and a form reply. The chat's read
+  path calls it after each read it makes itself in `use-conversation.ts`, and the secure request
+  card after its own read of the chat.
+- README: the linked chat paragraph says a send or a finished read retires an earlier prefetch.
+
+### Choices
+
+- Approvals, clarify answers and Stop do not supersede a prefetch. They are not sends; the approval
+  card keeps its own saved decision, and the next read retires the prefetch as before.
+- An aborted prefetch rather than only a dropped entry: without the abort, the older read still
+  wrote the response cache, which the chat shows first on its next open.
+
+### Red before the fix
+
+On `21cb37f` plus the new tests, with the source change reverted:
+
+- `npx vitest run tests/conversation-prefetch.test.ts tests/linked-chat-ui.test.ts`: 2 failed.
+  "shows the person's message on return… after the chat read the transcript that holds it" failed
+  at the return with "expected 'Start with Ranch Hand's role…' to contain 'Shut the north gate'".
+  "drops a prefetch still on its way when a newer read of the chat completes" failed with
+  "expected Promise{…} to be undefined".
+
+### Mutants
+
+Each line was broken by hand, the two focused files run, and the source restored.
+
+| Mutation | Result |
+| --- | --- |
+| `sendMessage()` does not call the rule | failed: "…when the person left before any read landed" |
+| The chat's read path does not call the rule | failed: "drops a prefetch still on its way…" |
+| The rule does not abort a prefetch on its way | failed: "drops a prefetch still on its way…", at the response cache |
+| The rule keeps a finished prefetch | failed: both "shows the person's message on return…" cases |
+| The rule keeps the entry of a prefetch on its way | survived |
+| A finished prefetch stored without checking it is still current | survived |
+
+The two survivors cover the same window: a prefetch whose response was already read when the rule
+runs, so the abort comes too late and its `then` has not run yet. Every test aborts before the
+response arrives, so the abort alone settles the read. Both stay as the guard for that window;
+holding the order of two settled reads to one microtask is not something the fakes can set.
+
+### Checks
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/conversation-prefetch.test.ts tests/linked-chat-ui.test.ts
+  tests/submission-state-ui.test.ts tests/draft-sync-ui.test.ts`: 4 files, 57 tests passed.
+- `npm test`: 172 files, 2,678 tests passed.
+- `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
+
+### Not exercised
+
+- Safari, Firefox and an installed iOS web app: not run.
