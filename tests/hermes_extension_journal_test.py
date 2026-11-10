@@ -1274,6 +1274,49 @@ class ReadMergeTests(unittest.TestCase):
             self.assertLess(waiting["activate"], 100)
             self.assertGreaterEqual(waiting["total"], waiting["queued"] + waiting["activate"])
 
+    def test_identical_discovers_waiting_behind_a_running_one_share_one_routine_scan(self):
+        jobs = [{"id": "job", "name": "[bot:default] Daily AI news"}]
+        run = {"id": "execution", "status": "completed", "claimed_at": "2026-10-31T07:00:00-05:00"}
+        scans, entered, go = [], threading.Event(), threading.Event()
+
+        def list_jobs(profile):
+            # Each scan lists every profile's jobs, so this records one entry per profile per scan.
+            scans.append(profile)
+            return jobs
+
+        def list_executions(job_id, limit):
+            # Hermes's cron ledger; the first read holds the discovery lane until the test releases it.
+            if not entered.is_set():
+                entered.set()
+                if not go.wait(10):
+                    raise RuntimeError("The test never released the first scan")
+            return [run]
+        with PooledHermes() as hermes:
+            executions = types.ModuleType("cron.executions")
+            executions.list_executions, executions.EXECUTIONS_FILE = list_executions, Path(hermes.directory.name) / "executions.db"
+            cron = types.ModuleType("cron")
+            cron.executions = executions
+            modules = {"hermes_cli.web_routers.cron": types.SimpleNamespace(_owner_home_scope=lambda _: contextlib.nullcontext(), _list_cron_jobs_sync=list_jobs),
+                       "cron": cron, "cron.executions": executions}
+            with patch.dict(sys.modules, modules):
+                replies = Replies()
+                discover = lambda rid: hermes.server.dispatch({"id": rid, "method": "agent-interface.discover", "params": {"cursor": "0", "full": True}}, replies)
+                discover("running")
+                self.assertTrue(entered.wait(3))
+                discover("a")
+                discover("b")
+                go.set()
+                self.assertTrue(replies.wait("running", "a", "b"))
+            # One forced scan of both profiles for the running request, one for both waiting ones.
+            self.assertEqual(scans, ["slow", "fast", "slow", "fast"])
+            a, b = (replies.answers[rid] for rid in ("a", "b"))
+            self.assertEqual((a["id"], b["id"]), ("a", "b"))
+            self.assertEqual(a["result"], b["result"])
+            self.assertEqual([(event["botId"], event["routineId"]) for event in a["result"]["events"]], [("slow", "job"), ("fast", "job")])
+            # Each profile's run was recorded once, as two separate scans would have left it.
+            self.assertEqual(hermes.journal.db.execute("SELECT profile FROM events WHERE routine_id='job' ORDER BY id").fetchall(), [("slow",), ("fast",)])
+            self.assertEqual(hermes.active[0], 0)
+
     def test_a_response_without_timings_only_takes_its_own_id(self):
         error = {"jsonrpc": "2.0", "id": "first", "error": {"code": -32000, "message": "failed"}}
         self.assertEqual(extension.answered(error, "second", 0.5), {**error, "id": "second"})

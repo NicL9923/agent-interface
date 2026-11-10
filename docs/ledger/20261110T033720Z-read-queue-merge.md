@@ -57,4 +57,59 @@ run, and the source restored. Every one went red:
   `test_one_slow_assistants_reads_never_take_hermes_native_workers`.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production. No merge of two
-`agent-interface.discover` requests ran in a test; its safety rests on the reading above.
+`agent-interface.discover` requests ran in a test; its safety rests on the reading above. Review round 1
+below adds that test.
+
+## Review round 1 (GPT-6.1 Sol), November 9
+
+The reviewer found nothing in this branch's own diff. Its scratch reproduction merged two
+`agent-interface.discover` requests with the real discovery and routine-scan code and fake cron I/O and
+passed; the suite had no such case. `t3/open-row-memo` changed under it (its review round 1, `0110552`),
+so this branch merges it with a normal merge commit. The only conflict was the capability-matrix
+paragraph both branches edit; the resolution keeps both additions. Source fingerprint
+`sha256:b39ed66e26dfe3595d7dc15f2ce258fc5e49a70431624ae2f8f6844b13108329` (1666 files); `src/hermes`
+`sha256:f51d02760201a1343e26db6319cde6505789b5446cae6517fa045564a42a744a`.
+
+A merged reply shares its result with its twin, but each is serialized to the same connection and
+nothing in the process keeps it. The row cache's rule, that no response shares an object with a
+cache, still holds: the shared result is the copy the open made on its way out.
+
+### New test
+
+`test_identical_discovers_waiting_behind_a_running_one_share_one_routine_scan` in `ReadMergeTests`
+(`tests/hermes_extension_journal_test.py`, now 60 tests). A forced discovery holds the lane inside the
+fake cron ledger read; two identical discoveries from the same connection queue behind it. Once it is
+released, one more scan of both profiles answers both, each under its own request ID with the same
+events, each profile's run is in the journal once, and every admission reservation is released. Only
+the cron module and its ledger are fakes; discovery, the routine scan, the read queue and the journal
+are the real code.
+
+Red proof: with `agent-interface.discover` removed from `MERGED_READS`, the test failed on three scans
+(`['slow', 'fast', 'slow', 'fast', 'slow', 'fast']`). `ReadMergeTests` then ran 20 times in a row with no
+failure.
+
+### Checks on the merged state
+
+- `npm run test:py`: 42 files passed, 0 skipped (Python 3.14.10). `tests/system_terminal_test.py`
+  passed this time.
+- `npm run lint:py` with ruff 0.17.3 from `.github/requirements-ci.txt`: passed.
+- `npm run typecheck`: passed, after the `npm ci` run for `t3/open-row-memo` (same lockfile).
+  `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts`: 2 files, 220 tests
+  passed.
+
+### Measurement
+
+`python3 .agents/tools/benchmark-open-during-turn.py --repo CHECKOUT`, now on Hermes's exact `messages`
+schema (see the `t3/open-row-memo` ledger), five interleaved rounds, each cell the median across rounds
+of one run's median. The benchmark calls the open handler directly, so the read queue is not in it.
+
+| Code | Open median | Open p90 | Activate median | Decorate median | Window median |
+| --- | --- | --- | --- | --- | --- |
+| `ec24b94` | 81.3 ms | 88.8 ms | 20.2 ms | 59.3 ms | 0.8 ms |
+| `t3/open-row-memo` at `0110552` | 21.6 ms | 26.1 ms | 5.2 ms | 15.1 ms | 1.0 ms |
+| This branch | 22.7 ms | 29.2 ms | 5.6 ms | 15.4 ms | 1.1 ms |
+
+The 1 ms between the two branches is inside the run-to-run spread on this machine (minimums 21.3 and
+21.5 ms).
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
