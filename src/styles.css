@@ -215,9 +215,11 @@ a {
   white-space: nowrap;
   border: 0;
 }
+/* An on-screen keyboard that the browser lays out over the page sets the visible frame here. See keyboard-viewport.ts. */
 .app-shell {
   display: flex;
-  height: 100dvh;
+  height: var(--keyboard-height, 100dvh);
+  margin-top: var(--keyboard-top, 0px);
   min-height: 0;
   overflow: hidden;
 }
@@ -321,6 +323,8 @@ a {
 .conversation-panel {
   display: flex;
   flex-direction: column;
+  /* Content that cannot fit overflows the top, never the composer at the bottom. See .composer-area. */
+  justify-content: flex-end;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -745,10 +749,37 @@ a {
   gap: 10px;
   margin: 18px 0;
 }
+/*
+ * When the conversation is shorter than what it holds, as above a phone's keyboard, space comes back in this
+ * order, so Send and Stop are the last things on screen to lose any:
+ * 1. The transcript, down to its padding.
+ * 2. The notices, the Talk panel, the attachment tray and the message box, which scroll inside their own boxes.
+ *    The message box keeps one line, and the composer keeps its row of buttons: `--composer-floor`, the form's
+ *    border and padding plus 44px rows, one beside Send or two when the draft is stacked above the buttons.
+ * 3. The header, cut from the top, since the conversation panel packs its content to the bottom.
+ * Only a frame shorter than this area's floor, 112px with a stacked draft, can cut Send, and keyboard-viewport.ts does
+ * not fit the shell to one (`LEAST_FRAME`; change both together). Browsers size a box's minimum to all of its
+ * content, so the floors are stated here rather than left to the layout. A squeezed notice
+ * dock keeps its 10px margin and a squeezed Talk panel its 28px of border, padding and margin, so they add those.
+ */
 .composer-area {
-  flex-shrink: 0;
-  padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, env(safe-area-inset-bottom));
+  --composer-bottom-inset: env(safe-area-inset-bottom);
+  --composer-floor: 54px;
+  --dock-floor: 0px;
+  --talk-floor: 0px;
+  display: flex;
+  flex-direction: column;
+  min-height: calc(var(--composer-floor) + var(--dock-floor) + var(--talk-floor) + 6px + max(8px, var(--composer-bottom-inset)));
+  padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, var(--composer-bottom-inset));
 }
+.composer-area:has(> .composer[data-layout="stacked"]) { --composer-floor: 98px; }
+.composer-area:has(> .status-dock) { --dock-floor: 10px; }
+.composer-area:has(> .talk-panel) { --talk-floor: 28px; }
+/* The home indicator's inset stays reported under an iOS keyboard, which covers it, so the composer sits on the keyboard. */
+:root[data-keyboard-open] .composer-area { --composer-bottom-inset: 0px; }
+.composer-area > .status-dock,
+.composer-area > .talk-panel { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.composer-area > .composer { flex-shrink: 1; min-height: var(--composer-floor); }
 .activity-status {
   display: flex;
   gap: 7px;
@@ -809,6 +840,8 @@ a {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
   grid-template-areas: "extras extras extras extras" "lead input voice send" "panel panel panel panel";
+  /* With too little height, the tray and the message box give theirs up; the message box keeps one line. */
+  grid-template-rows: minmax(0, auto) minmax(44px, auto) auto;
   align-items: end;
   column-gap: 4px;
 }
@@ -829,6 +862,8 @@ a {
 @supports (field-sizing: content) {
   .composer textarea { field-sizing: content; }
 }
+/* Stretched to the row the form leaves it, so the draft scrolls inside the box before Send is pushed off screen. */
+.composer-area .composer textarea { align-self: stretch; }
 .composer textarea::placeholder { white-space: nowrap; }
 .composer textarea:focus-visible {
   outline: none;
@@ -839,8 +874,9 @@ a {
 }
 .composer[data-layout="stacked"] {
   grid-template-areas: "extras extras extras extras" "input input input input" "lead . voice send" "panel panel panel panel";
+  grid-template-rows: minmax(0, auto) minmax(44px, auto) auto auto;
 }
-.composer-extras { grid-area: extras; min-width: 0; }
+.composer-extras { grid-area: extras; align-self: stretch; min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .composer-extras:has(> :not(:empty)) { padding: 4px 8px; }
 .composer-measure-box { position: absolute; inset: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
 .composer-measure { display: inline-block; white-space: pre; }
@@ -1176,7 +1212,7 @@ a {
     padding: 26px 28px 12px;
   }
   .composer-area {
-    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
+    padding: 6px 12px max(8px, var(--composer-bottom-inset));
   }
 }
 @media (max-width: 620px) {
@@ -1270,7 +1306,7 @@ a {
     font-size: 1.5625rem;
   }
   .composer-area {
-    padding: 6px 12px max(8px, env(safe-area-inset-bottom));
+    padding: 6px 12px max(8px, var(--composer-bottom-inset));
   }
   .composer {
     padding: 4px;

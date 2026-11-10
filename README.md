@@ -423,7 +423,17 @@ own intervals. When the household stream or the open chat's has been down for 20
 connection notice says live updates are reconnecting, above the composer in a chat and at the top of
 Today, Find and group chats. It clears once the stream is live again. A screen reader hears each
 connection change once, from one status region the whole app shares; the sidebar's Offline chip and the
-notice show the state without announcing it again. Manual reconnect checks immediately. The transport bounds
+notice show the state without announcing it again.
+
+One failed conversation read
+is not an outage: a chat shows it is disconnected after a second failure in a row, or
+3 seconds without a successful read, and at once when the browser is offline or the
+server answers that Hermes is unavailable. The next successful read clears it. From the
+first failure, actions that need the connection are refused: Send, Stop, the model
+picker, approvals, reply cards, and saving or listening to a reply. Until the chat shows
+it is disconnected, a refused Send or Stop says the connection is being checked, and a
+send refused from the keyboard says so in the composer's status line. A failure belongs
+to its chat, so it refuses nothing once that chat is closed or gone. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
@@ -605,12 +615,40 @@ Search, Settings and appearance. Cmd/Ctrl+1 to 9 open pinned assistants in the
 installed app (browsers keep those keys for tabs), Cmd/Ctrl+. stops the current
 reply after asking, and `?` lists every shortcut. An iPad with a keyboard has Cmd+K
 "Go to…" and Cmd+1 to 9. In an empty message box, Up recalls your earlier messages
-in that chat. Enter sends and Shift+Enter starts a new line. While a Japanese,
+in that chat. With a mouse or trackpad, Enter sends and Shift+Enter starts a new line.
+On a touch screen with no mouse or trackpad, Return starts a new line and the Send button
+sends. Ctrl+Enter or Cmd+Enter sends on every device. This holds in assistant and group
+chats alike, and follows a trackpad connected or removed while the page is open. The app
+cannot tell a hardware keyboard from an on-screen one, so a tablet with a keyboard but no
+trackpad also gets a new line from Enter, and sends with Ctrl+Enter, Cmd+Enter or the Send
+button. `src/app/enter-key.ts` holds the rule. While a Japanese,
 Chinese or Korean input method is composing a word, Enter, Escape and the arrow keys
 belong to it, in every browser including Safari, so confirming a word never sends the
 message, moves a find, or picks a palette entry. Pasting 32 KB of text or more attaches it as `Pasted text.txt`. Pinning
 or moving an assistant on home shows Undo for five seconds. Web text follows the
 browser's text size setting.
+
+On a phone, the message box sits directly above the on-screen keyboard and the latest
+message stays in view as the keyboard opens and closes. Android browsers resize the page
+for the keyboard through the viewport's `interactive-widget=resizes-content`. Safari on
+iPhone and iPad and the installed iOS web app ignore it through iOS 27.2, so
+`src/app/keyboard-viewport.ts` sizes the app to the visible area while the keyboard is up.
+WebKit added the setting in the iOS 27.3 beta ([bug 259770](https://bugs.webkit.org/show_bug.cgi?id=259770)),
+where a report says the field still ends up behind the keyboard; the app's behavior on that
+beta is unverified. The code compares the visible area with the page instead of checking the
+browser, so it steps aside wherever the browser resizes the page itself. A pinch zoom leaves
+the app's size alone, except one within 1% of normal scale, which counts as unzoomed.
+
+When the visible area is too short for everything, the transcript gives up its space first,
+then the notices, the Talk panel, the attachment tray and the message box, which scroll inside
+their own boxes down to one line of text, and last the header, cut from the top. Send and Stop
+stay on screen whenever the area is at least as tall as one line of text and the row of
+buttons, about 112 pixels. A shorter area, as in landscape on a small iPhone where Safari's
+bars take most of what the keyboard leaves, keeps the app at full height and lets Safari
+scroll the message box into view. A group chat's composer stays at the bottom of the chat as it
+scrolls and follows the same order. `.agents/tools/check-send-visible.mjs` checks both in Chromium.
+Pressing Send or Stop leaves focus in the message box, so the keyboard stays up between
+messages. Attach and Talk switch to the file picker or your voice, so they let it close.
 
 ## Hermes updates and activity
 

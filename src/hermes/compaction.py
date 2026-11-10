@@ -123,6 +123,8 @@ class IdleCompaction:
         self.clock, self.monotonic, self.size = clock, monotonic, size
         self.lock = threading.Lock()
         self.attempts = {}
+        # Sessions with an input on its way to admission: no compaction of them may start.
+        self.pending = {}
         # When each session last showed activity, and the history each was last compacted at.
         self.activity = {}
         self.settled = {}
@@ -137,6 +139,25 @@ class IdleCompaction:
         """Whether a background compaction holds this session. Its running flag is not a task."""
         with self.lock:
             return sid in self.attempts
+
+    @contextlib.contextmanager
+    def admitting(self, sid):
+        """Hold off any new compaction of this session while an input is admitted.
+
+        An input preempts before it takes submission_lock, so a compaction could otherwise start
+        between that preempt and the lock. ``compact`` registers an attempt only while no hold is
+        taken, under ``lock``, and the hold is taken under the same lock: either the attempt is
+        registered first, and the input's preempt finds it, or it never starts.
+        """
+        with self.lock:
+            self.pending[sid] = self.pending.get(sid, 0) + 1
+        try:
+            yield
+        finally:
+            with self.lock:
+                self.pending[sid] -= 1
+                if not self.pending[sid]:
+                    del self.pending[sid]
 
     def touch(self, sid):
         """Record activity: a native frame or an admitted input. A compaction's own frames do not count."""
@@ -200,6 +221,9 @@ class IdleCompaction:
             before = self.size(session)[0]
             attempt = Attempt(getattr(session["agent"].context_compressor, WORKING, None))
             with self.lock:
+                # An input admitted without submission_lock holds this off; see admitting().
+                if self.pending.get(sid):
+                    return None
                 self.attempts[sid] = attempt
         result = None
         watcher = threading.Thread(target=self.watch, args=(sid, attempt), name="agent-interface-compaction-watch", daemon=True)

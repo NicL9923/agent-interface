@@ -9,7 +9,7 @@ import { GroupCreate } from '../src/components/GroupCreate';
 import { RoutineResults } from '../src/components/RoutineResults';
 import { AgentExchange } from '../src/components/AgentExchange';
 import { defaultPreferences, type Bootstrap } from '../src/shared/types';
-import { click, mountRoot, typeInto } from './ui-harness';
+import { click, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 import { GROUP_FALLBACK_POLL_MS, GROUPS_EVENT } from '../src/app/use-session';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
@@ -177,6 +177,41 @@ it('shows a sent group message at once even while a background check is still ru
   await act(async()=>held!(state));
   expect(container.querySelectorAll('.group-message')).toHaveLength(1);
 });
+it('starts a new line on Return from a touch screen, and sends with the Send button',async()=>{
+  // A phone: its only pointer is a finger.
+  stubMatchMedia(query=>query==='(any-pointer: coarse)');
+  const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  vi.mocked(api).mockImplementation(async(path)=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path==='/groups/room'?state:{events:[],cursor:0,has_more:false});
+  vi.mocked(write).mockResolvedValue({accepted:true});
+  await act(async()=>root.render(view()));
+  await act(async()=>vi.advanceTimersByTimeAsync(0));
+  const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  expect(field.getAttribute('enterkeyhint')).toBe('enter');
+  await typeInto(field,'Plan Saturday');
+  const press=(init:KeyboardEventInit)=>act(async()=>field.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,cancelable:true,...init})));
+  // An iPhone's on-screen Shift and Caps Lock fire these too.
+  await press({key:'Shift',shiftKey:true});await press({key:'CapsLock'});
+  expect(field.getAttribute('enterkeyhint')).toBe('enter');
+  // Left to the browser, which inserts the line break.
+  expect(await press({key:'Enter'})).toBe(true);
+  expect(vi.mocked(write).mock.calls.filter(([path])=>path==='/groups/room/messages')).toEqual([]);
+  await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send to group"]')!.click());
+  expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Plan Saturday'}));
+});
+it.each([['Ctrl',{ctrlKey:true}],['Cmd',{metaKey:true}]])('sends with %s+Enter from a touch screen',async(_,chord)=>{
+  stubMatchMedia(query=>query==='(any-pointer: coarse)');
+  const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
+  vi.mocked(api).mockImplementation(async(path)=>path==='/groups'?{supported:true,canSend:true,rooms:[room]}:path==='/groups/room'?state:{events:[],cursor:0,has_more:false});
+  vi.mocked(write).mockResolvedValue({accepted:true});
+  await act(async()=>root.render(view()));
+  await act(async()=>vi.advanceTimersByTimeAsync(0));
+  const field=container.querySelector<HTMLTextAreaElement>('#group-message')!;
+  await typeInto(field,'Plan Saturday');
+  let unhandled=true;
+  await act(async()=>{unhandled=field.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,...chord}));});
+  expect(unhandled).toBe(false);
+  expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Plan Saturday'}));
+});
 it('reads a room log from the start again after leaving and returning to it',async()=>{
   const other={...room,room_id:'other',name:'Fence repair'};
   const state={room,driver_status:{working:false,blocked:false,pending_actions:[]}};
@@ -256,6 +291,17 @@ describe('group conversation',()=>{
     await type('Ask @planner and @ra');
     await press('Tab');
     expect(field().value).toBe('Ask @planner and @ranch ');
+  });
+
+  // Ctrl+Enter and Cmd+Enter send everywhere, so the list of members must not take them as a pick.
+  it.each([['Ctrl',{ctrlKey:true}],['Cmd',{metaKey:true}]])('sends with %s+Enter while members are suggested, leaving the mention as typed',async(_,chord)=>{
+    serve();
+    vi.mocked(write).mockResolvedValue({accepted:true});
+    await act(async()=>root.render(view()));
+    await type('Ask @ra');
+    expect(suggestions()).toEqual(['@ranch']);
+    await act(async()=>field().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true,...chord})));
+    expect(write).toHaveBeenCalledWith('/groups/room/messages',expect.objectContaining({text:'Ask @ra'}));
   });
 
   it('reads new events when the stream names this room, instead of polling every few seconds',async()=>{

@@ -12,6 +12,7 @@ import contextvars
 import datetime
 import hashlib
 import json
+import math
 import logging
 import os
 import sqlite3
@@ -131,7 +132,7 @@ class Journal:
             self.db.execute("ALTER TABLE receipts ADD COLUMN input_text TEXT")
         if "steering" not in columns:
             self.db.execute("ALTER TABLE receipts ADD COLUMN steering INTEGER NOT NULL DEFAULT 0")
-        for column in ("stored_session", "attachments", "admission_response"):
+        for column in ("stored_session", "attachments", "admission_response", "turn_rows"):
             if column not in columns:
                 self.db.execute(f"ALTER TABLE receipts ADD COLUMN {column} TEXT")
         if "artifacts" not in {row[1] for row in self.db.execute("PRAGMA table_info(tools)")}:
@@ -370,8 +371,8 @@ def routine_run_body(home, job_id, execution, executions=()):
     return None
 
 
-class ReadQueue:
-    """Runs add-on reads on threads of its own, one job at a time per key, in arrival order.
+class LaneQueue:
+    """Runs add-on requests on threads of its own, one job at a time per key, in arrival order.
 
     Waiting work holds no thread, so one slow assistant can take at most one worker
     and never any of Hermes's native RPC pool, which its long handlers need. A request
@@ -380,8 +381,8 @@ class ReadQueue:
     answered by a computation that began after it arrived.
     """
 
-    def __init__(self, workers):
-        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-interface-read")
+    def __init__(self, workers, name):
+        self.pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-interface-" + name)
         atexit.register(lambda: self.pool.shutdown(wait=False, cancel_futures=True))
         self.lock = threading.Lock()
         # Each lane holds only waiting jobs: (merge key, run, requests). run_next takes one out before it runs.
@@ -398,24 +399,56 @@ class ReadQueue:
                 else:
                     lane.append((merge, run, [request]))
                 return
-            self.queues[key] = collections.deque([(merge, run, [request])])
-        self.pool.submit(self.run_next, key)
+            lane = self.queues[key] = collections.deque([(merge, run, [request])])
+            # Scheduled under the lock, so no request joins a lane whose worker may never run.
+            try:
+                self.pool.submit(self.run_next, key, lane)
+            except BaseException:
+                # The executor can queue the work item and then fail to start its thread. That item
+                # runs on the next worker that starts, and finds its lane gone.
+                del self.queues[key]
+                raise
 
-    def run_next(self, key):
+    def run_next(self, key, lane):
         with self.lock:
-            _, run, requests = self.queues[key].popleft()
+            # A work item whose scheduling failed: its caller was refused, so it runs nothing.
+            if self.queues.get(key) is not lane:
+                return
+            _, run, requests = lane.popleft()
         try:
             run(requests)
         except Exception:
-            logging.getLogger(__name__).exception("Add-on read failed")
+            logging.getLogger(__name__).exception("Add-on request failed")
         finally:
             with self.lock:
-                more = bool(self.queues[key])
+                more = bool(lane)
                 if not more:
                     del self.queues[key]
             # Requeue behind other keys' work instead of looping, so keys share workers fairly.
+            # If a new thread fails to start here, this worker still runs the queued item.
             if more:
-                self.pool.submit(self.run_next, key)
+                self.pool.submit(self.run_next, key, lane)
+
+
+class Reservation:
+    """One admission reservation, released at most once, so a second release cannot free another request's.
+
+    ``unlist`` runs just after the release, both under ``lock``, so a reader holding ``lock`` sees the
+    reservation and what lists it go together, and nothing is unlisted while its reservation is held.
+    """
+
+    def __init__(self, retirement, lock, unlist=None):
+        self.retirement, self.lock, self.unlist, self.held = retirement, lock, unlist, True
+
+    def release(self):
+        with self.lock:
+            held, self.held = self.held, False
+            if held:
+                self.retirement.release()
+                if self.unlist is not None:
+                    self.unlist()
+        if not held:
+            logging.getLogger(__name__).error("An admission reservation was released twice; the second release was ignored", stack_info=True)
 
 
 def answered(response, rid, queued):
@@ -484,6 +517,15 @@ def parsed_result(result):
     return result
 
 
+def turn_extent(row_ids):
+    """A turn's committed rows, or None unless they are a list of row IDs.
+
+    Checked when a completion is saved and again when the stored copy is read, which may be damaged."""
+    if isinstance(row_ids, list) and all(type(row) is int and row > 0 for row in row_ids):
+        return row_ids
+    return None
+
+
 def approval_id(row):
     # The approval's native request ID, which its event identity ends with, lets a notification decide it.
     prefix = f"{row[3]}:approval:"
@@ -492,6 +534,8 @@ def approval_id(row):
 
 # The run a session's newest unsettled receipt belongs to.
 OPEN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1"
+# The run an open names: OPEN_RUN without receipts whose admission Hermes has not answered yet.
+SHOWN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 AND request_id NOT IN (SELECT value FROM json_each(?)) ORDER BY created DESC LIMIT 1"
 LATEST_TERMINAL = "SELECT kind FROM events WHERE profile=? AND session_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
 LATEST_ROOT = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE profile=? AND stored_session=? AND steering=0 ORDER BY created DESC LIMIT 1"
 RUN_TERMINAL = "SELECT kind FROM events WHERE run_id=? AND kind IN ('completed','failed','interrupted') ORDER BY id DESC LIMIT 1"
@@ -501,6 +545,12 @@ INSERT_REJECTED = "INSERT INTO receipts(request_id,digest,profile,session_id,sto
 # Reads the app polls. They run on the add-on's own read queue instead of the
 # connection's serial lane, so one slow history read never queues every other RPC.
 QUEUED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
+# App sends, likewise off the connection's serial lane, so a send waiting for a background
+# compaction to stop never holds up another request on the socket. One lane per assistant
+# keeps each assistant's sends in arrival order; a send never merges with another.
+QUEUED_SENDS = frozenset({"agent-interface.submit"})
+# Methods whose lane is the requested assistant's; the rest share one lane per method.
+PROFILE_LANES = frozenset({"agent-interface.open", "agent-interface.submit"})
 # Queued reads whose waiting requests may share one computation when their connection and
 # parameters are identical. Each answer depends only on its parameters and state read after
 # every merged request arrived, and the effects are idempotent: an open activates the session
@@ -508,6 +558,12 @@ QUEUED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
 MERGED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
 # Distinct assistants read at once; a busy assistant's later reads wait without a thread.
 READ_WORKERS = 4
+# Distinct assistants' sends at once. Admissions themselves take turns under submission_lock;
+# only the wait for a compaction to stop runs beside them, and the idle compactor runs one
+# compaction at a time, so a second assistant's send never waits for a worker behind it.
+SEND_WORKERS = 4
+# Where an admission spent its time, reported as app_timing like an open's phases.
+SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity, journal mutation and native
 # redaction state; the lifetime only bounds what an identity collision could serve.
 # Without readable redaction state, the earlier short lifetime still applies.
@@ -575,9 +631,25 @@ class Bridge:
         # Leaf lock for the decorated-history cache, which every profile's open prunes.
         self.cache_lock = threading.Lock()
         self.submission_lock = threading.RLock()
-        self.reads = ReadQueue(READ_WORKERS)
+        self.reads = LaneQueue(READ_WORKERS, "read")
+        self.sends = LaneQueue(SEND_WORKERS, "send")
+        # Each queued app send, from its reservation until it is answered: [profile, "queued" or "admitting"].
+        # Maintenance status lists them as active work, as acquire already counts their reservations.
+        self.sends_in_flight = {}
+        self.sends_in_flight_lock = threading.Lock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
+        # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
+        # to the turn it starts for that prompt, and only to that turn first, so the turn that ran a
+        # receipt's prompt is known by it. Native ID -> (session, receipt request ID, text).
+        self.turn_requests = {}
+        self.turn_requests_lock = threading.Lock()
+        # The receipt whose prompt this thread's native turn runs, or None. Set around Hermes's
+        # _run_prompt_submit, whose turn thread runs with a copy of the caller's context.
+        self.turn_claim = contextvars.ContextVar("agent_interface_turn_claim", default=None)
+        # Request IDs whose intent is written but whose admission Hermes has not answered yet. An open
+        # names no run for them, so it shows what it showed before the admission began. journal.lock.
+        self.admitting = set()
         self.maintenance_lock = threading.RLock()
         self.maintenance_read = contextvars.ContextVar("agent_interface_maintenance_read", default=False)
         self.keepers = {}
@@ -630,14 +702,23 @@ class Bridge:
         return json.loads(path.read_text())
 
     def busy_sessions(self):
+        """Active work for maintenance: busy sessions, then app sends that wait for or hold a lane.
+
+        A send staging images or inside Hermes's admission call has not marked its session running,
+        and one waiting on its lane has not reached Hermes at all. Each holds an admission
+        reservation, so acquire refuses; status lists them so its callers refuse first.
+        """
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
         # native reservations cover work queued after this snapshot.
         sessions = self.server._sessions.copy()
+        with self.sends_in_flight_lock:
+            sends = [tuple(send) for send in self.sends_in_flight.values()]
         return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
                 for sid, session in sessions.items()
                 if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
-                or session.get("pending_steer") or session.get("_auto_continue_scheduled")]
+                or session.get("pending_steer") or session.get("_auto_continue_scheduled")] + [
+            {"sessionId": self.canonical.get(profile), "profile": profile, "state": state} for profile, state in sends]
 
     def maintenance(self, rid, params):
         server = self.server
@@ -711,41 +792,62 @@ class Bridge:
         server.register_method("agent-interface.maintenance", self.maintenance)
 
     def route(self, request, *args, **kwargs):
-        """Native dispatch, except polled add-on reads, which go to the add-on's read queue.
+        """Native dispatch, except polled add-on reads and app sends, which go to the add-on's lanes.
 
         This mirrors native long handlers: reserve admission before queueing, answer through
-        the connection's transport, release once answered. Direct handle_request calls stay
-        synchronous, and a request without a connection transport keeps native dispatch.
+        the connection's transport, release once answered. A queued send holds its reservation
+        while it waits and runs, so maintenance and retirement treat it as active work, as they
+        did a send the reader ran itself. Direct handle_request calls stay synchronous, and a
+        request without a connection transport keeps native dispatch.
         """
         arrived = time.perf_counter()
         transport = args[0] if args else kwargs.get("transport")
         method = request.get("method") if isinstance(request, dict) else None
-        if method not in QUEUED_READS or transport is None or "id" not in request:
+        if method not in QUEUED_READS and method not in QUEUED_SENDS or transport is None or "id" not in request:
             return self.original_dispatch(request, *args, **kwargs)
         from tui_gateway.transport import bind_transport
         server, retirement = self.server, self.retirement
-        if not retirement.acquire():
-            return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        profile = params.get("profile", "default")
+        # Listed whenever its reservation is held, so maintenance status and acquire agree about it. Maintenance
+        # reads both under maintenance_lock, so listing and reserving are one step to it, and so are releasing
+        # and unlisting in Reservation.release. Neither step waits on anything but the native fence.
+        send = [profile if isinstance(profile, str) else None, "queued"] if method in QUEUED_SENDS else None
+        def unlist():
+            with self.sends_in_flight_lock:
+                self.sends_in_flight.pop(id(send), None)
+        with self.maintenance_lock:
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    self.sends_in_flight[id(send)] = send
+            if not retirement.acquire():
+                unlist()
+                return server._err(request["id"], 5035, "backend is retiring; reconnect to continue")
+        reservation = Reservation(retirement, self.maintenance_lock, unlist if send is not None else None)
         context = contextvars.copy_context()
         def answer(requests):
             # Each merged request holds its own admission reservation until it is answered.
             started = time.perf_counter()
+            if send is not None:
+                with self.sends_in_flight_lock:
+                    send[1] = "admitting"
             try:
-                # Native activation attaches the session to the transport bound here, which
-                # every merged request shares.
+                # Native activation and admission attach the session to the transport bound here,
+                # the caller's, which every merged request shares.
                 bind_transport(transport)
                 try:
                     response = self.original_handle(request)
                 except Exception as exc:
                     response = server._err(request["id"], -32000, f"handler error: {exc}")
-                for each, arrival in requests:
+                for each, arrival, _ in requests:
                     reply = answered(response, each["id"], started - arrival)
                     if reply is not None:
                         transport.write(reply)
             finally:
-                for _ in requests:
-                    retirement.release()
-        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+                for *_, held in requests:
+                    held.release()
+        # A profile that is not a name still gets its handler's answer, from a lane of its own.
+        lane = (method, profile if method in PROFILE_LANES and isinstance(profile, str) else None)
         merge = None
         if method in MERGED_READS:
             try:
@@ -754,18 +856,19 @@ class Bridge:
             except (TypeError, ValueError):
                 merge = None
         try:
-            self.reads.submit((method, params.get("profile", "default") if method == "agent-interface.open" else None),
-                              lambda requests: context.run(answer, requests), (request, arrived), merge)
+            (self.sends if method in QUEUED_SENDS else self.reads).submit(
+                lane, lambda requests: context.run(answer, requests), (request, arrived, reservation), merge)
         except BaseException:
-            retirement.release()
+            # Nothing was queued, so native dispatch answers the raise and nothing else ever will.
+            reservation.release()
             raise
         return None
 
 
     # Native seams: tool detail, inline guidance, frames and turn settlement.
 
-    def native(self, method, params):
-        response = self.server.handle_request({"jsonrpc": "2.0", "id": "extension-native", "method": method, "params": params})
+    def native(self, method, params, rid="extension-native"):
+        response = self.server.handle_request({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
         if "error" in response:
             raise NativeResponseError(response["error"])
         return response["result"]
@@ -888,7 +991,7 @@ class Bridge:
 
     def install_inline_guidance(self):
         # Add client rendering guidance at model-call time, without changing SOUL,
-        # persisted user text, receipt digests, image recovery, or steering matches.
+        # persisted user text, receipt digests, or steering matches.
         server = self.server
         self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
         # Said on every app turn, because a model skips a one-time rule about half the time. Hermes shows the line
@@ -916,6 +1019,65 @@ class Bridge:
                 return self.with_inline_guidance(original_run, eligible, session.get("agent"), rid, sid, session, *args,
                                                  guidance_profile=self.live_profile_for(sid), **kwargs)
             server._run_prompt_submit = run
+
+    def claim_turn(self, rid, sid, text, display_kind, author):
+        """The receipt a native turn starting under request ID ``rid`` runs the prompt of, or None.
+
+        Hermes's prompt.submit hands its own request ID to the turn it starts. A queue drain or a
+        goal continuation started after that turn reuses the same ID for a turn that runs another
+        prompt, so an ID names a receipt once, for the first turn that starts with it. That turn
+        must also run exactly the text the receipt sent, unmarked: anything else is not the
+        receipt's prompt, and the receipt stays unbound.
+        """
+        if not isinstance(rid, str):
+            return None
+        with self.turn_requests_lock:
+            sent = self.turn_requests.pop(rid, None)
+        if sent is None or sent[0] != sid or sent[2] != text or display_kind is not None or author is not None:
+            return None
+        return {"sid": sid, "request_id": sent[1], "used": False}
+
+    def install_turn_claims(self):
+        server = self.server
+        if not hasattr(server, "_run_prompt_submit"):
+            return
+        original = server._run_prompt_submit
+        def run(rid, sid, session, *args, **kwargs):
+            claim = self.claim_turn(rid, sid, kwargs.get("text", args[0] if args else None), kwargs.get("display_kind"), kwargs.get("turn_author"))
+            # Set even when None: a drain or continuation runs on the thread of the turn that just
+            # finished, and must never pass that turn's receipt to its own.
+            token = self.turn_claim.set(claim)
+            try:
+                return original(rid, sid, session, *args, **kwargs)
+            finally:
+                self.turn_claim.reset(token)
+        server._run_prompt_submit = run
+
+    def bind_turn_row(self, sid, payload):
+        """Bind the receipt this thread's turn claimed to the prompt row its completion reports.
+
+        Only a turn that claimed the receipt at its start binds it, once, and only an unbound
+        receipt: Hermes's own answer to prompt.submit names the row whenever it staged one, and
+        that row stays even when the turn could not adopt it and reports a row of its own.
+        Every other completion, such as another client's turn, a queued or redirected send's
+        neighbor, a resumed turn or a goal continuation, binds nothing.
+
+        The same completion lists every committed row of the turn (``persisted_turn.row_ids``),
+        kept as the receipt's turn: a steer is bound later only to a row inside it. A value that is
+        not a list of row IDs keeps no turn.
+        """
+        claim = self.turn_claim.get()
+        if claim is None or claim["sid"] != sid or claim["used"]:
+            return
+        claim["used"] = True
+        persisted = payload.get("persisted_turn") or {}
+        row_id, row_ids = persisted.get("user_row_id"), persisted.get("row_ids")
+        if type(row_id) is not int:
+            return
+        extent = turn_extent(row_ids)
+        extent = None if extent is None else json.dumps(extent)
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
@@ -970,13 +1132,10 @@ class Bridge:
         event_kind = {"complete": "completed", "error": "failed", "interrupted": "interrupted"}.get(payload.get("status")) if kind == "message.complete" else None
         if frame.get("method") == "approval":
             event_kind = "approval"
-        if sid and kind == "message.complete" and type((payload.get("persisted_turn") or {}).get("user_row_id")) is int:
-            # Image-only admission has no staged row. Native completion provides its
-            # actual committed row identity, without any textual inference.
-            with journal.lock, journal.db:
-                pending = journal.db.execute("SELECT request_id FROM receipts WHERE session_id=? AND terminal=0 AND steering=0 AND row_id IS NULL ORDER BY created LIMIT 1", (sid,)).fetchone()
-                if pending:
-                    journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (payload["persisted_turn"]["user_row_id"], pending[0]))
+        if sid and kind == "message.complete":
+            # Image-only admission has no staged row. Native completion reports the turn's
+            # committed rows, which bind the receipt only if this turn ran its prompt.
+            self.bind_turn_row(sid, payload)
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
@@ -1036,6 +1195,7 @@ class Bridge:
         self.native_history = server._history_to_messages
         server._history_to_messages = self.detailed_history
         self.install_inline_guidance()
+        self.install_turn_claims()
         self.native_write = server.write_json
         server.write_json = self.write
         self.native_followups = server._run_post_turn_followups
@@ -1201,7 +1361,9 @@ class Bridge:
         # Other profiles' opens share this connection. Never hold the journal across native calls.
         with self.journal.lock:
             interruption = db.execute("SELECT request_id,created FROM interruptions WHERE profile=? AND stored_session=?", (profile, value["canonical_stored_session_id"])).fetchone()
-            current = db.execute(OPEN_RUN, (sid,)).fetchone()
+            # An admission still waiting on staging or on Hermes's answer is not a run yet: Hermes
+            # may still refuse or queue it, and its turn may not have started.
+            current = db.execute(SHOWN_RUN, (sid, json.dumps(sorted(self.admitting)))).fetchone()
             # Cold resume has a new runtime SID; use the canonical journal owner.
             terminal = self.journal.last_terminal(profile, sid, value["canonical_stored_session_id"])
         value["app_interruption"] = {"requestId": interruption[0], "runId": interruption[0], "detail": "Hermes restarted during this task. Review its results before retrying."} if interruption else None
@@ -1272,19 +1434,17 @@ class Bridge:
     def attribute(self, profile, sid, value, rows=None):
         """Bind app receipts, files and tool details to native history rows.
 
-        Returns (messages, journal mutation after binding, whether the result is cacheable).
-        App attribution follows Hermes's durable row identity, never a rewritten body.
-        Read each journal table once per poll, not once per message. Binding only fills
-        a NULL row_id, so the unbound snapshot can only overstate candidates, and only
-        a row ID bound here needs a reread. Callers hold journal.lock, which native
+        Returns (messages, journal mutation after binding). App attribution follows
+        Hermes's durable row identity, never a rewritten body. Read each journal table once
+        per poll, not once per message. The only binding made here is a steer's, from these
+        rows and the journal alone, so a later read of the same rows and journal binds
+        nothing new and the result can be cached. Callers hold journal.lock, which native
         writers also take, so none lands mid-poll. ``rows`` is the session's RowCache, or None.
         """
         journal, server = self.journal, self.server
         stored = value["canonical_stored_session_id"]
         messages = value.get("messages", [])
-        unbound = journal.db.execute("SELECT steering,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND row_id IS NULL", (profile, stored)).fetchall()
-        steering_texts = {text for steering, text, _ in unbound if steering}
-        image_pending = any(not steering and any(str(x.get("mime", "")).startswith("image/") for x in json.loads(raw or "[]")) for steering, _, raw in unbound)
+        self.bind_steers(profile, stored, messages)
         attributed = {}
         for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
@@ -1293,34 +1453,13 @@ class Bridge:
         tool_records = {}
         for record_id, record in self.tool_records(list(calls), rows).items():
             tool_records.setdefault(calls[record_id], []).append(record)
-        rebound = set()
         current_run = None
         for message in messages:
             if message.get("role") == "user":
                 current_run = None
-            if message.get("role") == "user" and message.get("row_id") is not None and message.get("text") in steering_texts:
-                # Native steering persists a correction later, without an admission row ID.
-                # Pair equal corrections in admission order within this canonical owner.
-                candidate = journal.db.execute("SELECT request_id FROM receipts WHERE profile=? AND stored_session=? AND steering=1 AND status='accepted' AND row_id IS NULL AND input_text=? AND created<=? AND (SELECT row_id FROM receipts root WHERE root.request_id=receipts.run_id)<? ORDER BY created LIMIT 1", (profile, stored, message.get("text"), float(message.get("timestamp") or time.time()) + 1, message["row_id"])).fetchone()
-                if candidate:
-                    with journal.db:
-                        journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], candidate[0]))
-                    rebound.add(message["row_id"])
-            if message.get("role") == "user" and message.get("row_id") is not None and image_pending:
-                # Recovery for image-only turns completed before this binding hook.
-                # Match the official persisted image-ref representation within the
-                # admitted owner and time window, never arbitrary marker text.
-                candidates = journal.db.execute("SELECT request_id,input_text,attachments FROM receipts WHERE profile=? AND stored_session=? AND status='accepted' AND steering=0 AND row_id IS NULL AND created<=? ORDER BY created", (profile, stored, float(message.get("timestamp") or time.time()) + 1)).fetchall()
-                for request_id, input_text, raw_attachments in candidates:
-                    images = [x["path"] for x in json.loads(raw_attachments or "[]") if str(x.get("mime", "")).startswith("image/")]
-                    if images and server._build_persist_message_with_image_refs(input_text, images) == message.get("text"):
-                        with journal.lock, journal.db:
-                            journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (message["row_id"], request_id))
-                        rebound.add(message["row_id"])
-                        break
             if message.get("row_id") is None:
                 row = None
-            elif type(message["row_id"]) is int and message["row_id"] not in rebound:
+            elif type(message["row_id"]) is int:
                 row = attributed.get(message["row_id"])
             else:
                 row = journal.db.execute("SELECT request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE row_id=? AND profile=? ORDER BY created DESC LIMIT 1", (message.get("row_id"), profile)).fetchone()
@@ -1355,7 +1494,52 @@ class Bridge:
                     detail = tool[2]
                     if len(recorded) == 1 and isinstance(detail, dict) and detail.get("name") == message.get("name") and tool[3] == (message.get("args") or {}):
                         message["app_tool_call"] = detail
-        return messages, journal.mutation, not unbound
+        return messages, journal.mutation
+
+    def bind_steers(self, profile, stored, messages):
+        """Bind each unbound steer whose row can only be its own.
+
+        Hermes answers session.steer with no row and no request ID, and writes the steer later as
+        a user row holding its words, beside any other client's correction with the same words
+        (``tui_gateway/methods_session_interrupt.py:114-130`` and ``agent/agent_runtime_helpers.py:3668-3703``
+        at ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn
+        has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
+        only when exactly one user row inside those rows holds its words and was not saved more
+        than a second before the steer was sent, no receipt holds that row, and no other receipt
+        of the run, bound or not, sent the same words. The second is the slack between the
+        add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
+        time cannot be read or compared binds nothing.
+        Anything else leaves it unbound and its row shows unattributed. Known limit: a native
+        client's identical words in the same turn, saved after the steer was sent or within that
+        second, can still take the steer's place, because Hermes names no steer's row
+        (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
+        """
+        journal = self.journal
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        def saved(row_id):
+            # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
+            # zero one as now. None for a time that cannot be read or compared, which binds nothing.
+            stamp = next(message for message in messages if message.get("row_id") == row_id).get("timestamp")
+            try:
+                at = float(stamp or time.time())
+            except (TypeError, ValueError, OverflowError):
+                return None
+            return at if math.isfinite(at) else None
+        for request_id, text, run_id, extent, sent in steers:
+            try:
+                extent = turn_extent(json.loads(extent))
+            except ValueError:
+                continue
+            if extent is None:
+                continue
+            extent = set(extent)
+            found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
+                     and message["row_id"] in extent and message.get("text") == text]
+            # The root's own row is held by the root's receipt, so the second test also excludes it.
+            if len(found) != 1 or (at := saved(found[0])) is None or sent > at + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
+                continue
+            with journal.db:
+                journal.db.execute("UPDATE receipts SET row_id=? WHERE request_id=?", (found[0], request_id))
 
     def unrepresented_tool_calls(self, session, messages):
         # Standard native tools flush before completion; Codex can expose
@@ -1432,7 +1616,7 @@ class Bridge:
             self.original_rows(session, value.get("messages", []))
         with journal.lock:
             if cached is None:
-                messages, bound_mutation, cacheable = self.attribute(profile, sid, value, rows)
+                messages, bound_mutation = self.attribute(profile, sid, value, rows)
         # Never acquire history_lock while holding journal.lock: native flushes
         # emit frames under history_lock and the frame hook needs journal.lock.
         after = self.history_identity(session) if not omit else None
@@ -1443,7 +1627,7 @@ class Bridge:
             if cached is None:
                 cache = self.decorated
                 with self.cache_lock:
-                    if not omit and identity is not None and after == identity and cacheable and mutation == bound_mutation == journal.mutation:
+                    if not omit and identity is not None and after == identity and mutation == bound_mutation == journal.mutation:
                         # Full binding preserves cursor identities and earlier file context.
                         now = time.monotonic()
                         cache[sid] = (identity, journal.mutation, messages, now, now)
@@ -1518,8 +1702,41 @@ class Bridge:
                     images.pop(len(images) - 1 - images[::-1].index(image))
             session["attached_images"] = images
 
-    def submit(self, rid, params):
+    def turn_request(self, sid, request_id, text):
+        """A request ID of its own for the prompt.submit that carries this receipt's prompt.
+
+        Registered before Hermes is called: the turn can start before the call returns.
+        """
+        native_rid = "agent-interface-submit:" + uuid.uuid4().hex
+        with self.turn_requests_lock:
+            self.turn_requests[native_rid] = (sid, request_id, text)
+        return native_rid
+
+    def turn_started(self, sid, native_rid, streaming):
+        """Hermes answered prompt.submit. Only a started turn can still claim the ID.
+
+        Any other answer, a refusal, a queue, a redirect, starts no turn with this ID. Once a turn
+        starts, the session's earlier unclaimed IDs are dropped so the table stays small: Hermes
+        admits one turn at a time, so their turns either ran or failed to start. Dropping an ID
+        can only leave a receipt unbound, never bind one. Called under submission_lock.
+        """
+        with self.turn_requests_lock:
+            if not streaming:
+                self.turn_requests.pop(native_rid, None)
+                return
+            for key in [key for key, sent in self.turn_requests.items() if sent[0] == sid and key != native_rid]:
+                del self.turn_requests[key]
+
+    def submit(self, rid, params, phases=None):
+        """Admit one app message durably, as a new task or as steering into the running one.
+
+        An app send arrives on its assistant's send lane, so that assistant's sends come one at a
+        time; goal continuation calls this directly, already holding submission_lock. ``phases``,
+        when given, gathers the seconds each step took for the answer's ``app_timing``, and gains
+        ``fresh`` when this call made the admission decision rather than replaying one.
+        """
         server, journal = self.server, self.journal
+        phases = {} if phases is None else phases
         request_id = params.get("request_id")
         actor = params.get("sender_id")
         profile = params.get("profile", "default")
@@ -1529,86 +1746,179 @@ class Bridge:
         if not isinstance(request_id, str) or not 1 <= len(request_id) <= 200 or not isinstance(actor, str) or not actor or not isinstance(text, str) or (not text.strip() and not attachments):
             return server._err(rid, -32602, "request_id, sender_id and non-empty text required")
         digest = hashlib.sha256(json.dumps([profile, actor, text, attachments], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
-        with self.submission_lock:
-            # Replays need neither fresh canonical activation nor interruption review.
-            # Keep the submission fence until admission finishes so only one call owns
-            # a request ID. Do not take a profile lock while holding journal.lock.
-            with journal.lock:
-                previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
-                if previous:
-                    if previous[0] != digest:
-                        return server._err(rid, 4093, "Request ID already belongs to a different input")
-                    return server._ok(rid, journal.admission_response(request_id))
-            if sid is None:
-                sid = self.open_canonical(profile)
-            # Stop a background compaction before reading run state. Its running flag is no task.
-            preempted = sid is not None and self.compaction.preempt(sid)
-            with journal.lock:
-                if sid is None or self.canonical.get(profile) != sid:
-                    return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
-                state = journal.submission_state(profile, sid, server._sessions[sid])
-                stored, running, current, interrupted = (state[key] for key in ("stored", "running", "current", "interrupted"))
-                if params.get("require_idle") is True and running:
-                    return server._err(rid, 4091, "This assistant started another turn before goal continuation admission")
-                if interrupted and params.get("reviewed_interruption") is not True:
-                    return server._err(rid, 4094, "Review the interrupted task before starting another turn")
-                rejected = (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time())
-                if current and not server._sessions[sid].get("running"):
-                    # Native releases running before draining its followup queue. No new root
-                    # may be admitted in that interval or retired with the preceding task.
-                    with journal.db:
-                        journal.db.execute(INSERT_REJECTED, rejected)
-                        return self.admitted(rid, request_id, "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
-                steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
-                if preempted and not current:
-                    # No app task was open, so nothing can be steered: the compaction this input
-                    # just stopped was the only work. Hermes queues it if a native turn started meanwhile.
-                    steering = False
-                if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
-                    with journal.db:
-                        journal.db.execute(INSERT_REJECTED, rejected)
-                        return self.admitted(rid, request_id, "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.")
-                run_id = current[0] if steering and current else request_id
-                # FULL-synchronous intent is durable before native execution may be admitted.
+        # A replay or a conflicting reuse stops no compaction and needs no canonical session. Only
+        # this skip rests on the read: submission_lock still decides who owns the request ID.
+        mark = time.perf_counter()
+        with journal.lock:
+            known = journal.db.execute("SELECT 1 FROM receipts WHERE request_id=?", (request_id,)).fetchone() is not None
+        phases["journal"] = phases.get("journal", 0.0) + time.perf_counter() - mark
+        mark = time.perf_counter()
+        if sid is None and not known:
+            sid = self.open_canonical(profile)
+        phases["open"] = phases.get("open", 0.0) + time.perf_counter() - mark
+        preempting = sid is not None and not known
+        # While held, no background compaction of this session can start, so the wait for one to
+        # stop happens before the lock every admission takes, and holds up no other assistant.
+        with self.compaction.admitting(sid) if preempting else contextlib.nullcontext():
+            mark = time.perf_counter()
+            preempted = preempting and self.compaction.preempt(sid)
+            waited = time.perf_counter() - mark
+            phases["preempt"] = phases.get("preempt", 0.0) + waited
+            if preempted:
+                logging.getLogger(__name__).info("A send waited %.0f ms for profile %s's background compaction to stop", waited * 1000, profile)
+            mark = time.perf_counter()
+            with self.submission_lock:
+                phases["wait"] = phases.get("wait", 0.0) + time.perf_counter() - mark
+                if preempting:
+                    # Nothing can have started since, so this returns at once. A compaction the first
+                    # call left running at its bound gets only what remains of that bound.
+                    mark = time.perf_counter()
+                    preempted = self.compaction.preempt(sid, wait=max(0.0, sibling_module("compaction").PREEMPT_WAIT - waited)) or preempted
+                    phases["preempt"] += time.perf_counter() - mark
+                return self.admit(rid, params, sid, digest, preempted, phases)
+
+    def admit(self, rid, params, sid, digest, preempted, phases):
+        """The admission decision and its native call. Callers hold submission_lock.
+
+        journal.lock covers each journal transaction and nothing else, so tool frames, opens,
+        receipt lookups and the turn's own start never wait for Hermes's admission call or for
+        image staging. Every receipt is written under submission_lock, so the request ID's owner
+        and digest are settled once the first transaction below has read them.
+        """
+        server, journal = self.server, self.journal
+        request_id, actor, text = params.get("request_id"), params.get("sender_id"), params.get("text", "")
+        profile = params.get("profile", "default")
+        attachments = params.get("attachments") or []
+        def timed(phase, mark):
+            phases[phase] = phases.get(phase, 0.0) + time.perf_counter() - mark
+        mark = time.perf_counter()
+        with journal.lock:
+            # Replays need neither fresh canonical activation nor interruption review. A request
+            # without a receipt at submit's early read had its canonical session opened then.
+            previous = journal.db.execute("SELECT digest FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+            if previous:
+                timed("journal", mark)
+                if previous[0] != digest:
+                    return server._err(rid, 4093, "Request ID already belongs to a different input")
+                return server._ok(rid, journal.admission_response(request_id))
+            phases["fresh"] = True
+            if sid is None or self.canonical.get(profile) != sid:
+                timed("journal", mark)
+                return server._err(rid, -32602, "Open this profile's canonical conversation before admission")
+            state = journal.submission_state(profile, sid, server._sessions[sid])
+            stored, running, current, interrupted = (state[key] for key in ("stored", "running", "current", "interrupted"))
+            if params.get("require_idle") is True and running:
+                timed("journal", mark)
+                return server._err(rid, 4091, "This assistant started another turn before goal continuation admission")
+            if interrupted and params.get("reviewed_interruption") is not True:
+                timed("journal", mark)
+                return server._err(rid, 4094, "Review the interrupted task before starting another turn")
+            rejected = (request_id, digest, profile, sid, stored, actor, journal.epoch, request_id, text, json.dumps(attachments), False, "rejected", 1, time.time())
+            if current and not server._sessions[sid].get("running"):
+                # Native releases running before draining its followup queue. No new root
+                # may be admitted in that interval or retired with the preceding task.
                 with journal.db:
-                    journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, run_id, text, json.dumps(attachments), steering, "uncertain", time.time()))
-                staged = []
-                try:
-                    if not steering:
-                        self.stage_images(sid, profile, attachments, staged)
-                except Exception as exc:
-                    # No prompt invocation occurred, so this receipt is definitely rejected.
-                    self.unstage_images(sid, staged)
-                    with journal.db:
-                        journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
-                        return self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
-                try:
-                    method = "session.steer" if steering else "prompt.submit"
-                    native = {"session_id": sid, "profile": profile, "text": text}
-                    # A spoken Talk turn runs on Hermes's auxiliary.voice_chat route. A steer joins a
-                    # running turn, whose route is already bound, so it carries no voice mark.
-                    if params.get("voice_turn") is True and not steering:
-                        native["voice_turn"] = True
-                    result = self.native(method, native)
-                except Exception as exc:
-                    # Known native admission refusals happen before invoking or queueing a turn.
-                    # Crashes and unrecognized errors may follow side effects, so stay uncertain.
-                    if isinstance(exc, NativeResponseError) and exc.refused_admission:
-                        self.unstage_images(sid, staged)
-                        logging.getLogger(__name__).warning("Native message admission refused with code %s", exc.code)
-                        with journal.db:
-                            journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
-                            return self.admitted(rid, request_id, exc.refusal_message)
-                    with journal.db:
-                        return self.admitted(rid, request_id, str(exc)[:500])
-                status = "rejected" if result.get("status") == "rejected" else "accepted"
+                    journal.db.execute(INSERT_REJECTED, rejected)
+                    response = self.admitted(rid, request_id, "Hermes is finishing the preceding task. Your input was not admitted; send it again after the task settles.")
+                timed("journal", mark)
+                return response
+            steering = bool(params.get("steer")) or bool(server._sessions.get(sid, {}).get("running"))
+            if preempted and not current:
+                # No app task was open, so nothing can be steered: the compaction this input
+                # just stopped was the only work. Hermes queues it if a native turn started meanwhile.
+                steering = False
+            if steering and any(str(x.get("mime", "")).startswith("image/") for x in attachments):
                 with journal.db:
-                    journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
-                    if interrupted and status == "accepted":
-                        journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
-                    if steering and status == "accepted":
-                        self.steered.value = (profile, sid, actor, text)
-                    return self.admitted(rid, request_id)
+                    journal.db.execute(INSERT_REJECTED, rejected)
+                    response = self.admitted(rid, request_id, "Images cannot be added while Hermes is working. Keep this draft and send it after the task settles.")
+                timed("journal", mark)
+                return response
+            run_id = current[0] if steering and current else request_id
+            # FULL-synchronous intent is durable before native execution may be admitted, and
+            # committed before any frame of its turn can look for it.
+            with journal.db:
+                journal.db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,stored_session,actor,epoch,run_id,input_text,attachments,steering,status,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (request_id, digest, profile, sid, stored, actor, journal.epoch, run_id, text, json.dumps(attachments), steering, "uncertain", time.time()))
+            self.admitting.add(request_id)
+        timed("journal", mark)
+        try:
+            return self.admit_native(rid, params, sid, steering, interrupted, stored, phases)
+        finally:
+            with journal.lock:
+                self.admitting.discard(request_id)
+
+    def admit_native(self, rid, params, sid, steering, interrupted, stored, phases):
+        """Image staging and Hermes's admission call for an intent admit just wrote, and the answer.
+
+        Each final journal transaction also ends the admission for readers, so an open sees the
+        intent hidden or the answered receipt, never a receipt Hermes answered still hidden.
+        """
+        journal = self.journal
+        request_id, actor, text = params.get("request_id"), params.get("sender_id"), params.get("text", "")
+        profile = params.get("profile", "default")
+        attachments = params.get("attachments") or []
+        def timed(phase, mark):
+            phases[phase] = phases.get(phase, 0.0) + time.perf_counter() - mark
+        staged = []
+        mark = time.perf_counter()
+        try:
+            if not steering:
+                self.stage_images(sid, profile, attachments, staged)
+        except Exception as exc:
+            # No prompt invocation occurred, so this receipt is definitely rejected.
+            self.unstage_images(sid, staged)
+            timed("staging", mark)
+            mark = time.perf_counter()
+            with journal.lock, journal.db:
+                journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
+                response = self.admitted(rid, request_id, "Image preparation failed before admission: " + str(exc)[:400])
+                self.admitting.discard(request_id)
+            timed("journal", mark)
+            return response
+        timed("staging", mark)
+        native_rid = self.turn_request(sid, request_id, text) if not steering else "extension-native"
+        mark = time.perf_counter()
+        try:
+            method = "session.steer" if steering else "prompt.submit"
+            native = {"session_id": sid, "profile": profile, "text": text}
+            # A spoken Talk turn runs on Hermes's auxiliary.voice_chat route. A steer joins a
+            # running turn, whose route is already bound, so it carries no voice mark.
+            if params.get("voice_turn") is True and not steering:
+                native["voice_turn"] = True
+            result = self.native(method, native, native_rid)
+        except Exception as exc:
+            timed("native", mark)
+            mark = time.perf_counter()
+            # Known native admission refusals happen before invoking or queueing a turn.
+            # Crashes and unrecognized errors may follow side effects, so stay uncertain.
+            if isinstance(exc, NativeResponseError) and exc.refused_admission:
+                self.turn_started(sid, native_rid, False)
+                self.unstage_images(sid, staged)
+                logging.getLogger(__name__).warning("Native message admission refused with code %s", exc.code)
+                with journal.lock, journal.db:
+                    journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
+                    response = self.admitted(rid, request_id, exc.refusal_message)
+                    self.admitting.discard(request_id)
+            else:
+                with journal.lock, journal.db:
+                    response = self.admitted(rid, request_id, str(exc)[:500])
+                    self.admitting.discard(request_id)
+            timed("journal", mark)
+            return response
+        timed("native", mark)
+        mark = time.perf_counter()
+        status = "rejected" if result.get("status") == "rejected" else "accepted"
+        if not steering:
+            self.turn_started(sid, native_rid, result.get("status") == "streaming")
+        with journal.lock, journal.db:
+            journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
+            if interrupted and status == "accepted":
+                journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
+            if steering and status == "accepted":
+                self.steered.value = (profile, sid, actor, text)
+            response = self.admitted(rid, request_id)
+            self.admitting.discard(request_id)
+        timed("journal", mark)
+        return response
 
     def submit_from_app(self, rid, params):
         """An app message. Once it is durably admitted as steering, the asks it answers instead close.
@@ -1616,10 +1926,17 @@ class Bridge:
         A blocked tool returns only when its ask settles, and native steering drains after that
         tool returns, so the message would otherwise wait behind the ask. This runs after every
         lock is released: closing wakes the waiting tool thread, which may need them.
+
+        A fresh admission's answer reports ``app_timing`` in milliseconds, as an open does: the
+        canonical open, the wait for a background compaction to stop, the wait for other
+        admissions, journal statements, image staging, Hermes's admission call and the whole call.
+        A replay answers what was saved, without timings.
         """
+        started = time.perf_counter()
+        phases = dict.fromkeys(SUBMIT_PHASES, 0.0)
         self.steered.value = None
         try:
-            return self.submit(rid, params)
+            response = self.submit(rid, params, phases)
         finally:
             steered, self.steered.value = self.steered.value, None
             hook = getattr(self.journal, "steering_admitted", None)
@@ -1628,6 +1945,10 @@ class Bridge:
                     hook(*steered)
                 except Exception:
                     logging.getLogger(__name__).exception("Could not close the asks a steering message answered")
+        if phases.pop("fresh", False) and isinstance(response.get("result"), dict):
+            phases["total"] = time.perf_counter() - started
+            response["result"]["app_timing"] = {name: round(seconds * 1000, 1) for name, seconds in phases.items()}
+        return response
 
     def receipt(self, rid, params):
         with self.journal.lock:

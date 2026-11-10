@@ -16,6 +16,7 @@ import { Icon } from './Icon';
 import { Avatar } from './Avatar';
 import { When } from './When';
 import { imeKey } from '../app/ime';
+import { sendsOnKey, useEnterSends } from '../app/enter-key';
 import './collaboration.css';
 type PendingMessage = { requestId: string; threadId: string; text: string };
 type RoomView = { state: GroupState; page: GroupPage };
@@ -35,6 +36,7 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const [threadId, setThreadId] = useState('');
   const [replyToId, setReplyToId] = useState('');
   const panel = useRef<HTMLDivElement>(null);
+  const notesBox = useRef<HTMLDivElement>(null);
   const scrollLatest = useRef(false);
   const [notice, setNotice] = useState('');
   // Another member made one of its assistants personal, so the group left this person's list.
@@ -117,6 +119,9 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
   const [mentionIndex, setMentionIndex] = useState(0);
   const mentionList = useId();
   const field = useRef<HTMLTextAreaElement>(null);
+  // On a touch screen with no mouse or trackpad, Return starts a new line. Ctrl+Enter and Cmd+Enter
+  // send everywhere. See enter-key.ts.
+  const enterSends = useEnterSends();
   const caret = useRef<number | null>(null);
   const suggestions = mention && state ? matchMembers(state.room.members, mention.query) : [];
   const suggesting = suggestions.length > 0;
@@ -201,12 +206,30 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
     // Include pending decisions and paging controls after the messages.
     view.scrollTop = view.scrollHeight;
   }, [events, state]);
-  return <div className="group-panel" ref={panel}>
+  // The draft gives up the height the notes take, so the composer never lies over an error it caused. CSS cannot
+  // measure them, so their height is handed to it as --group-notes.
+  useLayoutEffect(() => {
+    const box = notesBox.current, view = panel.current;
+    if (!box || !view) return;
+    const reserve = () => view.style.setProperty('--group-notes', `${box.offsetHeight}px`);
+    reserve();
+    if (typeof ResizeObserver !== 'function') return;
+    const observer = new ResizeObserver(reserve);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [gone]);
+  // Errors and notes sit inside the conversation's section. The composer sticks to the bottom of the panel only
+  // within that section, so a note above the section would push the section down and the composer's buttons with
+  // it, off a short screen.
+  const notes = <div className="group-notes" ref={notesBox}>
     {room.error && <FormMessage tone="error">{room.error} <button onClick={() => void room.reload()}>Retry</button></FormMessage>}
     {error && <FormMessage tone="error">{error}</FormMessage>}
     {notice && <p className="capability-note" role="status">{notice}</p>}
     {reason && !canSend && !gone && <p className="capability-note">{reason}</p>}
-    {!gone && <section aria-label="Group conversation">{state ? <><div className="group-heading"><div>
+  </div>;
+  return <div className="group-panel" ref={panel}>
+    {gone && notes}
+    {!gone && <section aria-label="Group conversation">{notes}{state ? <><div className="group-heading"><div>
         <p className="muted">{state.room.members.map(member => `${member.display_name || member.profile} (@${member.handle})`).join(' · ')}</p>
         {context?.purpose && <p className="group-purpose">{context.purpose}</p>}</div>
         <div className="group-heading-actions">
@@ -257,11 +280,12 @@ export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }:
                   setMentionIndex(index => (Math.min(index, suggestions.length - 1) + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length);
                   return;
                 }
-                if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
+                // Plain Enter picks the member. Ctrl+Enter and Cmd+Enter are left to send, as they do everywhere.
+                if ((event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) || event.key === 'Tab') { event.preventDefault(); if (chosen) accept(chosen.handle); return; }
                 if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMention(null); return; }
               }
-              if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
-            }} />
+              if (sendsOnKey(event.nativeEvent, enterSends)) { event.preventDefault(); if (!busy && writable && draft.trim()) event.currentTarget.form?.requestSubmit(); }
+            }} enterKeyHint={enterSends ? 'send' : 'enter'} />
           <div className="composer-tools"><span id="group-status" role="status" className="group-status">{status}</span>
             {pending ? <button type="submit" className="primary" disabled={busy || !writable}>Retry same saved message</button>
               : <button type="submit" className="send-button" aria-label={busy ? 'Sending…' : 'Send to group'} disabled={busy || !writable || !draft.trim()}><Icon name="send" size={19} /></button>}</div>

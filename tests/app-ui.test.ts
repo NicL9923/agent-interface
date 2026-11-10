@@ -11,6 +11,7 @@ import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
+import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
 import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
@@ -737,6 +738,8 @@ describe("conversation state", () => {
       return (path === "/bootstrap?roster=lean" ? bootstrap : savedDraft) as T;
     });
     await changed();
+    // One failed read that may be a blip shows once no read has succeeded for the grace period.
+    await advance(DISCONNECT_GRACE_MS);
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
     expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.hasAttribute("data-avatar-prop")).toBe(false);
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
@@ -1462,6 +1465,7 @@ describe("conversation state", () => {
       return (path === "/bootstrap?roster=lean" ? { ...bootstrap, preferences: { ...defaultPreferences, startPage:"assistant", presentation: "advanced" } } : savedDraft) as T;
     });
     await changed();
+    await advance(DISCONNECT_GRACE_MS);
     expect(container.querySelector('[data-tool-call-id="live-call"] summary')?.textContent).toContain("Last seen running");
   });
 
