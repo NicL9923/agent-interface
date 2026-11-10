@@ -83,11 +83,11 @@ the roster changed. Nothing was changed for them; the test holds each below 0.1.
 
 ## Measurement
 
-From the same first-load run as `t3/early-bootstrap`'s ledger, 30 loads per build per load kind,
-this branch at `cd32bfb` against `t3/account-transitions` at `148d8ef`: roster painted at 5651, 577
-and 293 ms (cold, warm, worker), 317, 281 and 401 ms sooner, each interval clear of zero. The tool
-refused to call it a result: the load average rose from 7.1 to 13.2 during the run, from other
-agents' work on this shared machine. See `20261110T190000Z-early-bootstrap-review-fixes.md`.
+From the first-load runs in `20261110T190000Z-early-bootstrap-review-fixes.md`, 30 loads per build
+per load kind, this branch at `cd32bfb` against `t3/account-transitions` at `148d8ef`. Run 2, which
+stayed below the tool's load bound (4.7 at the start, 3.2 at the end): roster painted at 5648, 567
+and 300 ms (cold, warm, worker), 308, 271 and 381 ms sooner, each 95% interval clear of zero. Run 1,
+which the tool refused as busy, agreed within 25 ms.
 
 ## Application tests
 
