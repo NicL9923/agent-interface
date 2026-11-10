@@ -4,10 +4,11 @@ import type { Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import { SignIn } from '../src/components/SignIn';
-import { api, cachedResponse, clearResponseCache, write } from '../src/client-api';
+import { api, ApiError, cachedResponse, clearResponseCache, write } from '../src/client-api';
+import { DISCONNECT_GRACE_MS } from '../src/app/use-conversation';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 import { FakeEventSource } from './fake-event-source';
-import { advance, button, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
+import { advance, button, mountRoot, renderedProps, stubMatchMedia, typeInto } from './ui-harness';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}))(original)));
 // Presence heartbeats would interleave with the writes these tests count; they have their own tests.
@@ -578,5 +579,128 @@ describe('pushed conversation updates',()=>{
       expect(FakeEventSource.created.filter(url=>url.includes("/bots/"))).toHaveLength(2);
       expect(FakeEventSource.streams.size).toBe(2);
     }finally{Reflect.deleteProperty(document,'visibilityState');}
+  });
+});
+
+describe('a failed conversation read',()=>{
+  // What the next conversation read throws, as the client API reports it; undefined answers it.
+  let failure:Error|undefined;
+  // A request that never reached the app, as the client API reports a failed fetch: it may be a blip.
+  const blip=()=>new ApiError("Can't reach the app. Your draft is kept. We'll reconnect automatically.",503,'CONNECTION_UNAVAILABLE');
+  const form='```agent-ui\n'+JSON.stringify({version:1,cards:[{id:'gate',type:'form',title:'Gate check',fields:[{id:'state',label:'State',kind:'text',required:true}]}]})+'\n```';
+  beforeEach(()=>{
+    vi.setSystemTime(Date.UTC(2026,10,10,15));
+    failure=undefined;
+    const serve=vi.mocked(api).getMockImplementation()!;
+    vi.mocked(api).mockImplementation(async <T>(path:string,...rest:unknown[])=>{
+      if(failure&&path.startsWith('/bots/shared/conversation?'))throw failure;
+      return (serve as (path:string,...rest:unknown[])=>Promise<T>)(path,...rest);
+    });
+  });
+  // A change notice asks for a read, which then fails or succeeds.
+  const read=async()=>{await act(async()=>FakeEventSource.notifyAll());await advance(0);};
+  const shown=()=>container.querySelector('[aria-label="Hermes connection"]')!==null;
+  const sendButton=()=>container.querySelector<HTMLButtonElement>('button[aria-label^="Send"]')!;
+  const opened=async()=>{await renderApp();await advance(20);expect(container.querySelector('.transcript [data-message-id]')).not.toBeNull();expect(shown()).toBe(false);};
+
+  it('shows nothing for one failure that the next read answers',async()=>{
+    await opened();
+    failure=blip();await read();
+    await advance(DISCONNECT_GRACE_MS-1);
+    failure=undefined;await read();
+    await advance(DISCONNECT_GRACE_MS);
+    expect(shown()).toBe(false);
+  });
+
+  it('shows the connection is down on a second failure in a row',async()=>{
+    await opened();
+    failure=blip();await read();
+    expect(shown()).toBe(false);
+    await read();
+    expect(shown()).toBe(true);
+  });
+
+  it('shows it once a failure goes 3 seconds without a successful read, not a millisecond sooner, and clears on the next success',async()=>{
+    await opened();
+    failure=blip();await read();
+    await advance(DISCONNECT_GRACE_MS-1);
+    expect(shown()).toBe(false);
+    await advance(1);
+    expect(shown()).toBe(true);
+    failure=undefined;await read();
+    expect(shown()).toBe(false);
+  });
+
+  it.each([
+    ['the browser is offline',()=>{Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>false});return blip();},true],
+    ['the server answers that Hermes is unreachable',()=>new ApiError('The Hermes operation could not be completed',502,'unreachable'),true],
+    ['the answer was unreadable',()=>new ApiError('The app returned an unreadable response.',502,'INVALID_RESPONSE'),false],
+    ['the server failed without a code',()=>new ApiError('Request failed (500)',500),false],
+    ['the failure is not an API error',()=>new Error('Hermes is restarting.'),false],
+  ])('on one failure, shows at once only when it proves the connection is down: %s',async(_name,make,atOnce)=>{
+    await opened();
+    failure=make();await read();
+    expect(shown()).toBe(atOnce);
+  });
+
+  it('refuses a send and a stop during the grace period, and allows them once a read succeeds',async()=>{
+    conversation={...conversation,activity:{state:'working',runId:'run-1'}};
+    await opened();
+    failure=blip();await read();
+    expect(shown()).toBe(false);
+    const field=container.querySelector('textarea')!;
+    const stop=()=>container.querySelector<HTMLButtonElement>('button[aria-label="Stop response"]')!;
+    // With an empty draft a running reply offers Stop; with words, Send guidance.
+    await typeInto(field,'');
+    expect(stop().disabled).toBe(true);
+    await typeInto(field,'Check the gate');
+    expect(sendButton().disabled).toBe(true);
+    await act(async()=>container.querySelector('form')!.requestSubmit());
+    expect(vi.mocked(write).mock.calls.filter(([path])=>/^\/bots\/shared\/(messages|stop)/.test(String(path)))).toEqual([]);
+    failure=undefined;await read();
+    expect(sendButton().disabled).toBe(false);
+    await typeInto(field,'');
+    expect(stop().disabled).toBe(false);
+  });
+
+  it('re-renders only the turns that show the connection: reply cards at once, a running tool once it shows',async()=>{
+    const ask=(id:string,text:string)=>({id,role:'user' as const,text,sender:{id:'one',name:'One'}});
+    conversation={...conversation,activity:{state:'working',runId:'run-1'},messages:[
+      ask('q1','Is the gate shut?'),{id:'a1',role:'assistant',text:'The **north gate** is shut.'},
+      ask('q2','Check it for me'),{id:'p2',role:'assistant',interim:true,text:'Let me write up a *short* form.'},{id:'a2',role:'assistant',text:`Fill this in.\n\n${form}`},
+      ask('q3','Watch the barn'),{id:'t3',role:'tool',text:'',toolCall:{id:'watch',name:'terminal',status:'running'}},{id:'a3',role:'assistant',text:'Watching the *barn* now.'},
+    ]};
+    await opened();
+    const markdown=(id:string)=>[...container.querySelectorAll<HTMLElement>(`[data-message-id="${id}"] .message-markdown *`)];
+    const props=(elements:HTMLElement[])=>elements.map(renderedProps);
+    // Which of these elements rendered again since `before`: React gave them a new props object.
+    const rerendered=(elements:HTMLElement[],before:unknown[])=>props(elements).some((now,index)=>now!==before[index]);
+    // A progress line in the card's own turn holds no card, so it does not re-render either.
+    const plain=[...markdown('a1'),...markdown('p2'),...markdown('a3')], card=markdown('a2');
+    expect(markdown('p2')).not.toEqual([]);
+    // The first turn shows neither a card nor a running tool: its own rows, which only its turn renders, stay as they were.
+    const first=container.querySelector<HTMLElement>('[data-message-id="a1"]')!.closest<HTMLElement>('.conversation-turn')!;
+    const quiet=[first,...first.querySelectorAll<HTMLElement>(':scope > article')];
+    expect(quiet).toHaveLength(3);
+    const before={plain:props(plain),card:props(card),quiet:props(quiet)};
+    const submit=()=>container.querySelector<HTMLButtonElement>('[data-message-id="a2"] .reply-cards button[type="submit"]')!;
+    expect(submit().disabled).toBe(false);
+    // One failure: the card refuses at once, and no other reply parses its Markdown again.
+    failure=blip();await read();
+    expect(submit().disabled).toBe(true);
+    expect(rerendered(card,before.card)).toBe(true);
+    expect(rerendered(plain,before.plain)).toBe(false);
+    expect(rerendered(quiet,before.quiet)).toBe(false);
+    expect(container.querySelector('[data-message-id="a3"]')!.closest('.conversation-turn')!.textContent).not.toContain('Last seen running');
+    // The connection is down: the running tool says so, and the plain replies still do not re-render.
+    await read();
+    expect(shown()).toBe(true);
+    expect(container.querySelector('[data-message-id="a3"]')!.closest('.conversation-turn')!.textContent).toContain('Last seen running');
+    expect(rerendered(plain,before.plain)).toBe(false);
+    expect(rerendered(quiet,before.quiet)).toBe(false);
+    failure=undefined;await read();
+    expect(submit().disabled).toBe(false);
+    expect(rerendered(plain,before.plain)).toBe(false);
+    expect(rerendered(quiet,before.quiet)).toBe(false);
   });
 });

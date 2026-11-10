@@ -1,0 +1,162 @@
+{
+ "before": [
+  {
+   "label": "before-r1",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": true,
+   "shownAfterSuccess": false,
+   "counts": {
+    "TurnView.body": 40,
+    "MessageActions.body": 80,
+    "MarkdownBlocks.body": 80
+   },
+   "commits": 9,
+   "commitMs": [
+    0,
+    41.1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    20.7,
+    0
+   ]
+  },
+  {
+   "label": "before-r2",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": true,
+   "shownAfterSuccess": false,
+   "counts": {
+    "TurnView.body": 40,
+    "MessageActions.body": 80,
+    "MarkdownBlocks.body": 80
+   },
+   "commits": 10,
+   "commitMs": [
+    0,
+    0,
+    33,
+    0.1,
+    0,
+    0,
+    0,
+    0,
+    20.4,
+    0
+   ]
+  },
+  {
+   "label": "before-r3",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": true,
+   "shownAfterSuccess": false,
+   "counts": {
+    "TurnView.body": 40,
+    "MessageActions.body": 80,
+    "MarkdownBlocks.body": 80
+   },
+   "commits": 9,
+   "commitMs": [
+    0,
+    33.8,
+    0.1,
+    0.1,
+    0,
+    0,
+    0,
+    23.7,
+    0
+   ]
+  }
+ ],
+ "after": [
+  {
+   "label": "after-r1",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": false,
+   "shownAfterSuccess": false,
+   "counts": {
+    "MessageActions.body": 80,
+    "TurnView.body": 10,
+    "MarkdownBlocks.body": 10
+   },
+   "commits": 6,
+   "commitMs": [
+    0,
+    10.8,
+    0,
+    0,
+    0,
+    10.7
+   ]
+  },
+  {
+   "label": "after-r2",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": false,
+   "shownAfterSuccess": false,
+   "counts": {
+    "MessageActions.body": 80,
+    "TurnView.body": 10,
+    "MarkdownBlocks.body": 10
+   },
+   "commits": 6,
+   "commitMs": [
+    0,
+    16.4,
+    0,
+    0,
+    0,
+    9.8
+   ]
+  },
+  {
+   "label": "after-r3",
+   "rows": 60,
+   "reads": {
+    "failed": 1,
+    "passed": 1
+   },
+   "shownDuringFailure": false,
+   "shownAfterSuccess": false,
+   "counts": {
+    "MessageActions.body": 80,
+    "TurnView.body": 10,
+    "MarkdownBlocks.body": 10
+   },
+   "commits": 8,
+   "commitMs": [
+    0,
+    0,
+    10.5,
+    0,
+    0,
+    0,
+    8.8,
+    3.8
+   ]
+  }
+ ]
+}
