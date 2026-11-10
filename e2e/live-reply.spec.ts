@@ -60,6 +60,9 @@ test.describe("a live reply's caret", () => {
     { name: "Arabic followed by a number", text: "البوابة مغلقة 2026", word: "2026", side: "right" },
     { name: "Arabic followed by a number with no space", text: "عام2026", word: "عام2026", side: "line" },
     { name: "Latin followed by Arabic with no space", text: "helloمرحبا", word: "helloمرحبا", side: "line" },
+    // The final letter is the line's right end itself, so the caret must clear that letter too.
+    { name: "Latin followed by one Arabic letter", text: "helloم", word: "helloم", side: "line" },
+    { name: "Latin followed by one Hebrew letter", text: "helloש", word: "helloש", side: "line" },
     // Words on the line above the end do not count as taking the caret's room.
     { name: "a wrapped line", text: `${"latchedthenorthgate openedtheeastgate ".repeat(4)}latchedthenorthgate partner`, word: "partner", side: "right" },
   ] as const;

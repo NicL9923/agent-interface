@@ -309,17 +309,20 @@ export function logicalEndSide(grapheme: string, last: Box, previous: Box | unde
 }
 
 /**
- * Where the caret goes once its gap and width, `reach`, are known: past the text's logical end, unless
- * another glyph on the line takes that room, as where Latin meets Arabic with no space between, or
- * Arabic meets a number. Then it goes past the end of the line in the paragraph's direction, beyond
- * every glyph on it, which is also where the next word goes when it runs in that direction.
- * `line` holds the boxes of the line's other glyphs; a space is not one, so the caret may sit in it.
+ * Where the caret goes once its gap and width, `reach`, are known: past the text's logical end, the
+ * `side` of its `last` grapheme, unless another glyph on the line takes that room, as where Latin
+ * meets Arabic with no space between, or Arabic meets a number. Then it goes past the end of the line
+ * in the paragraph's direction, beyond every glyph on it, which is also where the next word goes when
+ * it runs in that direction. `line` holds the boxes of the line's other glyphs; a space is not one, so
+ * the caret may sit in it.
  */
-export function clearEnd(x: number, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+export function clearEnd(last: Box, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+  const x = side === "left" ? last.left : last.right;
   const from = side === "left" ? x - reach : x, to = side === "left" ? x : x + reach;
   if (!line.some(glyph => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
-  if (direction === "rtl") return { x: Math.min(x, ...line.map(glyph => glyph.left)), side: "left" };
-  return { x: Math.max(x, ...line.map(glyph => glyph.right)), side: "right" };
+  // The final grapheme counts whole: in "helloم" it is the line's end itself.
+  if (direction === "rtl") return { x: Math.min(last.left, ...line.map(glyph => glyph.left)), side: "left" };
+  return { x: Math.max(last.right, ...line.map(glyph => glyph.right)), side: "right" };
 }
 
 const space = /\s/;
@@ -377,7 +380,7 @@ function textEnd(box: Element, reach: number): { x: number; side: "left" | "righ
   const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
   const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
   const logical = logicalEndSide(node.data.slice(start, end), last, previous, direction);
-  const { x, side } = clearEnd(logical === "left" ? last.left : last.right, logical, lineGlyphs(walker, node, start, last), direction, reach);
+  const { x, side } = clearEnd(last, logical, lineGlyphs(walker, node, start, last), direction, reach);
   return { x, side, top: last.top, height: last.height, node };
 }
 /** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
