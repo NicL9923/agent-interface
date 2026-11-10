@@ -18,6 +18,9 @@ from unittest.mock import patch
 from hermes_compaction_test import DELAY, Agent, Native
 from hermes_extension_journal_test import PooledHermes, Replies, extension, saved
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents/tools"))
+import deploy_common  # noqa: E402
+
 ADMISSION = ("image.attach", "prompt.submit", "session.steer")
 # Every native method these tests let the add-on call: admission, and the roster and activation an open makes.
 # The add-on's own agent-interface methods are registered on the fake and run as themselves.
@@ -402,8 +405,8 @@ class SendLaneTests(unittest.TestCase):
                 # The waiting send holds its own reservation before any thread runs it.
                 self.assertEqual(hermes.active[0], before + 1)
                 refused = maintenance("acquire")
-                self.assertEqual((refused["error"]["code"], lease.exists()), (409, False))
-                self.assertIn("active work", refused["error"]["message"])
+                # The guarded release retries only this exact answer; any other error is held for review.
+                self.assertEqual((refused["error"], lease.exists()), (deploy_common.BUSY_REFUSAL, False))
                 admitting.set()
                 self.assertTrue(replies.wait("running", "waiting"))
                 self.assertEqual(hermes.settled(), 0)

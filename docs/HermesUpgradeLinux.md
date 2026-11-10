@@ -448,15 +448,37 @@ sign-in and the app work. `--check` stops there and changes nothing. Activation 
    already past its own checks cannot leave its status behind.
 4. Backs up the app, drains the gateway, stops the native owners and switches the release.
 
-When the lease is refused, or its answer is lost, the tool releases it, which removes this
-operation's lease if acquire took one, and requires no lease to remain, the blocked status to be
-its own and no update request to be pending. It then restores the saved status, journals
-`maintenance-refused` and exits 75. Nothing stopped, so the household keeps the app and the work
-that refused the lease finishes as usual; `release-app.py activate` leaves the stage prepared to
-run again. Any other failure, including a failed release or a status the app rewrote, journals
-`maintenance-held-needs-review`, exits 2 and keeps the blocked status. The app may then still be
-running behind it. Before this order, the app stopped first, so a send in that window made the
-acquire refuse with the app already down and the operation held for review.
+When the add-on answers acquire with its busy refusal, or with a lease that fails the tool's
+checks, its handler has returned. The tool then releases, which removes this operation's lease if
+acquire took one, and requires no lease to remain, the blocked status to be its own and no update
+request to be pending. It then restores the saved status, journals `maintenance-refused` and
+exits 75. Nothing stopped, so the household keeps the app and the work that refused the lease
+finishes as usual; `release-app.py activate` leaves the stage prepared to run again.
+
+Any other failure journals `maintenance-held-needs-review`, exits 2 and keeps the blocked status,
+with the app possibly still running behind it. That includes a failed release, any other error
+answer, and a status file that changed after the tool wrote the blocked status. The tool leaves a
+changed status file as it found it: those bytes are the app's, so leave them in place and never
+write the blocked status back over them.
+
+Acquire waits up to 120 s for its answer, because the add-on first stops any running idle
+compaction, one at a time and for up to 30 s each. With no answer by then, the handler may still
+be running and can write the lease after any release, so the tool never reports this as nothing
+changed. It tries one release, then exits 2 with `Stopped at fence: Hermes answered maintenance
+acquire.` The app, dashboard and gateway keep running, and the app refuses sends with the
+draft-saved message. On the host:
+
+1. Wait five minutes after the tool exited, so any acquire still running has ended.
+2. Read `maintenanceFile`. If it holds exactly `{"operationId": "OPERATION"}` for this
+   operation, the late acquire took the lease: delete the file. Stop and investigate a lease that
+   names another operation, or a `.drain_request.json` in the Hermes home.
+3. If `upgradeStateDir/status.json` still has `"phase": "blocked"` and this `operationId`, replace
+   it with `appBase/operations/continued-OPERATION/previous-status.json` through a temporary file
+   and `mv`, keeping mode 600. Leave any other content in place.
+4. Prepare the commit again. The needs-review stage stays as the record.
+
+Before this order, the app stopped first, so a send in that window made the acquire refuse with
+the app already down and the operation held for review.
 
 Host programs travel as Python source in `REMOTE*` string constants, which `compileall`
 cannot see. `tests/host_programs_test.py` finds every such constant, composes it exactly as

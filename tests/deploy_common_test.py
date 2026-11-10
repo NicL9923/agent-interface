@@ -247,8 +247,8 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         return {"active": False, "operationId": None, "busy": list(busy)}
 
     def busy(self):
-        # The add-on answers 409 and writes no lease; the RPC script then exits nonzero.
-        raise RuntimeError("A deployment command failed; private log retained")
+        # The add-on's handler returns this error and writes no lease (src/hermes/extension.py).
+        raise deploy_common.Answered({"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"})
 
     def run_steps(self):
         self.d.acquire_then_stop_app(self.rpc, self.BLOCKED, self.PREVIOUS)
@@ -288,18 +288,46 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
             self.run_steps()
         self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
         self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
-        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+        self.assertIsInstance(caught.exception.__cause__, deploy_common.Answered)
 
-    def test_lost_acquire_answer_is_released_before_the_refusal(self):
-        def lost():
-            self.acquired()
-            raise subprocess.TimeoutExpired("python", 40)
-        self.answers.update(acquire=lost, release=self.released)
-        with self.assertRaises(deploy_common.Refused):
+    def test_another_error_answer_is_held_for_review_without_a_release(self):
+        # Same code as the busy refusal, but no busy work to wait out: a rerun cannot succeed.
+        def other_owner():
+            raise deploy_common.Answered({"code": 409, "message": "Another maintenance operation owns this lease"})
+        self.answers["acquire"] = other_owner
+        with self.assertRaisesRegex(deploy_common.Answered, "Another maintenance operation") as caught:
             self.run_steps()
-        # The release ran while the lost acquire's lease was still held, and removed it.
-        self.assertEqual([event[0::3] for event in self.recorded()], [["acquire", False], ["release", True]])
-        self.assertEqual((self.status.read_bytes(), self.d.lease.exists()), (self.PREVIOUS, False))
+        self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire"])
+
+    def test_unanswered_acquire_keeps_the_blocked_status_since_its_lease_can_still_appear(self):
+        """No answer means the add-on may still be preempting compactions before it writes the lease."""
+        def lost_after_lease():
+            self.acquired()
+            raise subprocess.TimeoutExpired("python", 145)
+        def no_answer():
+            raise RuntimeError("A deployment command failed; private log retained")
+        cases = (
+            # The answer was lost on its way back: the release still removes the lease it finds.
+            ("answer lost after the lease", lost_after_lease, self.released, [["acquire", False], ["release", True]], False),
+            # The handler is still preempting: release finds nothing, and the lease is written once it returns.
+            ("lease written after the release", no_answer,
+             lambda: (self.released(), self.acquired())[0], [["acquire", False], ["release", False]], True),
+            ("release unreachable", no_answer, no_answer, [["acquire", False], ["release", False]], False),
+        )
+        for name, acquire, release, calls, late_lease in cases:
+            with self.subTest(name):
+                self.status.write_bytes(self.PREVIOUS)
+                self.d.lease.unlink(missing_ok=True)
+                self.events.unlink(missing_ok=True)
+                self.answers.update(acquire=acquire, release=release)
+                with self.assertRaisesRegex(deploy_common.Fence, "^Hermes answered maintenance acquire$") as caught:
+                    self.run_steps()
+                self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+                self.assertEqual([event[0::3] for event in self.recorded()], calls)
+                # The app keeps refusing sends: a lease that appears later never meets an idle status.
+                self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.BLOCKED, "maintenance-acquiring", late_lease))
 
     def test_unexpected_acquire_answers_are_refusals_once_released(self):
         def other_lease():
@@ -350,6 +378,105 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         self.assertNotIsInstance(caught.exception, deploy_common.Refused)
         self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
         self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+
+class MaintenanceRpcTests(unittest.TestCase):
+    """The release helper's real NATIVE maintenance RPC, run as the guarded tool runs it.
+
+    The service-ticket endpoint is a local HTTP server. The WebSocket client library is a fake
+    module in the fake Hermes source, which NATIVE puts first on sys.path; it replays the messages
+    a test scripts and fails on any receive the test did not script.
+    """
+    REQUEST = {"action": "rpc", "key": "service-key", "operation": "op-1"}
+    BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.host = Fixture(Path(temporary.name))
+        self.addCleanup(self.host.close)
+        self.d = self.host.deployment
+        source = self.host.source
+        (source / "hermes_bootstrap.py").write_text("")
+        (source / "websockets/sync").mkdir(parents=True)
+        (source / "websockets/__init__.py").write_text("")
+        (source / "websockets/sync/__init__.py").write_text("")
+        self.script, self.calls = self.host.root / "ws-script.json", self.host.root / "ws-calls.jsonl"
+        (source / "websockets/sync/client.py").write_text(f"""
+import json
+from pathlib import Path
+def record(*event):
+    with open({str(self.calls)!r}, "a") as calls: calls.write(json.dumps(event) + "\\n")
+class Socket:
+    def __init__(self): self.steps = json.loads(Path({str(self.script)!r}).read_text())
+    def __enter__(self): return self
+    def __exit__(self, *_): return False
+    def send(self, message): record("send", json.loads(message))
+    def recv(self, timeout):
+        record("recv", timeout)
+        if not self.steps: raise AssertionError("unscripted WebSocket receive")
+        step = self.steps.pop(0)
+        if step == "silence": raise TimeoutError("timed out while waiting for a message")
+        return json.dumps(step)
+def connect(url, *, open_timeout, close_timeout):
+    record("connect", url)
+    return Socket()
+""")
+        class Tickets(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                ok = self.path == "/api/agent-interface/service-ticket" and self.headers["Authorization"] == "Bearer service-key"
+                body = json.dumps({"ticket": "ticket-1"}).encode() if ok else b"{}"
+                self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body)
+            def log_message(self, *_): pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Tickets)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.request = dict(self.REQUEST, source=str(source), origin=f"http://127.0.0.1:{server.server_address[1]}")
+        # Exactly the guarded tool's rpc command.
+        helper = ROOT / "scripts/hermes-upgrade-linux.py"
+        self.argv = [sys.executable, "-I", "-c", "import runpy; m=runpy.run_path(" + repr(str(helper)) + "); exec(m['NATIVE'])"]
+
+    def call(self, method, *steps):
+        self.script.write_text(json.dumps(list(steps)))
+        return self.d.maintenance_rpc(self.argv, dict(self.request, method=method))
+
+    def recorded(self):
+        return [json.loads(line) for line in self.calls.read_text().splitlines()]
+
+    def test_result_returns_and_acquire_waits_out_the_add_ons_compaction_preempts(self):
+        acquired = {"active": True, "operationId": "op-1", "busy": []}
+        self.assertEqual(self.call("acquire", {"method": "event"}, {"id": 1, "result": acquired}), acquired)
+        sent = {"jsonrpc": "2.0", "id": 1, "method": "agent-interface.maintenance",
+                "params": {"action": "acquire", "operation_id": "op-1", "service_key": "service-key"}}
+        port = self.request["origin"].rsplit(":", 1)[1]
+        # The add-on preempts up to 30 s per canonical Bot Chat before it answers acquire.
+        self.assertEqual(self.recorded(), [["connect", f"ws://127.0.0.1:{port}/api/ws?ticket=ticket-1"], ["send", sent],
+                                           ["recv", 120], ["recv", 120]])
+        self.calls.unlink()
+        self.call("release", {"id": 1, "result": {"active": False, "operationId": None, "busy": []}})
+        self.assertEqual(self.recorded()[-1], ["recv", 15])
+
+    def test_an_error_answer_is_reported_as_answered_with_the_add_ons_error(self):
+        with self.assertRaises(deploy_common.Answered) as caught:
+            self.call("acquire", {"id": 1, "error": self.BUSY})
+        self.assertEqual(caught.exception.error, self.BUSY)
+        # The child still fails as every other NATIVE caller expects.
+        self.assertIn("RuntimeError: Native maintenance request rejected", (self.host.ops / "commands.log").read_text())
+
+    def test_no_answer_is_a_plain_failure_not_an_answer(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self.call("acquire", "silence")
+        self.assertNotIsInstance(caught.exception, deploy_common.Answered)
+        self.assertIn("TimeoutError", (self.host.ops / "commands.log").read_text())
+
+    def test_a_failed_child_is_answered_only_when_its_last_line_is_the_answered_error(self):
+        for stdout in ('{"active": false}', '{"answeredError": "409"}', 'answeredError'):
+            with self.subTest(stdout=stdout):
+                child = executable(self.host.root / "child", f"import sys; print({stdout!r}); sys.exit(1)")
+                with self.assertRaises(RuntimeError) as caught:
+                    self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire"))
+                self.assertNotIsInstance(caught.exception, deploy_common.Answered)
 
 
 class FenceTests(unittest.TestCase):
@@ -435,6 +562,12 @@ class ToolWiringTests(unittest.TestCase):
         self.assertEqual({ast.unparse(node) for node in calls if ast.unparse(node.func) == "rpc"}, {"rpc('status')"})
         self.assertIsInstance(claim.body[check + 1], ast.Try)
         self.assertIn("d.acquire_then_stop_app", {ast.unparse(node.func) for node in ast.walk(claim.body[check + 1]) if isinstance(node, ast.Call)})
+
+    def test_guarded_maintenance_rpc_tells_an_error_answer_from_no_answer(self):
+        # A plain run() would turn the busy refusal into a lost answer, and every refusal into a review.
+        tree = ast.parse((TOOLS / "deploy-guarded-app-release.py").read_text())
+        rpc = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "rpc")
+        self.assertEqual(ast.unparse(rpc.body[-1].value.func), "d.maintenance_rpc")
 
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
         stage = load_source(".agents/tools/stage-recovery-tools.py", "stage_recovery")

@@ -56,7 +56,7 @@ def rpc(action):
  code="import runpy; m=runpy.run_path("+repr(str(release/"scripts/hermes-upgrade-linux.py"))+"); exec(m['NATIVE'])"
  secret=dict(line.split("=",1) for line in service_env.read_text().splitlines() if "=" in line)["HERMES_AGENT_INTERFACE_TOKEN"]
  req={"action":"rpc","source":str(source),"origin":"http://127.0.0.1:9119","key":secret,"operation":operation,"method":action}
- return json.loads(run([c["managedPython"],"-I","-c",code],input=json.dumps(req),timeout=40))
+ return d.maintenance_rpc([c["managedPython"],"-I","-c",code],req)
 def gateway_idle(after=None):
  if not ready_gateway("draining"):return False
  record=gateway_state();updated=datetime.datetime.fromisoformat(record["updated_at"]).timestamp()
@@ -79,7 +79,8 @@ with claim:
  try:
   state.update(phase="blocked",maintenance=True,operationId=operation,message="The installer is applying a verified app release.",updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat())
   # Acquire before stopping the app: a send since the status check refuses with nothing stopped.
-  # On any other failure, leave native owners running and retain the blocked state for diagnosis.
+  # On any other failure, including an acquire that went unanswered, leave native owners running
+  # and retain the blocked state for diagnosis.
   d.acquire_then_stop_app(rpc,(json.dumps(state)+"\n").encode(),(ops/"previous-status.json").read_bytes())
   run([c["node"],str(release/".agents/tools/backup-app.mjs"),str(base/"shared/app.sqlite"),str(ops/"database")])
   request=json.loads(native("import json; from gateway.drain_control import write_drain_request; print(json.dumps(write_drain_request(principal="+repr(operation)+",suppress_notification=True)))"))
