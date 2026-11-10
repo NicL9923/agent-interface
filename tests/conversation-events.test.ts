@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as realDelay } from "node:timers/promises";
+import { request as httpRequest } from "node:http";
 import { createApp } from "../src/server/app.js";
+import { LIVE_TICK_MS, TURN_TICK_MS } from "../src/server/conversation-routes.js";
 import { loadConfig } from "../src/server/config.js";
 import { hash } from "../src/server/auth.js";
 import type { Activity, Bot, Inflight, Message, Runtime, ToolCall } from "../src/shared/types.js";
@@ -232,6 +234,121 @@ describe("conversation change stream", () => {
       expect(out).not.toMatch(/Private (reply|thought)|private (input|output)|more/);
       expect(frames(out).map(([event]) => event)).toEqual(["inflight", "inflight"]);
       await events.close();
+    });
+
+    // Turn streams feed the web client's paced reveal, which hides the shorter wait; the iOS app and older
+    // bundles show each update as it lands, so theirs stays as it was.
+    it.each([["1", LIVE_TICK_MS], ["2", LIVE_TICK_MS], ["3", TURN_TICK_MS]] as const)("?inflight=%s sends growth at most once every %i ms, and nothing while nothing changes", async (mode, tick) => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      const grow = (text: string) => {
+        const value = live(text);
+        s.runtime.inflight = () => value;
+        s.runtime.turn = () => ({ ...value, version: "b:1:1", turn: { messages: [], after: null } });
+        s.change("shared", "inflight");
+      };
+      const count = () => frames(events.text).length;
+      // The first growth goes at once, and the clock stands still from here, so the window is measured from it.
+      grow("Hello");
+      await pass(0);
+      expect(count()).toBe(1);
+      grow("Hello there");
+      await pass(tick - 1);
+      expect(count()).toBe(1);
+      await pass(1);
+      expect(count()).toBe(2);
+      // No timer runs without a notice.
+      await pass(tick * 5);
+      expect(count()).toBe(2);
+      await events.close();
+    });
+
+    it("sends a turn stream nothing when a notice finds the reply unchanged", async () => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      let reads = 0;
+      const value = live("Hello");
+      s.runtime.inflight = () => value;
+      s.runtime.turn = () => { reads++; return { ...value, version: "b:1:1", turn: { messages: [], after: null } }; };
+      s.change("shared", "inflight");
+      await events.until(() => frames(events.text).length === 1);
+      s.change("shared", "inflight");
+      await events.until(() => reads === 2);
+      await pass(TURN_TICK_MS);
+      expect(frames(events.text).map(([event]) => event)).toEqual(["turn"]);
+      await events.close();
+    });
+
+    // The turn ends with a structural notice. Growth still waiting for its tick is dropped, not sent after the
+    // notice, and the notice goes at once: the client's read on it brings the saved reply.
+    it.each(["1", "2"])("?inflight=%s drops growth held for the tick when the turn ends, and sends the change notice at once", async mode => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      s.runtime.inflight = () => live("Hello");
+      s.change("shared", "inflight");
+      await pass(0);
+      s.runtime.inflight = () => live("Hello there");
+      s.change("shared", "inflight");
+      s.change("shared");
+      await pass(0);
+      expect(events.notices()).toBe(1);
+      await pass(LIVE_TICK_MS * 2);
+      expect(frames(events.text).map(([, data]) => data.message?.text ?? data.appendText)).toEqual(["Hello"]);
+      await events.close();
+    });
+
+    it("writes nothing more to a client that stops reading until it catches up, then sends all it missed as one delta", async () => {
+      const s = await setup();
+      const responses: import("node:http").ServerResponse[] = [];
+      s.app.server.on("request", (req, res) => { if (req.url?.includes("/events")) responses.push(res); });
+      // A real client socket that stops reading after the stream opens, as a stalled phone does.
+      const url = new URL(s.base);
+      const response = await new Promise<import("node:http").IncomingMessage>(resolve => {
+        httpRequest({ host: url.hostname, port: url.port, path: "/api/bots/shared/events?inflight=2", headers: { cookie: s.cookie } }, resolve).end();
+      });
+      let text = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { text += chunk; });
+      await events(() => text.includes("retry"));
+      response.pause();
+      // Each tick grows the reply by half a megabyte, far more than loopback buffers hold over 40 ticks.
+      const piece = "x".repeat(512 * 1024);
+      let reply = "", reads = 0, queued = 0;
+      for (let tick = 0; tick < 40; tick++) {
+        reply += piece;
+        const value = live(reply);
+        s.runtime.inflight = () => { reads++; return value; };
+        s.change("shared", "inflight");
+        await pass(LIVE_TICK_MS);
+        queued = Math.max(queued, responses[0].writableLength);
+      }
+      // At most one update past the buffer, and the ticks after it read nothing.
+      expect(queued).toBeLessThan(piece.length + 64 * 1024);
+      expect(reads).toBeLessThan(40);
+      response.resume();
+      // Wait until the stream has delivered every byte of the reply, however it was split.
+      const shown = () => {
+        let held = "";
+        for (const [event, data] of frames(text.slice(0, text.lastIndexOf("\n\n") + 2))) {
+          if (event === "inflight") held = data.message.text;
+          else { expect(data.baseTextLength).toBe(held.length); held += data.appendText ?? ""; }
+        }
+        return held;
+      };
+      await events(() => shown().length === reply.length, 10_000);
+      expect(shown()).toBe(reply);
+      response.destroy();
+      async function events(ready: () => boolean, ms = 3000) {
+        const deadline = performance.now() + ms;
+        while (!ready()) {
+          if (performance.now() > deadline) throw new Error(`Stream never got there after ${text.length} characters`);
+          await vi.advanceTimersByTimeAsync(10);
+          await realDelay(5);
+        }
+      }
     });
   });
 

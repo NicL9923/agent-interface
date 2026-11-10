@@ -292,6 +292,29 @@ describe("?inflight=3 turn streams", () => {
     }
   });
 
+  it("sends the turn with its saved reply as soon as the server's read after the turn ends lands, not at the next tick", async () => {
+    const s = await setup();
+    midTurn(s);
+    const events = await stream(s, s.one);
+    await s.get(s.one);
+    s.hermes.frame("message.delta", { text: "Looking." });
+    await events.until(() => events.turns().length === 1);
+    // Growth just went out, so the tick's window is open for the whole test: the clock stands still from here.
+    s.hermes.history.push(row(4, "assistant", "Looking. All latched.", { app_run_id: "run-2" }));
+    Object.assign(s.hermes, { running: false, runId: undefined, inflight: {} });
+    s.hermes.frame("message.delta", { text: " All latched." });
+    s.hermes.frame("message.complete", { text: "" });
+    const deadline = performance.now() + 3000;
+    while (events.turns().length < 2) {
+      if (performance.now() > deadline) throw new Error(`The saved reply waited for the tick: ${JSON.stringify(events.text)}`);
+      // Runs only timers already due, so a reply held for the tick never goes.
+      await vi.advanceTimersByTimeAsync(0);
+      await realDelay(5);
+    }
+    expect(saved(events.turns()[1].messages).map(message => message.text)).toEqual(["Check the barn", "Looking. All latched."]);
+    await events.close();
+  });
+
   it("carries the conversation read's version, which a turn event after it never undercuts", async () => {
     const s = await setup();
     midTurn(s);
