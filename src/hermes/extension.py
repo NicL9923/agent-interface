@@ -942,7 +942,7 @@ class Bridge:
 
     def install_inline_guidance(self):
         # Add client rendering guidance at model-call time, without changing SOUL,
-        # persisted user text, receipt digests, image recovery, or steering matches.
+        # persisted user text, receipt digests, or steering matches.
         server = self.server
         self.inline_instructions = json.loads((Path(__file__).resolve().parents[1] / "shared" / "inline-ui-instructions.json").read_text())
         # Said on every app turn, because a model skips a one-time rule about half the time. Hermes shows the line
