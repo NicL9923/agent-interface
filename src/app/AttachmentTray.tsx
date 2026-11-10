@@ -5,6 +5,7 @@ import type { FileRef } from "../shared/types";
 import { formatBytes, MAX_UPLOAD_BYTES } from "../shared/uploads";
 import { Icon } from "../components/Icon";
 import type { LocalUpload } from "./storage";
+import { rememberImageSize } from "./image-sizes";
 import "./attachments.css";
 
 type Preview = { name: string; url: string; size?: number };
@@ -33,7 +34,8 @@ export function AttachmentTray({ attachments, uploads, previews, canOpen, onRemo
     <ul className="attachment-list" aria-label="Attachments">
       {attachments.map(file => {
         const url = urlOf(file);
-        return <AttachmentChip key={file.id} name={file.name} mime={file.mime} url={url}
+        // Its size, known from the preview, lets the sent message reserve the image's space in the transcript.
+        return <AttachmentChip key={file.id} name={file.name} mime={file.mime} url={url} onImageLoad={image => rememberImageSize(file.id, image)}
           meta={[kindLabel(file.name, file.mime), file.size !== undefined && formatBytes(file.size)].filter(Boolean).join(" · ")}
           onOpen={url ? () => file.mime.startsWith("image/") ? setPreview({ name: file.name, url, size: file.size }) : window.open(url, "_blank", "noopener") : undefined}
           onRemove={() => onRemove(file.id)} removeLabel={`Remove ${file.name}`} />;
@@ -55,7 +57,7 @@ export function AttachmentTray({ attachments, uploads, previews, canOpen, onRemo
   </div>;
 }
 
-function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemove, removeLabel }: {
+function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemove, removeLabel, onImageLoad }: {
   name: string;
   mime: string;
   url?: string;
@@ -65,11 +67,12 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
   onRetry?(): void;
   onRemove(): void;
   removeLabel: string;
+  onImageLoad?(image: HTMLImageElement): void;
 }) {
   const image = mime.startsWith("image/") && !!url;
   const state = upload?.status ?? "ready";
   const thumb = <>
-    {image ? <img src={url} alt="" draggable={false} decoding="async" /> : <span className="attachment-badge"><Icon name="file" size={20} /><small>{kindLabel(name, mime)}</small></span>}
+    {image ? <img src={url} alt="" draggable={false} decoding="async" onLoad={event => onImageLoad?.(event.currentTarget)} /> : <span className="attachment-badge"><Icon name="file" size={20} /><small>{kindLabel(name, mime)}</small></span>}
     {upload && upload.status !== "failed" && <span className="attachment-progress" aria-hidden="true">
       {upload.status === "processing" ? <Icon name="spinner" className="spin" size={22} />
         : <svg viewBox="0 0 36 36" width={30} height={30}>

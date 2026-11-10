@@ -1,6 +1,6 @@
 import { matchCombo, shortcuts } from "./shortcuts";
 import { lazy, memo, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode, RefCallback, RefObject } from "react";
+import type { CSSProperties, ReactNode, RefCallback, RefObject } from "react";
 import type { ActivityState, Bootstrap, Bot, FileRef, Message, ToolCall } from "../shared/types";
 import { Avatar } from "../components/Avatar";
 import { avatarProp } from "../components/avatar-motion";
@@ -48,6 +48,8 @@ import { continueDraftRevisions } from "../shared/draft-diff";
 import { unknownEarlierFiles, type Artifact } from "../shared/artifacts";
 import { continueChips, continueTurns, settleChips, settleRevisions, settleTurns, useSettledWindow, type Turn } from "./transcript-window";
 import { useEarlierFiles } from "./use-earlier-files";
+import { imageSize, neverLeaves, readerSees, rememberImageSize, reshapes, rowOf, scrollerOf } from "./image-sizes";
+import type { ImageSize } from "./image-sizes";
 import "./transcript.css";
 // The panel loads when a file chip first opens it, as it does from the assistant's details.
 const ArtifactsPanel = lazy(() => import("../components/Artifacts").then(module => ({ default: module.ArtifactsPanel })));
@@ -606,29 +608,60 @@ function ToolCallDetail({ call, disconnected }: { call: ToolCall; disconnected?:
     {call.status === "running" && call.result === undefined && <p>{disconnected ? "The current tool status will be checked when Hermes reconnects." : "Waiting for the result from Hermes."}</p>}
   </details>;
 }
-// Natural sizes of images already shown, so one that scrolls back into the transcript reserves its space before it reloads.
-const imageSizes = new Map<string, { width: number; height: number }>();
 function FileLink({ file }: { file: FileRef }) {
-  const size = imageSizes.get(file.id);
+  // The frame around the image holds its space: the image's natural shape when this page knows it, else the 4:3
+  // frame in styles.css. A loaded image far from its frame's shape takes its own once (see reshapes), at once unless
+  // the reader is looking at it, else as soon as nothing being read would move: the row left the view, or the reader
+  // is back at the end (see readerSees). A row that no scroll can take out of view, as in a short thread, takes it at
+  // once, since waiting would keep it letterboxed for good (see neverLeaves). One that fails leaves the frame as it
+  // was. The frame, not the image, carries the shape, because a browser drops a failed image's aspect ratio.
+  const [shape, setShape] = useState(() => imageSize(file.id));
+  const [waiting, setWaiting] = useState<ImageSize>();
+  const [failed, setFailed] = useState(false);
+  const frame = useRef<HTMLSpanElement>(null);
+  const href = file.url || `/api/files/${encodeURIComponent(file.id)}`;
+  const image = file.mime.startsWith("image/");
+  useEffect(() => {
+    const element = frame.current;
+    if (!waiting || !element) return;
+    let done = false;
+    const apply = () => { if (done) return; done = true; setShape(waiting); setWaiting(undefined); };
+    const check = () => { if (!readerSees(element) || neverLeaves(element)) apply(); };
+    check();
+    if (done) return;
+    // Scrolling is how a reader leaves the row or comes back to the end; the observer also hears the row pushed away.
+    const scroller = scrollerOf(element);
+    scroller?.addEventListener("scroll", check, { passive: true });
+    const observer = typeof IntersectionObserver === "undefined" ? undefined
+      : new IntersectionObserver(entries => { if (!entries.some(entry => entry.isIntersecting)) apply(); }, { root: scroller });
+    observer?.observe(rowOf(element));
+    return () => { scroller?.removeEventListener("scroll", check); observer?.disconnect(); };
+  }, [waiting]);
+  // The card's width follows the frame's ratio, so an image the height cap binds, such as a tall screenshot, keeps
+  // its own shape in a narrower card instead of sitting between bars. See `.file-image` in styles.css.
+  const ratio = shape ? shape.width / shape.height : undefined;
   return (
-    <a
-      className="file-link"
-      href={file.url || `/api/files/${encodeURIComponent(file.id)}`}
-      target="_blank"
-      rel="noreferrer"
-    >
-      {file.mime.startsWith("image/") && (
-        <img
-          src={file.url || `/api/files/${encodeURIComponent(file.id)}`}
-          alt={file.name}
-          width={size?.width}
-          height={size?.height}
-          loading="lazy"
-          decoding="async"
-          onLoad={event => imageSizes.set(file.id, { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
-        />
+    <a className={`file-link${image ? " file-image" : ""}`} href={href} target="_blank" rel="noreferrer"
+      style={ratio ? { "--file-ratio": ratio } as CSSProperties : undefined}>
+      {image && (
+        <span className="file-frame" ref={frame} style={shape && { aspectRatio: `${shape.width} / ${shape.height}` }}>
+          {failed ? <span className="file-failed"><Icon name="file" size={20} />Couldn't load this image</span> : <img
+            src={href}
+            alt={file.name}
+            loading="lazy"
+            decoding="async"
+            onError={() => setFailed(true)}
+            onLoad={event => {
+              const loaded = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight };
+              rememberImageSize(file.id, event.currentTarget);
+              if (!reshapes(shape, loaded)) return;
+              if (frame.current && readerSees(frame.current)) setWaiting(loaded);
+              else setShape(loaded);
+            }}
+          />}
+        </span>
       )}
-      <span><Icon name={file.mime.startsWith("image/") ? "download" : "file"} size={16} /> {file.name}</span>
+      <span className="file-name"><Icon name={image ? "download" : "file"} size={16} /> {file.name}</span>
     </a>
   );
 }
