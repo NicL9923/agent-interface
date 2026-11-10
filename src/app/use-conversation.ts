@@ -3,8 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ApiError, cachedResponse, changeStream, pollWhileVisible, request } from "../client-api";
 import { isActivityMessage } from "../shared/message-origin";
 import { HISTORY_PAGE_TURNS } from "../shared/history";
-import { applyInflightDelta } from "../shared/inflight";
-import type { Inflight, Message } from "../shared/types";
+import { applyInflightDelta, compareVersions, versionBoot, withTurn } from "../shared/inflight";
+import type { Inflight, Message, TurnEvent } from "../shared/types";
 import { replySnippet, watchReplies } from "./reply-announcement";
 import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
@@ -128,14 +128,49 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // A reader already scrolling the cached page keeps it; otherwise the latest page refreshes it.
     let start: string | undefined = opening;
     const cachedStart = cached?.botId === botId ? cached.messages[0]?.id : undefined;
-    let latestInflight: Inflight | undefined;
-    const patch = (value: SavedConversation, live?: Inflight): SavedConversation => {
+    // The live reply growth applies to, and, from a turn event, the read it leaves saved text to.
+    let latestInflight: (Inflight & { version?: string }) | undefined;
+    // The latest turn event, until a conversation read as new as it arrives. A read that is older, as one
+    // that set out before the turn changed, gets the turn's saved messages put back on top of it.
+    let heldTurn: TurnEvent | undefined;
+    const patch = (value: SavedConversation, live?: Inflight & { version?: string }): SavedConversation => {
       if (!live || live.botId !== value.botId
         || !["thinking", "working", "waiting", "blocked"].includes(value.activity.state)
-        || value.activity.runId !== live.activity.runId) return value;
+        || value.activity.runId !== live.activity.runId
+        // A live reply leaves out exactly what its own read saved, so it shows only beside that read's messages.
+        || live.version !== undefined && compareVersions(live.version, value.version) !== 0) return value;
       const messages = value.messages.filter(message => !message.id.endsWith("-inflight"));
       if (live.message.text || live.message.reasoning) messages.push(live.message);
       return {...value, messages, activity: live.activity, toolCalls: live.toolCalls};
+    };
+    // Which server process's state the view shows. Versions from two processes never compare, so the view shows one at a
+    // time, and only a read the view asked for decides which: the newest read asked wins, whichever process answers it.
+    // - A read answered after a newer one was asked, by another process than the current one, is dropped. The newer read
+    //   is already asked, so dropping it asks nothing.
+    // - A turn event from another process never decides it. It waits as `pending` and asks one read, which any later
+    //   such turns share. The first read taken that set out after it settles it: the turn goes on top only when that read
+    //   is from the turn's process and older than the turn, and is dropped otherwise. A turn already held from the read's
+    //   process stays when it is as new. A read that fails leaves it waiting. A read older than the turn that cannot place
+    //   it, as one joined to a prefetch that set out before, asks one more read.
+    // Reads are bounded: a response never asks for a read because of the process that answered it, so two processes that
+    // disagree cost one read per change. Every read answers an input, such as the opening, a change notice, a reconnect, a
+    // wake or poll, the person's navigation, growth that does not continue the reply held, a turn that cannot be placed, or
+    // a pending turn, and once more when the read that settles it cannot place it. Asks made while a read is on its way become one read. A response asks for another read itself only
+    // when the latest page slid past the cached message a reader is on, once, since that read starts from the message.
+    let boot: string | undefined, asks = 0;
+    const inflightOf = (turn: TurnEvent): Inflight & { version?: string } =>
+      ({ botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version });
+    let pending: { turn: TurnEvent; ask: number } | undefined;
+    // Growth continues the turn whose live reply it extends, wherever that turn is kept, held or waiting, so a turn
+    // settling or restored later brings back the grown reply, not the one its event first carried. The live reply held
+    // is that turn's own message object (`inflightOf`), so identity names the turn growth extends.
+    const grown = (turn: TurnEvent | undefined, before: Message, after: Inflight): TurnEvent | undefined =>
+      turn?.message === before ? { ...turn, message: after.message, activity: after.activity, toolCalls: after.toolCalls } : turn;
+    const compose = (value: SavedConversation): SavedConversation => {
+      let shown = value;
+      if (heldTurn?.botId === value.botId && (compareVersions(heldTurn.version, value.version) ?? 0) > 0) shown = withTurn(value, heldTurn) ?? value;
+      else heldTurn = undefined;
+      return patch(shown, latestInflight);
     };
     let loading = false, again = false, more = false, gone = false;
     let firstConversation = true;
@@ -144,9 +179,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     let secureRequestIds = new Set<string>();
     const load = async () => {
       if (gone) return;
+      asks++;
       if (loading) { again = true; return; }
       loading = true;
-      const generation = navigation;
+      const generation = navigation, asked = asks;
       const earlierPage = more;
       more = false;
       if (!start && mode.current !== "follow") start = cachedStart;
@@ -162,6 +198,12 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         const result = await joined?.catch(() => undefined)
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
+        const from = versionBoot(result.version);
+        // Another process answered, and a newer read is already asked: that one decides.
+        if (from && from !== boot && asked < asks) {
+          if (earlierPage) more = true;
+          return;
+        }
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {
           again = true;
@@ -187,7 +229,22 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         firstConversation = false;
         if (result !== current.current) holdPlace();
         if (target.current?.botId === botId && target.current.generation === generation) target.current.ready = true;
-        setConversation(patch(result, latestInflight));
+        if (from) boot = from;
+        if (pending && asked >= pending.ask) {
+          const waiting = pending.turn;
+          pending = undefined;
+          // From another process than this read's, the waiting turn is dropped. From this read's, it is held unless a turn
+          // already held from this process is as new; `compose` then puts the held turn on top only when it is newer.
+          const order = compareVersions(heldTurn?.version, waiting.version);
+          if (versionBoot(waiting.version) === from && (order === undefined || order < 0)) {
+            heldTurn = waiting;
+            // Newer than this read, which holds neither its first message nor `after`: one more read, asked after it, is as new.
+            if ((compareVersions(waiting.version, result.version) ?? 0) > 0 && !withTurn(result, waiting)) again = true;
+          }
+          // The live reply is the last turn heard, which can be from the other process. Growth continues the held turn's.
+          if (heldTurn && versionBoot(heldTurn.version) === from && versionBoot(latestInflight?.version) !== from) latestInflight = inflightOf(heldTurn);
+        }
+        setConversation(compose(result));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
       } catch (error) {
@@ -226,21 +283,51 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       holdPlace();
       setConversation(previous => previous?.botId === botId ? patch(previous, value) : previous);
     };
-    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=2&drafts=1`, () => {
-      latestInflight = undefined;
-      void load();
-    }, value => {
+    const showTurn = (turn: TurnEvent) => {
+      const from = versionBoot(turn.version);
+      // Growth on the stream continues this reply. It shows only beside a read of its own version (`patch`).
+      latestInflight = inflightOf(turn);
+      // From another process than the view's, or before any read: it waits for a read asked after it. See `boot`.
+      if (from && from !== boot) {
+        if (pending) { pending.turn = turn; return; }
+        void load();
+        pending = { turn, ask: asks };
+        return;
+      }
+      const held = current.current?.botId === botId ? current.current : null;
+      if (!held) { heldTurn = turn; return; }
+      if (!withTurn(held, turn)) { heldTurn = undefined; void load(); return; }
+      heldTurn = turn;
+      holdPlace();
+      setConversation(previous => {
+        if (previous?.botId !== botId) return previous;
+        const placed = withTurn(previous, turn);
+        return placed ? patch(placed, latestInflight) : previous;
+      });
+    };
+    // A turn stream: the server sends each whole live reply with its turn's saved messages, versioned, so a
+    // change notice's read no longer gates the reply. A server that predates it sends change notices only.
+    const stream = changeStream(`/bots/${encodeURIComponent(botId)}/events?inflight=3&drafts=1`, () => void load(), value => {
       if (!live || value.botId !== botId) return;
       showInflight(value);
     }, {
       // The person's own draft for this assistant has a new revision, from this or another device.
       draft: data => window.dispatchEvent(new CustomEvent(DRAFT_EVENT, { detail: { botId, revision: Number(data) } })),
+      turn: data => {
+        if (!live) return;
+        let turn: TurnEvent;
+        try { turn = JSON.parse(data) as TurnEvent; } catch { void load(); return; }
+        if (turn.botId === botId) showTurn(turn);
+      },
     }, delta => {
       if (!live || delta.botId !== botId) return true;
       // Growth that does not continue the held reply is dropped for a reload, never guessed at.
       const value = applyInflightDelta(latestInflight, delta);
-      if (value) showInflight(value);
-      return !!value;
+      if (!value) return false;
+      heldTurn = grown(heldTurn, latestInflight!.message, value);
+      if (pending) pending.turn = grown(pending.turn, latestInflight!.message, value)!;
+      showInflight(value);
+      return true;
     });
     if (document.visibilityState !== "hidden") stream.open();
     const wake = () => {
