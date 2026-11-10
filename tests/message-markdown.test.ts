@@ -271,4 +271,39 @@ describe("streaming Markdown", () => {
       "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
     ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
+
+  // Each case is a fence or definition the per-line splitter cannot follow, so it must parse whole.
+  it.each([
+    ["a fence opened behind a list marker hides a later footnote", "Note[^a]\n\nHere:\n\n- ```\n  code\n  ```\n\n[^a]: footnote"],
+    ["a list item's fence closes on a line that the tracker reads as an opener", "See [docs][a].\n\nSteps:\n\n- ```\n  code\n  ```\n  [a]: https://example.test\n  ```"],
+    ["a list item's fence ends at a line left of it", "See [docs][a].\n\nSteps:\n\n- Run:\n\n  ```\n[a]: https://example.test\n  ```"],
+    ["an HTML block holds a fence-shaped line", "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test"],
+    ["a definition label spans two lines", "See [docs][a b].\n\n[a\nb]: https://example.test"],
+    ["a definition label holds an escaped bracket", "See [docs][a\\]b].\n\n[a\\]b]: https://example.test"],
+  ])("renders the same as the saved reply when %s", async (_case, text) => {
+    expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+    expect(streamingBlocks(text)).toBeNull();
+  });
+
+  // Seeded replies built from lines the splitter must follow: fences in and out of containers,
+  // definitions, multi-line labels, HTML blocks and tables. Live and saved must render alike.
+  it("renders seeded random replies the same live and saved", async () => {
+    const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "[a", "b]: https://example.test/b",
+      "- ```", "  ```", "```", "~~~", "   ```", "\t```", "> ```", "  code", "code", "    indented", "> text", ">", "- item", "1. item",
+      "  - nested", "- [ ] task", "<div>", "</div>", "<!--", "-->", "| a | b |", "| - | - |", "Text **bold**", "Title", "===", "* * *", "", ""];
+    let seed = 7;
+    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const diverged: string[] = [];
+    for (let run = 0; run < 1500 && diverged.length < 3; run++) {
+      const body = Array.from({ length: 3 + pick(12) }, () => lines[pick(lines.length)] + (pick(3) ? "\n" : "\n\n")).join("");
+      const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
+      if (await renderAs(StreamingMarkdown, text) !== await renderAs(MessageMarkdown, text)) diverged.push(text);
+    }
+    expect(diverged).toEqual([]);
+  }, 60_000);
+
+  it("keeps blocks for a fence in a list item whose lines stay indented", () => {
+    const item = "1. Install:\n\n   ```sh\n   npm i\n\n   npm test\n   ```";
+    expect(streamingBlocks(`${item}\n\nDone`)).toEqual([item, "Done"]);
+  });
 });

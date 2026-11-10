@@ -184,36 +184,53 @@ const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, us
 // A backtick fence's info string cannot hold a backtick, so a line such as ```code``` is inline code.
 const fence = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 const listItem = /^ {0,3}([-*+]|\d{1,9}[.)])(\s|$)/;
+// A quote or list marker ahead of a line's content.
+const containerMarker = String.raw`[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))`;
+/**
+ * Lines anywhere in a reply that the splitter cannot follow. Reply cards and inline pages are judged
+ * together. A fence behind a quote or list marker is invisible to the fence tracker below, which
+ * would then pair its indented closing line with the next fence and skip what lies between.
+ */
+const wholeReply = new RegExp(String.raw`^ {0,3}(?:\`{3,}|~{3,})\s*(?:agent-ui|wildbots-html)\b|^(?:${containerMarker})+[ \t]*(?:\`{3,}|~{3,})`, "m");
 /**
  * Lines outside code fences that make one block depend on another. A reference-link or footnote
  * definition resolves uses anywhere in the reply; a use without one is literal text in both parses,
- * so only the definition matters. An HTML comment or a raw pre, script, style or textarea block
- * may contain blank lines. Each may sit in a quote or list item; matching an indented code line
- * too only costs a full parse.
+ * so only the definition matters. Its label may hold escaped brackets or run onto the next line,
+ * so a line that opens a bracket and never closes it counts too. A line that opens an HTML block
+ * may hold blank lines or fence-shaped lines that are not code. Each may sit in a quote or list
+ * item; matching an indented code line or an autolink too only costs a full parse.
  */
-const spansReply = /^(?:[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])[ \t]))*[ \t]*(?:\[[^\]]+\]:|<!--|<(?:pre|script|style|textarea)\b)/i;
+const spansReply = new RegExp(String.raw`^(?:${containerMarker})*[ \t]*(?:\[(?:[^\\\]]|\\.)*(?:\]:|\\?$)|<[A-Za-z/?!])`);
+const indent = (line: string) => {
+  const space = /^[ \t]*/.exec(line)![0];
+  return space.includes("\t") ? 4 : space.length;
+};
 /**
  * Splits a reply that is still arriving into blocks that are finished and the one still growing,
  * so each update parses only the last. Splits fall on blank lines outside code fences that are
  * followed by a line at the margin, which starts a new block, unless that line is a list item,
- * which may continue a loose list above it. Returns null when a rule spans the whole reply: reply
- * cards and inline pages are judged together, and `spansReply` lines outside code fences tie
- * blocks together. Inside a fence those lines are code, so a code-heavy reply keeps its blocks.
+ * which may continue a loose list above it. Returns null when a rule spans the whole reply
+ * (`wholeReply` anywhere, `spansReply` outside fences) or when a fence may close where the
+ * tracker cannot see: a fence indented by up to three spaces may sit in a list item, which ends,
+ * closing the fence, at a line indented less than the item's content. Inside a fence the other
+ * lines are code, so a code-heavy reply keeps its blocks.
  */
 export function streamingBlocks(text: string): string[] | null {
-  if (/^ {0,3}(`{3,}|~{3,})\s*(agent-ui|wildbots-html)\b/m.test(text)) return null;
+  if (wholeReply.test(text)) return null;
   const lines = text.split("\n"), blocks: string[] = [];
-  let start = 0, open: string | undefined;
+  let start = 0, open: string | undefined, openIndent = 0;
   for (let index = 0; index < lines.length; index++) {
-    const marker = fence.exec(lines[index])?.[1];
+    const line = lines[index];
+    if (open && line.trim() && indent(line) < openIndent) return null;
+    const marker = fence.exec(line)?.[1];
     if (marker) {
-      if (!open) open = marker;
-      else if (marker[0] === open[0] && marker.length >= open.length && !lines[index].trim().slice(marker.length).trim()) open = undefined;
+      if (!open) [open, openIndent] = [marker, indent(line)];
+      else if (marker[0] === open[0] && marker.length >= open.length && !line.trim().slice(marker.length).trim()) open = undefined;
       continue;
     }
-    if (!open && spansReply.test(lines[index])) return null;
+    if (!open && spansReply.test(line)) return null;
     const next = lines[index + 1];
-    if (open || lines[index].trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
+    if (open || line.trim() || index === start || !next?.trim() || /^\s/.test(next) || listItem.test(next)) continue;
     blocks.push(lines.slice(start, index).join("\n"));
     start = index + 1;
   }
