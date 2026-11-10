@@ -225,16 +225,21 @@ export type StreamOptions = {
  * however often its owner calls it. The count of failures resets only once a connection has stayed
  * healthy for longer than its greeting: data at least half a ping interval after it opened, which only a
  * ping after the greeting can be, allowing for delivery jitter. A server that
- * greets and then stalls keeps backing off. `close` ends the episode, so a page shown again connects at
- * once. `reconnect` is for a sign the failures are stale, such as the network returning or a manual retry
- * that reached the server: the first in an outage drops the backoff and connects at once, and later ones
- * are coalesced, starting the next attempt no sooner than `FORCED_GAP_MS` (jittered) after the last forced
- * one and never later than the ordinary retry. A connection that proves itself, by the rule that resets
- * the backoff, ends the outage.
+ * greets and then stalls keeps backing off. `reconnect` is for a sign the failures are stale, such as the
+ * network returning or a manual retry that reached the server: the first in an outage drops the backoff
+ * and connects at once, and later ones are coalesced, starting the next attempt no sooner than
+ * `FORCED_GAP_MS` (jittered) after the last forced one and never later than the ordinary retry. A
+ * connection that proves itself, by the rule that resets the backoff, ends the outage.
+ *
+ * `suspend` is for a pause, such as a hidden page or an offline device: it closes the connection and
+ * its timer and keeps the outage's budget, so the next `open` connects at once if the retry deadline
+ * passed meanwhile, or when it does. A stream with no failures connects at once. A `reconnect` during a
+ * pause suspends the stream and is answered by the next `open`. `close` is for an owner that is done
+ * with the stream, and also forgets the budget.
  *
  * The watchdog judges silence only after the stream's queued events have run, and a timer that fires
  * far later than it was set for, as on waking from sleep, restarts the deadline once instead of
- * replacing the stream. A hidden page's watchdog replaces nothing; its owners close the stream anyway.
+ * replacing the stream. A hidden page's watchdog replaces nothing; its owners suspend the stream anyway.
  */
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
   onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
@@ -248,6 +253,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   let failures = 0, retryAt = 0;
   // The earliest moment another forced attempt may start in this outage; 0 until the first one.
   let forcedNext = 0;
+  // Whether a revival signal arrived while the stream was paused, to be answered when it opens again.
+  let revived = false;
   // One timer per stream: the watchdog while a stream is open, the retry while none is.
   let timer: ReturnType<typeof setTimeout> | undefined, due = 0;
   const deadline = () => since + streamSilence(pingMs);
@@ -266,6 +273,8 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (!recovered && since - openedAt >= pingMs / 2) {
       recovered = true;
       failures = 0;
+      // A forced attempt can prove itself before the retry it beat was due.
+      retryAt = 0;
       forcedNext = 0;
     }
     if (deadline() < due) arm(deadline(), check);
@@ -290,6 +299,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     if (deadline() <= due) fail();
     else arm(deadline(), check);
   };
+  /** Closes the connection and its timer. The retry budget stays, so this is also `suspend`. */
   const drop = () => {
     clearTimeout(timer);
     timer = undefined;
@@ -308,9 +318,13 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     retryAt = 0;
     forcedNext = 0;
   };
-  /** Starts a connection unless one is open or a retry is already set, never before the retry deadline. */
+  /**
+   * Starts a connection unless one is open or a retry is already set, never before the retry deadline.
+   * A revival signal that arrived while the stream was paused is answered now, as `reconnect` would have.
+   */
   const open = () => {
     if (typeof EventSource === "undefined" || source || timer) return;
+    if (revived) { reconnect(); return; }
     if (Date.now() >= retryAt) connect();
     else arm(retryAt, connect);
   };
@@ -320,6 +334,13 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   };
   const reconnect = () => {
     if (typeof EventSource === "undefined") return;
+    // A hidden page or an offline device holds no stream. The signal waits for the next `open`.
+    if (document.visibilityState === "hidden" || navigator.onLine === false) {
+      drop();
+      revived = true;
+      return;
+    }
+    revived = false;
     // A live connection stays. One still waiting to prove itself would be replaced by an equally new one.
     if (source) return;
     if (!forcedNext) {
@@ -329,9 +350,10 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       return;
     }
     // Later in the same outage: once the gap has passed it connects at once, and before then an attempt
-    // already set at least as soon answers it.
-    if (Date.now() >= forcedNext) force();
-    else if (!timer || due > forcedNext) arm(forcedNext, force);
+    // set at least as soon answers it. A suspension cleared the retry's timer, so it is set again first.
+    if (Date.now() >= forcedNext) { force(); return; }
+    open();
+    if (!source && due > forcedNext) arm(forcedNext, force);
   };
   const connect = () => {
     clearTimeout(timer);
@@ -381,7 +403,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       onChange();
     });
   };
-  return { open, close, reconnect };
+  return { open, suspend: drop, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
 export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {
