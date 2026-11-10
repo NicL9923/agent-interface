@@ -560,6 +560,30 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual([method for method, _ in hermes.native_calls], ["prompt.submit"])
             self.assertEqual(fixture.events, [("cancel", True, True)])
 
+    def send_as_another_turn_takes_the_session(self, native):
+        """A message that stops a compaction, while Hermes admits another client's queued turn as it lets go.
+
+        Hermes answers prompt.submit with ``native`` while that turn runs. Returns the answer, Hermes's calls and the cancels."""
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            fixture = bridge_with_compaction(self, hermes)
+            session, calls = hermes.server._sessions["sid"], []
+            fixture.native.on_release = lambda: session.update(running=True)
+            def handle(request):
+                calls.append(request["method"])
+                return hermes.server._ok(request["id"], {"status": native if session.get("running") else "streaming"})
+            hermes.server.handle_request = handle
+            result = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "one", "sender_id": "member",
+                                                                       "text": "What's the weather?"})["result"]
+            return result, calls, fixture.events
+
+    def test_a_message_that_stops_a_compaction_says_when_another_turn_took_the_session_first(self):
+        for native, turn in [("redirected", "joined"), ("queued", "queued")]:
+            with self.subTest(native=native):
+                result, calls, events = self.send_as_another_turn_takes_the_session(native)
+                self.assertEqual((result["status"], result["steering"], result["runId"], result.get("turn")), ("accepted", False, "one", turn))
+                self.assertEqual((calls, events), (["prompt.submit"], [("cancel", True, True)]))
+
     def test_a_compaction_looks_idle_to_every_client_and_its_progress_stays_private(self):
         with FakeGateway([]) as hermes:
             hermes.open()

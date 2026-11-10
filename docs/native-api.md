@@ -130,7 +130,11 @@ new task behind that turn. A read during the native turn names the new task's ru
 so that turn's text and live events are recorded as the message's, and the line
 can end `measured` with `steered: false` and moments that are too early. Hermes's
 answer is the same as for a message that started its own turn, so nothing in this
-server tells the two apart. In that sequence `measured` is not a guarantee.
+server tells the two apart. In that sequence `measured` is not a guarantee. An add-on
+that reports `admission_turn` names the sequence in its admission answer, with `turn`
+set to `queued` (behind that turn) or `joined` (put into it), as
+[the integration evidence](HermesCapabilityMatrix.md) describes; this server does not
+read it yet.
 
 `ended` says why the line was written. Only `measured` carries both moments; any
 other value leaves out what could not be tied to the send's run:

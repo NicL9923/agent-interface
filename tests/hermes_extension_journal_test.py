@@ -794,6 +794,44 @@ class OpenTests(unittest.TestCase):
             self.assertNotIn("app_window", hermes.open())
 
 
+class AdmissionTurnTests(unittest.TestCase):
+    """Whether a new task started its own turn, as native prompt.submit answered."""
+    def submit(self, hermes, rid, native):
+        calls = []
+        def handle(request):
+            calls.append(request["method"])
+            return hermes.server._ok(request["id"], {"status": native})
+        hermes.server.handle_request = handle
+        params = {"profile": "default", "request_id": rid, "sender_id": "member", "text": "Hello " + rid}
+        return hermes.methods["agent-interface.submit"](rid, params)["result"], calls, params
+
+    def test_a_new_task_says_when_hermes_did_not_start_its_turn_at_once(self):
+        # The add-on read the session idle; Hermes's answer says whether a turn had taken it meanwhile.
+        for native, turn in [("streaming", None), ("queued", "queued"), ("redirected", "joined"), ("steered", "joined")]:
+            with self.subTest(native=native), FakeGateway([]) as hermes:
+                hermes.open()
+                answer, calls, params = self.submit(hermes, "send", native)
+                self.assertEqual((calls, answer["status"], answer["steering"], answer["runId"], answer.get("turn")),
+                                 (["prompt.submit"], "accepted", False, "send", turn))
+                # A replay answers the same, from what the journal saved.
+                self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], saved(answer))
+
+    def test_a_steer_carries_no_turn_though_hermes_answers_it_queued(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            self.submit(hermes, "first", "streaming")
+            hermes.server._sessions["sid"]["running"] = True
+            # Native session.steer answers "queued" when it accepts the text into the running turn.
+            answer, calls, _ = self.submit(hermes, "steer", "queued")
+            self.assertEqual((calls, answer["status"], answer["steering"], answer["runId"]), (["session.steer"], "accepted", True, "first"))
+            self.assertNotIn("turn", answer)
+
+    def test_the_add_on_says_it_reports_the_turn(self):
+        # A server can read a missing turn as "started at once" only from an add-on that reports it.
+        with FakeHermes([]) as hermes:
+            self.assertIs(hermes.registered["agent-interface.capabilities"]("caps", {})["result"]["admission_turn"], True)
+
+
 class InlineGuidanceTests(unittest.TestCase):
     def pending_app_turn(self, hermes):
         receipt(hermes.journal.db, "app-root", 1, time.time(), text="Original user text")

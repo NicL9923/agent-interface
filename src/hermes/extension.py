@@ -518,6 +518,12 @@ READ_WORKERS = 4
 # only the wait for a compaction to stop runs beside them, and the idle compactor runs one
 # compaction at a time, so a second assistant's send never waits for a worker behind it.
 SEND_WORKERS = 4
+# What Hermes did with a new task it did not start at once, by native prompt.submit's answer
+# (tui_gateway/session_auto_continue.py _handle_busy_submit at ed1afb0). "streaming" means it
+# started the turn. Over a running session, "queued" means the text waits as its own turn behind
+# that work; "steered" and "redirected" mean busy_input_mode put it into the running turn instead,
+# so it never gets a turn of its own. Any other answer reports nothing.
+ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined"}
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity, journal mutation and native
@@ -1497,13 +1503,16 @@ class Bridge:
 
     # Admission: one durable receipt per app request, before native execution.
 
-    def admitted(self, rid, request_id, message=None):
+    def admitted(self, rid, request_id, message=None, turn=None):
         # Save the complete response in the same transaction as its final
         # admission state. receipt() remains the mutable status projection.
         value = self.journal.receipt(request_id)
         value.update(app_run_id=value["runId"], admission="canonical")
         if message is not None:
             value["message"] = message
+        if turn is not None:
+            # A new task that did not start its own turn at once: see ADMISSION_TURN.
+            value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
         return self.server._ok(rid, value)
 
@@ -1692,13 +1701,16 @@ class Bridge:
         timed("native", mark)
         mark = time.perf_counter()
         status = "rejected" if result.get("status") == "rejected" else "accepted"
+        # Steering already joins the running task, and native session.steer answers "queued" when it
+        # accepts, so only a new task's answer says whether its turn started.
+        turn = None if steering else ADMISSION_TURN.get(result.get("status"))
         with journal.lock, journal.db:
             journal.db.execute("UPDATE receipts SET status=?,row_id=COALESCE(?,row_id),terminal=CASE WHEN ? THEN 1 ELSE terminal END WHERE request_id=?", (status, result.get("user_row_id"), steering or status == "rejected", request_id))
             if interrupted and status == "accepted":
                 journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
-            response = self.admitted(rid, request_id)
+            response = self.admitted(rid, request_id, turn=turn)
         timed("journal", mark)
         return response
 
@@ -1864,7 +1876,7 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
