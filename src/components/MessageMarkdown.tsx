@@ -9,7 +9,7 @@ import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
 import { streamingHoldBack } from "./streaming-hold-back";
-import { useRevealed } from "./streaming-reveal";
+import { graphemeCut, useRevealed } from "./streaming-reveal";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -284,33 +284,85 @@ export const LiveMarkdown = memo(function LiveMarkdown(props: MessageMarkdownPro
 
 // Text a person reads in the reply, not a control's label or a status line.
 const notReplyText = "button, [role=status], [aria-hidden=true], .markdown-code-header";
-/** The reply's last visible character, skipping trailing space and the labels of copy controls. */
-function lastCharacter(box: Element): Range | undefined {
+
+type Box = { left: number; right: number; top: number; bottom: number };
+/** Digits run left to right even inside right-to-left text. */
+const digit = /^\p{Nd}/u;
+/** Letters of the scripts written right to left. */
+const rightToLeft = /^[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]/u;
+const letter = /^\p{L}/u;
+/**
+ * Which edge of the reply's last grapheme is the text's logical end: its trailing edge in the
+ * direction it runs. A letter's direction is its script's, wherever it sits, and a digit runs left
+ * to right. Punctuation, spaces and symbols take their direction from the text around them, so
+ * the browser's own layout decides: if the grapheme before it on the same line lies to its right,
+ * the text runs right to left there. With nothing before it on the line, the paragraph's direction
+ * decides, as it does for the browser.
+ */
+export function logicalEndSide(grapheme: string, last: Box, previous: Box | undefined, direction: string): "left" | "right" {
+  if (digit.test(grapheme)) return "right";
+  if (rightToLeft.test(grapheme)) return "left";
+  if (letter.test(grapheme)) return "right";
+  if (previous && previous.top < last.bottom && previous.bottom > last.top)
+    return previous.left + previous.right > last.left + last.right ? "left" : "right";
+  return direction === "rtl" ? "left" : "right";
+}
+
+const measure = (node: Text, start: number, end: number) => {
+  const range = document.createRange();
+  range.setStart(node, start);
+  range.setEnd(node, end);
+  const rects = range.getClientRects?.();
+  return rects?.length ? rects[rects.length - 1] : undefined;
+};
+/**
+ * Where the reply's last visible character ends, skipping trailing space and the labels of copy
+ * controls: the x of its logical end, its line's top and height, and the text node it is in. It
+ * measures the last grapheme and the one before it, not a collapsed range, since browsers differ
+ * on a collapsed range's rectangle and on which side of a bidirectional boundary it lies.
+ */
+function textEnd(box: Element): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
   const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
     acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
   });
   const node = walker.lastChild() as Text | null;
   if (!node) return undefined;
-  // The last non-space code unit; a low surrogate is measured with its pair.
   const end = node.data.search(/\S\s*$/) + 1;
-  const start = end > 1 && /[\udc00-\udfff]/.test(node.data[end - 1]) ? end - 2 : end - 1;
-  const range = document.createRange();
-  range.setStart(node, start);
-  range.setEnd(node, end);
-  return range;
+  const start = graphemeCut(node.data, end - 1);
+  const last = measure(node, start, end);
+  if (!last) return undefined;
+  const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
+  const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
+  const side = logicalEndSide(node.data.slice(start, end), last, previous, direction);
+  return { x: side === "left" ? last.left : last.right, side, top: last.top, height: last.height, node };
 }
+/** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
+function visibleArea(from: Node, box: Element): Box {
+  const area = box.getBoundingClientRect();
+  for (let element = from.parentElement; element && element !== box; element = element.parentElement) {
+    if (!/auto|scroll|hidden/.test(getComputedStyle(element).overflowX)) continue;
+    const clip = element.getBoundingClientRect();
+    return { left: Math.max(area.left, clip.left), right: Math.min(area.right, clip.right), top: clip.top, bottom: clip.bottom };
+  }
+  return area;
+}
+/** The space between the last character and the caret. */
+const CARET_GAP = 2;
 /**
- * Puts the caret just after the reply's last character. It is absolutely positioned against its
- * containing block, so it never moves the text, and it has no text of its own to select or read.
+ * Puts the caret at the logical end of the reply's text: after its last character in the direction
+ * that text runs, so right of Latin text and left of Arabic or Hebrew. It is absolutely positioned
+ * against its containing block, so it never moves the text, and it has no text of its own to
+ * select or read. It stays inside the visible part of a code block or table that scrolls sideways.
  */
 function placeCaret(caret: HTMLElement) {
   const box = caret.previousElementSibling, parent = caret.offsetParent;
   if (!box || !(parent instanceof HTMLElement)) return;
-  const area = box.getBoundingClientRect(), base = parent.getBoundingClientRect();
-  const rects = lastCharacter(box)?.getClientRects?.();
-  const end = rects?.length ? rects[rects.length - 1] : undefined;
-  // A wide code block or table scrolls inside the reply; the caret stays at the reply's edge.
-  const x = Math.min(end ? end.right : area.left, area.right) - base.left - parent.clientLeft + parent.scrollLeft;
+  const base = parent.getBoundingClientRect(), end = textEnd(box);
+  const area = visibleArea(end?.node ?? box, box), width = caret.offsetWidth;
+  const side = end?.side ?? "right", at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
+  // Text flush with an edge, such as Arabic in a left-to-right paragraph, puts the caret just outside it.
+  const least = area.left - (side === "left" ? CARET_GAP + width : 0), most = area.right + (side === "right" ? CARET_GAP : -width);
+  const x = Math.max(least, Math.min(at, most)) - base.left - parent.clientLeft + parent.scrollLeft;
   const y = (end ? end.top : area.top) - base.top - parent.clientTop + parent.scrollTop;
   caret.style.transform = `translate(${x}px, ${y}px)`;
   caret.style.height = end ? `${end.height}px` : "";
@@ -318,13 +370,22 @@ function placeCaret(caret: HTMLElement) {
 function StreamingCaret({ text }: { text: string }) {
   const caret = useRef<HTMLSpanElement>(null);
   useLayoutEffect(() => { if (caret.current) placeCaret(caret.current); }, [text]);
-  // A narrower window or a late image moves the text without changing it.
   useEffect(() => {
     const element = caret.current, box = element?.previousElementSibling;
-    if (!element || !box || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => placeCaret(element));
-    observer.observe(box);
-    return () => observer.disconnect();
+    if (!element || !box) return;
+    // Scrolling a code block or table sideways moves the text under the caret. Scroll events do not
+    // bubble, so the reply hears its own blocks' in the capture phase, and places the caret once a frame.
+    let frame = 0;
+    const scrolled = () => { frame ||= requestAnimationFrame(() => { frame = 0; placeCaret(element); }); };
+    box.addEventListener("scroll", scrolled, { capture: true, passive: true });
+    // A narrower window or a late image moves the text without changing it.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => placeCaret(element));
+    observer?.observe(box);
+    return () => {
+      box.removeEventListener("scroll", scrolled, { capture: true });
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
   }, []);
   return <span ref={caret} className="streaming-caret" aria-hidden="true" />;
 }

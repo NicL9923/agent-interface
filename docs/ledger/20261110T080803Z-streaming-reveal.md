@@ -66,3 +66,74 @@ Each line was broken by hand, the named test went red, and the line was restored
   half-revealed marker...".
 - The caret without `aria-hidden`: the caret unit test and the app test.
 - A saved row rendered as live: the app test, through the caret check.
+
+## Review round 1 (GPT-6.1 Sol)
+
+Four findings, fixed in one commit over `8753e3d`.
+
+1. The 30 a second cap broke across arrivals: an arrival painted during render, then the frame
+   loop restarted with no memory of it and painted again a frame later. The hook now keeps the
+   last paint's time and length across updates. A continuing update that lands within
+   `MIN_FRAME_MS` of the last paint keeps showing what showed and waits for the next paced frame.
+   A row's first text, a new reply, a hidden tab and reduced motion still show at once. The
+   deadline is now "within `CATCH_UP_MS`, plus the wait for the next paced paint", under
+   `MIN_FRAME_MS` and a frame. The README says "about a third of a second".
+2. The caret overlapped right-to-left text. Browsers do not agree on a collapsed range's
+   rectangle: the CSSOM spec and web-platform-tests give it no client rects, Firefox has returned
+   an empty list, and which side of a bidirectional boundary it reports is a known weak spot. So
+   the caret measures the last grapheme and the one before it with ordinary ranges, which every
+   engine supports, and takes the grapheme's trailing edge in the direction it runs:
+   `logicalEndSide`. A letter's direction is its script's, a digit runs left to right, and
+   punctuation, spaces and symbols follow the browser's own layout of the grapheme before them on
+   the line, else the paragraph's direction. Text flush with the reply's left edge puts the caret
+   just outside it.
+3. The caret stayed behind when a code block or table scrolled sideways. The reply listens for
+   scroll in the capture phase and places the caret once a frame. It stays inside the visible part
+   of the scrolling block.
+4. The seeded pacing test asserted `text.startsWith(text.slice(0, length))`, true whatever the
+   reveal returned. It now drives the real hook through a probe component that records what React
+   committed, frame by frame, with the deadline and grapheme assertions. The other new tests on
+   both branches were read for the same fault. The fixture-length assertion in the backlog test
+   only checked its own input and became a comment.
+
+`e2e/server.ts`'s Trail Cook streams back what follows "Echo: " and leaves the turn running, so the
+browser suite can measure a live row. `.agents/tools/streaming-preview.ts` gained `CODE_BLOCK=1`.
+
+### Browser, Chromium
+
+`CODE_BLOCK=1 STREAM_CHARS=24 npx tsx .agents/tools/streaming-preview.ts 4190`, 900 x 800, the
+live row's text length sampled on every animation frame for 7 seconds while an open code block
+grew from 20,000 characters, the server sending 4 updates a second:
+
+| Build | Text changes in each second | Least gap | Median gap |
+| --- | --- | --- | --- |
+| `8753e3d`, before | 32 in all 7 | 15.2 ms | 33.3 ms |
+| This round | 30 in all 7 | 32.3 ms | 33.3 ms |
+
+`e2e/live-reply.spec.ts` streams four texts and checks the caret against Chromium's layout of the
+last word, one grapheme at a time, with a screenshot of each: Arabic alone, caret left of the last
+word; Latin alone; Hebrew then a Latin word; Arabic then a number, caret right of "2026", between it
+and the Arabic. At 390 px wide, it scrolls an open code block 24 px and the caret follows the last
+character, then past the last line and the caret waits at the block's visible edge. Safari and
+Firefox: not run.
+
+### Red proof
+
+Each was watched failing, then restored:
+
+- The head's hook with the new pacing test: least gap 2 ms after an arrival, against 32.3.
+- The hook ignoring a shorter text, with the probe test: "run 0: … is a prefix of …" fails.
+- `visibleLength` without the grapheme cut: "cut between graphemes: expected 21 to be 28".
+- The reveal's speed allowed to drop: "run 0 at 1034: expected 162 to be ≥ 231".
+- The head's caret code with the e2e suite: right-to-left text, caret at 459 to 461 over the last
+  letter at 457 to 461; code block scrolled 24 px, caret left 26 px behind.
+- No scroll listener, and placing on every scroll event, with the jsdom scroll test.
+- `logicalEndSide` taking the right edge of a right-to-left letter, and ignoring the grapheme
+  before punctuation: the rule's table test.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- The six files above: 202 tests passed.
+- `npm test`: 181 files, 2935 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 14 passed in Chromium.

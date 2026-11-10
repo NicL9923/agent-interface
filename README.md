@@ -222,10 +222,12 @@ still win.
   scroll-driven animations where the browser supports them.
 - While a turn runs, the live row shows its tools as a strip that fills in as each finishes.
 - While a reply streams, its text appears at a steady pace instead of jumping a line or two at
-  each of the server's updates, up to four a second. Each update is revealed within 300 ms of
-  arriving, however long it is, and a reply already under way when the chat opens shows at once.
-  A caret after the last character pulses until the reply is saved. The text shows at once in a
-  hidden tab, and under reduced motion, where the caret stays lit and still.
+  each of the server's updates, up to four a second. Each update is revealed within about a third
+  of a second of arriving, however long it is, with at most 30 paints a second, and a reply
+  already under way when the chat opens shows at once. A caret at the text's logical end, right of
+  Latin text and left of Arabic or Hebrew, pulses until the reply is saved, and follows a code
+  block or table scrolled sideways. The text shows at once in a hidden tab, and under reduced
+  motion, where the caret stays lit and still.
 - On a computer, pinned avatars glance at a nearby mouse pointer. When a pinned assistant finishes,
   it hops and the other pinned ones look over. Approving a request or answering a question makes
   the assistant cheer, and settled approval cards fold away.
