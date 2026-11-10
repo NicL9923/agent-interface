@@ -263,7 +263,7 @@ describe('group conversation',()=>{
     serve();
     await act(async()=>root.render(view()));
     const logs=()=>vi.mocked(api).mock.calls.filter(([path])=>String(path).includes('/log')).length;
-    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room')!;
+    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room&ping=10')!;
     expect(stream).toBeDefined();
     const before=logs();
     await act(async()=>vi.advanceTimersByTimeAsync(10_000));
@@ -281,7 +281,7 @@ describe('group conversation',()=>{
     serve([{event_id:'a',seq:1,kind:'message.user',actor:{kind:'user',id:'app'},payload:{text:'Hello'},created_at:1}]);
     await act(async()=>root.render(view()));
     const reads=()=>vi.mocked(api).mock.calls.filter(([path])=>path==='/groups/room').length;
-    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room')!;
+    const stream=[...FakeEventSource.streams].find(item=>item.url==='/api/events?group=room&ping=10')!;
     const before=reads();
     // The cursor is 1; a new pending approval announces the same sequence.
     await act(async()=>stream.emit('group',JSON.stringify({roomId:'room',latestSeq:1})));

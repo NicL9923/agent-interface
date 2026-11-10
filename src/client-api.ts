@@ -169,54 +169,120 @@ export function pollWhileVisible(refresh: () => void, intervalMs: number) {
     document.removeEventListener("visibilitychange", changed);
   };
 }
-/** Server pings keep a stream this fresh; a quieter one may be a dead connection. */
-const STREAM_SILENCE = 60_000;
+/** The ping interval of a server that does not name one: 25 seconds, as before `?ping=10`. */
+const DEFAULT_PING_MS = 25_000;
+/** The longest a silent stream waits before its next replacement, however often it was replaced. */
+export const MAX_STREAM_SILENCE = 5 * 60_000;
+/**
+ * How long a stream may stay silent before it counts as dead: two pings and five seconds more, so one
+ * lost or late ping never replaces a live stream. A server that pings every 10 seconds, as one opened
+ * with `?ping=10` does, is found dead within 25 seconds of its last event; one that names no interval,
+ * within 55. Each replacement that hears nothing doubles it, up to MAX_STREAM_SILENCE, and any event
+ * resets it.
+ */
+export function streamSilence(pingMs: number, misses: number) {
+  return Math.min((2 * pingMs + 5_000) * 2 ** misses, MAX_STREAM_SILENCE);
+}
+/** Adds `ping=10`, which asks the server to ping every 10 seconds and say so. */
+const withPing = (path: string) => `${path}${path.includes("?") ? "&" : "?"}ping=10`;
 /**
  * Calls onChange for each change notice on a server event stream, and each time it
  * connects, since notices sent before the subscription are lost. EventSource retries a drop
- * itself but never a refusal, so `open` replaces a closed or silent stream. `named` handles other
- * named events by their data, such as group chat notices.
+ * itself but never a refusal, and a connection a proxy or a sleeping device cut can stay open
+ * and silent. A watchdog replaces a stream silent past `streamSilence`, and `open` replaces a
+ * closed or silent one at once. A hidden page's late timers replace nothing: showing the page
+ * calls `open`, which checks then. `named` handles other named events by their data, such as
+ * group chat notices.
  */
 export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
   onInflightDelta?: (value: InflightDelta) => boolean) {
-  let source: EventSource | undefined, heard = 0;
+  let source: EventSource | undefined, heard = 0, pingMs = DEFAULT_PING_MS, misses = 0;
+  let watchdog: ReturnType<typeof setTimeout> | undefined, due = 0;
+  const silence = () => streamSilence(pingMs, misses);
+  const silent = () => Date.now() - heard >= silence();
+  /**
+   * Any event proves the connection, so the next silence is measured from the base again. The timer
+   * moves only when that brings the deadline closer, so a stream of growth events sets no timers.
+   */
+  const alive = () => {
+    heard = Date.now();
+    misses = 0;
+    if (source && heard + silence() < due) watch();
+  };
+  // One timer per stream, set for when silence would begin. A device waking from sleep fires it once, late.
+  const watch = (delay = Math.max(0, heard + silence() - Date.now())) => {
+    clearTimeout(watchdog);
+    due = Date.now() + delay;
+    watchdog = setTimeout(check, delay);
+  };
+  const check = () => {
+    watchdog = undefined;
+    if (!source) return;
+    // Hidden, it looks again a whole silence later; showing the page calls `open` sooner.
+    if (document.visibilityState === "hidden") watch(silence());
+    else if (source.readyState === EventSource.CLOSED || silent()) replace();
+    else watch();
+  };
   const close = () => {
+    clearTimeout(watchdog);
+    watchdog = undefined;
     source?.close();
     source = undefined;
+    misses = 0;
+  };
+  const replace = () => {
+    // A stream that failed or went silent counts against the next one's patience.
+    const failed = source ? misses + 1 : 0;
+    close();
+    misses = failed;
+    connect();
   };
   const open = () => {
     if (typeof EventSource === "undefined") return;
-    if (source && source.readyState !== EventSource.CLOSED && Date.now() - heard < STREAM_SILENCE) return;
-    close();
-    const current = source = new EventSource(`/api${path}`);
+    if (source && source.readyState !== EventSource.CLOSED && !silent()) return;
+    replace();
+  };
+  const connect = () => {
+    const current = source = new EventSource(`/api${withPing(path)}`);
     heard = Date.now();
+    // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
+    pingMs = DEFAULT_PING_MS;
+    watch();
+    // Only the stream this one opened last speaks for it: a replaced one's late events change nothing.
+    const on = (name: string, handle: (data: string) => void) =>
+      current.addEventListener(name, event => { if (current === source) handle((event as MessageEvent).data); });
     current.onopen = () => {
+      if (current !== source) return;
       heard = Date.now();
       onChange();
     };
-    if (onInflight) current.addEventListener("inflight", event => {
-      heard = Date.now();
-      try { onInflight(JSON.parse((event as MessageEvent).data) as Inflight); } catch { onChange(); }
+    if (onInflight) on("inflight", data => {
+      alive();
+      try { onInflight(JSON.parse(data) as Inflight); } catch { onChange(); }
     });
     // A growth notice the caller cannot apply means this stream and the caller disagree about the
     // live reply. Reload, and reconnect so the server starts again from a whole `inflight` event.
-    if (onInflightDelta) current.addEventListener("inflight-delta", event => {
-      heard = Date.now();
+    if (onInflightDelta) on("inflight-delta", data => {
+      alive();
       let applied = false;
-      try { applied = onInflightDelta(JSON.parse((event as MessageEvent).data) as InflightDelta); } catch { /* Reloads below. */ }
+      try { applied = onInflightDelta(JSON.parse(data) as InflightDelta); } catch { /* Reloads below. */ }
       if (applied) return;
       onChange();
       close();
       open();
     });
-    current.addEventListener("roster", () => { heard = Date.now(); onChange(); });
-    for (const [name, handle] of Object.entries(named))
-      current.addEventListener(name, event => { heard = Date.now(); handle((event as MessageEvent).data); });
-    current.addEventListener("ping", () => { heard = Date.now(); });
-    current.onmessage = () => {
-      heard = Date.now();
+    on("roster", () => { alive(); onChange(); });
+    for (const [name, handle] of Object.entries(named)) on(name, data => { alive(); handle(data); });
+    // A ping names its interval in seconds; an older server's says `ping` and keeps the default.
+    on("ping", data => {
+      const seconds = Number(data);
+      pingMs = Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? seconds * 1000 : DEFAULT_PING_MS;
+      alive();
+    });
+    on("message", () => {
+      alive();
       onChange();
-    };
+    });
   };
   return { open, close };
 }

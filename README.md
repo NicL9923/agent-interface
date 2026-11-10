@@ -398,7 +398,10 @@ link when the host sets `IOS_APP_LATEST_BUILD` and `IOS_APP_UPDATE_URL`; see the
 
 During an outage, the app retains loaded conversations and personal drafts,
 rechecks the connection automatically, and refreshes when the browser comes back
-online or into view. Manual reconnect checks immediately. The transport bounds
+online or into view. Each event stream the web app opens asks the server to ping every 10 seconds,
+and a stream silent for 25 seconds is replaced, as when a proxy, a sleeping laptop or a phone's radio
+cut it without closing it. Replacements that stay silent wait longer each time, up to 5 minutes, and
+start over once one hears anything. A hidden tab replaces nothing; showing it checks at once. Manual reconnect checks immediately. The transport bounds
 stalled requests and backs off repeated failures. It never automatically replays
 messages or configuration changes; uncertain admissions are reconciled through
 Hermes's durable receipts.
