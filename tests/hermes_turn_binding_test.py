@@ -146,8 +146,9 @@ class TurnHermes(FakeHermes):
             images = self.session["attached_images"]
             pause, self.attach_pause = self.attach_pause, None
             fail = pause[2] if pause is not None else None
-            # Native resolves the path first: "\\ " read as a space, variables expanded, a relative path joined to
-            # TERMINAL_CWD, symlinks resolved (hermes_cli/cli_terminal_input.py:86-137).
+            # Four of the rewrites native's resolver makes (hermes_cli/cli_terminal_input.py:86-137): "\\ " read as
+            # a space, variables expanded, a relative path joined to TERMINAL_CWD, symlinks resolved. Native also
+            # strips matching quotes, accepts file:// and ~, and rewrites X:/ on Linux; this fake does not.
             expanded = os.path.expandvars(params["path"].replace("\\ ", " "))
             path = os.path.realpath(os.path.join(os.getenv("TERMINAL_CWD", os.getcwd()), expanded))
             if fail != "before":

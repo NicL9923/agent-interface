@@ -403,3 +403,29 @@ by hash, and every `__pycache__` deleted:
 No mutant of this round survived.
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Review by a second provider
+
+GPT-6.1 Sol reached its usage limit, so xAI's Grok 4.7 at high effort reviewed the whole branch at `8dd65ca`, the
+head after merging `origin/main` at `c2ee202`, with Sol's eight earlier findings restated to it. Verdict: ready, no P1
+or P2. It replayed each of Sol's sequences through the tests and its own breaks, verified the five native answers at
+`ed1afb0`, `b9cb268` and `d23cc6b` and found no sixth, confirmed the server drops `turn` at both ends, found no lock
+inversion with `history_lock`, and judged the three windows only Hermes can close as accurately recorded and no worse
+than `main`. All five of its mutations on this branch went red.
+
+Two P3 findings, both corrected by the orchestrator:
+
+- `docs/HermesCapabilityMatrix.md` cited `ed1afb0` line numbers without saying so, and the forwarded owner queue it
+  described does not exist at `b9cb268` or `d23cc6b`. Each citation now names its revision. The orchestrator checked
+  every line at both qualified revisions in a local clone of upstream.
+- The turn fake's comment claimed it matched native's resolver. It makes four of native's rewrites; the comment now
+  says so and names the ones it does not make.
+
+### Checks on the merged head
+
+- `npm run test:py`: 44 files passed, 0 failed, Python 3.14.10, here and in the review.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck` passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+- After the two corrections: `tests/hermes_turn_binding_test.py` passed and `ruff check .` passed.
+- Real Hermes, the extension probe, `npm test`, iOS and production: not run.
