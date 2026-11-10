@@ -747,13 +747,18 @@ a {
   gap: 10px;
   margin: 18px 0;
 }
+/* When the view is too short for everything, as above a phone's keyboard, the notices scroll before the message box is cut off. */
 .composer-area {
   --composer-bottom-inset: env(safe-area-inset-bottom);
-  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 6px max(12px, calc((100% - 752px) / 2)) max(8px, var(--composer-bottom-inset));
 }
 /* The home indicator's inset stays reported under an iOS keyboard, which covers it, so the composer sits on the keyboard. */
 :root[data-keyboard-open] .composer-area { --composer-bottom-inset: 0px; }
+.composer-area > * { flex-shrink: 0; }
+.composer-area > .status-dock { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .activity-status {
   display: flex;
   gap: 7px;
