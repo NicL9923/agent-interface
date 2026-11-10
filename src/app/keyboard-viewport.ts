@@ -10,6 +10,11 @@
  * moved down to where it was panned. The check is the visual viewport against the layout viewport,
  * not a guess at the browser, so a browser that starts honoring the meta needs no change here.
  *
+ * The layout viewport's height is the root element's `clientHeight`, not `innerHeight`. Safari on
+ * iOS 27.0 was measured reporting `innerHeight` as that height less the page's scroll once it has
+ * panned to the field, 699 - 330 = 369, which equals the visual viewport and would read as no
+ * keyboard. The root's `clientHeight` stayed 699 throughout.
+ *
  * WebKit implements the meta from the iOS 27.3 beta (bug 259770), where it is reported to leave the
  * field behind the keyboard still; how this code and that beta interact is unverified.
  *
@@ -18,7 +23,7 @@
  * UNZOOMED of 1 counts as normal, so a zoom that slight is treated as a keyboard would be.
  */
 export type ViewportLike = Pick<VisualViewport, "height" | "scale" | "pageTop" | "addEventListener" | "removeEventListener">;
-type Host = { innerHeight: number; visualViewport?: ViewportLike | null; document: Pick<Document, "documentElement"> };
+type Host = { visualViewport?: ViewportLike | null; document: Pick<Document, "documentElement"> };
 
 /** Subpixel layout leaves the two viewports a fraction apart with no keyboard at all. */
 const SLACK = 1;
@@ -43,7 +48,7 @@ export function followKeyboard(host: Host = window) {
     delete root.dataset.keyboardOpen;
   };
   const update = () => {
-    const frame = keyboardFrame(host.innerHeight, viewport);
+    const frame = keyboardFrame(root.clientHeight, viewport);
     if (frame === undefined) return;
     if (!frame) return clear();
     root.style.setProperty("--keyboard-height", `${frame.height}px`);

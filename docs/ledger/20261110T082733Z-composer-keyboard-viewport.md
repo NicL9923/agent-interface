@@ -165,3 +165,42 @@ composers. [Report](../evidence/composer-keyboard-20261110/send-visible-preview.
   120px and 150px frames. Using the plain 76px for the banner failed the threaded portrait keyboard case.
 - `npm run lint`, `npm run typecheck`, `npm run build` and `npm run test:e2e` (10 passed) passed again. `npm test` was
   not repeated: this commit changes only CSS that jsdom does not lay out, and a tool.
+
+## iOS Simulator check of `bbadcff`, and the fix it led to
+
+Safari on an iPhone 17e simulator, iOS 27.0, on the Mac mini, driven by the device tools, with a
+same-origin probe script logging the viewport on every change. Nine of 16 steps ran before the
+tool's test runner froze on Safari's microphone prompt. The iPhone 18 Pro Max and the iPad were
+not run. A simulator is not a physical phone.
+
+- **Failed: the keyboard code did not engage in the usual case.** With the keyboard up, Safari
+  reported `innerHeight` as the root's `clientHeight` less the page's scroll: 699 - 330 = 369 in
+  portrait, 699 - 100 = 599 after a smaller pan, 326 - 263 = 63 in landscape. Once Safari had
+  panned to the field, `innerHeight` equalled the visual viewport's height and `keyboardFrame`
+  saw no keyboard. The probe log shows `data-keyboard-open` set at 10:10:51.887 with
+  `innerHeight` 699 and cleared at 10:10:52.303 with `innerHeight` 369 and `scrollY` 330. The
+  root's `clientHeight` stayed 699 throughout. Safari's own pan still put Send inside the frame,
+  at 312 to 356 of 369, but the header scrolled off and the notice was clipped, not shrunk.
+- Where the code did engage, it worked: back in portrait with the keyboard up, the shell was 401 px
+  with Send at 344 to 388; with `innerHeight` 599 the notice shrank to 42.5 px before the field.
+- Landscape leaves a 34 px visible frame on this phone, under the 112 px floor, so Send is cut
+  there. That is the stated limit.
+- Passed: no keyboard state at start, dismissing the keyboard, a long draft in portrait, four
+  photos attached.
+
+**Fix, by the orchestrator:** `followKeyboard` compares the visual viewport with the root
+element's `clientHeight` and no longer reads `innerHeight`.
+
+### Red proof
+
+"keeps the shell fitted after Safari pans the page and innerHeight drops to the visible height"
+replays the measured sequence. Before the fix it failed with the shell cleared: expected height
+`369px`, top `330px`, open; received empty, empty, closed.
+
+### Checks, after merging `origin/main` at `5d74731`
+
+- `npm run typecheck` and `npm run lint` passed.
+- `tests/keyboard-viewport.test.ts`: 7 tests passed. `npm test`: 180 files, 2926 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 10 passed in Chromium.
+- `.agents/tools/check-send-visible.mjs`: 70 of 70.
+- The fix has not run in Safari. A second simulator check follows.

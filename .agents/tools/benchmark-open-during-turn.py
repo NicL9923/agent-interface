@@ -16,7 +16,14 @@ its phases, it times ``original_rows``, the compaction-copy lookup inside the de
 ``--repo`` names another checkout, such as an export of origin/main, to time its add-on with the
 same fakes. ``--plan`` prints the query plan of every statement the add-on ran against the store.
 
-    python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30] [--plan]
+``--contend`` also times the journal lock. It wraps ``journal.lock`` to record each thread's
+outermost hold, and runs a frame thread beside the opens that records a live tool call every
+millisecond, as each ``tool.start`` and ``tool.complete`` does, through the add-on's own
+``record_live_tool``. It reports the open's holds, the attribution pass, and the frame thread's
+lock wait and whole call, split by whether the call began during an attribution pass or during
+the rest of the open, where only the interpreter lock is shared.
+
+    python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30] [--plan] [--contend]
 """
 import argparse
 import json
@@ -117,6 +124,38 @@ class Store:
         return self.db.execute(sql, params).fetchall()
 
 
+class TimedLock:
+    """The journal's lock, recording each thread's outermost hold and the wait before it, in milliseconds."""
+
+    def __init__(self, lock):
+        self.lock, self.local = lock, threading.local()
+        self.holds, self.waits = [], []
+
+    def acquire(self, blocking=True, timeout=-1):
+        started = time.perf_counter()
+        got = self.lock.acquire(blocking, timeout)
+        if got:
+            depth = getattr(self.local, "depth", 0)
+            if depth == 0:
+                self.local.since = time.perf_counter()
+                self.waits.append((threading.get_ident(), started, (self.local.since - started) * 1000))
+            self.local.depth = depth + 1
+        return got
+
+    def release(self):
+        self.local.depth -= 1
+        if self.local.depth == 0:
+            self.holds.append((threading.get_ident(), self.local.since, (time.perf_counter() - self.local.since) * 1000))
+        self.lock.release()
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
 class Yield:
     def __init__(self, value):
         self.value = value
@@ -191,6 +230,7 @@ def main():
     parser.add_argument("--rows", type=int, default=5000)
     parser.add_argument("--opens", type=int, default=30)
     parser.add_argument("--plan", action="store_true", help="print the query plan of each statement the add-on ran against the store")
+    parser.add_argument("--contend", action="store_true", help="time journal lock holds, and a frame thread recording live tool calls beside the opens")
     args = parser.parse_args()
     sys.path.insert(0, str(args.repo.resolve() / "tests"))
     import hermes_extension_journal_test
@@ -227,10 +267,42 @@ def main():
                 finally:
                     lookups.append((time.perf_counter() - started) * 1000)
             bridge.original_rows = timed_original_rows
+            passes, frames = [], []
+            if args.contend:
+                lock = hermes.journal.lock = TimedLock(hermes.journal.lock)
+                attribute = bridge.attribute
+
+                def timed_attribute(*args, **kwargs):
+                    started = time.perf_counter()
+                    try:
+                        return attribute(*args, **kwargs)
+                    finally:
+                        passes.append((started, time.perf_counter()))
+                bridge.attribute = timed_attribute
             for _ in range(2):
                 open_("warm", {"profile": "default", "window": {"turns": 20}})
-            durations, phases = [], []
+            durations, phases, spans = [], [], []
             del lookups[:]
+            # The first warm-up open parses every tool row and journal record: a cold row cache.
+            cold = [(end - start) * 1000 for start, end in passes[:1]]
+            del passes[:]
+            stop = threading.Event()
+
+            def frame_thread():
+                # Each tool.start and tool.complete frame records the call; tool.complete also inserts a row.
+                payload = {"tool_id": "live", "name": "terminal", "args": {"command": "ls"}}
+                while not stop.is_set():
+                    started = time.perf_counter()
+                    before = len(lock.waits)
+                    bridge.record_live_tool("sid", hermes.session, "tool.start", payload)
+                    ended = time.perf_counter()
+                    waits = [wait for ident, _, wait in lock.waits[before:] if ident == threading.get_ident()]
+                    frames.append((started, sum(waits), (ended - started) * 1000))
+                    time.sleep(0.001)
+            if args.contend:
+                contender = threading.Thread(target=frame_thread, name="frames", daemon=True)
+                contender.start()
+                del lock.holds[:]
             for _ in range(args.opens):
                 wal = Path(store.db_path + "-wal").stat()
                 with hermes.journal.db, store.db:
@@ -241,7 +313,11 @@ def main():
                 started = time.perf_counter()
                 result = open_("poll", {"profile": "default", "window": {"turns": 20}})["result"]
                 durations.append((time.perf_counter() - started) * 1000)
+                spans.append((started, time.perf_counter()))
                 phases.append(result["app_timing"])
+            if args.contend:
+                stop.set()
+                contender.join(5)
             if len(lookups) != args.opens:
                 sys.exit(f"{args.opens - len(lookups)} opens skipped the compaction-copy lookup; they did not model a running turn.")
 
@@ -255,6 +331,19 @@ def main():
             for name in phases[0]:
                 print(f"  {name}: {summary(phase[name] for phase in phases)}")
             print(f"  original_rows (in decorate): {summary(lookups)}")
+            if args.contend:
+                opener = threading.get_ident()
+                within = lambda moment, ranges: any(start <= moment < end for start, end in ranges)
+                holds = [hold for ident, since, hold in lock.holds if ident == opener and within(since, spans)]
+                print(f"Journal lock, opener's holds during measured opens ({len(holds)}): {summary(holds)}, max {max(holds):.1f} ms")
+                print(f"  attribution pass: {summary([(end - start) * 1000 for start, end in passes])}; cold row cache, first open: {cold[0]:.1f} ms")
+                during = [frame for frame in frames if within(frame[0], passes)]
+                rest = [frame for frame in frames if within(frame[0], spans) and not within(frame[0], passes)]
+                for name, group in (("began during an attribution pass", during), ("began in the rest of an open", rest)):
+                    if group:
+                        print(f"Frame thread, {len(group)} calls that {name}:")
+                        print(f"  journal lock wait: {summary([frame[1] for frame in group])}, max {max(frame[1] for frame in group):.1f} ms")
+                        print(f"  whole call: {summary([frame[2] for frame in group])}, max {max(frame[2] for frame in group):.1f} ms")
             if args.plan:
                 for sql, params in store.statements.items():
                     print(f"\n{sql}")

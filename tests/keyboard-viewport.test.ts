@@ -20,10 +20,17 @@ const shell = () => ({
 });
 const full = { height: "", top: "", open: false };
 let stop = () => {};
-const follow = (viewport: FakeViewport | null, innerHeight = 800) => {
-  const host = { innerHeight, visualViewport: viewport, document };
+/**
+ * The page as a phone reports it. `layout` is the root element's `clientHeight`, the layout viewport.
+ * `innerHeight` is there because Safari changes it while the keyboard is up, and nothing may read it.
+ */
+const page = { layout: 800, innerHeight: 800 };
+Object.defineProperty(root, "clientHeight", { configurable: true, get: () => page.layout });
+const follow = (viewport: FakeViewport | null, layout = 800) => {
+  Object.assign(page, { layout, innerHeight: layout });
+  const host = { get innerHeight() { return page.innerHeight; }, visualViewport: viewport, document };
   stop = followKeyboard(host);
-  return host;
+  return page;
 };
 afterEach(() => { stop(); stop = () => {}; });
 
@@ -41,10 +48,26 @@ describe("following an on-screen keyboard", () => {
     expect(shell()).toEqual(full);
   });
 
+  // Measured in Safari on iOS 27.0: once it has panned the page to the field, `innerHeight` reads the
+  // root's height less the scroll, 699 - 330 = 369, the same as the visual viewport. The root's own
+  // height stays 699, so that is what the visual viewport is compared with.
+  it("keeps the shell fitted after Safari pans the page and innerHeight drops to the visible height", () => {
+    const viewport = new FakeViewport();
+    const host = follow(viewport, 699);
+    viewport.set({ height: 369, pageTop: 0 });
+    expect(shell()).toEqual({ height: "369px", top: "0px", open: true });
+    host.innerHeight = 369;
+    viewport.set({ pageTop: 330 }, "scroll");
+    expect(shell()).toEqual({ height: "369px", top: "330px", open: true });
+    host.innerHeight = 699;
+    viewport.set({ height: 699, pageTop: 0 });
+    expect(shell()).toEqual(full);
+  });
+
   it("does nothing where the keyboard already shrinks the layout viewport, as the meta asks of Android", () => {
     const viewport = new FakeViewport();
     const host = follow(viewport);
-    host.innerHeight = 470;
+    host.layout = 470;
     viewport.set({ height: 470 });
     expect(shell()).toEqual(full);
     // A fraction of a pixel between the two is layout rounding, not a keyboard.
