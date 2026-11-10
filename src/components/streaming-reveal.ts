@@ -3,8 +3,8 @@ import { prefersReducedMotion } from "../app/reduced-motion";
 
 /**
  * Paces how a streaming reply's text is painted, apart from when it arrives. The server sends a
- * live reply's growth at most four times a second; shown as it lands, the text jumps a line or two
- * and then stops. Here each update is revealed over the frames that follow it instead.
+ * live reply's growth at most ten times a second (TURN_TICK_MS in src/server/conversation-routes.ts),
+ * and Hermes itself streams in bursts; shown as it lands, the text jumps and then stops. Here each update is revealed over the frames that follow it instead.
  *
  * Contract:
  * - What is shown is always a prefix of the text that arrived, cut between graphemes.
@@ -16,9 +16,11 @@ import { prefersReducedMotion } from "../app/reduced-motion";
  *   show at once, with no pacing.
  */
 /**
- * How long the reveal takes to catch up with an update. A little longer than the server's
- * 250 ms between updates, so the next one lands while the last is still being revealed and the
- * text keeps moving instead of stopping and starting.
+ * How long the reveal takes to catch up with an update. Longer than the server's 100 ms between
+ * updates, and long enough to carry the text through Hermes's own short pauses, so it keeps moving
+ * instead of stopping and starting. With 100 ms updates, 200 or 150 here showed a word 60 to 90 ms
+ * sooner, but on bursty input the 95th-percentile gap between paints grew from 83 ms to 201 and 333:
+ * docs/ledger/20261110T210126Z-live-tick.md.
  */
 export const CATCH_UP_MS = 300;
 /**

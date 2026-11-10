@@ -40,7 +40,7 @@ export function useStopResponse(botId: string, report: (message: string) => void
 
 /**
  * This person's earlier messages for recall, newest first. The same array comes back while the
- * messages are unchanged, so a streaming reply does not hand the composer a new list four times a second.
+ * messages are unchanged, so a streaming reply does not hand the composer a new list on every update.
  */
 export function useOwnPrompts(messages: readonly Message[] | undefined, userId: string | undefined) {
   const kept = useRef<string[]>([]);
@@ -155,7 +155,7 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   }, [footer]);
   return { panel, over };
 }
-// Memoized with stable callbacks from App, so a streaming reply, which changes the conversation about four times a second, does not re-render it.
+// Memoized with stable callbacks from App, so a streaming reply, which changes the conversation up to ten times a second, does not re-render it.
 export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, connectionShown, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
   boot: Bootstrap;
   selected: Bot;
