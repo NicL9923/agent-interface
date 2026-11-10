@@ -66,6 +66,7 @@ const readMethods = new Set([
   'profiles.list', 'profiles.describe', 'session.history', 'model.options',
   'groups.capabilities', 'groups.list', 'groups.state', 'groups.log',
 ]);
+const isRead = (method: string, params: Wire) => readMethods.has(method) || method === 'image.generate' && params.probe === true;
 // A quiet socket is checked in the background, so no request waits on a dead one,
 // and open chats reconnect without waiting for a request.
 const HEARTBEAT_MS = 10_000;
@@ -317,7 +318,7 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
           announced = rawRpc(current, 'client.capabilities', {server_requests: true});
         }
         // One round trip: the contract check follows the client announcement on the same socket.
-        const checked = rawRpc(current, 'agent-interface.capabilities');
+        const checked = rawRpc(current, 'agent-interface.capabilities', {}, true);
         checked.catch(() => { /* Settled below, after the announcement. */ });
         if (announced) await announced;
         let capabilities: Wire;
@@ -353,7 +354,8 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
       if (closed || connecting) return;
       const current = connection;
       if (current?.verified && current.ws.readyState === WebSocket.OPEN) {
-        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void rpc('agent-interface.capabilities').catch(() => {});
+        // The one read whose timeout still drops the socket: a quiet socket that cannot answer it is dead.
+        if (Date.now() - current.lastReceivedAt >= HEARTBEAT_MS) void request('agent-interface.capabilities', {}, {share: false, drop: true}).catch(() => {});
       } else if (hooks.watching() && retryAt <= Date.now()) void connect().catch(() => {});
     }, HEARTBEAT_MS);
     heartbeat.unref?.();
@@ -396,36 +398,53 @@ export function createHermesTransport(options: HermesOptions, hooks: TransportHo
     } catch { disconnect(current, unavailable()); }
   }
   /** share=false never joins an in-flight read, as a read that must see a just-made edit needs. */
-  async function rpc(method: string, params: Wire = {}, share = true): Promise<Wire> {
+  function rpc(method: string, params: Wire = {}, share = true): Promise<Wire> {
+    return request(method, params, {share});
+  }
+  async function request(method: string, params: Wire, {share, drop}: {share: boolean; drop?: boolean}): Promise<Wire> {
     await connect();
     const current = connection;
     if (!current?.verified || current.ws.readyState !== WebSocket.OPEN) {
       if (current) disconnect(current, unavailable());
       throw unavailable();
     }
-    const key = share && (readMethods.has(method) || method === 'image.generate' && params.probe === true)
+    const key = share && isRead(method, params)
       ? `${method}:${JSON.stringify(params)}`
       : undefined;
     if (key && reads.has(key)) return reads.get(key)!;
-    const request = rawRpc(current, method, params);
-    if (key) reads.set(key, request);
-    try { return await request; }
-    finally { if (key && reads.get(key) === request) reads.delete(key); }
+    const sent = rawRpc(current, method, params, drop);
+    if (key) reads.set(key, sent);
+    try { return await sent; }
+    finally { if (key && reads.get(key) === sent) reads.delete(key); }
   }
-  function rawRpc(current: Connection, method: string, params: Wire = {}): Promise<Wire> {
+  /**
+   * A read that times out fails alone and leaves the socket open, because one slow read must not
+   * drop every open chat's live state. A request that changes state, the handshake and the
+   * heartbeat's liveness probe still drop the socket when they time out: an unanswered mutation
+   * leaves its outcome uncertain on that socket, and an unanswered handshake or probe means it is
+   * dead. drop overrides that choice for one request.
+   */
+  function rawRpc(current: Connection, method: string, params: Wire = {}, drop?: boolean): Promise<Wire> {
     if (connection !== current || current.ws.readyState !== WebSocket.OPEN) {
       if (connection === current) disconnect(current, unavailable());
       return Promise.reject(unavailable());
     }
     const id = ++serial;
-    const timeout = readMethods.has(method) || method === 'client.capabilities' || method === 'image.generate' && params.probe === true
-      ? 10_000
-      : 45_000;
+    const read = isRead(method, params);
+    const timeout = read || method === 'client.capabilities' ? 10_000 : 45_000;
+    const drops = drop ?? !read;
     const deferred = Deferred.makeUnsafe<Wire, Error>();
     const scope = Scope.makeUnsafe();
     const timer = Effect.runFork(Effect.gen(function* () {
       yield* Effect.sleep(timeout);
-      disconnect(current, new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`));
+      if (drops) {
+        disconnect(current, new TransportError('unreachable', `Hermes ${method} timed out. Do not replay an uncertain submission.`));
+        return;
+      }
+      // An answer that arrives later finds no pending request and is dropped in receive().
+      if (pending.get(id)?.deferred !== deferred) return;
+      pending.delete(id);
+      Deferred.doneUnsafe(deferred, Effect.fail(new TransportError('unreachable', `Hermes ${method} timed out. Try again.`)));
     }));
     Effect.runSync(Scope.addFinalizer(scope, Effect.sync(() => timer.interruptUnsafe())));
     pending.set(id, {connection: current, deferred, scope});
