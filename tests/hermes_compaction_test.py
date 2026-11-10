@@ -71,6 +71,8 @@ class Native:
         self.hold_before_active.set()
         self.hold_before_dispatch.set()
         self.answers = [True]
+        # 10 ms polls before the summary finishes on its own if the test never releases it: at least 5 s.
+        self.polls = 500
         # Hermes's release of the session: it admits a queued turn, which reserves native admission.
         self.on_release = lambda: None
 
@@ -90,7 +92,7 @@ class Native:
             # Hermes builds the summary prompt, then marks this attempt's summary as working.
             self.hold_before_dispatch.wait(5)
             session["agent"].context_compressor._compression_working_attempt_generation += 1
-            for _ in range(500):
+            for _ in range(self.polls):
                 if fence.cancelled:
                     return {"status": "aborted"}
                 if self.release.is_set():

@@ -82,7 +82,11 @@ class FakeGateway:
         return journal
 
     def __exit__(self, *exc):
-        self.journal.db.close()
+        # Under the journal lock, which the add-on holds for its journal transactions: a send-lane worker still writing
+        # when a test ends finishes that transaction first, and a later one raises instead of using the freed
+        # connection, which crashed the interpreter under load.
+        with self.journal.lock:
+            self.journal.db.close()
         self.directory.cleanup()
         for item in reversed(self.patches):
             item.stop()
