@@ -25,6 +25,8 @@ wrapper are the real code.
 import contextvars
 import copy
 import json
+import os
+import tempfile
 import threading
 import time
 import types
@@ -72,12 +74,19 @@ class TurnHermes(FakeHermes):
     images it took, in admission order; ``snapshotted`` waits for one. With ``voice`` on, a typed "stop" ends the
     voice chat and admits nothing. ``reply_as`` replaces the answer to the next prompt.submit that starts a turn, and
     ``hold_admission`` is an Event that turn's thread waits on before Hermes admits it and takes the images.
+
+    image.attach appends the path, symlinks resolved, without a lock and answers it as ``path``, as native's does
+    (``methods_prompt.py:1020-1023`` and ``:1352-1355`` at ``ed1afb0``, ``:749-752`` and ``:1094-1097`` at the others).
+    ``pause_attach`` makes the next one wait after it appends, where native reads the image's header
+    (``_image_meta``, ``server.py:754-763`` at ``ed1afb0``, ``:840-849`` at the others). With ``fail="after"`` it then
+    answers 5027, as native does for an error after the append; with ``fail="before"`` it waits and answers 5027 without
+    appending, as native does when resolving the path raises (``methods_prompt.py:1008-1019`` and ``:1024-1025``).
     """
     def __init__(self, busy="queued"):
         super().__init__([])
         self.busy, self.races, self.submit_races, self.turns, self.rows, self.calls, self.start_as = busy, [], [], [], [], [], {}
         self.snapshots, self.changed = [], threading.Condition()
-        self.voice, self.reply_as, self.hold_admission = False, None, None
+        self.voice, self.reply_as, self.hold_admission, self.attach_pause = False, None, None, None
         server = self.server
         server.handle_request = self.handle
         server._run_prompt_submit = self.run_prompt_submit
@@ -134,8 +143,21 @@ class TurnHermes(FakeHermes):
             while self.submit_races:
                 self.submit_races.pop(0)()
         if method == "image.attach":
-            self.session["attached_images"].append(params["path"])
-            return ok(rid, {"attached": True})
+            images = self.session["attached_images"]
+            pause, self.attach_pause = self.attach_pause, None
+            fail = pause[2] if pause is not None else None
+            # Native resolves the path first (hermes_cli/cli_terminal_input.py:86-137).
+            path = os.path.realpath(params["path"])
+            if fail != "before":
+                images.append(path)
+            if pause is not None:
+                appended, resume, _ = pause
+                appended.set()
+                if not resume.wait(5):
+                    raise AssertionError("The test never resumed image.attach")
+                if fail:
+                    return self.server._err(rid, 5027, "Synthetic image failure " + fail + " the append")
+            return ok(rid, {"attached": True, "path": path, "count": len(images)})
         if method == "session.steer":
             with self.session["history_lock"]:
                 self.session.setdefault("corrections", []).append(params["text"])
@@ -191,6 +213,16 @@ class TurnHermes(FakeHermes):
         threading.Thread(target=admit, daemon=True).start()
         reply, self.reply_as = self.reply_as, None
         return self.server._ok(rid, reply if reply is not None else {"status": "streaming", **({"user_row_id": staged["_row_id"]} if staged else {})})
+
+    def pause_attach(self, fail=None):
+        """The next image.attach waits after it appends until the test sets ``resume``: (appended, resume) Events."""
+        appended, resume = threading.Event(), threading.Event()
+        self.attach_pause = (appended, resume, fail)
+        return appended, resume
+
+    def other_attach(self, path):
+        """Another client's native image.attach, which takes none of the add-on's locks."""
+        return self.handle({"id": 8, "method": "image.attach", "params": {"session_id": "sid", "path": path}})["result"]
 
     def other_client(self, text, rid=7):
         """Another client's prompt.submit. Its turn starts on its own thread, as Hermes's does."""
@@ -373,6 +405,42 @@ class StoredRows(FakeGateway):
 
     def bound(self, request_id):
         return self.journal.db.execute("SELECT row_id FROM receipts WHERE request_id=?", (request_id,)).fetchone()[0]
+
+
+class WatchedImages(list):
+    """A session's attached images that call ``write()`` before any removal from them."""
+    def __init__(self, images, write):
+        super().__init__(images)
+        self.write = write
+
+    def __delitem__(self, index):
+        self.write()
+        super().__delitem__(index)
+
+    def pop(self, *args):
+        self.write()
+        return super().pop(*args)
+
+    def remove(self, value):
+        self.write()
+        super().remove(value)
+
+    def clear(self):
+        self.write()
+        super().clear()
+
+
+class WatchedSession(dict):
+    """A Hermes session that calls ``write()`` before its attached images are replaced or removed from."""
+    def __init__(self, session, write):
+        super().__init__(session)
+        self.write = write
+        super().__setitem__("attached_images", WatchedImages(session["attached_images"], write))
+
+    def __setitem__(self, key, value):
+        if key == "attached_images":
+            self.write()
+        super().__setitem__(key, value)
 
 
 PHOTO = {"path": "/uploads/shared/photo.png", "name": "photo.png", "mime": "image/png"}
@@ -722,6 +790,77 @@ class TurnBindingTests(unittest.TestCase):
                 # Her next send is text only; its turn takes what was staged before the stop, never the stop's photo.
                 self.assertEqual(hermes.send("alice-time", "What time is it?")["status"], "accepted")
                 self.assertEqual(hermes.finish("What time is it?").images, before)
+
+    def test_a_send_takes_back_only_its_own_photo_when_another_client_attaches_during_its_attach(self):
+        # The desktop attaches an image while native reads Alice's photo's header, after appending it. Alice's send then
+        # takes back what it staged: after a typed stop, or when her attach fails after its append. When it fails before
+        # appending, it staged nothing, and the same photo the desktop staged earlier is the desktop's.
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        os.mkdir(os.path.join(directory.name, "real"))
+        os.symlink("real", os.path.join(directory.name, "linked"))
+        scan, linked = "/uploads/desktop/scan.png", {**PHOTO, "path": os.path.join(directory.name, "linked", "photo.png")}
+        # (case, how Alice's attach fails, staged before her send, what the desktop attaches meanwhile, her photo)
+        cases = (("answered", None, [], scan, PHOTO),
+                 ("fails after its append", "after", [], scan, PHOTO),
+                 ("fails before its append, the same photo staged before", "before", [PHOTO["path"]], scan, PHOTO),
+                 ("the desktop attaches the same photo", None, [], PHOTO["path"], PHOTO),
+                 ("fails after appending a path native resolved", "after", [], scan, linked))
+        for name, fail, before, other, photo in cases:
+            with self.subTest(name), TurnHermes() as hermes:
+                hermes.session["attached_images"].extend(before)
+                hermes.voice = True
+                appended, resume = hermes.pause_attach(fail)
+                self.addCleanup(resume.set)
+                answers = []
+                sender = threading.Thread(target=lambda hermes=hermes, photo=photo, answers=answers:
+                                          answers.append(hermes.send("alice-stop", "stop", attachments=[photo])))
+                sender.start()
+                self.assertTrue(appended.wait(5))
+                self.assertEqual(hermes.other_attach(other)["path"], other)
+                resume.set()
+                sender.join(5)
+                [answer] = answers
+                self.assertEqual(answer["status"], "rejected" if fail else "accepted")
+                self.assertEqual(hermes.session["attached_images"], [*before, other])
+                # The desktop's next turn runs with what it staged, and Alice's photo is in no turn.
+                hermes.voice = False
+                hermes.other_client("What is on this?")
+                self.assertEqual(hermes.finish("What is on this?").images, [*before, other])
+
+    def test_a_typed_stop_taking_back_its_photo_keeps_one_another_client_attaches_meanwhile(self):
+        # Native image.attach appends without history_lock, so the desktop's attach can land while Alice's cleanup runs.
+        # The session pauses the cleanup's thread just before its first write to the session's images, whether the
+        # cleanup replaces the list or removes from it.
+        scan = "/uploads/desktop/scan.png"
+        with TurnHermes() as hermes:
+            hermes.voice = True
+            writing, resume, answers = threading.Event(), threading.Event(), []
+            sender = threading.Thread(target=lambda: answers.append(hermes.send("alice-stop", "stop", attachments=[PHOTO])))
+            def write(sender=sender):
+                if threading.current_thread() is sender and not writing.is_set():
+                    writing.set()
+                    if not resume.wait(5):
+                        raise AssertionError("The test never resumed the cleanup")
+            hermes.server._sessions["sid"] = WatchedSession(hermes.session, write)
+            self.addCleanup(resume.set)
+            sender.start()
+            self.assertTrue(writing.wait(5))
+            self.assertEqual(hermes.session["attached_images"], [PHOTO["path"]])
+            # The cleanup holds history_lock, so no turn Hermes admits meanwhile can snapshot the photo it is removing.
+            lock = hermes.session["history_lock"]
+            held_elsewhere = not lock.acquire(blocking=False)
+            if not held_elsewhere:
+                lock.release()
+            self.assertTrue(held_elsewhere)
+            hermes.other_attach(scan)
+            resume.set()
+            sender.join(5)
+            self.assertEqual([answer["turn"] for answer in answers], ["none"])
+            self.assertEqual(hermes.session["attached_images"], [scan])
+            hermes.voice = False
+            hermes.other_client("What is on this?")
+            self.assertEqual(hermes.finish("What is on this?").images, [scan])
 
     def test_an_answer_the_add_on_does_not_know_leaves_its_photo_for_the_turn_it_may_have_started(self):
         with TurnHermes() as hermes:

@@ -348,8 +348,9 @@ class OpenTests(unittest.TestCase):
             session.update(history_lock=threading.Lock(), attached_images=["prior.png"])
             def refuse(request):
                 if request["method"] == "image.attach":
-                    session["attached_images"].append("new.png")
-                    return hermes.server._ok(request["id"], {})
+                    # Native appends the resolved path and answers it (methods_prompt.py:1020-1023 at ed1afb0).
+                    session["attached_images"].append(request["params"]["path"])
+                    return hermes.server._ok(request["id"], {"attached": True, "path": request["params"]["path"]})
                 return hermes.server._err(request["id"], 4090, "No slot available")
             hermes.server.handle_request = Mock(side_effect=refuse)
             params = {"profile": "default", "request_id": "image", "sender_id": "member", "text": "Hello"}
@@ -368,8 +369,8 @@ class OpenTests(unittest.TestCase):
             session.update(history_lock=threading.Lock(), attached_images=[])
             def closed(request):
                 if request["method"] == "image.attach":
-                    session["attached_images"].append("new.png")
-                    return hermes.server._ok(request["id"], {})
+                    session["attached_images"].append(request["params"]["path"])
+                    return hermes.server._ok(request["id"], {"attached": True, "path": request["params"]["path"]})
                 hermes.server._sessions.pop("sid")
                 return hermes.server._err(request["id"], 4001, "Session not found")
             hermes.server.handle_request = Mock(side_effect=closed)
@@ -523,7 +524,8 @@ class OpenTests(unittest.TestCase):
                         session.update(history_lock=threading.Lock(), attached_images=["prior.png"])
                         def fail_image(request, session=session):
                             self.assertEqual(request["method"], "image.attach")
-                            session["attached_images"].append("new.png")
+                            # Fails after its append, so its answer names no path.
+                            session["attached_images"].append(request["params"]["path"])
                             raise RuntimeError("Synthetic image failure")
                         native.side_effect = fail_image
                     elif mode == "native":

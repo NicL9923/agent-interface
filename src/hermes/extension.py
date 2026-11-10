@@ -1666,33 +1666,56 @@ class Bridge:
         return self.server._ok(rid, value)
 
     def stage_images(self, sid, profile, attachments, staged):
-        """Attach image attachments natively, recording each addition in ``staged``."""
+        """Attach image attachments natively, recording in ``staged`` the one entry each of this request's calls added.
+
+        Native image.attach appends one entry, the resolved path, and answers it as ``path``
+        (``methods_prompt.py:1020-1023`` and ``:1351-1355`` at ed1afb0, ``:749-752`` and ``:1093-1097`` at b9cb268
+        and d23cc6b). It takes no lock, so another client's attach can append beside it while it reads the image's
+        header (``server.py:754-763`` at ed1afb0, ``:840-849`` at the others), and not every entry new since the call
+        began is this request's. An error after the append answers 5027 with no path (``methods_prompt.py:1024-1025``
+        at ed1afb0, ``:753-754`` at the others); its entry is then the attachment's path as native resolves an absolute
+        path, symlinks resolved (``hermes_cli/cli_terminal_input.py:86-137``). A path native would resolve otherwise is
+        not recorded, and stays staged rather than removing an entry this request cannot prove its own.
+        """
         sessions = self.server._sessions
         for attachment in attachments:
             if str(attachment.get("mime", "")).startswith("image/"):
+                path = attachment["path"]
                 prior = list(sessions[sid].get("attached_images", []))
+                result = None
                 try:
-                    self.native("image.attach", {"session_id": sid, "profile": profile, "path": attachment["path"]})
+                    result = self.native("image.attach", {"session_id": sid, "profile": profile, "path": path})
                 finally:
-                    # Native image.attach can append before its result formatter fails.
-                    remaining = list(prior)
-                    for image in sessions[sid].get("attached_images", []):
-                        if image in remaining:
-                            remaining.remove(image)
-                        else:
-                            staged.append(image)
+                    answered = result.get("path") if isinstance(result, dict) else None
+                    # Native reads the path as str(path).strip() (methods_prompt.py:1005 at ed1afb0, :734 at the others).
+                    raw = str(path or "").strip()
+                    own = {answered} if isinstance(answered, str) else {raw, os.path.realpath(raw)}
+                    added = list(sessions[sid].get("attached_images", []))
+                    for image in prior:
+                        if image in added:
+                            added.remove(image)
+                    # One entry at most: an identical path another client attached meanwhile is not told apart.
+                    mine = next((image for image in reversed(added) if image in own), None)
+                    if mine is not None:
+                        staged.append(mine)
 
     def unstage_images(self, sid, staged):
-        # Remove only additions from this preparation and preserve pre-existing staged images.
+        """Remove this request's staged images from the live list, keeping every other entry.
+
+        Native image.attach appends without a lock, so this never writes back a copy: it deletes each entry in place
+        under ``history_lock``, which Hermes's own readers take to snapshot and clear the list (``prompt_turn.py:138-152``
+        and ``session_auto_continue.py:413-420`` at ed1afb0, ``:134-143`` and ``:388-393`` at the others). An append
+        lands at the end, so the index found in one copy of the list still names the same entry when it is deleted.
+        """
         session = self.server._sessions.get(sid)
         if session is None or not staged:
             return
         with session["history_lock"]:
-            images = list(session.get("attached_images", []))
+            images = session.get("attached_images", [])
             for image in reversed(staged):
-                if image in images:
-                    images.pop(len(images) - 1 - images[::-1].index(image))
-            session["attached_images"] = images
+                snapshot = images[:]
+                if image in snapshot:
+                    del images[len(snapshot) - 1 - snapshot[::-1].index(image)]
 
     def turn_request(self, sid, request_id, text):
         """A request ID of its own for the prompt.submit that carries this receipt's prompt.
