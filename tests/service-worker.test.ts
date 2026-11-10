@@ -808,7 +808,7 @@ describe('service worker notification taps with the app open', () => {
 
   // The page answers, the window cannot come forward, and the notification is being brought back.
   // Browsers may put it on screen before showNotification() settles, and a tap on it then is the
-  // person asking again, not part of the attempt that is ending.
+  // person asking again, not part of the attempt that is ending. Nothing waits for that display.
   describe('a tap while the notification is being brought back', () => {
     const row = rows.find(row => row.rule === 2 && row.ends === 'back' && !row.reshown)!;
     /** Holds the next showNotification() unsettled after it has put the notification on screen. */
@@ -819,37 +819,90 @@ describe('service worker notification taps with the app open', () => {
       sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => { await show(...args); await shown; });
       return settle;
     };
-    /** The brought-back notification as the person taps it: the tap closes it. */
-    const onScreen = (sw: ReturnType<typeof worker>) => ({ ...broughtBack(sw), close: sw.shown[0].close });
-    const showing = async (sw: ReturnType<typeof worker>) => { await vi.waitFor(() => expect(sw.shown).toHaveLength(1)); };
+    /** The brought-back notification on screen, as the person taps it: the tap closes it. */
+    const onScreen = (sw: ReturnType<typeof worker>) => {
+      const [title, options] = sw.showNotification.mock.calls.at(-1)!;
+      return { title, ...options, data: options.data ?? {}, close: sw.shown.at(-1)!.close };
+    };
+    const settled = (promise: Promise<unknown>) => {
+      const state = { done: false };
+      void promise.then(() => { state.done = true; });
+      return state;
+    };
 
-    it('starts a new attempt once the notification is back, so the tap ends in front or with it back again', async () => {
+    // Every display puts its notification on screen and never settles. The first tap's promise must
+    // not keep the worker alive past the attempt that replaced it, and that one ends at the deadline
+    // when it brings the notification back too.
+    it.each([
+      { second: 'cannot come forward either', settles: 10_000, ends: 'back' },
+      { second: 'comes forward', settles: 0, ends: 'in front' },
+    ])('starts a new attempt at once that $second, and no display that never settles keeps the worker alive', async ({ second: outcome, settles, ends }) => {
+      vi.useFakeTimers();
+      try {
+        const { window, sw } = setUp(row);
+        const show = sw.showNotification.getMockImplementation()!;
+        sw.showNotification.mockImplementation(async (...args: Parameters<typeof show>) => { await show(...args); await new Promise(() => {}); });
+        const first = settled(tap(sw));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(sw.shown).toHaveLength(1);
+        if (outcome === 'comes forward') window!.focus.mockResolvedValueOnce(window);
+        const second = settled(tap(sw, onScreen(sw)));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(counts(sw, window), 'asked again at once').toEqual({ asked: 2, navigated: 0, opened: 0 });
+        if (settles) {
+          await vi.advanceTimersByTimeAsync(settles - 1);
+          expect([first.done, second.done], 'kept alive while the notification is being shown').toEqual([false, false]);
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        expect([first.done, second.done], 'nothing left pending').toEqual([true, true]);
+        expect(await ending(sw, window, true)).toBe(ends);
+      } finally { vi.useRealTimers(); }
+    });
+
+    // Two different notifications about one chat: the second is tapped while the first is being
+    // brought back, and the first is left on screen. The chat ends with one notification.
+    it('leaves one notification for the chat when another about it is tapped meanwhile', async () => {
       const { window, sw } = setUp(row);
       const settle = holdNextShow(sw);
-      const first = tap(sw);
-      await showing(sw);
-      const second = tap(sw, onScreen(sw));
-      await new Promise(resolve => setTimeout(resolve, 0));
-      expect(window!.postMessage, 'not asked again before the notification is back').toHaveBeenCalledOnce();
+      const first = tap(sw, { ...tapped, tag: undefined });
+      await vi.waitFor(() => expect(sw.shown).toHaveLength(1));
+      const second = tap(sw, { ...tapped, title: 'Ranch Hand again', tag: undefined });
       settle();
       await Promise.all([first, second]);
       expect(await ending(sw, window, true)).toBe('back');
-      expect(counts(sw, window)).toEqual({ asked: 2, navigated: 0, opened: 0 });
+      expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand again']);
     });
 
-    it('starts one new attempt for several taps', async () => {
+    // The replaced attempt's display settles while its replacement is still asking the window. A tap
+    // then joins the replacement rather than starting a third attempt.
+    it('lets later taps join the new attempt, even once the replaced one settles', async () => {
       const { window, sw } = setUp(row);
       const settle = holdNextShow(sw);
       const first = tap(sw);
-      await showing(sw);
-      // The brought-back notification, and another about the same chat.
-      const taps = [tap(sw, onScreen(sw)), tap(sw, { ...tapped, tag: undefined })];
+      await vi.waitFor(() => expect(sw.shown).toHaveLength(1));
+      let refuse!: () => void;
+      window!.focus.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = () => reject(new TypeError('Not allowed to focus a window.')); }));
+      const second = tap(sw, onScreen(sw));
+      await vi.waitFor(() => expect(window!.postMessage).toHaveBeenCalledTimes(2));
       settle();
-      await Promise.all([first, ...taps]);
+      await first;
+      const third = tap(sw, { ...tapped, tag: undefined });
+      refuse();
+      await Promise.all([second, third]);
       expect(await ending(sw, window, true)).toBe('back');
       expect(counts(sw, window)).toEqual({ asked: 2, navigated: 0, opened: 0 });
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // A brought-back notification carries one tag per chat, so it replaces only the one brought back
+  // for the same chat. The server tags each push with its own event ID, which no chat's tag matches.
+  it('brings back notifications for two chats side by side', async () => {
+    const sw = worker();
+    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    await tap(sw, { tag: 'event-1', data: { url: '/?bot=ranch' } });
+    await tap(sw, { tag: 'event-2', data: { url: '/?bot=barn' } });
+    expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }, { url: '/?bot=barn', reshown: true }]);
   });
 
   // Chromium rejects showNotification() when it cannot store the notification. Overlapping taps
@@ -890,7 +943,7 @@ describe('service worker notification taps with the app open', () => {
     sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
     await tap(sw);
     expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', {
-      body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'bot:ranch', actions: [], silent: true,
+      body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'reshown:https://app.example/?bot=ranch', actions: [], silent: true,
       data: { url: '/?bot=ranch', reshown: true },
     });
   });

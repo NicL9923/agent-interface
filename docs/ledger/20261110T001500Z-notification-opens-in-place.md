@@ -583,3 +583,114 @@ assertion was added after the red run above to catch it, and R3 shows it can fai
 - A real notification tap during a real pending `showNotification()`, and a real storage
   failure. The worker cases fake the browser APIs at their boundary.
 - Safari, Firefox and an installed iOS web app: not run.
+
+## November 10 sixth review round: no waiting on a restoration
+
+GPT-6.1 Sol's sixth review at `c9e5217` verified two findings in last round's wait, both in
+`openChat`. The orchestrator chose to remove the wait rather than bound it, and to give every
+brought-back notification one tag per chat. This round does not merge `main`. Checks ran on
+NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromium).
+
+### Findings and changes
+
+1. A display that never settled left a tap waiting forever: the tap closed the brought-back
+   notification, no window came forward, and both `waitUntil` promises stayed pending.
+2. Tapping a second notification for the same chat while the first was being brought back
+   ended with two notifications for the chat when focus failed again.
+
+- A tap that finds its chat's attempt bringing the notification back starts a new attempt at
+  once and replaces it in `attempts`; later taps join the new one. The replaced attempt's promise
+  races a `replaced` promise that the new attempt resolves with its own, so the first tap's
+  `waitUntil` ends when the new attempt ends, or sooner if its own display settles first. An
+  attempt removes itself from `attempts` only while it is still the chat's attempt.
+- `restore` waits on the display for at most `RESTORE_MS`, 10 seconds. Storing a notification
+  takes milliseconds and browsers may show it before the promise settles, so the bound only stops
+  a display that never settles from keeping the worker alive until the browser stops it. The one
+  retry of a rejected display stays, inside that bound.
+- `showAgain` tags the notification `reshown:` plus the chat's canonical address from
+  `conversationUrl`. Original pushes carry the server's `tag`, which is the event's own ID
+  (`store-notifications.ts` `enqueue`, `health.ts`, `computer.ts`, `push-routes.ts`), or a fresh
+  batch ID for a digest. None is per chat, so there was no scheme to reuse. A failed decline is
+  tagged with its notification's tag plus `:decline`, and no address ends that way because
+  `conversationUrl` encodes the `bot` and `routine` values. A brought-back notification therefore
+  replaces only one brought back for the same chat, never a newer push. Data and actions are kept.
+- Removed: last round's wait (`current.done.then(() => openChat(notification))`) and its comment
+  sentence. The comment above `openChat` and the README paragraph after the rules now describe
+  the new attempt, the tag and the bound.
+
+One loss to know about: a brought-back approval, with its Decline button, is replaced when another
+brought-back notification for the same chat arrives. Both were tapped, both open the same chat,
+and the approval is answerable there.
+
+### Tests
+
+`tests/service-worker.test.ts`, "notification taps with the app open":
+
+- "starts a new attempt at once that …": the reviewer's first sequence with every display on
+  screen and never settling. One row's new attempt cannot come forward either, so both taps stay
+  pending at 9,999 ms and end at 10,000 ms with the notification back. In the other the window
+  comes forward, and both taps end at once, which only the replacement link can do because the
+  first display's own bound is still running. Each checks the invariant through `ending()`.
+- "leaves one notification for the chat when another about it is tapped meanwhile": the
+  reviewer's second sequence, with untagged notifications; exactly one is on screen, the second's.
+- "lets later taps join the new attempt, even once the replaced one settles": replaces last
+  round's "starts one new attempt for several taps".
+- "brings back notifications for two chats side by side": distinct tags per chat.
+- "shows the notification again…" now expects the `reshown:` tag.
+
+The fake notification store already replaced a notification with the same tag, so no existing
+test changed meaning. The 13 table rows, five overlap rows and last round's three rejection
+cases pass unchanged; no expected count changed. No test was written for a newer push for the
+same chat surviving: push tags are event IDs, so no tag of this scheme can match one.
+
+### Red before the fix
+
+The new tests against `c9e5217`'s worker:
+`npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 5 failed,
+30 passed.
+
+| Test | Failure on `c9e5217` |
+| --- | --- |
+| starts a new attempt at once that cannot come forward either… | "asked again at once": asked 1, expected 2 |
+| starts a new attempt at once that comes forward… | the same |
+| leaves one notification for the chat… | "a window in front, or the notification back: expected 1 to be 2" |
+| lets later taps join the new attempt… | the window asked once, expected twice |
+| shows the notification again… | tag `bot:ranch`, expected `reshown:https://app.example/?bot=ranch` |
+
+"brings back notifications for two chats side by side" passes there, since that worker kept each
+notification's own event tag; S6 below shows it can fail.
+
+### Mutants
+
+Each line was broken by hand, `tests/service-worker.test.ts` run (84 tests), and the source
+restored.
+
+| Mutation | Result |
+| --- | --- |
+| S1 Any settling attempt clears the chat's entry | failed: "lets later taps join the new attempt…" |
+| S2 No replacement link | failed: "…that comes forward…" |
+| S3 No bound on the display | failed: "…that cannot come forward either…" |
+| S4 A tap while restoring joins the ending attempt | failed: 4 |
+| S5 The original tag kept | failed: "leaves one notification…", "shows the notification again…" |
+| S6 One tag for every chat | failed: "…two chats side by side", "shows the notification again…" |
+| S7 Bound 10 s changed to 1 s | failed: "…that cannot come forward either…" |
+| S8 No retry | failed: 3 |
+| S9 Bound timer not cleared | survived |
+| S10 `restoring` never set | failed: 4 |
+
+S9 survives because clearing the timer is cleanup: it resolves a promise nobody waits on once the
+display settled, and a pending timer does not keep a service worker alive.
+
+### Checks
+
+- `npm ci`, `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
+  tests/close-request.test.ts`: 3 files, 111 tests passed.
+- `npm test`: 173 files, 2,724 tests passed.
+- `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed.
+
+### Not exercised
+
+- A real display that never settles, a real late display, and real taps during one. The worker
+  cases fake the browser APIs at their boundary.
+- Safari, Firefox and an installed iOS web app: not run.

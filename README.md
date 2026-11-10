@@ -103,10 +103,12 @@ A window running a release from before pages answered gets the notification back
 first tap and the chat on the second, as taps always did. A notification comes back only
 because of a tap, so it never loops on its own. A second tap on the same chat while the
 first is still being handled joins it, so nothing opens, loads or comes back twice. A tap
-while the notification is coming back may be a tap on that notification, so it is handled
-afresh once the notification is back; several such taps share that one new try. When the
-browser refuses to show the notification again, the worker tries once more, and if that also
-fails, nothing is on screen, the one case the rules cannot cover. Each fallback ends well
+while the notification is coming back may be a tap on that notification, so it starts a new
+try at once, and later taps join that one. A notification that comes back is tagged with its
+chat, so it replaces one already back for that chat and never a new notification. The worker
+waits at most 10 seconds for the browser to say a notification is back. When the browser
+refuses to show the notification again, the worker tries once more, and if that also fails,
+nothing is on screen, the one case the rules cannot cover. Each fallback ends well
 inside the one second Firefox allows a worker to open a window after a tap.
 
 An open assistant settings sheet or Settings closes the way its close button does before the

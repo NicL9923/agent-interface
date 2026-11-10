@@ -266,35 +266,45 @@ function askToOpen(client, url) {
 // own. A tap on a chat that already has an attempt in flight joins that attempt, so two taps never
 // ask, navigate, open a window or bring the notification back twice.
 // A tap that arrives while the attempt is bringing the notification back may be a tap on that very
-// notification, so it is a new request, and once the bringing back settles it starts one new
-// attempt that every such tap shares.
+// notification, so it starts a new attempt at once, without waiting for the display, and later taps
+// join the new one. The replaced attempt's taps end when the new attempt does, or sooner, so its
+// display never keeps the worker alive longer than the new attempt, which waits on its own display
+// for at most RESTORE_MS. Every notification brought back for a chat carries that chat's one tag,
+// so a late display and the new attempt's leave one notification, not two.
 // Bringing the notification back is retried once, and if the retry fails too, every tap on the
 // attempt ends with nothing on screen, the one case the invariant does not cover.
 const attempts = new Map();
 function openChat(notification) {
   const url = conversationUrl(notification.data?.url);
   const current = attempts.get(url);
-  // The first such tap starts the new attempt, and the rest join it as overlapping taps do.
-  if (current?.restoring) return current.done.then(() => openChat(notification));
-  if (current) return current.done;
-  const attempt = { restoring: false, done: undefined };
-  attempt.done = reach(notification, url)
+  if (current && !current.restoring) return current.done;
+  const attempt = { restoring: false, done: undefined, replace: undefined };
+  const replaced = new Promise((resolve) => { attempt.replace = resolve; });
+  const run = reach(notification, url)
     // A way of opening that failed unexpectedly has not reached the person either.
     .catch(() => false)
-    .then((inFront) => inFront || restore(notification, attempt))
-    .finally(() => attempts.delete(url));
+    .then((inFront) => inFront || restore(notification, url, attempt));
+  // A replaced attempt's display may settle before its replacement ends, and must not clear it.
+  attempt.done = Promise.race([run, replaced]).finally(() => { if (attempts.get(url) === attempt) attempts.delete(url); });
+  current?.replace(attempt.done);
   attempts.set(url, attempt);
   return attempt.done;
 }
 
+// How long a tap waits for the notification it brings back to be stored. That takes milliseconds,
+// and browsers may show the notification before showNotification() settles, so a display that never
+// settles would only keep the worker running until the browser stopped it. Ten seconds leaves a slow
+// phone plenty of room.
+const RESTORE_MS = 10_000;
+
 // Chromium rejects showNotification when it cannot store the notification, so it is tried once more.
-async function restore(notification, attempt) {
+async function restore(notification, url, attempt) {
   attempt.restoring = true;
-  try {
-    await showAgain(notification);
-  } catch {
-    await showAgain(notification).catch(() => {});
-  }
+  let timer;
+  const deadline = new Promise((resolve) => { timer = setTimeout(resolve, RESTORE_MS); });
+  const shown = showAgain(notification, url).catch(() => showAgain(notification, url)).catch(() => {});
+  await Promise.race([shown, deadline]);
+  clearTimeout(timer);
 }
 
 // Follows the table above. True when a window known to be in front shows the chat.
@@ -339,13 +349,16 @@ async function decline(notification) {
 }
 
 // No window known to be in front shows the chat. The notification is already closed, so it comes
-// back, quietly and marked, for the person to tap again; a tap on it is rule 4 above.
-async function showAgain(notification) {
+// back, quietly and marked, for the person to tap again; a tap on it is rule 4 above. Its tag names
+// the chat, so it replaces only a notification brought back for the same chat. The server tags each
+// push with its own event ID, and a failed decline's notification ends in ":decline", which no
+// address does, so it never replaces news the person has not seen.
+async function showAgain(notification, url) {
   await self.registration.showNotification(notification.title, {
     body: notification.body,
     icon: notification.icon,
     badge: notification.badge,
-    tag: notification.tag,
+    tag: 'reshown:' + url,
     actions: notification.actions,
     silent: true,
     data: { ...notification.data, reshown: true },
