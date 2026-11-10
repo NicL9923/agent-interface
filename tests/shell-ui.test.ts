@@ -65,6 +65,15 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
+/**
+ * The props React last rendered onto an element. React replaces this object whenever the element's
+ * component renders again, and keeps it when a memoized component above it skips rendering.
+ */
+const renderedProps = (element: Element) => {
+  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
+  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
+  return (element as unknown as Record<string, unknown>)[key];
+};
 const render = async () => { await mount.render(createElement(App)); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
@@ -360,6 +369,36 @@ describe("composer", () => {
     const sent = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { text: string };
     expect(sent.text).toBe("Feed the horses");
     expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/draft")).toEqual([]);
+  });
+
+  it("re-renders nothing in the transcript while typing", async () => {
+    conversation = { ...conversation, messages: [mine("1", "Plan dinner"), { id: "2", role: "assistant", text: "Sure" }] };
+    await render();
+    const frame = mount.container.querySelector<HTMLElement>(".transcript-frame")!;
+    const transcript = [frame, ...frame.querySelectorAll<HTMLElement>("*")];
+    const before = new Map(transcript.map(element => [element, renderedProps(element)]));
+    const fieldBefore = renderedProps(field());
+    for (const text of ["H", "Ho", "Hor", "Hors", "Horse"]) await typeInto(field(), text);
+    expect(field().value).toBe("Horse");
+    // The field re-rendered, so a re-render is visible this way.
+    expect(renderedProps(field())).not.toBe(fieldBefore);
+    const rerendered = transcript.filter(element => renderedProps(element) !== before.get(element));
+    expect(rerendered.map(element => `${element.localName}.${element.className}`)).toEqual([]);
+  });
+
+  it("lets CSS size the field and reads no layout while typing where field-sizing is supported", async () => {
+    vi.spyOn(CSS, "supports").mockImplementation(property => property === "field-sizing");
+    vi.spyOn(HTMLFormElement.prototype, "clientWidth", "get").mockReturnValue(600);
+    vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockReturnValue(96);
+    await render();
+    const styles = vi.spyOn(window, "getComputedStyle");
+    for (const text of ["H", "Ho", "Hor", "Hors", "Horse"]) await typeInto(field(), text);
+    expect(styles.mock.calls.filter(([element]) => element === field())).toEqual([]);
+    const form = field().closest("form")!;
+    expect(form.dataset.layout).toBe("inline");
+    await typeInto(field(), "Horse\nfeed");
+    expect(form.dataset.layout).toBe("stacked");
+    expect(field().style.height).toBe("");
   });
 
   it("attaches a very long paste as a text file and inserts a short one", async () => {
