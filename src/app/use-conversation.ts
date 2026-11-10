@@ -143,20 +143,20 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (live.message.text || live.message.reasoning) messages.push(live.message);
       return {...value, messages, activity: live.activity, toolCalls: live.toolCalls};
     };
-    // The server process this view follows. Versions from two processes never compare, so the view shows one
-    // process's state at a time. Once another process's response is followed, the earlier process is retired:
-    // a later response from it, or from any process other than the followed one to a request made before the
-    // follow, is older than the view and is read again instead. A request made after the follow can only be
-    // answered by that process or a newer one.
-    let boot: string | undefined, follows = 0;
-    const retired = new Set<string>();
-    const follow = (next: string) => {
-      if (boot) retired.add(boot);
-      boot = next;
-      follows++;
-      heldTurn = undefined;
-      latestInflight = undefined;
-    };
+    // Which server process's state the view shows. Versions from two processes never compare, so the view shows one at a
+    // time, and only a read the view asked for decides which: the newest read asked wins, whichever process answers it.
+    // - A read answered after a newer one was asked, by another process than the current one, is dropped. The newer read
+    //   is already asked, so dropping it asks nothing.
+    // - A turn event from another process never decides it. It waits as `pending` and asks one read, which any later
+    //   such turns share. The first read taken that set out after it settles it: the turn goes on top only when that read
+    //   is from the turn's process and older than the turn, and is dropped otherwise. A read that fails leaves it waiting.
+    // Reads are bounded: a response never asks for a read because of the process that answered it, so two processes that
+    // disagree cost one read per change. Every read answers an input, such as the opening, a change notice, a reconnect, a
+    // wake or poll, the person's navigation, growth that does not continue the reply held, a turn that cannot be placed, or
+    // a pending turn. Asks made while a read is on its way become one read. A response asks for another read itself only
+    // when the latest page slid past the cached message a reader is on, once, since that read starts from the message.
+    let boot: string | undefined, asks = 0;
+    let pending: { turn: TurnEvent; ask: number } | undefined;
     const compose = (value: SavedConversation): SavedConversation => {
       let shown = value;
       if (heldTurn?.botId === value.botId && (compareVersions(heldTurn.version, value.version) ?? 0) > 0) shown = withTurn(value, heldTurn) ?? value;
@@ -170,9 +170,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     let secureRequestIds = new Set<string>();
     const load = async () => {
       if (gone) return;
+      asks++;
       if (loading) { again = true; return; }
       loading = true;
-      const generation = navigation, followed = follows;
+      const generation = navigation, asked = asks;
       const earlierPage = more;
       more = false;
       if (!start && mode.current !== "follow") start = cachedStart;
@@ -187,14 +188,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         const from = versionBoot(result.version);
-        if (from && from !== boot) {
-          // From a retired process, or asked before the view followed the current one: read again.
-          if (retired.has(from) || followed !== follows) {
-            again = true;
-            if (earlierPage) more = true;
-            return;
-          }
-          follow(from);
+        // Another process answered, and a newer read is already asked: that one decides.
+        if (from && from !== boot && asked < asks) {
+          if (earlierPage) more = true;
+          return;
         }
         // A message was asked for meanwhile: this page is from before, and the load for it follows.
         if (generation !== navigation) {
@@ -221,6 +218,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         firstConversation = false;
         if (result !== current.current) holdPlace();
         if (target.current?.botId === botId && target.current.generation === generation) target.current.ready = true;
+        if (from) boot = from;
+        // `compose` puts it on top only when it is from this read's process and newer, and drops it otherwise.
+        if (pending && asked >= pending.ask) { heldTurn = pending.turn; pending = undefined; }
         setConversation(compose(result));
         setDisconnected(false);
         if (earlierPage) setEarlier({ loading: false, failed: false });
@@ -262,14 +262,16 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     };
     const showTurn = (turn: TurnEvent) => {
       const from = versionBoot(turn.version);
-      if (from && retired.has(from)) return;
-      if (from && from !== boot) follow(from);
+      // Growth on the stream continues this reply. It shows only beside a read of its own version (`patch`).
       latestInflight = { botId: turn.botId, message: turn.message, activity: turn.activity, toolCalls: turn.toolCalls, version: turn.version };
+      // From another process than the view's, or before any read: it waits for a read asked after it. See `boot`.
+      if (from && from !== boot) {
+        if (pending) { pending.turn = turn; return; }
+        void load();
+        pending = { turn, ask: asks };
+        return;
+      }
       const held = current.current?.botId === botId ? current.current : null;
-      // A turn from another process than the conversation on screen, as the first after a restart, is never
-      // put on that conversation: it waits for a read from its own process, which it goes on top of if newer.
-      if (held && from && versionBoot(held.version) !== from) { heldTurn = turn; void load(); return; }
-      // Until the first read lands, the turn waits for it.
       if (!held) { heldTurn = turn; return; }
       if (!withTurn(held, turn)) { heldTurn = undefined; void load(); return; }
       heldTurn = turn;
