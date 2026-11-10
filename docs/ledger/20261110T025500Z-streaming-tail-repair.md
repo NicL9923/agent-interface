@@ -126,3 +126,100 @@ closer cap, the bracket cap, the HTML check on continuation lines, the ambiguous
 and the tilde checks that the equal-size rule now covers. Mutations in `MessageMarkdown.tsx`:
 reading copy state without its code, settling a pending copy without the code check, and keying
 an unfinished `CodeBlock` by its code each turned their test red.
+
+## Review round 2: hold back instead of repairing
+
+GPT-6.1 Sol reviewed `2cb8bb5` and found six more faults in `completeStreamingTail`: quadratic
+bracket invalidation (735 to 1,120 ms on one input), closers added inside list-item and
+carriage-return-indented code, link labels read as a rule or heading once their brackets were
+removed, a code span shown where the saved view shows a link, and `**3`, `**kwargs` and
+`**test.ts` losing their stars. The orchestrator stopped the repair approach. Adding or removing
+characters makes text the parser reads in ways the scanner cannot foresee, and closing an open
+marker is a guess.
+
+`src/components/streaming-tail.ts` and its tests are deleted. `streamingHoldBack` in
+`src/components/streaming-hold-back.ts` returns a prefix of its input. The contract is the comment
+at the top of that file:
+
+- It holds back at most `HOLD_LIMIT` = 120 characters, all on the last line. That is about one
+  short sentence: it covers a bold phrase, a code span and a link to a typical docs page. At
+  100 to 300 characters a second it delays about half a second at worst.
+- A block longer than `BLOCK_LIMIT` = 4,000 characters comes back whole without being read. Every
+  pass runs over at most that many characters, and the stacks only push and pop, so the work is
+  bounded and no budget is needed. A paragraph rarely runs past 4,000 characters; a longer list
+  or a reply parsed whole shows markers as typed, as `origin/main` does.
+- Code is never cut. Any fence-shaped line in the block, behind any container markers, or a last
+  line indented four spaces or a tab, returns the block whole. The function sees the same block
+  the renderer parses on its own, so its view of code matches the parse of that block.
+- Rules, each held only while unfinished: an unclosed code span; a `**`, `__`, `~~`, `*` or `_`
+  opener after a space or opening bracket and before a letter or digit; a link or image whose text
+  or destination is arriving; a pipe-led line under a line that is not; a last line of only
+  marker characters; and a trailing `*`, `_`, `~` or `|` run after a space.
+- Pause mid-construct: no rule added. Nothing is held once a line break arrives, since the cut
+  never crosses one. Before a tool call the segment is already a saved history row
+  (`src/server/hermes-mapping.ts`, `inflightMessage`), and a saved row is parsed whole from raw
+  text. A model stall mid-construct with no tool call keeps up to 120 characters hidden until text
+  resumes; only a timer would change that. Neither case was watched in a browser.
+
+The copy-feedback fix, the mounted unfinished `CodeBlock` and the README's table sentence stay.
+The README now says short bold, italics, strikethrough, code and links appear whole when their
+closer arrives, a longer one shows as typed, and the header shows as typed while the delimiter
+row arrives.
+
+### Tests
+
+- `tests/streaming-hold-back.test.ts`: for every prefix of 14 realistic replies and 400 seeded
+  strings built from markers, words, brackets, pipes, backticks, tabs, `\r` and `\n`, the output
+  is a prefix, holds at most 120 characters and no line break, and never overlaps a `code` node
+  in the parse of that prefix. More than 1,000 prefixes must be cut, which an identity function
+  fails. A table of 20 positive cases holds each construct while unfinished and shows it whole
+  once finished; 24 negative cases show globs, names, indexes, URLs and every kind of code as
+  typed. A timing case requires a median under 1 ms on 100,000 characters and on five blocks at
+  the read limit.
+- `tests/message-markdown.test.ts`: all 18 reviewed inputs from both rounds, plus a readable
+  copy of the slowest, are checked through the real components: the live render equals
+  `MessageMarkdown` rendering the same prefix. React Markdown took about 80 seconds to render
+  `"*a ".repeat(16000) + "b_ ".repeat(16000)` live and saved in jsdom, so that input checks only
+  its prefix.
+- A scratch search, not committed, with a xorshift generator over a wider fragment set, including
+  `\r\n`, `<div>` and U+2028: 6 seeds, 931,733 prefixes, 362,425 of them cut, no fault.
+
+### Timing
+
+`npx tsx` with Node 24.22.2 on NicolasLaptop, 50 warm-up calls, then 101 timed calls each: the
+100,000-character block took 0.0002 ms median and 0.005 ms max, because it is not read. The worst
+4,000-character block, alternating `_a ` and `b_ ` runs, took 0.14 ms median and 0.55 ms max
+across the runs. A scratch search over 3,000 random 4,000-character blocks built from repeated
+marker shapes found a worst single call of 0.9 ms.
+
+While measuring I found my first fence regex backtracked exponentially: `"-   ".repeat(20) + "x"`
+took 52,465 ms, and the random strings had never built that shape. Its two space quantifiers
+could split the same run of spaces. The container pattern now gives each character one way to
+match. The same input takes 0.02 ms, and a 4,000-character version is in the timing case.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed.
+- `npx vitest run tests/streaming-hold-back.test.ts tests/message-markdown.test.ts`: 86 passed.
+- `npm test`: 170 files, 2555 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 3 passed in Chromium.
+
+### Red proof, round 2
+
+35 hand mutations, each run against both test files and then restored. All 35 turned at least
+one test red. On the first pass 29 did. Of the six survivors, one was a redundant guard (a
+construct before the window returning early), now deleted, because the final bound check already
+shows it as typed. The other five got a case each, and each now goes red: an underscore inside a
+word closing emphasis, a link destination not skipped, the bound not enforced on a line-level
+cut, openers or brackets beyond the bound blocking a later hold, and escapes ignored.
+
+Per rule: not holding an unclosed code span, removing each marker's opener test (`*`, `_`, `~~`),
+letting a shorter closer close, letting closers never close, letting an opener follow a letter,
+dropping the trailing run, the single tilde, the lone pipe, the link-text bracket, the image's
+`!`, the closed bracket at the end, the open destination, the open reference label, the table
+header and the marker line each failed their positive case. Holding every bracket, and counting
+tilde runs of any size, failed negative cases. Dropping the fence check, narrowing it to the
+margin, dropping the indentation check or its tab, treating only `\n` as a line end, and dropping
+the read limit each failed the property, a negative case or the timing case. In
+`MessageMarkdown.tsx`, passing the raw last block failed the hold test and three reviewed render
+cases. Not holding back a reply parsed whole failed the definition case.

@@ -8,7 +8,7 @@ import { ReplyCards } from "./ReplyCards";
 import { parseInlineDocument } from "../shared/inline-ui";
 import { InlineUi } from "./InlineUi";
 import { tableRows, tableToCsv, tableToMarkdown } from "./table-export";
-import { completeStreamingTail } from "./streaming-tail";
+import { streamingHoldBack } from "./streaming-hold-back";
 import "./message-markdown.css";
 
 type Highlighter = typeof import("./code-highlight");
@@ -219,16 +219,16 @@ export function streamingBlocks(text: string): string[] | null {
 
 /**
  * A reply that is still arriving. Finished blocks keep their parsed output while the last one
- * grows, so a long reply no longer re-parses from the top several times a second. The growing
- * end is completed for display, so a half-written marker, link or table header does not flash as
- * raw Markdown. The saved reply replaces this and is parsed whole from its raw text.
+ * grows, so a long reply no longer re-parses from the top several times a second. A short
+ * unfinished marker, link or table header at the growing end is held back until it is whole, so it
+ * does not flash as raw Markdown. The saved reply replaces this and is parsed whole.
  */
 export const StreamingMarkdown = memo(function StreamingMarkdown(props: MessageMarkdownProps) {
   const blocks = useMemo(() => {
     const split = streamingBlocks(props.text);
-    return split ? [...split.slice(0, -1), completeStreamingTail(split.at(-1)!)] : null;
+    return split ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : null;
   }, [props.text]);
-  const whole = useMemo(() => blocks ? "" : completeStreamingTail(props.text), [blocks, props.text]);
+  const whole = useMemo(() => blocks ? "" : streamingHoldBack(props.text), [blocks, props.text]);
   if (!blocks) return <MessageMarkdown {...props} text={whole} />;
   return <div className="message-markdown">{blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)}</div>;
 });
