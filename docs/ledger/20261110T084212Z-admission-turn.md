@@ -251,3 +251,85 @@ runs tests without writing bytecode and deletes the source's `__pycache__` after
 | An unknown answer settled, as the reviewer's probe did | `test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started` |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
+
+## Third review round
+
+GPT-6.1 Sol re-reviewed `f280624`: ready after fixes, no P1. Two P2 findings in the helpers the typed stop's cleanup
+uses, which the staging-failure and refused-admission paths share. Upstream read from a local clone of
+`NousResearch/hermes-agent` at `ed1afb0`, `b9cb268` and `d23cc6b`; `image.attach` and its helpers are the same at all
+three.
+
+- P2, staging claimed another client's image. `stage_images` recorded every entry new in `attached_images` during its
+  call as the send's. Native `image.attach` appends without a lock and then reads the image's header
+  (`tui_gateway/methods_prompt.py:1020-1023`, `_attached_image_result` `:1351-1355`, `_image_meta` `server.py:754-763` at
+  `ed1afb0`; `:749-752`, `:1093-1097` and `server.py:840-849` at the others), so a desktop's attach in that window was
+  recorded too and removed with the send's photo. The answer names the one entry the call appended, `path`
+  (`str(image_path)`, the same value it appended), so the send now records that entry if it is new since the call began.
+  An error after the append answers 5027 with no path (`:1024-1025` at `ed1afb0`, `:753-754` at the others). `_image_meta`
+  suppresses every `Exception`, so at these revisions that case needs a failure the handler does not catch, but the add-on
+  still handles it: it records at most one new entry equal to the attachment's path as native reads it
+  (`str(path or "").strip()`, `:1005` and `:734`) or with symlinks resolved, which is how native resolves an absolute path
+  (`hermes_cli/cli_terminal_input.py:86-137`). A path native would resolve otherwise, with `~`, `$`, quotes or a
+  relative form, is not recorded and stays staged: the add-on removes nothing it cannot show is its own. The app sends
+  absolute upload paths.
+- P2, the cleanup overwrote a concurrent attach. `unstage_images` copied the list, removed the send's entries from the
+  copy and stored it, so an attach between the copy and the store was discarded. It now deletes each entry from the live
+  list in place under `history_lock`, which Hermes's turn snapshot and busy claim take (`prompt_turn.py:138-152` and
+  `session_auto_continue.py:413-420` at `ed1afb0`, `:134-143` and `:388-393` at the others). The index comes from one
+  copy taken under the lock; another client's attach only appends, at the end, and each list operation is atomic under
+  the interpreter lock, so the index still names the send's entry when it is deleted. Covered: an append before, during or
+  after the cleanup survives it, and a turn snapshot or busy claim sees the list before the cleanup or after it, never
+  between. Left for Hermes, recorded with the image-ownership defect in `docs/HermesCapabilityMatrix.md`: two clients
+  attaching the same path cannot be told apart, and one equal entry is removed; `image.detach` stores a filtered copy
+  without the lock (`methods_prompt.py:1148-1149` at `ed1afb0`, `:877-878` at the others), so a cleanup between its copy and
+  its store edits the discarded list and the send's photo stays staged; and Hermes's own snapshot drops an append between
+  its copy and its reset.
+- Callers. On this branch: the staging failure (`extension.py:1880-1883`), the refused admission (`:1910`) and the typed
+  stop (`:1935`). On `main` (`6e6d398`) the first two exist with the same helpers (`:1831-1834`, `:1861`), and both had
+  both exposures: a staging failure or a refused admission removed another client's image attached during the send's
+  attach, and the cleanup could discard one attached during it. The fix changes them the same way. No other code calls
+  either helper.
+- The journal tests' fakes appended `new.png` for an attachment at `/new.png` or `/photo.png`, which native never does.
+  They now append the attachment's path and, on success, answer it, as native does. The turn fake resolves the path with
+  symlinks, answers it as `path`, and can pause an attach after its append (`pause_attach`) and then answer 5027, or
+  answer 5027 without appending.
+
+## Third review round checks
+
+Source fingerprint sha256:5e5c47fc832da59a869f27e03e7843cdddc0c9e442880085ecc0b692c48a13b4 (1697 source files); `src/hermes` alone sha256:711640dff7c6dccd6fc872c920cc11d3cbf5adac6f3e3ca89de37032b4b5d76e (20 source files). Same host and versions (Python 3.14.10).
+
+- `npm ci` once, then `npm run test:py`: 44 files passed, 0 skipped, 0 failed (213 s). `tests/hermes_turn_binding_test.py`:
+  33 tests, 2 new; `tests/hermes_extension_journal_test.py`: 65 tests, three fakes corrected.
+- `ruff check .` with ruff 0.17.3, `npm run lint` and `npm run typecheck`: passed.
+- `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
+  251 tests passed.
+
+## Third review round red proof
+
+Both tests were written first and went red on `f280624` for the reviewer's reasons.
+`test_a_send_takes_back_only_its_own_photo_when_another_client_attaches_during_its_attach` (the desktop attaches its scan
+while Alice's typed stop's attach is paused after its append): `[] != ['/uploads/desktop/scan.png']`, both after a typed
+stop and when her attach failed after its append. `test_a_typed_stop_taking_back_its_photo_keeps_one_another_client_attaches_meanwhile`
+(the desktop attaches while the cleanup is paused just before its first write to the session's images, whether a store or
+a removal): `[] != ['/uploads/desktop/scan.png']`. The attach test's table then grew to five cases, to kill mutants that
+survived its first two.
+
+Each line was then broken with a scripted text replacement, the binding tests and `tests/hermes_extension_journal_test.py`
+run without writing bytecode, and the source restored, checked by hash, and every `__pycache__` deleted:
+
+| Broken | Red |
+| --- | --- |
+| Every new entry recorded, `main`'s staging | the attach test, all five cases |
+| The answer's path only, no fallback after a failure | the attach test, both after-append cases; the journal's image-preparation case |
+| The symlink-resolved path dropped from the fallback | the attach test, the resolved-path case |
+| Entries staged before the call not subtracted | the attach test, the fails-before-its-append case |
+| Every equal new entry claimed, not one | the attach test, the same-photo case |
+| Copy and store, `main`'s cleanup | the cleanup test: the scan lost |
+| The cleanup outside `history_lock` | the cleanup test: the lock was free at the write |
+| A typed stop's images left staged | the attach test, the cleanup test and the earlier typed-stop test |
+
+Survive, equivalent: the answer's path ignored in favor of the fallback, since for an absolute path without `~`, `$`,
+quotes or `\ ` native answers exactly the symlink-resolved path the fallback computes; and the first equal entry removed
+instead of the last, since equal entries are the same string and only their order among themselves differs.
+
+Not run: real Hermes, the qualification run, `npm test`, iOS and production.
