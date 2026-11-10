@@ -79,4 +79,17 @@ test("an open tab is offered a new release, and its next load reaches it without
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   await expect.poll(caches).toEqual([current.replace("agent-interface-", "agent-interface-next-")]);
   await expect(page.getByRole("status").filter({ hasText: "Update available" })).toHaveCount(0);
+test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
+  await signIn(page);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
+
+  // The worker's own tap handler, minus the notification: Playwright cannot click one.
+  const [worker] = context.serviceWorkers();
+  await worker.evaluate(() => (self as unknown as { openChat(url: string): Promise<void> }).openChat(`${location.origin}/?bot=trail`));
+  await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
 });

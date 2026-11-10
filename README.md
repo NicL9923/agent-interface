@@ -77,6 +77,12 @@ device gets it as before. Security alerts always reach every device. See
 [Device activity](docs/native-api.md#device-activity).
 <!-- END device activity -->
 
+Tapping a web notification while the app is open in a window switches that window to the
+chat, as choosing it there would, and brings the window forward without reloading it. The
+worker asks the page with an `OPEN_CHAT` message and loads the chat's address into the
+window only if the page has not answered within a second. A window the worker does not
+control, or one that cannot be loaded, gets a new window instead.
+
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
 approval notification offers **Review** and **Decline** where the browser supports

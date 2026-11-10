@@ -42,6 +42,7 @@ import { waitingPlaceholder } from "./app/waiting-input";
 import { badgeCount, useAppBadge } from "./app/badge";
 import { ConnectionPanel } from "./components/ConnectionPanel";
 import { DecisionsNotice, reviewFirstDecision, type DockItem } from "./app/StatusDock";
+import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 export function App() {
   const [view, setView] = useState<View>(initialView);
@@ -287,6 +288,16 @@ export function App() {
     history.openAt(id, messageId);
     selectBot(id);
   });
+  // A notification tapped while this window is open switches it in place, as a click here would.
+  const openFromWorker = useStableCallback((destination: Destination) => {
+    setOverlay(null);
+    setPanel(null);
+    if ("view" in destination) return showView(destination.view);
+    if (destination.messageId) return openMessage(destination.botId, destination.messageId);
+    selectBot(destination.botId);
+    if (destination.routineId) setPanel({ kind: "routine", botId: destination.botId, routineId: destination.routineId });
+  });
+  useWorkerOpens(openFromWorker);
   const { stopping, stop } = useStopResponse(botId, setError);
   // The composer is memoized, so these keep one identity while a reply streams.
   const sendMessage = useStableCallback(() => send(request => history.anchorSend(request.requestId)));

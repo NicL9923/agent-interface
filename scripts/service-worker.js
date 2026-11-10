@@ -214,15 +214,36 @@ self.addEventListener('push', (event) => {
   ]));
 });
 
+// How long an open window has to say it switched to the chat before the worker loads the chat into
+// it instead. A page answers in milliseconds; a backgrounded one wakes as it is focused.
+const OPEN_ACK_MS = 1000;
+
+// Asks an open window to switch to the chat in place, as a click in it would, without reloading the
+// app. Resolves true once the page says it did. src/app/worker-opens.ts answers it.
+function askToOpen(client, url) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const done = (opened) => { clearTimeout(timer); channel.port1.close(); resolve(opened); };
+    const timer = setTimeout(() => done(false), OPEN_ACK_MS);
+    channel.port1.onmessage = () => done(true);
+    try { client.postMessage({ type: 'OPEN_CHAT', url }, [channel.port2]); } catch { done(false); }
+  });
+}
+
 async function openChat(url) {
-  const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  const existing = windows.find((client) => new URL(client.url).origin === self.location.origin);
+  // Only a window this worker controls runs code that answers, and only such a window can be navigated.
+  const windows = await self.clients.matchAll({ type: 'window' });
+  const existing = windows.find((client) => client.focused) ?? windows.find((client) => client.visibilityState === 'visible') ?? windows[0];
   if (existing) {
-    if (existing.url !== url) await existing.navigate(url);
-    await existing.focus();
-  } else {
-    await self.clients.openWindow(url);
+    // Focused first, since the browser allows it only shortly after the tap.
+    const focused = existing.focus().catch(() => {});
+    if (await askToOpen(existing, url)) return focused;
+    try {
+      await existing.navigate(url);
+      return focused;
+    } catch { /* Closed meanwhile, or no longer this worker's. */ }
   }
+  await self.clients.openWindow(url);
 }
 
 async function decline(notification) {

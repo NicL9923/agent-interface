@@ -16,7 +16,18 @@ const html = () => new Response('<!doctype html>', { headers: { 'content-type': 
 // A healthy server: pages are HTML and everything else is code or an image.
 const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
 
-type Window = { url: string; navigate: ReturnType<typeof vi.fn> };
+// An open window of the app. `controlled` says whether this worker controls it; `answers` whether its page
+// says it opened what it was asked to.
+type Window = { url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; postMessage: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> };
+const openWindowOf = ({ url = 'https://app.example/?bot=home', controlled = true, answers = true, focused = false } = {}): Window => {
+  const client: Window = {
+    url, controlled, answers, focused, visibilityState: 'hidden',
+    postMessage: vi.fn((_data: unknown, [port]: MessagePort[]) => { if (client.answers) port.postMessage({ opened: true }); }),
+    focus: vi.fn(async () => client),
+    navigate: vi.fn(async () => client),
+  };
+  return client;
+};
 function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[] } = {}) {
   const handlers: Record<string, (event: any) => void> = {};
   const setAppBadge = vi.fn().mockResolvedValue(undefined), clearAppBadge = vi.fn().mockResolvedValue(undefined);
@@ -24,7 +35,6 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
   const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
-  const matchAll = vi.fn(async () => options.windows ?? []);
   const fetch = vi.fn().mockRejectedValue(new Error('offline'));
   // Installing needs the network; tests of later steps keep the default of being offline.
   // Cache storage by name. The current release's cache starts with its app shell, as after an install.
@@ -45,12 +55,15 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       location: { origin: 'https://app.example' },
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
       registration: { showNotification, update, unregister },
-      clients: { matchAll, openWindow, claim },
+      clients: { matchAll: async (query: { includeUncontrolled?: boolean } = {}) => (options.windows ?? []).filter(client => client.controlled || query.includeUncontrolled), openWindow, claim },
       navigator: { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
     caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
-    URL, Response, fetch,
+    URL, Response, fetch, MessageChannel,
+    // Read at call time, so a test's fake timers apply inside the worker too.
+    setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
+    clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   };
   vm.runInNewContext(script(), context);
   const run = async (type: 'install' | 'activate') => {
@@ -465,7 +478,7 @@ describe('service worker app shell', () => {
     sw.stores.get('agent-interface-test')!.set('/index.html', shell());
     return sw;
   };
-  const window = (url = 'https://app.example/?bot=ranch'): Window => ({ url, navigate: vi.fn().mockResolvedValue(undefined) });
+  const window = (url = 'https://app.example/?bot=ranch') => openWindowOf({ url });
 
   it('opens from this release\'s cache without waiting on the network', async () => {
     const sw = installed();
@@ -524,5 +537,69 @@ describe('service worker app shell', () => {
     expect(sw.unregister).not.toHaveBeenCalled();
     expect(sw.update).not.toHaveBeenCalled();
     expect(open[0].navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('service worker notification taps with the app open', () => {
+  const url = 'https://app.example/?bot=ranch';
+  async function tap(sw: ReturnType<typeof worker>) {
+    let done: Promise<unknown> | undefined;
+    sw.handlers.notificationclick({ notification: { data: { url: '/?bot=ranch' }, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    return done!;
+  }
+
+  it('asks the window to open the chat in place and focuses it, without reloading it', async () => {
+    const window = openWindowOf();
+    const sw = worker({ windows: [window] });
+    await tap(sw);
+    expect(window.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'OPEN_CHAT', url }, [expect.anything()]);
+    expect(window.focus).toHaveBeenCalled();
+    expect(window.navigate).not.toHaveBeenCalled();
+    expect(sw.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('asks the window the person was last in when several are open', async () => {
+    const [other, current] = [openWindowOf(), openWindowOf({ focused: true })];
+    await tap(worker({ windows: [other, current] }));
+    expect(current.postMessage).toHaveBeenCalled();
+    expect(other.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('loads the chat into a window that does not answer in time', async () => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      const sw = worker({ windows: [window] });
+      const done = tap(sw);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(window.navigate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await done;
+      expect(window.navigate).toHaveBeenCalledExactlyOnceWith(url);
+      expect(window.focus).toHaveBeenCalled();
+      expect(sw.openWindow).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('opens a new window when loading the chat into the silent one fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const window = openWindowOf({ answers: false });
+      window.navigate.mockRejectedValue(new TypeError('not controlled'));
+      const sw = worker({ windows: [window] });
+      const done = tap(sw);
+      await vi.advanceTimersByTimeAsync(1000);
+      await done;
+      expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('opens a new window beside one this worker does not control, which it can neither ask nor navigate', async () => {
+    const window = openWindowOf({ controlled: false });
+    const sw = worker({ windows: [window] });
+    await tap(sw);
+    expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
+    expect(window.postMessage).not.toHaveBeenCalled();
+    expect(window.navigate).not.toHaveBeenCalled();
   });
 });
