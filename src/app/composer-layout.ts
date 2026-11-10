@@ -13,13 +13,17 @@ export function shouldStackComposer(text: string, inlineWidth: number, measure: 
 export type ComposerSlot = { available: number; font: string; letterSpacing: string };
 
 let canvas: OffscreenCanvasRenderingContext2D | null | undefined;
+// A canvas measures these as a space. The field expands a tab to its tab stop, draws a vertical tab
+// as a control glyph and a form feed as nothing, as the measuring span does.
+const canvasMismeasures = /[\t\v\f]/;
 /**
  * The one-line width of `text` in the field's font. A canvas measures without laying out the page;
- * where there is none, the hidden measuring span does, at the cost of a layout.
+ * where there is none, or the text has a character it gets wrong, the hidden measuring span does,
+ * at the cost of a layout.
  */
 export function textWidth(text: string, slot: ComposerSlot, span: HTMLElement | null): number {
   canvas ??= typeof OffscreenCanvas === "undefined" ? null : new OffscreenCanvas(1, 1).getContext("2d");
-  if (canvas) {
+  if (canvas && !canvasMismeasures.test(text)) {
     canvas.font = slot.font;
     canvas.letterSpacing = slot.letterSpacing === "normal" ? "0px" : slot.letterSpacing;
     return canvas.measureText(text).width;
