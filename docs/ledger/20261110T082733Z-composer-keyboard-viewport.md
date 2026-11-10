@@ -310,3 +310,29 @@ window scroll (1 failed, 13 passed, top `0px` where `330px` was expected). Each 
   fail the same way on an untouched `73e4469` on this Mac, where the expected LAN route is missing.
   `live-turn-timing` read 65ms for 61ms once and passed when rerun. Linux CI is the reference for these.
 - `npm run build` passed. The Playwright suite was not run here.
+
+## Review round 2
+
+GPT-6.1 Sol reviewed `812cae4..5d025ab`: ready after one fix. It cleared the Send floors, the send reserve, the
+README, the root-height comparison, the clamp, the window-scroll listener and the short-frame fallback against the
+recorded Safari numbers, and all 15 hand mutations in this branch's scope went red. It noted that a frame crossing
+112 px, replayed in Chromium as 113, 112, 111, 112, flips the shell between the fitted height and the full height;
+whether a real keyboard animation shows that is unknown. Neither known Safari residual blocks.
+
+- P2: the group composer lost its retry button after a failed send. The action error rendered above the
+  conversation's section, pushed the section's start down, and the sticky composer cannot rise above its section. At
+  375 by 667 with a 363 px frame and a ten-line draft, "Retry same saved message" sat at 395 to 441.
+- Fix, by the orchestrator: the group panel's errors and notes render inside the section, so nothing above it moves
+  it. They take the section's 860 px width limit with it. No reviewer has read this fix.
+
+### Red proof
+
+`.agents/tools/check-send-visible.mjs` gained a failed group send, a 503 answered at the browser's edge, with ten
+cases across the phone sizes. Before the fix it reported 79 of 80, the failure at 375 by 667 with a 363 px frame and
+the button at 395 to 441, the reviewer's numbers. After, 80 of 80, that button at 296 to 342.
+
+### Checks
+
+- `npm run typecheck` and `npm run lint` passed. `npm test`: 180 files, 2933 tests passed.
+- `npm run build` passed. `npm run test:e2e`: 10 passed in Chromium.
+- Safari, Firefox and a physical phone: not run for this fix.
