@@ -140,3 +140,28 @@ The earlier list still stands. This round added no device runs. A browser withou
 before 26.2, sizes the message box from script with an explicit height, which the stretch does not override. There a
 long draft may draw above its row when space is short, though Send keeps its place. The group chat composer was not
 checked with a keyboard: the e2e server has no group.
+
+### Group chat composer, same round
+
+Checking the other surface that shares the behavior found the group composer's Send below the frame with a long
+draft, on `main` too and even with no keyboard on a small phone. `.composer { position: relative }` in
+`src/styles.css` overrode `.group-composer { position: sticky }`, so it never stuck. `collaboration.css` now:
+
+- states the sticking with two classes, so the order of the style sheets cannot undo it;
+- makes `.group-panel` a size container and caps the group message box at its height (`100cqh`) less the 20px top
+  margin and the composer's other rows: 76px, or 150px with the "Replying in thread" banner. It keeps one line;
+- gives the panel a floor of one line plus those rows, so in a frame too short for it the header is cut from the
+  top, as in an assistant chat.
+
+`.agents/tools/check-send-visible.mjs` scripts the check, since this round needed it twice. It runs against
+`preview-app.mjs`, which has Stop, a dock notice, uploads and group threads, over 70 cases: five sizes, keyboard
+frames of 363, 548, 120, 190 and 150px, and empty, short, long, with-attachment and threaded drafts in both
+composers. [Report](../evidence/composer-keyboard-20261110/send-visible-preview.json):
+
+- With `812cae4`'s CSS, 38 of 70 kept the button whole and tappable. With `a8a161c`, 49 of 70, all the misses in the
+  group chat. Now 70 of 70.
+- Breaking each group line by hand turned the tool red. Undoing the two-class sticky failed the long and threaded group drafts on the small phone, with and without a keyboard. Removing the
+  message box cap failed the portrait keyboard case with a thread and a long draft. Removing the floor failed the
+  120px and 150px frames. Using the plain 76px for the banner failed the threaded portrait keyboard case.
+- `npm run lint`, `npm run typecheck`, `npm run build` and `npm run test:e2e` (10 passed) passed again. `npm test` was
+  not repeated: this commit changes only CSS that jsdom does not lay out, and a tool.
