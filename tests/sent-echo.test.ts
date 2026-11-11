@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { awaitingTurn, COPY_HANDOFF_MS, ECHO_PATIENCE, nextEcho, nextEchoes, nextSends, OWN_SENDS_KEPT, ownSentRows, restoreSent, SENDING_ROW_MS, sendingDraft, withEchoes } from "../src/app/sent-echo";
-import type { OwnSend, SentEcho } from "../src/app/sent-echo";
+import { advance, awaitingTurn, COPY_HANDOFF_MS, ECHO_PATIENCE, nextEcho, nextEchoes, nextSends, OWN_SENDS_KEPT, ownSentRows, restoreSent, SENDING_ROW_MS, sendingDraft, withEchoes } from "../src/app/sent-echo";
+import type { EchoState, OwnSend, SentEcho } from "../src/app/sent-echo";
 import type { Pending, SavedConversation } from "../src/app/storage";
 import type { Message, SubmissionReceipt } from "../src/shared/types";
 
@@ -305,7 +305,9 @@ describe("the person's own sends, kept after their echo leaves", () => {
     step(null, { pending: { ...request, requestId, text: words }, sending: true });
   /** The send as the app records it when Hermes accepts it. */
   const recorded = (words: string, requestId = "req", receipt: Partial<SubmissionReceipt> = {}, sends: OwnSend[] = []) =>
-    nextSends(sends, [send(words, requestId)!], { receipt: accept({ requestId, ...receipt }), sender });
+    recordedFrom(send(words, requestId)!, accept({ requestId, ...receipt }), sends);
+  const recordedFrom = (echo: SentEcho, receipt: SubmissionReceipt, sends: OwnSend[] = []) =>
+    nextSends(sends, [echo], [echo], { receipt, sender, conversation: null });
 
   it("records a send when Hermes accepts it, from the echo it had until then", () => {
     expect(recorded("Avoid flights", "req", { steered: true })).toEqual([
@@ -318,15 +320,16 @@ describe("the person's own sends, kept after their echo leaves", () => {
     ["a typed stop phrase, which admitted nothing", accept({ turn: "none" })],
     ["another request's receipt", accept({ requestId: "older" })],
   ])("records nothing for %s", (_name, receipt) => {
-    expect(nextSends([], [send("Avoid flights")!], { receipt, sender })).toEqual([]);
+    expect(nextSends([], [send("Avoid flights")!], [send("Avoid flights")!], { receipt, sender, conversation: null })).toEqual([]);
   });
 
   it("records a send once, keeps the same list when nothing changed, and forgets the last person's", () => {
     const sends = recorded("Avoid flights");
-    expect(nextSends(sends, [send("Avoid flights")!], { receipt: accept(), sender })).toBe(sends);
-    expect(nextSends(sends, [], { receipt: null, sender })).toBe(sends);
-    expect(nextSends(sends, [], { receipt: null, sender: { id: "two", name: "Two" } })).toEqual([]);
-    expect(nextSends(sends, [], { receipt: null, sender: undefined })).toEqual([]);
+    const echo = send("Avoid flights")!;
+    expect(nextSends(sends, [echo], [echo], { receipt: accept(), sender, conversation: null })).toBe(sends);
+    expect(nextSends(sends, [], [], { receipt: null, sender, conversation: null })).toBe(sends);
+    expect(nextSends(sends, [], [], { receipt: null, sender: { id: "two", name: "Two" }, conversation: null })).toEqual([]);
+    expect(nextSends(sends, [], [], { receipt: null, sender: undefined, conversation: null })).toEqual([]);
   });
 
   it("keeps a chat's newest sends and leaves another chat's alone", () => {
@@ -380,6 +383,75 @@ describe("the person's own sends, kept after their echo leaves", () => {
       expect(ownSentRows(sends, null)).toEqual(new Set());
       const photo = recorded("   ", "photo");
       expect(ownSentRows(photo, conversation([{ id: "a", role: "assistant", text: "Hi" }, user("blank", "")]))).toEqual(new Set());
+    });
+  });
+
+  describe("a send restored after a reload, before the chat was read", () => {
+    // The page reloads while the outcome is unknown: the pending send comes back while the conversation is
+    // still null, so its echo has no anchor, and Hermes then queues it with no row ID.
+    const restored = (receipt: Partial<SubmissionReceipt> = {}) => {
+      const echo = step(null, { pending: { ...request, text: "Thanks" }, sending: true, conversation: null })!;
+      expect(echo.after).toBeUndefined();
+      return recordedFrom(echo, accept({ messageId: undefined, turn: "queued", ...receipt }));
+    };
+    const saved = (rows: Message[]) => conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "working");
+
+    it("claims no row by its words, so an older member's same words keep their label", () => {
+      const sends = restored();
+      expect(sends[0].after).toBeUndefined();
+      expect(ownSentRows(sends, saved([user("older", "Thanks"), user("queued", "Thanks")]))).toEqual(new Set());
+    });
+
+    it("still claims the row Hermes named for it", () => {
+      const sends = restored({ messageId: "row-9" });
+      expect([...ownSentRows(sends, saved([user("older", "Thanks"), user("row-9", "Thanks, then")]))]).toEqual(["row-9"]);
+    });
+  });
+
+  describe("a send Hermes never saves under its own words", () => {
+    const working = conversation([{ id: "a", role: "assistant", text: "Hi" }], "working");
+    const settled = (rows: Message[]) => conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "done");
+    const input = (extra: Partial<Parameters<typeof nextEcho>[1]>) => ({ pending: null, receipt: null, sending: false, conversation: working, sender, now: 1000, ...extra });
+    /** Both steers accepted while the chat is working, then the chat settles on `rows`. */
+    const afterJoined = (rows: Message[], steers = ["Avoid flights", "Use trains"]) => {
+      let state: EchoState = { echoes: [], sends: [] };
+      steers.forEach((words, index) => {
+        const requestId = `steer-${index}`;
+        state = advance(state, input({ pending: { ...request, requestId, text: words }, sending: true }));
+        state = advance(state, input({ receipt: { requestId, status: "accepted", steered: true, turn: "joined" } }));
+      });
+      expect(state.sends).toHaveLength(steers.length);
+      state = advance(state, input({ conversation: working, now: 2000 }));
+      return advance(state, input({ conversation: settled(rows), now: 3000 }));
+    };
+
+    it("ends its record with its echo, so it cannot claim another member's identical words later", () => {
+      // Hermes wrote both steers as one row, so neither echo finds its copy and both leave when the work ends.
+      const state = afterJoined([user("joined", "Avoid flights\nUse trains")]);
+      expect(state.echoes).toEqual([]);
+      expect(state.sends).toEqual([]);
+      expect(ownSentRows(state.sends, settled([user("joined", "Avoid flights\nUse trains"), user("theirs", "Avoid flights")]))).toEqual(new Set());
+    });
+
+    it("keeps a record whose copy is shown, and one whose echo still waits on a long queue", () => {
+      const copied = afterJoined([user("mine", "Avoid flights"), user("joined", "Use trains")]);
+      expect(copied.sends.map(each => each.requestId)).toEqual(["steer-0", "steer-1"]);
+      let state = afterJoined([], ["Avoid flights"]);
+      expect(state.sends).toEqual([]);
+      // Still working ten minutes on: the echo, and so the record, wait for the queue however long it is.
+      state = advance({ echoes: [], sends: [] }, input({ pending: { ...request, text: "Avoid flights" }, sending: true }));
+      state = advance(state, input({ receipt: { requestId: "req", status: "accepted", turn: "queued" } }));
+      state = advance(state, input({ now: 1000 + 600_000 }));
+      expect(state.sends).toHaveLength(1);
+    });
+
+    it("leaves a record alone while another chat is open", () => {
+      const sends: OwnSend[] = [{ requestId: "req", botId: "bot", senderId: "one", text: "Avoid flights", after: "a" }];
+      const echo = send("Avoid flights")!;
+      const other = { ...conversation(), botId: "other" };
+      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: other })).toBe(sends);
+      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: null })).toBe(sends);
+      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: conversation() })).toEqual([]);
     });
   });
 });

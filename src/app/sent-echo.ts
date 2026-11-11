@@ -77,8 +77,10 @@ export function echoShown(echo: SentEcho, conversation: SavedConversation) {
  * queued or redirected are saved without the sender, so once the echo is gone the row would otherwise read
  * as another member's. It lives in memory with the session that sent it, so it ends with the account's
  * generation, and a chat keeps its newest OWN_SENDS_KEPT. The anchor keeps an older row with the same words
- * from matching, and a send Hermes never saved under its own words (merged with another's) leaves one
- * record that can still claim a later row of the same words, which is why the label is a hint, not a binding.
+ * from matching, so a send without one (restored after a reload, before the chat was read) claims only a row
+ * Hermes named for it. A record ends with its echo when the echo leaves with its copy not shown (see nextSends),
+ * as for a send Hermes never saved under its own words, such as a steer joined with another into one row. Equal
+ * words cannot tell two rows apart, so the label is a hint, not a binding.
  */
 export type OwnSend = { requestId: string; messageId?: string; botId: string; senderId: string; text: string; after?: string };
 export const OWN_SENDS_KEPT = 20;
@@ -92,7 +94,8 @@ export function ownSentRows(sends: OwnSend[], conversation: SavedConversation | 
   if (!conversation) return claimed;
   for (const send of sends) {
     if (send.botId !== conversation.botId) continue;
-    const index = copyIndex(send, conversation.messages, claimed);
+    // Without its anchor, words could match an older row of another member's; only an ID is evidence.
+    const index = copyIndex(send.after ? send : { ...send, text: "" }, conversation.messages, claimed);
     if (index >= 0) claimed.add(conversation.messages[index].id);
   }
   return claimed;
@@ -257,27 +260,38 @@ export function restoreSent(draft: Draft, request: Pick<Pending, "text" | "attac
 }
 /**
  * The person's sends after a change: one is added when Hermes accepts it, from the echo it had until then,
- * and the other person's, or sends past a chat's newest OWN_SENDS_KEPT, are dropped. The same list comes
- * back when nothing changed. A typed stop phrase admitted nothing, so it is never a send.
+ * and the other person's, or sends past a chat's newest OWN_SENDS_KEPT, are dropped. A send ends with its echo
+ * when the echo leaves while its own chat is open and its copy is not shown, the evidence the echo itself
+ * uses that no copy is coming: Hermes joined it with other steers, or merged or dropped its queued text.
+ * Time cannot bound it, since a queued send may wait as long as the work before it. The same list comes back
+ * when nothing changed. A typed stop phrase admitted nothing, so it is never a send.
+ * `before` and `after` are the echoes of the same change.
  */
-export function nextSends(sends: OwnSend[], echoes: SentEcho[], { receipt, sender }: Pick<EchoInput, "receipt" | "sender">): OwnSend[] {
+export function nextSends(sends: OwnSend[], before: SentEcho[], after: SentEcho[], { receipt, sender, conversation }: Pick<EchoInput, "receipt" | "sender" | "conversation">): OwnSend[] {
   let next = sends.filter(send => send.senderId === sender?.id);
   const echo = receipt?.status === "accepted" && receipt.turn !== "none" && sender
-    ? echoes.find(each => each.request.requestId === receipt.requestId && each.sender.id === sender.id) : undefined;
+    ? before.find(each => each.request.requestId === receipt.requestId && each.sender.id === sender.id) : undefined;
   if (echo && receipt && !next.some(send => send.requestId === echo.request.requestId)) {
-    const { request, after } = echo;
+    const { request, after: anchor } = echo;
     const messageId = echo.messageId ?? receipt.messageId;
-    next = [...next, { requestId: request.requestId, botId: request.botId, senderId: echo.sender.id, text: request.text, after, ...messageId ? { messageId } : {} }];
+    next = [...next, { requestId: request.requestId, botId: request.botId, senderId: echo.sender.id, text: request.text, after: anchor, ...messageId ? { messageId } : {} }];
     const ofChat = next.filter(send => send.botId === request.botId);
     const dropped = new Set(ofChat.slice(0, Math.max(0, ofChat.length - OWN_SENDS_KEPT)));
     if (dropped.size) next = next.filter(send => !dropped.has(send));
   }
+  if (conversation) {
+    const noCopyComing = (send: OwnSend) => conversation.botId === send.botId
+      && before.some(each => each.request.requestId === send.requestId) && !after.some(each => each.request.requestId === send.requestId)
+      && copyIndex(send, conversation.messages) < 0;
+    if (next.some(noCopyComing)) next = next.filter(send => !noCopyComing(send));
+  }
   return next.length === sends.length && next.every((send, index) => send === sends[index]) ? sends : next;
 }
-type EchoState = { echoes: SentEcho[]; sends: OwnSend[] };
-const advance = (current: EchoState, input: EchoInput): EchoState => {
+export type EchoState = { echoes: SentEcho[]; sends: OwnSend[] };
+/** Both lists after a change, together so a send ends in the same step as its echo. */
+export const advance = (current: EchoState, input: EchoInput): EchoState => {
   const echoes = nextEchoes(current.echoes, input);
-  const sends = nextSends(current.sends, current.echoes, input);
+  const sends = nextSends(current.sends, current.echoes, echoes, input);
   return echoes === current.echoes && sends === current.sends ? current : { echoes, sends };
 };
 /**
