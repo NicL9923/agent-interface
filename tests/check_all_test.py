@@ -3,10 +3,14 @@ summary parsing and the whole command, run against real processes, real sockets,
 on PATH. Nothing here touches the network or the real check battery."""
 import ast
 import contextlib
+import fcntl
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
+import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -501,28 +505,106 @@ class PythonDecisionTest(TempCase):
         self.assertIsNone(check_all.changed_paths(self.tmp, "origin/nowhere"))
 
 
-def repository_reads(source):
-    """Repository paths a Python test source names relative to the repository root: the argument of `load_source`,
-    `ROOT / "a" / "b"` and `TOOLS / "x"` chains, and `ROOT.glob("pattern")`. Paths built under a temporary
-    directory (`root / ...`, `self.repo / ...`) are fixtures, not reads of this repository, and are left out."""
-    bases = {"ROOT": "", "TOOLS": ".agents/tools"}
+def _text(node):
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _tidy(path):
+    """A normalized posix path with "" for the repository root, or None when it leaves the repository."""
+    path = posixpath.normpath(path) if path else "."
+    return "" if path == "." else None if path == ".." or path.startswith("../") else path
+
+
+def _up(path, steps=1):
+    for _ in range(steps):
+        if path is None or path == "":
+            return None
+        path = posixpath.dirname(path)
+    return path
+
+
+def _resolver(tree, location, read_module, importing=()):
+    """A function naming the repository path an expression stands for (relative to the root, "" for the root, None when
+    unknown), with the base names this file defines or imports from a sibling module of the tests."""
+    bases = {}
+
+    def resolve(node):
+        if isinstance(node, ast.Name):
+            return bases.get(node.id)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path" and len(node.args) == 1 and not node.keywords:
+            argument = node.args[0]
+            return location if isinstance(argument, ast.Name) and argument.id == "__file__" else None
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve" and not node.args:
+            return resolve(node.func.value)
+        if isinstance(node, ast.Attribute) and node.attr == "parent":
+            return _up(resolve(node.value))
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "parents" \
+                and isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, int) and node.slice.value >= 0:
+            return _up(resolve(node.value.value), node.slice.value + 1)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            left, right = resolve(node.left), _text(node.right)
+            return None if left is None or not right or right.startswith("/") else _tidy(posixpath.join(left, right))
+        return None
+
+    for node in ast.walk(tree):  # `from support import ROOT` means the ROOT that support.py defines
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module and "." not in node.module:
+            for folder in (posixpath.dirname(location), "tests"):
+                module = posixpath.join(folder, node.module + ".py")
+                source = read_module(module) if module not in importing and module != location else None
+                if source is not None:
+                    imported = _resolver(ast.parse(source), module, read_module, (*importing, location))[1]
+                    for alias in node.names:
+                        if alias.name in imported:
+                            bases[alias.asname or alias.name] = imported[alias.name]
+                    break
+    assignments = [(target.id, node.value) for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                   for target in node.targets if isinstance(target, ast.Name)]
+    for _ in range(len(assignments)):  # a base may be defined from another that comes later in the walk
+        for name, value in assignments:
+            path = resolve(value)
+            if path is not None:
+                if bases.setdefault(name, path) != path:
+                    raise ValueError(f"{location} assigns {name} two different repository paths; give them different names")
+    return resolve, bases
+
+
+READ_METHODS = ("read_text", "read_bytes", "open", "exists", "is_file", "is_dir", "iterdir", "stat")
+
+
+def repository_reads(source, location, read_module=lambda path: None):
+    """Repository paths a Python test source reads, relative to the repository root. `location` is the source file's
+    own path under the root, which decides what its base names mean: a name assigned from `Path(__file__)` (for
+    example `ROOT = Path(__file__).resolve().parents[2] / "src/hermes"`, or `TOOLS = ROOT / ".agents/tools"`) is the
+    directory that expression names in this file, not a fixed one, and a name imported from a sibling module
+    (`from support import ROOT`) is what that module defines (`read_module(path)` returns its source, or None).
+    Seen: `/` chains from such a base or from `Path(__file__)`, `.glob()` and `.rglob()` with a literal pattern on
+    one, `load_source("path")`, and a relative literal in `open("x")` or `Path("x").read_text()` (the tests run with the root as
+    the working directory). Not seen: a path that is computed (a variable or f-string part, `os.path.join`). Paths
+    built under a temporary directory (`root / ...`, `self.repo / ...`) never derive from `__file__`, so they are
+    fixtures and are left out."""
     tree = ast.parse(source)
-    inner = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
+    resolve, _ = _resolver(tree, location, read_module)
+    chain_parts = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
     found = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
-            function = node.func
+        path = None
+        if isinstance(node, ast.Call) and node.args and _text(node.args[0]):
+            function, argument = node.func, _text(node.args[0])
             if isinstance(function, ast.Name) and function.id == "load_source":
-                found.add(node.args[0].value)
-            elif isinstance(function, ast.Attribute) and function.attr == "glob" and isinstance(function.value, ast.Name) and function.value.id in bases:
-                found.add("/".join(part for part in (bases[function.value.id], node.args[0].value) if part))
-        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner:  # the whole chain only
-            parts, base = [], node
-            while isinstance(base, ast.BinOp) and isinstance(base.op, ast.Div):
-                parts.append(base.right.value if isinstance(base.right, ast.Constant) and isinstance(base.right.value, str) else None)
-                base = base.left
-            if isinstance(base, ast.Name) and base.id in bases and None not in parts:
-                found.add("/".join(part for part in [bases[base.id], *reversed(parts)] if part))
+                path = argument
+            elif isinstance(function, ast.Name) and function.id == "open" and not argument.startswith("/"):
+                path = _tidy(argument)
+            elif isinstance(function, ast.Attribute) and function.attr in ("glob", "rglob") and resolve(function.value) is not None:
+                path = _tidy(posixpath.join(resolve(function.value), argument))
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in chain_parts:  # the whole chain only
+            path = resolve(node)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in READ_METHODS:
+            made = node.func.value  # Path("package.json").read_text(): a literal that names no base is relative to the root
+            if isinstance(made, ast.Call) and isinstance(made.func, ast.Name) and made.func.id == "Path" and len(made.args) == 1 and _text(made.args[0]) \
+                    and not _text(made.args[0]).startswith("/"):
+                path = _tidy(_text(made.args[0]))
+        if path:
+            found.add(path)
     return found
 
 
@@ -539,16 +621,62 @@ class PythonInputsTest(unittest.TestCase):
             temp = root / "package.json"
             computed = ROOT / name
         """)
-        self.assertEqual(repository_reads(source), {"src/hermes/voice.py", "src/shared/voice.ts", ".agents/tools/validate-ios.sh", ".agents/tools",
-                                                    "public/voice-previews/*"})
+        self.assertEqual(repository_reads(source, "tests/voice_test.py"), {"src/hermes/voice.py", "src/shared/voice.ts", ".agents/tools/validate-ios.sh",
+                                                                           ".agents/tools", "public/voice-previews/*"})
+
+    def test_a_read_through_any_base_name_or_a_relative_literal_is_seen(self):
+        source = textwrap.dedent("""
+            APP = Path(__file__).resolve().parents[1]
+            HERE = Path(__file__).resolve().parent
+            config = (APP / "package.json").read_text()
+            sibling = (HERE / "fixtures" / "a.json").read_text()
+            inline = (Path(__file__).resolve().parents[1] / "src" / "shared" / "x.json").read_text()
+            opened = open("tsconfig.json")
+            relative = Path("docs/Dependencies.md").read_text()
+            named = Path("docs/ValidationLedger.md")
+            fixture_file = self.repo / named
+            listed = list(APP.rglob("*.mjs"))
+            computed = APP / name
+            absolute = open("/etc/hosts")
+            fixture = self.repo / "package-lock.json"
+        """)
+        self.assertEqual(repository_reads(source, "tests/some_test.py"), {"package.json", "tests/fixtures/a.json", "src/shared/x.json", "tsconfig.json",
+                                                                          "docs/Dependencies.md", "*.mjs"})
+
+    def test_a_base_that_points_below_the_root_is_read_from_there_and_a_name_means_what_its_own_file_says(self):
+        # scripts/spike/dashboard_contract_test.py sets ROOT to src/hermes; the same name in tests/ is the root.
+        spike = 'ROOT = Path(__file__).resolve().parents[2] / "src/hermes"\nsource = (ROOT / "dashboard.py").read_text()\n'
+        self.assertEqual(repository_reads(spike, "scripts/spike/dashboard_contract_test.py"), {"src/hermes", "src/hermes/dashboard.py"})
+        top = 'ROOT = Path(__file__).resolve().parents[1]\nsource = (ROOT / "dashboard.py").read_text()\n'
+        self.assertEqual(repository_reads(top, "tests/dashboard_test.py"), {"dashboard.py"})
+        self.assertEqual(repository_reads('ROOT = Path(__file__).resolve().parents[1]\n(ROOT / "package.json").read_text()\n', "scripts/x_test.py"),
+                         {"package.json"})
+
+    def test_a_base_imported_from_a_sibling_module_means_what_that_module_defines(self):
+        modules = {"tests/support.py": 'ROOT = Path(__file__).resolve().parents[1]\n', "scripts/spike/support.py": 'ROOT = Path(__file__).resolve().parents[2] / "src/hermes"\n'}
+        source = 'from support import ROOT as REPO, missing\nfrom elsewhere import ROOT\n(REPO / "package.json").read_text()\n(ROOT / "x").read_text()\n'
+        self.assertEqual(repository_reads(source, "tests/a_test.py", modules.get), {"package.json"})
+        self.assertEqual(repository_reads(source, "scripts/spike/a_test.py", modules.get), {"src/hermes/package.json"})
+        self.assertEqual(repository_reads(source, "scripts/b_test.py", modules.get), {"package.json"})  # no support.py beside it: the one in tests/
+
+    def test_a_base_that_climbs_out_of_the_repository_or_is_assigned_two_ways_is_not_guessed_at(self):
+        self.assertEqual(repository_reads('ROOT = Path(__file__).resolve().parents[5]\n(ROOT / "x.json").read_text()\n', "tests/x_test.py"), set())
+        outside = 'ROOT = Path(__file__).resolve().parents[1]\nopen("../elsewhere.json")\n(ROOT / ".." / "sibling").read_text()\n(ROOT / "a" / ".." / "b.json").read_text()\n'
+        self.assertEqual(repository_reads(outside, "tests/x_test.py"), {"b.json"})
+        with self.assertRaisesRegex(ValueError, "ROOT two different"):
+            repository_reads('ROOT = Path(__file__).resolve().parents[1]\nROOT = Path(__file__).resolve().parent\n', "tests/x_test.py")
 
     def test_every_repository_path_a_python_test_reads_is_an_input_that_makes_auto_run_py(self):
         # A test that reads src/shared/voice.ts must run when only that file changes. A new read outside the list
         # fails here, naming the test: add its directory to PYTHON_INPUT_DIRS in check_all.py.
         files = sorted({path for pattern in ("tests/*.py", "scripts/*test*.py", "scripts/spike/*test*.py") for path in ROOT.glob(pattern)})
         reads = {}
+
+        def read_module(relative):
+            return (ROOT / relative).read_text() if (ROOT / relative).is_file() else None
+
         for path in files:
-            for read in repository_reads(path.read_text()):
+            for read in repository_reads(path.read_text(), path.relative_to(ROOT).as_posix(), read_module):
                 reads.setdefault(read, path.name)
         # The scan still sees reads, so it cannot pass by finding none.
         self.assertGreaterEqual(set(reads), {"src/shared/voice.ts", "public/voice-previews", ".agents/tools/validate-ios.sh", "src/hermes/voice.py"})
@@ -681,6 +809,47 @@ FAKE_NPM = """
         log.write(json.dumps({"done": key, "at": time.time()}) + "\\n")
     sys.exit(step.get("rc", 0))
 """
+
+# A launcher that leaves descriptors 3 to 20 open, as some terminals and agent harnesses do, then runs the driver.
+LEAKY_LAUNCHER = """
+import os, sys
+null = os.open("/dev/null", os.O_RDONLY)
+for number in range(3, 21):
+    os.dup2(null, number)
+    os.set_inheritable(number, True)
+if null > 20:
+    os.close(null)
+os.execv(sys.executable, [sys.executable, "-I", "-c", *sys.argv[1:]])
+"""
+
+# Which descriptors above 2 are lock files (told from the process's own by inode).
+LOCK_PROBE = """
+import json, os, sys
+from pathlib import Path
+locks = {(path.stat().st_dev, path.stat().st_ino) for path in Path(sys.argv[1]).glob("*.lock")}
+found = []
+for number in range(3, 256):
+    try:
+        stat = os.fstat(number)
+    except OSError:
+        continue
+    if (stat.st_dev, stat.st_ino) in locks:
+        found.append(number)
+print(json.dumps(found))
+"""
+
+# The real Node as npm, since the claim is about what Node does with descriptors it inherits: it records which lock
+# descriptors it holds, then which a child it spawns holds.
+NODE_NPM = """
+const fs = require("fs"), path = require("path"), { spawnSync } = require("child_process");
+const locks = path.join(process.env.CHECK_ALL_HOME, "locks");
+const identities = new Set(fs.readdirSync(locks).map((name) => { const s = fs.statSync(path.join(locks, name)); return s.dev + ":" + s.ino; }));
+let own = [];
+for (let fd = 3; fd < 256; fd++) { try { const s = fs.fstatSync(fd); if (identities.has(s.dev + ":" + s.ino)) own.push(fd); } catch (_) {} }
+const child = spawnSync(process.env.FAKE_PROBE, [locks], { encoding: "utf8" });
+fs.writeFileSync(process.env.FAKE_REPORT, JSON.stringify({ npm: own, grandchild: JSON.parse(child.stdout) }));
+console.log("  4 passed (3s)");
+"""
 PASSING = {
     "run typecheck": {"out": ""}, "run lint": {"out": ""},
     "test": {"out": " Test Files  3 passed (3)\n      Tests  12 passed (12)\n"},
@@ -742,7 +911,7 @@ class CommandTest(TempCase):
     def run_main(self, *argv, root=None, **extra):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, self.env(**extra), clear=True), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = check_all.main(list(argv), root=root or self.root, cache=self.cache)
+            code = check_all.main(list(argv), root=root or self.root, cache=self.cache, close_inherited=False)
         return code, out.getvalue(), err.getvalue()
 
     def calls(self):
@@ -1129,6 +1298,58 @@ class CommandTest(TempCase):
         lease = check_all.try_lock(locks[0])  # the port pair's lock; the orphaned web server still listens, as no flock can stop
         self.assertIsNotNone(lease)
         lease.release()
+
+    def run_with_leaky_launcher(self, *argv):
+        """Run check-all's main in a process whose launcher left descriptors 3 to 20 open, under the real Node as npm.
+        Returns what Node and a child of Node's held of the locks."""
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("needs a real node on PATH")
+        npm = self.bin / "npm"
+        npm.write_text(f"#!{node}\n" + textwrap.dedent(NODE_NPM))
+        npm.chmod(0o700)
+        probe, report = script(self.tmp / "probe", LOCK_PROBE), self.tmp / "report.json"
+        driver = ("import sys; sys.path.insert(0, sys.argv[1]); import check_all; "
+                  "sys.exit(check_all.main(sys.argv[4:], root=__import__('pathlib').Path(sys.argv[2]), cache=__import__('pathlib').Path(sys.argv[3])))")
+        result = subprocess.run([sys.executable, "-I", "-c", LEAKY_LAUNCHER, driver, str(TOOLS), str(self.root), str(self.cache), *argv],
+                                env=self.env(FAKE_PROBE=str(probe), FAKE_REPORT=str(report)), capture_output=True, text=True, timeout=60, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(report.read_text())
+
+    def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_npm_holds_them(self):
+        # libuv marks descriptors 0 to 15 close-on-exec, so a lock at 3 or 4 stays with npm. With 3 to 20 inherited
+        # open, locks opened after them land at 21 and up, which Node hands to every child: the runner, its workers and
+        # Playwright's web server, any of which could hold the slot for good.
+        report = self.run_with_leaky_launcher("--only", "e2e")
+        self.assertEqual(report["npm"], [3, 4])  # the heavy slot and the port pair, the lowest numbers there are
+        self.assertEqual(report["grandchild"], [], "a child of npm still holds a lock")
+
+    def test_a_lock_descriptor_node_would_pass_on_is_refused_before_anything_starts(self):
+        marker = self.tmp / "started"
+        script(self.tmp / "suite", "from pathlib import Path\nPath(%r).write_text('x')\n" % str(marker))
+        held = check_all.try_lock(self.tmp / "x.lock")
+        self.addCleanup(held.release)
+        high = fcntl.fcntl(held.fd, fcntl.F_DUPFD, 16)  # the same lock file at the first descriptor number Node would pass on
+        self.addCleanup(os.close, high)
+        with self.assertRaisesRegex(RuntimeError, rf"\[{high}\] are 16 or higher"):
+            check_all.run_process([str(self.tmp / "suite")], self.tmp, dict(os.environ), self.tmp / "log", 5, False, inherit=[held.fd, high])
+        self.assertFalse(marker.exists())
+
+    def test_a_slot_held_by_a_killed_run_names_the_live_suite_not_the_dead_run(self):
+        process, _, port, locks = self.start_e2e_with_server()
+        suite = int(self.calls()[0]["pid"])
+        process.kill()
+        process.communicate(timeout=5)
+        self.assertNotEqual(process.pid, suite)
+        with self.assertRaises(check_all.LockTimeout) as caught:
+            check_all.acquire_slot(self.cache / "locks", 1, {"check": "second run"}, 0.3)
+        named = int(re.search(r"pid (\d+)", str(caught.exception)).group(1))
+        self.assertEqual(named, suite)
+        self.assertTrue(self.alive(named))
+        self.assertFalse(self.alive(process.pid))
+        # The port pair's lock file names the suite too.
+        self.assertEqual(check_all.read_info(locks[0])["pid"], suite)
+        self.assertEqual(check_all.read_info(locks[1])["check"], "e2e")  # the rest of the holder's description is kept
 
     def test_a_stop_that_the_suite_ignores_kills_it_only_after_the_grace(self):
         script(self.tmp / "stubborn", """

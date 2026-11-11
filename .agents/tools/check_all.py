@@ -13,9 +13,16 @@ the traps agents kept hitting by hand:
 Locks are flock(2) locks on small files in a per-user cache directory. The check's own process (the npm
 wrapper) inherits the lock descriptors and waits for the suite it started, so a lock lasts as long as the suite
 does: check-all killed by SIGKILL leaves its suite running with its slot and ports still held, and they free
-when the suite ends. Node does not pass the descriptors on, so the runner and Playwright's web server do not
-hold them; they do not need to, because npm waits for the runner and the runner stops the server when it exits.
-A stopped run (Ctrl-C, SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright
+when the suite ends. The lock files name the check's pid once it starts, so a waiter is told about a live process.
+
+Only npm should hold the locks, and that depends on the descriptor numbers. When Node starts, libuv marks
+descriptors 0 to 15 close-on-exec (and goes on past 15 only until it meets a closed number), so a descriptor
+below 16 is not passed to the runner, its children or Playwright's web server. That does not matter, because npm
+waits for the runner and the runner stops the server when it exits. A descriptor of 17 or more is passed on to
+every process in the suite tree, and a leaked child, or a web server in a session of its own, would then hold the
+slot for good. A launcher that leaves descriptors 3 to 20 open puts the locks at 21 and up, which is how 207
+processes once held one slot. So `main` closes every inherited descriptor above 2 before it opens a lock, which
+puts the locks at 3 and 4, and `run_process` refuses to pass on one that is 16 or more. A stopped run (Ctrl-C, SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright
 can shut down the web server it started in a process group of its own, and kills what is left after ten
 seconds. Nothing here needs a package outside the standard library.
 """
@@ -96,10 +103,15 @@ class Held:
 
     def __init__(self, fd, path):
         self.fd, self.path = fd, path
+        self.info = {}
 
     def write_info(self, info):
+        self.info = dict(info)
         os.ftruncate(self.fd, 0)
-        os.pwrite(self.fd, json.dumps(info).encode(), 0)
+        os.pwrite(self.fd, json.dumps(self.info).encode(), 0)
+
+    def update_info(self, **changes):
+        self.write_info({**self.info, **changes})
 
     def release(self):
         if self.fd is None:
@@ -372,7 +384,10 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 # Beyond .py files: the directories whose files the Python tests run or read. src/hermes and scripts/ hold the code
 # under test, .agents/tools holds the tools and shell scripts the tests run, src/shared holds the TypeScript and
 # JSON the voice, delegation and qualification tests read, and public/voice-previews is listed by the voice test.
-# tests/check_all_test.py scans the Python tests and fails when one reads a path outside this list.
+# tests/check_all_test.py scans the Python tests and fails when one reads a path outside this list, for the reads it
+# can see: a literal path joined to a base name defined from `Path(__file__)` (in the file or in `support.py`), a
+# `load_source` argument, a literal glob, or a relative literal given to `open` or `Path(...).read_text()`. A path
+# that is computed at run time is not seen, so a test that builds one is on its author to list the directory here.
 PYTHON_INPUT_DIRS = ("src/hermes/", "scripts/", ".agents/tools/", "src/shared/", "public/voice-previews/")
 PYTHON_INPUTS = "Python or a file the Python tests read"
 
@@ -547,11 +562,21 @@ def stop_group(process, grace=None):
             wait_for_group(process, 5)
 
 
-def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=()):
+# Node's libuv marks descriptors 0 to 15 close-on-exec at startup, so those are not passed on to its children.
+NODE_KEEPS_BELOW = 16
+
+
+def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=(), on_start=None):
     """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
 
     The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
-    this process is killed. A child that is not a Node wrapper may pass them on to its own children."""
+    this process is killed. They must be below 16: Node keeps those from its own children, so only the npm wrapper
+    holds the locks, where a higher descriptor reaches every process in the suite tree (see the module docstring).
+    `on_start(pid)` runs once the child exists, for a caller that records who now holds the locks."""
+    too_high = [fd for fd in inherit if fd >= NODE_KEEPS_BELOW]
+    if too_high:
+        raise RuntimeError(f"Lock descriptors {too_high} are {NODE_KEEPS_BELOW} or higher, so Node would pass them to every process in the suite; "
+                           "main() closes inherited descriptors above 2 so the locks land low.")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, errors="replace", start_new_session=True, pass_fds=tuple(inherit))
@@ -565,6 +590,8 @@ def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=()):
     timer.start()
     chunks = []
     try:
+        if on_start:
+            on_start(process.pid)
         with log_path.open("w") as log:
             for line in process.stdout:
                 chunks.append(line)
@@ -725,8 +752,15 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             log(f"e2e: app port {port}, control port {port + 1}")
         started = time.monotonic()
         log_path = logs / f"{name}.log"
-        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose,
-                                   inherit=[lease.fd for lease in (port_lease, held) if lease])
+        leases = [lease for lease in (held, port_lease) if lease]
+
+        def name_the_child(pid):
+            # The lock outlives this process when it is killed, so it names the check that keeps it, not this run.
+            for lease in leases:
+                lease.update_info(pid=pid)
+
+        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose, inherit=[lease.fd for lease in leases],
+                                   on_start=name_the_child)
         seconds = time.monotonic() - started
     except Refusal as error:
         return Result(name, "fail", queued, 0.0, note="refused", detail=str(error))
@@ -744,7 +778,20 @@ class Interrupted(BaseException):
     pass
 
 
-def main(argv, root=ROOT, cache=None):
+def close_inherited_descriptors():
+    """Close every descriptor above 2, so the locks this process opens next get the lowest numbers (3 and 4)."""
+    try:
+        highest = os.sysconf("SC_OPEN_MAX")
+    except (ValueError, OSError):
+        highest = 4096
+    os.closerange(3, max(highest, 4096))
+
+
+def main(argv, root=ROOT, cache=None, close_inherited=True):
+    """Run the command. `close_inherited` closes every inherited descriptor above 2 first, as the module docstring
+    explains; only a caller that lives on in the same process (a test) turns it off."""
+    if close_inherited:
+        close_inherited_descriptors()
     cache = cache or cache_dir()
 
     def interrupt(signum, _frame):
