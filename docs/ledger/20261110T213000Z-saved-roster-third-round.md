@@ -264,3 +264,18 @@ tests. `npm run build`: pass. `npm run test:e2e`: 38 passed. Orderings, no order
 three words, 20,000 orders each from seeds 1, 100001 and 200001; four words, 40,000 orders each from
 the same seeds. Ran on the commit before this ledger entry, after a real `npm ci`.
 
+
+## Sixth review: Claude Opus 5.5 on `e211c13`
+
+Same-provider review: the cross-provider reviewers were unavailable, so this branch's pull request carries the
+`independent-review-owed` label. Ready after fixes; the fixes are on `t3/account-transitions` and merged in here.
+The reviewer cleared `owesLogout` for every record shape and the `bcf1de0` resolution of `accountStart`.
+
+One line it could remove with every test green: `owesLogout(record)` in `accountOf`. It stays, on purpose. A mark
+that owes a logout and began from a logout record already names no account through `fromSignedOut`; the only mark
+that reaches this term is one begun over another tab's mark, which inherits `logout` but not `fromSignedOut`. For
+that mark the term makes the address belong to no account, so the next sign-in drops it. Without it the address
+belongs to the member named on the mark, which can only be the member who signed out, and it is still cleared
+before any other account draws, because a different member's settle clears it. The reviewer traced both and found
+no difference a person can see; the term keeps `accountOf` saying what `accountStart` already decides, that an
+owed logout means nobody is signed in.
