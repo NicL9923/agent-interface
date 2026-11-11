@@ -126,6 +126,11 @@ let addressFor: { user?: string } | null | undefined;
  */
 const accountOf = (record: AuthEpoch | null) =>
   !record || record.signedOut || owesLogout(record) || record.changing && record.fromSignedOut ? null : { ...record.user ? { user: record.user } : {} };
+/**
+ * The account the stored record names for this browser now, if it names one: not after a sign-out,
+ * and not for a record that names none, as before a first bootstrap has named the account.
+ */
+export const recordedUser = () => accountOf(current())?.user;
 /** The account a screen of this generation drew first, as the saved home does before bootstrap answers. */
 let drawnHere: string | undefined;
 const listeners = new Set<() => void>();

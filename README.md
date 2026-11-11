@@ -153,8 +153,8 @@ it shows the plain title and no app badge, and the back-forward cache covers it 
 rest. Bootstrap's answer redraws the same rows in place, so scroll and
 focus stay, and the saved group chats stay until the group list answers, except a group chat with
 an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
-fails. The copy belongs to one account: it is drawn only while the sign-in record names that
-account, read once per account generation (see Accounts in one browser below), so every change
+fails. The copy belongs to one account: it is drawn only while the sign-in hint names that
+account and the record does not name another (a sign-in whose two writes did not both land), read once per account generation (see Accounts in one browser below), so every change
 of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
 off the page, and it is removed with the sign-in record, so a second member never sees the
 first's home. Every field is checked as the server would accept it: assistant, section and group

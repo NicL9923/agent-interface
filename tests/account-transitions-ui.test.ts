@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { act, createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authEpochKey, draftKey, savedThemeKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, draftKey, savedRosterKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
@@ -806,6 +806,45 @@ describe("the address after a change", () => {
     expect(new URLSearchParams(location.search).get("bot")).toBe("home");
     expect(location.hash).toBe("#home-1");
     expect(calls.filter(call => call.call.startsWith("GET /bootstrap"))).toHaveLength(1);
+  });
+
+  // The saved home follows the sign-in hint, and the address follows the record. When the two name
+  // different members, as when storage refused one of the writes of a sign-in, the home is not drawn,
+  // or it would mark the address that opened under the record as the hint's member's.
+  const savedHomeOfOne = { v: 1, user: "one", me: { name: "Ada One" }, rooms: [],
+    bots: [{ id: "ranch", name: "Ranch Hand", shared: false }, { id: "home", name: "Home", shared: true }],
+    order: { favorites: [], sections: [], mainSuggestionDismissed: false } };
+  it("does not draw member one's saved home, nor keep the address, for a record that names member two", async () => {
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "later", at: NOW - 30_000, user: "two" }));
+    data.set(savedRosterKey, JSON.stringify(savedHomeOfOne));
+    holding = ["GET /bootstrap"];
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Connecting to your household");
+    expect(tab.text()).not.toContain("Ranch Hand");
+    holding = [];
+    await answerHeld("GET /bootstrap");
+    // Member one's cookie answered for a page opened under member two's record: it starts again at member one's own place.
+    expect(tab.text()).toContain("Gate code is 4471");
+    expect(tab.text()).not.toContain("One's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("ranch");
+    expect(location.hash).toBe("");
+    expect(JSON.parse(data.get(authEpochKey)!)).toMatchObject({ user: "one" });
+  });
+
+  it("draws member one's saved home and keeps the address when the record names member one", async () => {
+    signedInAs("one");
+    data.set(savedRosterKey, JSON.stringify(savedHomeOfOne));
+    holding = ["GET /bootstrap"];
+    const tab = await openTab("/?bot=home#home-1");
+    // Before bootstrap answers, the rail is the saved copy's: Ranch Hand and Home, with no chat open yet.
+    expect(tab.text()).toContain("Ranch Hand");
+    expect(tab.text()).not.toContain("One's home chat");
+    holding = [];
+    await answerHeld("GET /bootstrap");
+    expect(tab.text()).toContain("One's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+    expect(location.hash).toBe("#home-1");
   });
 
   it("keeps an address the person opened while signed out, which named no account's chat yet", async () => {
