@@ -393,6 +393,17 @@ class UnsupportedRepair(RuntimeError):
     pass
 
 
+# The platform quiescence hook's exit when Hermes never answered its maintenance acquire. The add-on
+# may still take the lease, so the update is held for review, unlike its proven refusal, 75.
+MAINTENANCE_UNANSWERED = 76
+
+
+class MaintenanceUnanswered(RuntimeError):
+    def __init__(self):
+        super().__init__("Hermes did not answer the request to pause for this update and may still pause itself. "
+            "Hermes changes stay paused. If Cancel appears, use it to restore Hermes. Otherwise ask the installer to review the update.")
+
+
 class NativeUpdateClaim:
     """Hold the native updater marker across all installation and recovery hooks."""
     def __init__(self, source, home):
@@ -1189,6 +1200,8 @@ class Worker:
                 self.refresh_interpreter()
                 self.update(phase="rolled_back", maintenance=False, current=self.revision(old[0]), message="The update could not be verified. The previous Hermes is restored and ready.", error="upgrade_rolled_back")
             else:
+                if not lease and isinstance(install_error, subprocess.CalledProcessError) and install_error.returncode == MAINTENANCE_UNANSWERED:
+                    raise MaintenanceUnanswered() from install_error
                 if not lease and not (isinstance(install_error, subprocess.CalledProcessError) and install_error.returncode == 75):
                     raise
                 if lease:
@@ -1238,7 +1251,7 @@ class Worker:
                     unsupported = isinstance(error, (UnsupportedDependencies, UnsupportedRepair))
                     checking = self.action == "check" or self.state.get("phase") in ("checking", "qualifying")
                     self.update(phase="blocked" if safe_rejection or unsupported else "failed", error="repair_requires_review" if isinstance(error, UnsupportedRepair) else "dependencies_require_qualification" if unsupported else "qualification_failed" if checking else "qualification_stale" if safe_rejection else "install_requires_review",
-                        message=str(error) if unsupported else "The update check failed. Ask the installer to review its private log." if checking
+                        message=str(error) if unsupported or isinstance(error, MaintenanceUnanswered) else "The update check failed. Ask the installer to review its private log." if checking
                         else "The qualified update changed before installation. Check again before installing it." if safe_rejection
                         else "The update stopped without a verified recovery. Hermes changes stay paused until the installer reviews it.",
                         maintenance=bool(self.state.get("maintenance")) and not safe_rejection)
