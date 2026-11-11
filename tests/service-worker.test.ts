@@ -1634,6 +1634,19 @@ describe('service worker app badge for the page', () => {
     expect(sw.badge.count).not.toBe(3);
   });
 
+  it("drops the clear a page of an older generation sent once the same account has come back, which would wipe the count it set", async () => {
+    // The clear's hash is held, so member two's word and member one's again overtake it before it reaches the front.
+    const sw = worker({ holdHashes: [2] });
+    await sw.signedIn('one');
+    await push(sw, { ...forOne, badge: 4 });
+    const stale = sw.pageBadge('one', 0);
+    const words = [sw.signedIn('two'), sw.signedIn('one')];
+    sw.releaseHash(2);
+    await Promise.all([stale, ...words]);
+    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+    expect(sw.badge.count).toBe(4);
+  });
+
   it('answers on the page\'s port once the step has ended, whether it changed the badge or not', async () => {
     const sw = worker();
     await sw.signedIn('one');
@@ -1648,15 +1661,22 @@ describe('service worker app badge for the page', () => {
     expect(sw.setAppBadge).toHaveBeenCalledOnce();
   });
 
-  it('ignores a browser without the badge API, and answers', async () => {
+  it('ignores a browser without the badge API, keeping no record of a badge, and answers', async () => {
     const sw = worker({ badging: false });
     await sw.signedIn('one');
     const channel = new FakeMessageChannel(), answers: unknown[] = [];
     channel.port1.onmessage = event => answers.push(event.data);
     await sw.pageBadge('one', 3, channel.port2);
+    await sw.pageBadge('one', 0, channel.port2);
     await Promise.resolve();
-    expect(answers).toEqual([{ badge: true }]);
+    expect(answers).toEqual([{ badge: true }, { badge: true }]);
     expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
+  });
+
+  it('sets nothing for a page that names no account before any word has arrived either', async () => {
+    const sw = worker();
+    await sw.pageBadge(null, 3);
+    expect(badgeCalls(sw)).toEqual([]);
   });
 
   it('keeps going when the browser refuses the record of the badge, and the next write still applies', async () => {

@@ -191,9 +191,9 @@ function mayShow(state, named) {
   return typeof named !== 'string' || named === state.marker;
 }
 
-// The account whose push set the badge, as { named }, or null when no push set one that is still up.
-// It is kept beside the account, so a worker started again clears only a badge a push of its set, and
-// a page's own badge is the page's to change.
+// The account whose push, or whose page through a BADGE message, set the badge, as { named }, or null when
+// none set one that is still up. It is kept beside the account, so a worker started again knows whose badge
+// is on screen: it clears one the latest word does not allow, and leaves the latest account's alone.
 const BADGE_KEY = '/badge';
 let badgeFor;
 const readBadge = () => badgeFor ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(BADGE_KEY))
@@ -290,7 +290,7 @@ function setPageBadge(user, count) {
     if (at !== generation) return;
     if (count) {
       // A browser that cannot hash keeps today's rule: no word names an account to refuse it for.
-      if (!self.navigator?.setAppBadge || state && (typeof named !== 'string' || !mayShow(state, named))) return;
+      if (state && (typeof named !== 'string' || !mayShow(state, named))) return;
       // No await between the check above and the call.
       void self.navigator.setAppBadge(count).catch(() => {});
       return keepBadgeFor({ named });

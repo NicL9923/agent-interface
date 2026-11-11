@@ -3,7 +3,7 @@ import { assistants, expect, setActivity, signIn, test } from "./fixtures.js";
 /**
  * The installed app's badge, through a real service worker. The page asks the worker to write it, so one writer
  * orders the page's counts with the worker's own steps at every change of account (see src/app/badge.ts and the
- * top of scripts/service-worker.js). Full Chromium runs this project: the headless shell crashes the page when a
+ * top of scripts/service-worker.js). The project runs full Chromium, since the headless shell crashes the page when a
  * service worker calls the badge API (see playwright.config.ts). The calls are recorded and passed on to the real API.
  */
 type Counts = { calls: string[] };

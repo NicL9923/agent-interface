@@ -5,10 +5,10 @@ import { assistants, chooseDark, conversation, expect, signIn, test } from "./fi
  * A page frozen in the back-forward cache hears no storage events, and a restored one can paint before its
  * script runs. The app covers its account's screens as the page leaves (see src/app/account-epoch.ts).
  */
-// Playwright's default headless shell has no back-forward cache, and Playwright turns it off in every
-// Chromium it launches. Full Chromium in headless mode has one once that switch is left out. These run
-// in a file of their own because a browser option needs a worker of its own.
-test.use({ channel: "chromium", launchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] } });
+// Playwright turns the back-forward cache off in every Chromium it launches. The project runs full Chromium
+// (see playwright.config.ts), which has one once that switch is left out. These run in a file of their own
+// because a browser option needs a worker of its own.
+test.use({ launchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] } });
 type Seen = { covered: boolean; rowsVisible: boolean; theme?: string };
 // What the page holds at `resume`, the first moment script runs on a restored page, before the app's listeners.
 const watchRestores = () => {

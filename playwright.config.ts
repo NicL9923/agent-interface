@@ -9,11 +9,10 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
-  projects: [
-    { name: "chromium", testIgnore: /badge\.spec\.ts/, use: { ...devices["Desktop Chrome"] } },
-    // Full Chromium, not the headless shell: the shell crashes the page when a service worker calls the badge API.
-    { name: "chromium-full", testMatch: /badge\.spec\.ts/, use: { ...devices["Desktop Chrome"], channel: "chromium" } },
-  ],
+  // Full Chromium, not Playwright's headless shell: the shell crashes the page when a service worker calls the
+  // badge API, which the worker does for every page it controls (see src/app/badge.ts), and it has no
+  // back-forward cache. `npx playwright install chromium` installs both builds.
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium" } }],
   webServer: {
     command: "npx tsx e2e/server.ts",
     url: `http://127.0.0.1:${port}/api/auth/config`,
