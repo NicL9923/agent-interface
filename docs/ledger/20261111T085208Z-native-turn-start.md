@@ -93,9 +93,20 @@ the reply prefix check (2), the assignment (2) and the call in `describe_task` (
 
 ## Checks
 
-`.agents/tools/check-all --py always` on the tree before the merge of `7d794ef`'s two commits into the base: typecheck,
-lint, ruff, test (208 files, 3804 tests), build, e2e (55) and py (47 files) passed. The final run on the committed tree is
-in the commit message of the push.
+`.agents/tools/check-all --py always` on the committed tree over `origin/main` at `7d794ef` (the commit before this entry):
+
+| Check | Result | Queued | Run | Counts |
+| --- | --- | --- | --- | --- |
+| typecheck | pass | - | 0.6s | - |
+| lint | pass | - | 0.2s | - |
+| ruff | pass | - | 0.0s | - |
+| test | pass | 16m00s | 15.0s | 208 files, 3804 tests |
+| build | pass | - | 2.7s | 894 modules |
+| e2e | pass | 15.3s | 1m58s | 55 tests |
+| py | pass | - | 5m05s | 47 files |
+
+The queue time is other worktrees' suites holding the machine's one heavy slot. An earlier run on the same change before the
+base moved from `884031a` to `7d794ef` (two commits that touch no file here) passed the same seven checks.
 
 ## Not done
 
