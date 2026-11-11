@@ -7,8 +7,13 @@ const SNIPPET_LENGTH = 200;
 export interface ReplyWatch {
   /** The newest saved message already accounted for. Pages of older history never move it. */
   lastId?: string;
-  /** A reply that arrived while the assistant was still working. */
+  /**
+   * A reply that arrived while the assistant was still working: its last row, which may be the unsaved tail, the
+   * words of the saved rows before it, and the turn it belongs to.
+   */
   waiting?: Message;
+  waitingBefore?: string[];
+  waitingTurn?: string;
   /** An unsaved reply already read, or already there on load, until its saved rows arrive. */
   heard?: { text: string; turn?: string };
 }
@@ -28,11 +33,26 @@ export function replySnippet(text: string) {
     .trim();
   return plain.length > SNIPPET_LENGTH ? `${plain.slice(0, SNIPPET_LENGTH).trimEnd()}…` : plain;
 }
+/** Streamed and saved copies of the same words separate them differently, so compare without whitespace. */
+const bare = (text: string) => text.replace(/\s+/g, "");
+/**
+ * What is left of a reply's parts after the last run of them that spells the words already read aloud.
+ * The run can be the whole reply, its tail or its head. With no such run, nothing was read and all of it is left.
+ */
+function afterHeard(parts: string[], heard: string): string[] {
+  const words = bare(heard);
+  for (let end = parts.length; end > 0; end--) {
+    for (let start = 0; start < end; start++) if (bare(parts.slice(start, end).join("")) === words) return parts.slice(end);
+  }
+  return parts;
+}
 /**
  * Decides whether a refreshed conversation holds a reply to read out. Only a message after
  * the last one seen counts, so history above it, the first load and a switch stay quiet,
  * and a reply waits until the assistant stops working, so it is read once rather than as it grows.
- * An unsaved reply that was already read is not read again when saved rows replace it.
+ * A turn can save its reply as several rows, such as text, a tool call and more text, and the reply is
+ * all of them, joined, including the rows of an earlier read that were still waiting. An unsaved reply
+ * that was already read is not read again when saved rows replace it, however many rows they are.
  */
 export function watchReplies(watch: ReplyWatch, conversation: SavedConversation, baseline: boolean): { watch: ReplyWatch; reply?: Message } {
   const { messages } = conversation;
@@ -48,13 +68,29 @@ export function watchReplies(watch: ReplyWatch, conversation: SavedConversation,
   const arrivedAt = messages.findLastIndex((message, index) => index > known && saved(message) && speakable(message));
   const arrived = messages[arrivedAt];
   const heard = watch.heard;
-  // The saved rows of a reply that was already read replace it silently.
-  if (!unsaved && arrived && heard && arrived.text.trim() === heard.text.trim() && turnAt(arrivedAt) === heard.turn) {
-    return { watch: { lastId } };
+  // The reply is every speakable saved row of the newest turn that arrived since the last read, and the rows
+  // of that turn an earlier read held back while the assistant was still working, saved or not. A saved row
+  // can grow in place while that lasts, so a held one is read again from the conversation. The newest turn is
+  // the one the unsaved tail belongs to, or else the one of the newest saved row.
+  const newest = unsaved ? messages.length - 1 : arrivedAt;
+  const turnStart = messages.findLastIndex((message, index) => index <= newest && message.role === "user");
+  const heldRow = watch.waiting && (messages.find(message => message.id === watch.waiting?.id) ?? watch.waiting);
+  const held = watch.waiting && watch.waitingTurn === turnAt(newest)
+    ? [...watch.waitingBefore ?? [], ...heldRow && saved(heldRow) ? [heldRow.text] : []] : [];
+  let parts = arrived || unsaved ? [...held, ...messages.slice(Math.max(known, turnStart) + 1, newest + 1).filter(message => saved(message) && speakable(message)).map(message => message.text)] : [];
+  // The saved rows of a reply that was already read replace it silently, and only rows after what was read are new.
+  if (!unsaved && arrived && heard && turnAt(arrivedAt) === heard.turn) {
+    parts = afterHeard(parts, heard.text);
+    if (!parts.length) return { watch: { lastId } };
   }
   const unread = unsaved && unsavedHeard && (unsaved.text !== heard?.text || unsavedHeard.turn !== heard.turn) ? unsaved : undefined;
-  const latest = unsaved ? unread : arrived;
-  const reply = latest ?? (unsaved ? undefined : messages.find(message => message.id === watch.waiting?.id) ?? watch.waiting);
-  if (reply && !replying.has(conversation.activity.state)) return { watch: { lastId, heard: reply === unsaved ? unsavedHeard : heard }, reply };
-  return { watch: { lastId, waiting: reply, heard } };
+  // The row that ends the reply, the words of the rows before it, and the turn they belong to.
+  let last: Message | undefined, before: string[] = [], turn = watch.waitingTurn;
+  if (unsaved) { last = unread; before = parts; turn = unsavedHeard?.turn; }
+  else if (arrived) { last = arrived; before = parts.slice(0, -1); turn = turnAt(arrivedAt); }
+  else { last = heldRow; before = watch.waitingBefore ?? []; }
+  if (last && !replying.has(conversation.activity.state)) {
+    return { watch: { lastId, heard: last === unsaved ? unsavedHeard : heard }, reply: before.length ? { ...last, text: [...before, last.text].map(part => part.trim()).join("\n\n") } : last };
+  }
+  return { watch: { lastId, waiting: last, waitingBefore: before.length ? before : undefined, waitingTurn: last ? turn : undefined, heard } };
 }
