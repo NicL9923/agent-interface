@@ -128,11 +128,11 @@ const messages: Record<SendEnded, string> = {
  *   running turn's: a send preempts an idle compaction, an unrelated native turn starts before the add-on
  *   reads the session's state, and Hermes queues the send as a new task behind it or puts it into that turn.
  *   A read during the native turn names the send's run, so that turn's text would be recorded as the send's.
- *   An add-on that reports `admission_turn` says so in its answer (`turn`, see AdmissionTurn). A send Hermes
+ *   An add-on says so in its answer (`turn`, see AdmissionTurn). A send Hermes
  *   put into the running turn (`joined`) is measured as a steer, with steered true. One whose turn did not
  *   start at all (`queued`, `none`, `unknown`) logs at the answer, ended "not-started", with no moments: a
  *   queued text may be merged or dropped, so no later turn is its own either. Limit, not guarded: an older
- *   add-on answers that sequence as a started turn, and the line can end "measured" with steered false.
+ *   add-on answers that sequence with no turn, and the line can end "measured" with steered false.
  * - A steer is measured by its run's next growth after it arrived. Native steering answers "queued" for an
  *   ordinary steer too, and queued text drains into a later turn of the same run, so a steer and a queued
  *   send cannot be told apart. Both are measured on their run, past turn boundaries.

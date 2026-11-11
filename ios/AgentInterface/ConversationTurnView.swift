@@ -8,12 +8,24 @@ private struct TranscriptConnectedKey: EnvironmentKey { static let defaultValue 
 private struct TranscriptRecipientKey: EnvironmentKey { static let defaultValue = "Assistant" }
 private struct FoundMessageKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct TranscriptUserKey: EnvironmentKey { static let defaultValue: String? = nil }
+private struct SharedChatKey: EnvironmentKey { static let defaultValue = false }
+private struct OwnRowsKey: EnvironmentKey { static let defaultValue: Set<String> = [] }
 private struct DraftRevisionsKey: EnvironmentKey { static let defaultValue: [String: DraftRevision] = [:] }
 extension EnvironmentValues {
   /// The signed-in person, so only another member's message carries a name.
   var transcriptUserId: String? {
     get { self[TranscriptUserKey.self] }
     set { self[TranscriptUserKey.self] = newValue }
+  }
+  /// Whether another member can write in the open chat, so a row with no sender could be theirs.
+  var transcriptSharedChat: Bool {
+    get { self[SharedChatKey.self] }
+    set { self[SharedChatKey.self] = newValue }
+  }
+  /// The open chat's no-sender rows that are the signed-in person's own sends; see `SentEcho.ownRows`.
+  var transcriptOwnRows: Set<String> {
+    get { self[OwnRowsKey.self] }
+    set { self[OwnRowsKey.self] = newValue }
   }
   var foundMessage: String? {
     get { self[FoundMessageKey.self] }

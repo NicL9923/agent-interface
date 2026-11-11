@@ -2542,10 +2542,11 @@ describe('approval scopes, question shapes and the steering decision on the wire
     const {messages} = await runtime.conversation('shared');
     expect(messages.map(message => message.steered)).toEqual([undefined, true, undefined]);
   });
-  // The add-on sends `turn` only when Hermes did not start the turn, so only its capability makes silence mean started.
-  it('carries what Hermes did with a new task\'s turn, and says started only for an add-on that reports turns', async () => {
+  // The add-on saves a started turn as `started`, so an answer without a turn is never taken for one: it may be an answer an
+  // older add-on saved, or one it never answered.
+  it('carries what Hermes did with a new task\'s turn, and reads a missing one as unknown, never started', async () => {
     const answers: Record<string, Record<string, unknown>> = {
-      started: {}, queued: {turn: 'queued'}, joined: {turn: 'joined'}, none: {turn: 'none', message: 'Hermes ended its voice chat.'},
+      started: {turn: 'started'}, silent: {}, queued: {turn: 'queued'}, joined: {turn: 'joined'}, none: {turn: 'none', message: 'Hermes ended its voice chat.'},
       unknown: {turn: 'unknown'}, future: {turn: 'deferred'}, empty: {turn: ''}, null: {turn: null}, number: {turn: 3},
       steered: {steering: true, turn: 'queued'}, refused: {status: 'rejected', turn: 'queued'}, uncertain: {status: 'uncertain'},
     };
@@ -2558,28 +2559,29 @@ describe('approval scopes, question shapes and the steering decision on the wire
     const turns = async () => Object.fromEntries(await Promise.all(Object.keys(answers).map(async (text, index) =>
       [text, (await runtime.submit({...input(), requestId: `turn-${index}`, text})).turn])));
     beforeSend = answering;
-    // An add-on that does not report turns: a missing one says nothing, and a reported one is still read.
-    expect(await turns()).toEqual({started: undefined, queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
-      future: 'unknown', empty: 'unknown', null: 'unknown', number: 'unknown', steered: undefined, refused: undefined, uncertain: undefined});
-    await runtime.close();
-    capabilities({admission_turn: true});
-    const reports = beforeSend!;
-    beforeSend = (request, socket) => { reports(request, socket); answering(request, socket); };
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
-    expect(await turns()).toEqual({started: 'started', queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
+    // Only an explicit turn says what Hermes did, whatever capabilities the add-on reports.
+    expect(await turns()).toEqual({started: 'started', silent: undefined, queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
       future: 'unknown', empty: 'unknown', null: 'unknown', number: 'unknown', steered: undefined, refused: undefined, uncertain: undefined});
     // The typed stop's own words reach the client.
     expect((await runtime.submit({...input(), requestId: 'stop', text: 'none'})).message).toBe('Hermes ended its voice chat.');
-    // A lookup never carries the turn, so it says nothing either.
+    // A lookup carries the turn the add-on saved with the answer, and nothing else the answer stamped.
     deferredMethods.add('agent-interface.receipt');
+    const saved: Record<string, Record<string, unknown>> = {r: {turn: 'none'}, s: {turn: 'started'}, old: {}, steer: {steering: true, turn: 'queued'}, odd: {turn: 'deferred'}, refused: {status: 'rejected', turn: 'queued'}};
     beforeSend = (request, socket) => {
-      if (request.method === 'agent-interface.receipt')
-        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: 'r', status: 'accepted', runId: 'task-one', steering: false}}}));
+      if (request.method === 'agent-interface.receipt') {
+        const {status = 'accepted', steering = false, ...rest} = saved[request.params.request_id];
+        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: request.params.request_id, status, runId: 'task-one', steering, ...rest}}}));
+      }
     };
-    const looked = await runtime.lookupSubmission('r');
-    expect(looked).toMatchObject({status: 'accepted', steered: false});
-    expect(looked).not.toHaveProperty('turn');
-    expect(looked).not.toHaveProperty('admittedVersion');
+    const looked = Object.fromEntries(await Promise.all(Object.keys(saved).map(async id => [id, await runtime.lookupSubmission(id)])));
+    expect(looked.r).toMatchObject({status: 'accepted', steered: false, turn: 'none'});
+    expect(looked.s).toMatchObject({status: 'accepted', turn: 'started'});
+    expect(looked.old).not.toHaveProperty('turn');
+    expect(looked.steer).not.toHaveProperty('turn');
+    expect(looked.odd).toMatchObject({turn: 'unknown'});
+    expect(looked.refused).not.toHaveProperty('turn');
+    // Only an admission answer is stamped with the version it arrived at.
+    expect(looked.s).not.toHaveProperty('admittedVersion');
   });
 
   // A read asked at a newer structural version than the answer's arrival was asked after Hermes finished admitting.

@@ -167,6 +167,44 @@ import XCTest
     }
   }
 
+  func testAMessageHermesPutIntoTheRunningTurnIsGuidanceLikeASteer() throws {
+    var joined = accepted; joined.turn = "joined"
+    let echo = try XCTUnwrap(step(sending, receipt: joined))
+    XCTAssertTrue(echo.steered)
+    XCTAssertEqual(SentEcho.transcript(conversation(), [echo])?.messages.last?.steered, true)
+    for turn in ["started", "queued", "unknown", "something-newer"] {
+      var other = accepted; other.turn = turn
+      XCTAssertFalse(try XCTUnwrap(step(sending, receipt: other)).steered, turn)
+    }
+  }
+
+  func testATypedStopPhraseLeavesNoEchoBecauseHermesAdmittedNothing() throws {
+    var none = accepted; none.turn = "none"
+    XCTAssertNil(step(sending, receipt: none), "Accepted, but no copy is coming")
+    // Only an accepted receipt can say so; the others leave for their own reasons, as before.
+    for status in ["rejected", "interrupted"] {
+      var other = none; other.status = status
+      XCTAssertNil(step(sending, receipt: other), status)
+    }
+    var started = accepted; started.turn = "started"
+    XCTAssertNotNil(step(sending, receipt: started))
+  }
+
+  func testTheReceiptDecodesItsTurnAndAdmittedVersionAndLeavesThemNilWhenAbsent() throws {
+    let full = try JSONDecoder().decode(Receipt.self, from: Data(#"{"requestId":"r","status":"accepted","turn":"none","admittedVersion":"12:3","message":"Hermes ended its voice chat."}"#.utf8))
+    XCTAssertEqual(full.turn, "none"); XCTAssertEqual(full.admittedVersion, "12:3")
+    XCTAssertTrue(full.admittedNothing); XCTAssertFalse(full.admitted)
+    let older = try JSONDecoder().decode(Receipt.self, from: Data(#"{"requestId":"r","status":"accepted"}"#.utf8))
+    XCTAssertNil(older.turn); XCTAssertNil(older.admittedVersion)
+    XCTAssertTrue(older.admitted); XCTAssertFalse(older.admittedNothing)
+    // A stop phrase is told apart only on an accepted receipt, and only by `none`.
+    XCTAssertFalse(Receipt(requestId: "r", status: "rejected", turn: "none").admittedNothing)
+    XCTAssertFalse(Receipt(requestId: "r", status: "rejected").admitted)
+    XCTAssertTrue(Receipt(requestId: "r", status: "accepted", turn: "joined").joinedRunningWork)
+    XCTAssertTrue(Receipt(requestId: "r", status: "accepted", steered: true).joinedRunningWork)
+    XCTAssertFalse(Receipt(requestId: "r", status: "accepted", turn: "queued").joinedRunningWork)
+  }
+
   func testWaitsUnconfirmedWhenTheRequestEndsWithoutAReceipt() {
     let echo = step(sending, pending: request)
     XCTAssertEqual(echo?.status, .unconfirmed)

@@ -25,7 +25,20 @@ import XCTest
       #"{"id":"7","role":"user","text":"   "}"#,
       #"{"id":"8","role":"user","text":"Personal chat note"}"#,
     ].map(message)
-    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me"), ["Personal chat note", "Water the garden", "Check the hay"])
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: false, ownRows: []),
+      ["Personal chat note", "Water the garden", "Check the hay"], "In a private chat a no-sender row is the person's own")
+  }
+  func testRecallInASharedChatSkipsANoSenderRowUnlessItIsThisPersonsOwnSend() throws {
+    let messages = try [
+      #"{"id":"1","role":"user","text":"Check the hay","sender":{"id":"me","name":"Me"}}"#,
+      #"{"id":"2","role":"user","text":"From a native Hermes client"}"#,
+      #"{"id":"3","role":"user","text":"My queued send"}"#,
+      #"{"id":"4","role":"user","text":"From my spouse","sender":{"id":"spouse","name":"Spouse"}}"#,
+    ].map(message)
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: true, ownRows: []), ["Check the hay"],
+      "Another member's no-sender message is never recalled as this person's, as on the web")
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: true, ownRows: ["3"]), ["My queued send", "Check the hay"],
+      "A no-sender row recorded as this person's own send is recalled")
   }
   func testUpStepsBackFromAnEmptyComposerAndDownReturnsToTheEmptyDraft() {
     var recall = PromptRecall()
@@ -94,16 +107,29 @@ import XCTest
 
   // MARK: Status dock
   func testDockSortsByUrgencyWhateverOrderStatesArrive() {
-    let items = DockItem.items(connectionLost: true, uncertain: true, receiptStatus: "rejected", receiptMessage: nil,
+    let items = DockItem.items(connectionLost: true, uncertain: true, receiptStatus: "rejected", receiptMessage: nil, receiptTurn: nil,
       interrupted: true, decisions: 2, holdsText: true)
     XCTAssertEqual(items, [.connection, .uncertainSend, .rejected("Hermes did not accept this message. Your draft is saved."),
       .interruptionReview, .decisions(2), .heldText])
-    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "interrupted", receiptMessage: nil,
+    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "interrupted", receiptMessage: nil, receiptTurn: nil,
       interrupted: false, decisions: 1, holdsText: false), [.interruptedSubmission, .decisions(1)])
-    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "accepted", receiptMessage: "ok",
+    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "accepted", receiptMessage: "ok", receiptTurn: nil,
       interrupted: false, decisions: 0, holdsText: false), [], "A quiet chat shows no dock")
-    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "rejected", receiptMessage: "Too long",
+    XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: "rejected", receiptMessage: "Too long", receiptTurn: nil,
       interrupted: false, decisions: 0, holdsText: false), [.rejected("Too long")])
+  }
+  func testAStopPhraseSaysSoInTheDockOnlyWhenAcceptedWithNoTurn() {
+    func items(_ status: String, _ turn: String?, _ message: String? = nil) -> [DockItem] {
+      DockItem.items(connectionLost: false, uncertain: false, receiptStatus: status, receiptMessage: message, receiptTurn: turn,
+        interrupted: false, decisions: 0, holdsText: false)
+    }
+    XCTAssertEqual(items("accepted", "none"), [.notAdmitted(DockItem.notAdmittedMessage)])
+    XCTAssertEqual(items("accepted", "none", ""), [.notAdmitted(DockItem.notAdmittedMessage)], "An empty message says the same")
+    XCTAssertEqual(items("accepted", "none", "Voice chat ended."), [.notAdmitted("Voice chat ended.")])
+    for turn in [nil, "started", "queued", "joined", "unknown"] { XCTAssertEqual(items("accepted", turn), [], turn ?? "absent") }
+    XCTAssertEqual(items("rejected", "none", "Too long"), [.rejected("Too long")], "A refusal keeps its own wording")
+    XCTAssertEqual(DockItem.items(connectionLost: true, uncertain: false, receiptStatus: "accepted", receiptMessage: nil, receiptTurn: "none",
+      interrupted: true, decisions: 1, holdsText: false), [.connection, .notAdmitted(DockItem.notAdmittedMessage), .interruptionReview, .decisions(1)])
   }
   func testDecisionsLabelCountsInWords() {
     XCTAssertEqual(DockItem.decisionsLabel(1), "1 decision waiting")

@@ -72,7 +72,7 @@ released, with the short commit hash as a detail.
 A conversation's header shows only the back button and the assistant's live avatar
 and name. Tap it for the assistant's card: Find in loaded messages, Pin, Artifacts
 and Settings, plus **Notify me about all activity** and its **Home section**. An
-assistant sits in at most one section. Cmd+F still opens Find. While typing, the
+assistant sits in at most one section. Cmd+F still opens Find. In a chat other household members can write in, a message with no sender, such as one a native Hermes client wrote, is labeled **Household member** instead of reading as yours, unless it is one of your own recent sends that Hermes saved without saying so, as it does a steer or a queued message; the app remembers up to 20 of those per chat in memory, and only while it runs. While typing, the
 keyboard button beside Send or a tap on the transcript puts the keyboard away.
 
 Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
@@ -162,7 +162,9 @@ sets its own server there before building. A link for a different server shows a
 
 Haptics are subtle: a light tap when a send is accepted, a soft success when a reply
 finishes in the open chat, a firmer tap when an approval is decided, and an error
-for a refused send or a failed approval or stop. Swipe an assistant row left to pin
+for a refused send or a failed approval or stop. A typed stop phrase that ends Hermes's voice chat is accepted but admits
+nothing: it keeps the draft, plays neither tap, and the chat says why, as on the web. A message
+Hermes puts into the running turn reads as added guidance. Swipe an assistant row left to pin
 or unpin it. With a hardware keyboard, Cmd+1 to 9 open pinned assistants in order,
 Cmd+F finds in the open chat or opens Search, and Cmd+. asks before stopping active
 work. Hold Command on an iPad to see them. Return still sends and Shift-Return

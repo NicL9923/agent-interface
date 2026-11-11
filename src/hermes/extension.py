@@ -173,9 +173,16 @@ class Journal:
             self.db.execute("INSERT OR IGNORE INTO events(profile,session_id,run_id,kind,title,body,occurred,epoch,event_key,routine_id) VALUES(?,?,?,?,?,?,?,?,?,?)", (profile, sid, run_id, kind, title, body, time.time(), self.epoch, event_key, routine_id))
 
     def receipt(self, request_id):
-        row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor,steering FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+        row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor,steering,admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+        if row is None:
+            return None
         # steering is the decision made under the submission lock: this input joined the running task.
-        return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3], "steering": bool(row[4])}
+        value = {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3], "steering": bool(row[4])}
+        # The turn the saved answer carried, for a caller whose answer was lost. A receipt saved before the add-on
+        # stored a started turn, a steer and a refusal carry none.
+        if row[5] and (stored := json.loads(row[5]).get("turn")) is not None:
+            value["turn"] = stored
+        return value
 
     def last_terminal(self, profile, sid, stored):
         """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
@@ -575,16 +582,17 @@ ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined
 
 
 def admission_turn(result):
-    """What a new task's successful prompt.submit answer says about its turn; None only for a started turn.
+    """What a new task's successful prompt.submit answer says about its turn.
 
-    Only "streaming" says Hermes started the turn (methods_prompt.py:973; compute_host_bridge.py:327
-    for an isolated turn). A typed stop phrase while the session's voice mode is on ends the voice
+    Only "streaming" says Hermes started the turn, answered "started" (methods_prompt.py:973; compute_host_bridge.py:327
+    for an isolated turn). It is saved like every other turn, so a saved answer without one was saved by an add-on
+    older than the field and says nothing. A typed stop phrase while the session's voice mode is on ends the voice
     chat and admits nothing: {"voice_stopped": true} (methods_prompt.py:265-268, checked first at :835-836, and :760-761), "none".
     Any answer this does not know is "unknown", never taken for a started turn.
     """
     status = result.get("status")
     if status == "streaming":
-        return None
+        return "started"
     if status is None and result.get("voice_stopped") is True:
         return "none"
     return ADMISSION_TURN.get(status, "unknown")
@@ -1770,7 +1778,7 @@ class Bridge:
         if message is not None:
             value["message"] = message
         if turn is not None:
-            # A new task Hermes did not start at once: see admission_turn.
+            # A new task's turn, saved with the answer so a replay and the receipt lookup say the same: see admission_turn.
             value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
         return self.server._ok(rid, value)

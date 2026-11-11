@@ -16,12 +16,15 @@ const legacyReason = (receipt: SubmissionReceipt): RejectionReason | undefined =
 type Intent = { created: boolean; receipt: SubmissionReceipt; input: Submission };
 
 /**
- * A looked-up receipt with what Hermes's admission answer said about the turn. A lookup never carries it, so it
- * comes from the recorded receipt, while both say the message was accepted.
+ * A looked-up receipt with what this server recorded of Hermes's admission answer, while both say the message was
+ * accepted. The lookup carries the turn the add-on saved, which wins; a lookup without one, from an add-on that saved
+ * the answer before the field existed, takes the recorded turn. Only the recorded receipt has the admitted version.
  */
-export const withAdmission = (looked: SubmissionReceipt, recorded?: SubmissionReceipt): SubmissionReceipt =>
-  looked.status !== "accepted" || recorded?.status !== "accepted" ? looked
-    : { ...looked, ...recorded.turn ? { turn: recorded.turn } : {}, ...recorded.admittedVersion ? { admittedVersion: recorded.admittedVersion } : {} };
+export function withAdmission(looked: SubmissionReceipt, recorded?: SubmissionReceipt): SubmissionReceipt {
+  if (looked.status !== "accepted" || recorded?.status !== "accepted") return looked;
+  const turn = looked.turn ?? recorded.turn;
+  return { ...looked, ...turn ? { turn } : {}, ...recorded.admittedVersion ? { admittedVersion: recorded.admittedVersion } : {} };
+}
 
 /** Message admission receipts, run participants and approval attribution. */
 export class SubmissionRepository {

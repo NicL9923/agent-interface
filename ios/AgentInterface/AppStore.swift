@@ -78,6 +78,11 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
   /// The open assistant's sent messages, shown in the transcript at once while Send keeps spinning
   /// until Hermes answers, and each kept until Hermes's own copy arrives, as on the web.
   private(set) var echoes: [SentEcho] = []
+  /// The person's accepted sends, kept in memory after their echo leaves; see `OwnSend`.
+  @ObservationIgnored private(set) var ownSends: [OwnSend] = []
+  /// The open conversation's no-sender rows that are the person's own sends, so only another member's
+  /// reads as the household's; see `SentEcho.ownRows`.
+  private(set) var ownRows: Set<String> = []
   @ObservationIgnored private var echoTimer: Task<Void, Never>?
   /// When the earliest accepted echo whose run never showed runs out of patience.
   @ObservationIgnored private var echoDeadline: Date?
@@ -385,9 +390,14 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
     let now = Date()
     // Only a conversation on screen is kept current, so only it can retire an echo or anchor one.
     let current = followedBotId == nil ? nil : conversation
+    let sender = bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }
     let next = SentEcho.nextEchoes(
-      echoes, pending: pending, receipt: receipt, sending: sending, conversation: current,
-      sender: bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }, now: now)
+      echoes, pending: pending, receipt: receipt, sending: sending, conversation: current, sender: sender, now: now)
+    // A send is kept from its echo's last step, so it is worked out before the echoes change.
+    let sends = SentEcho.nextSends(ownSends, before: echoes, after: next, receipt: receipt, sender: sender, conversation: current)
+    if sends != ownSends { ownSends = sends }
+    let rows = SentEcho.ownRows(sends, in: conversation)
+    if rows != ownRows { ownRows = rows }
     let changed = next != echoes
     if changed { echoes = next }
     if changed || conversationChanged {
