@@ -167,9 +167,54 @@ describe("turn reads for streams that follow turns", () => {
     expect(runtime.turn!("shared")!.message.text).toBe("Looking. Found it.");
     // Only a client's read brings the reply back for the others, and no watcher heard the turn read.
     expect(runtime.inflight!("shared")).toBeUndefined();
-    expect(notices.mock.calls).toEqual([[undefined], ["inflight"]]);
+    // The tool's finish is a change the turn event carries, so the notice names the version that event reaches.
+    expect(notices.mock.calls).toEqual([[undefined, expect.stringMatching(/^[0-9a-f]{8}:\d+:\d+$/)], ["inflight"]]);
     await runtime.conversation("shared", { window: { turns: 20 } });
     expect(runtime.inflight!("shared")!.message.text).toBe("Looking. Found it.");
+  });
+
+  // A watcher is told which structural frames a turn event carries whole, and the version that event reaches, so a stream
+  // that sends turn events can wait for it. Everything else, approvals and requests above all, only a read carries.
+  describe("tells watchers which changes a turn event covers", () => {
+    const frames: [string, () => void, boolean][] = [
+      ["a turn starting, whose prompt a native turn may save later", () => hermes.frame("message.start", {}), false],
+      ["a tool finishing", () => hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" }), true],
+      ["a progress line saved", () => hermes.frame("message.interim", { text: "Checking." }), true],
+      ["the turn ending", () => hermes.frame("message.complete", { status: "complete" }), false],
+      ["an error", () => hermes.frame("error", { message: "boom" }), false],
+      ["a request cancelled", () => hermes.frame("request.cancel", { id: "ap-1" }), false],
+      ["an approval asked", () => hermes.request("approval", "ap-1", { command: "ls" }), false],
+      ["a frame the runtime does not know", () => hermes.frame("session.info", {}), false],
+    ];
+    it.each(frames)("%s", async (_, send, covered) => {
+      midTurn();
+      await runtime.conversation("shared", { window: { turns: 20 } });
+      const notices = vi.fn(), followed = vi.fn();
+      runtime.watch!("shared", notices);
+      runtime.followTurns!("shared", followed);
+      send();
+      expect(notices).toHaveBeenCalledTimes(1);
+      const [kind, version] = notices.mock.calls[0];
+      expect(kind).toBeUndefined();
+      // A change nothing carries is announced as ever, with the one argument.
+      if (!covered) { expect(notices.mock.calls[0]).toEqual([undefined]); return; }
+      await vi.waitFor(() => expect(followed).toHaveBeenCalled());
+      hermes.frame("message.delta", { text: "Found it." });
+      // The turn read after the frame reaches the version the notice named, so the event it sends covers the change.
+      expect(compareVersions(runtime.turn!("shared")!.version, version)).toBeGreaterThanOrEqual(0);
+    });
+
+    it("never names a version on a growth notice, nor for a watcher of another assistant", async () => {
+      midTurn();
+      await runtime.conversation("shared", { window: { turns: 20 } });
+      const own = vi.fn(), other = vi.fn();
+      runtime.watch!("shared", own);
+      runtime.watch!("hidden", other);
+      hermes.frame("message.delta", { text: "Looking." });
+      hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+      expect(own.mock.calls).toEqual([["inflight"], ["inflight"]]);
+      expect(other).not.toHaveBeenCalled();
+    });
   });
 
   it("leaves live state to clients' reads, so the roster shows what it did before the turn read", async () => {

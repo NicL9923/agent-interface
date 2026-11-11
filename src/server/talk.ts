@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withoutDraftClause } from "../shared/errors.js";
+import { cutText } from "../shared/cut-text.js";
 import { isConversationReply, isProgressLine } from "../shared/message-origin.js";
 import { markdownPlain } from "../shared/plain-text.js";
 import type { Bot, CapabilityKey, Conversation, Message, RealtimeSessionInput, Runtime, SubmissionReceipt } from "../shared/types.js";
@@ -28,7 +29,7 @@ const SETTLE_MS = 180_000;
 const running = ["thinking", "working"];
 
 const clean = (text: string | undefined, limit: number) =>
-  (text ?? "").replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim().slice(0, limit);
+  cutText((text ?? "").replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim(), limit);
 
 /**
  * What the voice model is told. It names only this assistant, from its name and description,
@@ -60,13 +61,19 @@ export function talkTools(name: string): RealtimeSessionInput["tools"] {
   }];
 }
 
+/** The sentence ends in Chinese and Japanese, which no space follows. */
+const CJK_ENDS = ["。", "！", "？"];
+
 /** A reply short enough to speak. It ends at a sentence when one ends late enough, and points to the chat for the rest. */
 export function spokenText(text: string, limit = MAX_TALK_ANSWER) {
   const trimmed = text.trim();
   if (trimmed.length <= limit) return trimmed;
-  const head = trimmed.slice(0, limit - 40);
-  const sentence = Math.max(...[". ", "! ", "? ", "\n"].map(mark => head.lastIndexOf(mark)));
-  const cut = sentence > head.length * 0.6 ? head.slice(0, sentence + 1) : head.slice(0, Math.max(head.lastIndexOf(" "), 1));
+  const head = cutText(trimmed, limit - 40);
+  const sentence = Math.max(...[". ", "! ", "? ", "\n", ...CJK_ENDS].map(mark => head.lastIndexOf(mark)));
+  // Text with no space in it, as in Chinese or Japanese or a run of emoji, or only one early on, is cut where the limit
+  // falls, not after its first word or character. A space counts only when it is late enough, as in `excerpt`.
+  const space = head.lastIndexOf(" ");
+  const cut = sentence > head.length * 0.6 ? head.slice(0, sentence + 1) : head.slice(0, space >= head.length * 0.6 ? space : head.length);
   return `${cut.trim()} The rest is in the chat.`;
 }
 
@@ -108,9 +115,10 @@ function requestMessages(receipt: SubmissionReceipt, conversation: Conversation)
 export function spokenProgress(text: string, limit = MAX_TALK_PROGRESS) {
   const plain = markdownPlain(text).replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim();
   if (plain.length <= limit) return plain;
-  const head = plain.slice(0, limit);
-  const sentence = Math.max(...[". ", "! ", "? "].map(mark => head.lastIndexOf(mark)));
-  return (sentence > limit * 0.5 ? head.slice(0, sentence + 1) : head.slice(0, Math.max(head.lastIndexOf(" "), 1))).trim();
+  const head = cutText(plain, limit);
+  const sentence = Math.max(...[". ", "! ", "? ", ...CJK_ENDS].map(mark => head.lastIndexOf(mark)));
+  const space = head.lastIndexOf(" ");
+  return (sentence > limit * 0.5 ? head.slice(0, sentence + 1) : head.slice(0, space >= head.length * 0.6 ? space : head.length)).trim();
 }
 
 /**

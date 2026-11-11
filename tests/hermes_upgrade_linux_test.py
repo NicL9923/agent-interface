@@ -40,9 +40,11 @@ class FixturePlatform(linux.Platform):
             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
             "platforms": {key: {"state": "connected"} for key in self.config["discordConnections"]}})
 
-    def rpc(self, method):
+    def rpc(self, method, deadline=None):
         self.rpc_calls.append(method)
+        if method == "capabilities": return self.capabilities
         if method == "acquire":
+            self.deadlines.append(deadline)
             self.gate = True
             linux.atomic(self.config["maintenanceFile"], {"operationId": self.operation})
         if method == "release":
@@ -141,7 +143,7 @@ class HostFixture(unittest.TestCase):
             HERMES_UPGRADE_BACKUP_DIR=str(self.stage / "backup"), HERMES_UPGRADE_RECEIPT=str(self.stage / "qualification.json"), HERMES_UPGRADE_QUALIFICATION_PYTHON=os.sys.executable, HERMES_UPGRADE_RUNTIME_FINGERPRINT=json.dumps({"interpreterSha256": "fixed-python", "dependenciesSha256": "fixed-generation"}))
         self.environment["HERMES_UPGRADE_INTEGRATION_DIGEST"] = "a" * 64
         self.platform = self.platform_type(self.config, self.environment)
-        self.platform.states = self.states; self.platform.rpc_calls = []; self.platform.gate = False; self.platform.active_work = 0; self.platform.pending_ingress = 0
+        self.platform.states = self.states; self.platform.rpc_calls = []; self.platform.deadlines = []; self.platform.capabilities = {}; self.platform.gate = False; self.platform.active_work = 0; self.platform.pending_ingress = 0
         self.platform.write_gateway("running")
         linux.atomic(self.stage / "qualification.json", {"revision": self.candidate, "trackedPatchSha256": self.platform.source_state(self.target)[1]})
 
@@ -948,19 +950,27 @@ FAKE_ADDON = r"""
 import json, os, subprocess, sys, time
 from pathlib import Path
 SCRIPT, CALLS, LEASE = Path(__SCRIPT__), Path(__CALLS__), Path(__LEASE__)
+# A clock that only moves when the fake socket blocks or NATIVE sleeps, so a 120 s wait costs no time.
+real_monotonic, real_sleep, skew = time.monotonic, time.sleep, [0.0]
+time.monotonic = lambda: real_monotonic() + skew[0]
+def sleep(seconds):
+    record("sleep", round(seconds))
+    skew[0] += seconds
+time.sleep = sleep
 BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
 # Written by a separate process once this one has exited: the handler finishing after the caller gave up.
 LATE = '''
 import json, os, sys, time
 from pathlib import Path
 parent, lease, operation = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+body = sys.argv[4] if len(sys.argv) > 4 else json.dumps({"operationId": operation})
 while True:
     try: os.kill(parent, 0)
     except ProcessLookupError: break
     time.sleep(.02)
 time.sleep(.3)
 temporary = lease.with_name(lease.name + ".late")
-with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(json.dumps({"operationId": operation}))
+with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(body)
 temporary.replace(lease)
 '''
 def record(*event):
@@ -978,16 +988,35 @@ class Socket:
     def send(self, message):
         # A send that fails may still have reached the add-on, so the hook must not call it unsent.
         if SCRIPT.exists() and json.loads(SCRIPT.read_text()).get("failSend"): raise ConnectionResetError("connection reset during send")
-        self.params = json.loads(message)["params"]
+        request = json.loads(message)
+        self.method, self.params = request["method"], request["params"]
     def recv(self, timeout):
-        action, operation = self.params["action"], self.params["operation_id"]
-        record("recv", action, timeout)
         script = json.loads(SCRIPT.read_text())
+        if self.method == "agent-interface.capabilities":
+            # An object is the result, "silence" and an error go as scripted. One step is asked again and again; a list
+            # answers each read with its next step and keeps repeating the last, like an add-on that restarted in between.
+            record("recv", "capabilities", timeout, None)
+            step = script.get("capabilities", "unscripted")
+            if step == "unscripted": raise AssertionError("unscripted maintenance capabilities")
+            if isinstance(step, list):
+                step, script["capabilities"] = step[0], step[1:] or step[-1:]
+                SCRIPT.write_text(json.dumps(script))
+            if step == "silence":
+                skew[0] += timeout
+                raise TimeoutError("timed out while waiting for a message")
+            return json.dumps({"id": 1, "error": step["error"]} if "error" in step else {"id": 1, "result": step})
+        action, operation = self.params["action"], self.params["operation_id"]
+        record("recv", action, timeout, self.params.get("deadline"))
         if not script.get(action): raise AssertionError("unscripted maintenance " + action)
         step = script[action].pop(0)
         SCRIPT.write_text(json.dumps(script))
-        if step == "silence": raise TimeoutError("timed out while waiting for a message")
-        if step == "stall": time.sleep(60)
+        if step == "silence":
+            skew[0] += timeout
+            raise TimeoutError("timed out while waiting for a message")
+        if step == "drop":
+            skew[0] += 2
+            raise ConnectionResetError("connection dropped after two seconds")
+        if step == "stall": real_sleep(60)
         if step == "busy": return json.dumps({"id": 1, "error": BUSY})
         if step == "grant":
             write_lease(operation)
@@ -996,6 +1025,12 @@ class Socket:
             if held() == {"operationId": operation}: LEASE.unlink()
             return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
         if step == "status": return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
+        if "releaseThenLease" in step:
+            # The release finds no lease and answers; the handler that started late writes it afterwards.
+            if held() == {"operationId": operation}: LEASE.unlink()
+            subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["releaseThenLease"], *step.get("body", [])],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
         if "lateLease" in step:
             subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["lateLease"]],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -1027,14 +1062,13 @@ class MaintenanceRpcTests(HostFixture):
         (self.source / "websockets/__init__.py").write_text(""); (client.parent / "__init__.py").write_text("")
         client.write_text(FAKE_ADDON.replace("__SCRIPT__", repr(str(self.script))).replace("__CALLS__", repr(str(self.calls))).replace("__LEASE__", repr(str(self.lease))))
         key = "a" * 43
-        self.refused_tickets = 0
+        self.refused_tickets, self.tickets = set(), 0
         outer = self
         class Tickets(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 ok = self.path == "/api/agent-interface/service-ticket" and self.headers["Authorization"] == "Bearer " + key
-                if ok and outer.refused_tickets:
-                    outer.refused_tickets -= 1
-                    ok = False
+                outer.tickets += 1
+                if outer.tickets in outer.refused_tickets: ok = False
                 body = json.dumps({"ticket": "ticket-1"}).encode() if ok else b"{}"
                 self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body)
             def log_message(self, *_): pass
@@ -1044,13 +1078,30 @@ class MaintenanceRpcTests(HostFixture):
         self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(server.server_address[1]))
         # Long enough for a test whose lease appears late; the rest end their watch at once or never start it.
         patcher = patch.object(linux, "LATE_LEASE_SECONDS", 10); patcher.start(); self.addCleanup(patcher.stop)
+        # The watch after a deadline passes is 100 s; a test that wants it long patches it, the rest wait one second.
+        patcher = patch.object(linux, "DEADLINE_WATCH_SECONDS", 1); patcher.start(); self.addCleanup(patcher.stop)
 
-    def scripted(self, **steps): self.script.write_text(json.dumps(steps))
+    def scripted(self, **steps):
+        # An add-on older than the maintenance_deadline capability, which every test not about it meets.
+        steps.setdefault("capabilities", {"revision": "r"})
+        self.script.write_text(json.dumps(steps))
+
+    def events(self, kind):
+        return [] if not self.calls.exists() else [event[1:] for event in map(json.loads, self.calls.read_text().splitlines()) if event[0] == kind]
 
     def requests(self):
-        """Each maintenance request the add-on received, with how long NATIVE waited for its answer."""
-        if not self.calls.exists(): return []
-        return [event[1:] for event in map(json.loads, self.calls.read_text().splitlines()) if event[0] == "recv"]
+        """Each maintenance request the add-on received, with how long NATIVE waited for its answer. Capability reads are left out."""
+        return [event[:2] for event in self.events("recv") if event[0] != "capabilities"]
+
+    def deadlines(self):
+        """The deadline each maintenance request carried."""
+        return [event[2] for event in self.events("recv") if event[0] != "capabilities"]
+
+    def capability_reads(self): return [event for event in self.events("recv") if event[0] == "capabilities"]
+
+    def sleeps(self):
+        """How long NATIVE slept after a failure, on the fake clock."""
+        return [event[0] for event in self.events("sleep")]
 
     def quiescence(self):
         """Run quiescence; return its exit code, or None when it returned, and what it logged."""
@@ -1161,7 +1212,7 @@ class MaintenanceRpcTests(HostFixture):
                 with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
 
     def test_a_failed_child_is_unsent_only_when_its_last_line_is_exactly_the_unsent_line(self):
-        for line in ('{"unsent": false}', '{"unsent": true, "id": 1}', '"unsent"', "unsent"):
+        for line in ('{"unsent": false}', '{"unsent": 1}', '{"unsent": true, "id": 1}', '"unsent"', "unsent"):
             with self.subTest(line=line):
                 self.scripted(status=[{"print": line}])
                 with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
@@ -1188,7 +1239,7 @@ class MaintenanceRpcTests(HostFixture):
 
     def test_a_send_that_fails_is_unanswered_not_unsent(self):
         # The request may have left before the socket failed, so a lease can still appear: held, never 75.
-        self.script.write_text(json.dumps({"failSend": True}))
+        self.scripted(failSend=True)
         states = self.states.read_bytes()
         with patch.object(linux, "LATE_LEASE_SECONDS", 0.3): code, log = self.quiescence()
         self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
@@ -1219,8 +1270,9 @@ class MaintenanceRpcTests(HostFixture):
                 self.assertFalse((self.home / ".drain_request.json").exists())
 
     def test_an_acquire_refused_before_it_is_sent_is_a_finished_refusal_once_the_release_confirms(self):
-        self.refused_tickets = 1
-        self.scripted(release=["release"])
+        # The second service ticket, the acquire's, is refused; the capability read before it was answered.
+        self.refused_tickets = {2}
+        self.scripted(capabilities=self.CAPABLE, release=["release"])
         states = self.states.read_bytes()
         code, log = self.quiescence()
         self.assertEqual(code, 75)
@@ -1230,6 +1282,200 @@ class MaintenanceRpcTests(HostFixture):
         self.assertEqual(self.phase(), "rejected")
         self.assertFalse(self.lease.exists())
         self.assert_unchanged(states)
+
+    CAPABLE = {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-1"}
+
+    def test_a_capable_add_on_is_asked_before_the_acquire_and_sent_a_deadline_shorter_than_the_wait(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["busy"], release=["release"])
+        code, _ = self.quiescence()
+        self.assertEqual(code, 75)
+        self.assertEqual(self.capability_reads(), [["capabilities", 15, None]])
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        # The release carries no deadline: it answers at once and has nothing to bound.
+        self.assertEqual(self.deadlines(), [90, None])
+        self.assertEqual(self.phase(), "rejected")
+        self.scripted(capabilities=self.CAPABLE, acquire=["grant"])
+        self.calls.unlink()
+        self.assertEqual(self.quiescence()[0], None)
+        self.assertEqual((self.deadlines(), self.phase()), ([90], "quiescent"))
+
+    def test_the_capability_read_changes_nothing_and_comes_before_the_acquire_phase(self):
+        # A read that fails leaves no trace: the phase is saved only after it, so a baseline or capability
+        # failure cannot be mistaken for an acquire that may have been sent.
+        self.scripted(capabilities="silence", acquire=["busy"], release=["release"])
+        original = self.platform.save
+        saves = []
+        with patch.object(self.platform, "save", lambda record: (saves.append((record["phase"], len(self.capability_reads()))), original(record))[1]):
+            self.assertEqual(self.quiescence()[0], 75)
+        # The first save, the one that says an acquire may be under way, finds the capability read already done.
+        self.assertEqual(saves[0], ("acquiring", 1))
+        self.assertEqual(len(self.capability_reads()), 1)
+
+    def test_no_answer_after_the_deadline_is_a_finished_refusal_once_a_watch_after_the_release_sees_no_lease(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=["release"])
+        states = self.states.read_bytes()
+        started = time.monotonic()
+        code, log = self.quiescence()
+        # Exit 75, not the held 76: the add-on writes no lease after its deadline, the whole wait has passed and
+        # nothing showed for the watch that follows the release. That watch is DEADLINE_WATCH_SECONDS, patched to 1 here.
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes did not answer maintenance acquire within its 90 s deadline", log)
+        self.assertGreaterEqual(time.monotonic() - started, 1, "the watch for a late lease ran after the release")
+        self.assertLess(time.monotonic() - started, 5, "not the five-minute watch of an add-on with no deadline")
+        # The capability read, asked again for the epoch, is not a maintenance request.
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        self.assertEqual(len(self.capability_reads()), 2)
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
+
+    def test_a_handler_that_starts_late_and_writes_its_lease_after_the_release_is_released_again(self):
+        # The acquire handler waited for a thread in Hermes's pool, so its deadline ran past the tool's wait. The first
+        # release found no lease and the handler wrote one afterwards. Exit 75 would leave Hermes refusing every chat.
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"],
+                      release=[{"releaseThenLease": self.platform.operation}, "release"])
+        states = self.states.read_bytes()
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, log = self.quiescence()
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes did not answer maintenance acquire within its 90 s deadline", log)
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15], ["release", 15]])
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
+
+    def test_the_phase_holds_for_review_while_the_watch_runs_and_a_second_release_that_fails_closes(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[{"releaseThenLease": self.platform.operation}, "silence"])
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10), self.assertRaisesRegex(linux.Unanswered, "^Hermes did not answer maintenance release"):
+            self.platform.quiescence()
+        # A worker that dies here leaves the phase the app's Cancel recovers from, with the late lease in place.
+        self.assertEqual(self.phase(), "acquire_unanswered")
+        self.assertTrue(self.lease.exists())
+
+    def test_a_second_release_that_reports_the_lease_still_held_fails_closed(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"],
+                      release=[{"releaseThenLease": self.platform.operation}, {"result": {"active": True, "operationId": self.platform.operation, "busy": []}}])
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10), self.assertRaisesRegex(RuntimeError, "^Maintenance release was not confirmed after a late lease$"):
+            self.platform.quiescence()
+        self.assertEqual(self.phase(), "acquire_unanswered")
+
+    def test_a_lease_that_is_not_this_operations_in_the_watch_is_held_for_review_and_left_alone(self):
+        # Not this operation's, so not this operation's to release, and the acquire it sent can never have written it. Exit 75
+        # would tell the app Hermes is open while something holds maintenance, so the run is held like an unanswered acquire.
+        cases = (("another operation's", {"releaseThenLease": "another-operation"}, '{"operationId": "another-operation"}'),
+                 ("one that cannot be read", {"releaseThenLease": "", "body": ["{not json"]}, "{not json"))
+        for name, step, text in cases:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.lease.unlink(missing_ok=True)
+                self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[step])
+                states = self.states.read_bytes()
+                with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, log = self.quiescence()
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review, a maintenance lease that is not this operation's appeared", log)
+                self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+                self.assertEqual(self.lease.read_text(), text)
+                self.assert_unchanged(states)
+
+    def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_with_no_release(self):
+        # The acquire went to a different process than the one that said it honors a deadline, so its silence proves nothing.
+        cases = (("a new epoch", [self.CAPABLE, {**self.CAPABLE, "executor_epoch": "epoch-2"}]),
+                 ("a restart into an add-on that ignores the deadline", [self.CAPABLE, {"revision": "r"}]),
+                 ("the second read gets no answer", [self.CAPABLE, "silence"]),
+                 ("the second read is an error", [self.CAPABLE, {"error": {"code": -32601, "message": "unknown method"}}]))
+        for name, capabilities in cases:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.scripted(capabilities=capabilities, acquire=["silence"])
+                states = self.states.read_bytes()
+                with patch.object(linux, "LATE_LEASE_SECONDS", 0.3): code, log = self.quiescence()
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review, maintenance may still be taken", log)
+                self.assertEqual(self.requests(), [["acquire", 120]])
+                self.assertEqual(self.deadlines(), [90])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+                self.assert_unchanged(states)
+
+    def test_an_add_on_restarted_since_the_capability_read_whose_lease_appears_is_released_and_refused(self):
+        self.scripted(capabilities=[self.CAPABLE, {**self.CAPABLE, "executor_epoch": "epoch-2"}],
+                      acquire=[{"lateLease": self.platform.operation}], release=["release"])
+        code, _ = self.quiescence()
+        self.assertEqual((code, self.requests(), self.phase(), self.lease.exists()), (75, [["acquire", 120], ["release", 15]], "rejected", False))
+
+    def test_a_connection_lost_after_the_send_waits_out_the_rest_of_the_wait_then_is_a_finished_refusal(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["drop"], release=["release"])
+        self.assertEqual(self.quiescence()[0], 75)
+        # Two seconds in, the socket dropped; the add-on's handler can run until its 90 s deadline, so the
+        # child waited for the other 118 s of the wait before it said the deadline had passed.
+        self.assertEqual(self.sleeps(), [118])
+        self.assertEqual(self.phase(), "rejected")
+
+    def test_a_release_with_no_answer_after_the_deadline_fails_closed(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=["silence"])
+        with self.assertRaisesRegex(linux.Unanswered, "^Hermes did not answer maintenance release"):
+            self.platform.quiescence()
+        self.assertEqual(self.phase(), "acquiring")
+
+    def test_a_capable_add_ons_other_error_answer_is_still_held_for_review_without_a_release(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=[{"error": {"code": 409, "message": "Another maintenance operation owns this lease"}}])
+        with self.assertRaisesRegex(RuntimeError, "^Hermes refused maintenance for a reason other than active work, error code 409$"):
+            self.platform.quiescence()
+        self.assertEqual(self.requests(), [["acquire", 120]])
+        self.assertEqual(self.sleeps(), [])
+
+    def test_an_add_on_that_does_not_say_it_honors_a_deadline_is_sent_none_and_keeps_the_late_lease_watch(self):
+        # Exactly maintenance_deadline: true. A deadline sent to an older add-on is ignored there, and the
+        # answer it never gives would then be read as proof that no lease can appear.
+        cases = (("an older add-on", {"revision": "r"}), ("false", {"revision": "r", "maintenance_deadline": False}),
+                 ("a string", {"maintenance_deadline": "true"}), ("the number one", {"maintenance_deadline": 1}),
+                 ("an unrelated key", {"maintenance_deadlines": True}), ("an empty object", {}),
+                 # A restart cannot be told apart later without the process's epoch, so no epoch is no deadline.
+                 ("no epoch", {"maintenance_deadline": True}), ("an empty epoch", {"maintenance_deadline": True, "executor_epoch": ""}),
+                 ("a numeric epoch", {"maintenance_deadline": True, "executor_epoch": 7}))
+        for name, capabilities in cases:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.scripted(capabilities=capabilities, acquire=["silence"])
+                with patch.object(linux, "LATE_LEASE_SECONDS", 0.2): code, log = self.quiescence()
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review, maintenance may still be taken", log)
+                self.assertEqual(self.deadlines(), [None])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+
+    def test_a_capability_read_that_fails_is_no_capability(self):
+        self.refused_tickets = {1}
+        failures = (("the add-on answered an error", {"error": {"code": -32601, "message": "unknown method"}}),
+                    ("no answer", "silence"), ("the ticket was refused", None))
+        for name, capabilities in failures:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.tickets = 0
+                self.refused_tickets = {1} if capabilities is None else set()
+                self.scripted(capabilities=capabilities or {}, acquire=["silence"])
+                with patch.object(linux, "LATE_LEASE_SECONDS", 0.2): code, log = self.quiescence()
+                # The acquire still ran, and with no deadline its silence is held for review, as for an older add-on.
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertEqual(self.deadlines(), [None])
+                self.assertEqual(self.requests(), [["acquire", 120]])
+
+    def test_a_deadline_that_is_not_shorter_than_the_wait_is_refused_before_anything_runs(self):
+        for method, deadline in (("acquire", 120), ("acquire", 500), ("release", 15), ("status", 90)):
+            with self.subTest(method=method, deadline=deadline):
+                with self.assertRaisesRegex(ValueError, "^A deadline must be shorter than the wait for its answer$"):
+                    self.platform.rpc(method, deadline=deadline)
+        self.assertFalse(self.calls.exists())
+
+    def test_the_deadline_passing_is_only_the_exact_marker_from_a_request_that_carried_one(self):
+        for line in ('{"deadlinePassed": false}', '{"deadlinePassed": true, "unsent": true}', '{"deadlinePassed": 1}', '"deadlinePassed"', "deadlinePassed"):
+            with self.subTest(line=line):
+                self.assertFalse(linux.deadline_passed("noise\n" + line + "\n"))
+        self.assertFalse(linux.deadline_passed('{"deadlinePassed": true}\nlater output\n'))
+        self.assertFalse(linux.deadline_passed(""))
+        self.assertTrue(linux.deadline_passed('noise\n{"deadlinePassed": true}\n'))
+        # The exact marker from a request with no deadline means nothing: nothing bounded that handler.
+        self.scripted(status=[{"print": '{"deadlinePassed": true}'}])
+        with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
+        self.assertEqual(self.sleeps(), [])
 
     def test_after_an_acquire_failures_release_and_success_keeps_the_lease(self):
         cases = [("active work in the drain", 1, ["grant"], "Gateway has active or unknown chat"),

@@ -115,3 +115,18 @@ it("previews a room's newest message as plain words, keeping a code-only message
   expect(previewOf(said('## Plan\n**Test** recurring follow-through'), room, 'one', () => undefined).text).toBe('Plan Test recurring follow-through');
   expect(previewOf(said('```\nls\n```'), room, 'one', () => undefined).text).toBe('ls');
 });
+
+it("cuts a long preview at the limit without splitting a character", () => {
+  const room = { room_id: 'r', name: 'R', members: [] };
+  const said = (text: string) => ({ event_id: 'p', seq: 1, kind: 'message.user', created_at: 0, actor: { kind: 'user', id: 'two' }, sender: { id: 'two', name: 'Kim' }, payload: { text } }) as GroupEvent;
+  const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+  // 159 units are kept before the ellipsis. An emoji whose pair would end at 160 goes whole, and so does a flag or a family.
+  for (const [unit, kept] of [['😀', 79], ['🇹🇷', 39], ['👨‍👩‍👧‍👦', 14], ['今日は晴れです', 159 / 7]] as const) {
+    const preview = previewOf(said(unit.repeat(100)), room, 'one', () => undefined).text;
+    expect(preview).not.toMatch(lone);
+    expect(preview.endsWith('…')).toBe(true);
+    // Chinese has no unit boundary to fall on, so it keeps the 159 characters; the others the whole units that fit.
+    expect(preview.slice(0, -1)).toBe(unit.length === 7 ? unit.repeat(22) + unit.slice(0, 5) : unit.repeat(kept));
+  }
+  expect(previewOf(said('Short words'), room, 'one', () => undefined).text).toBe('Short words');
+});

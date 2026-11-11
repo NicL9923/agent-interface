@@ -33,6 +33,12 @@ const deltaEvents = ['message.delta', 'reasoning.delta', 'thinking.delta', 'tool
 // The frames a send is timed by: its turn's start, streamed text or reasoning, and end.
 const turnEvents = new Map<unknown, 'start' | 'text' | 'end'>([
   ['message.start', 'start'], ['message.delta', 'text'], ['reasoning.delta', 'text'], ['message.complete', 'end']]);
+// Structural frames whose whole effect on a conversation is in what a `?inflight=3` turn event carries: the turn's saved
+// messages, its tools and its activity. Hermes saves a reply segment before the tool that follows it and a progress line
+// before announcing it, so a read after either finds its rows. A turn's start is left out: a native turn's prompt can be
+// saved after the frame, and the client's read after the start is what heals a turn read that came first. Every other
+// frame can change approvals or requests too, which only a read carries.
+const turnCovered = new Set<unknown>(['tool.complete', 'message.interim']);
 const settledStates = ['done', 'failed', 'interrupted'];
 // Every viewer of an assistant shares one read until Hermes reports a change there, for a few seconds at most.
 // It stays short: writers outside this socket, such as another gateway process or the CLI, send it no frame.
@@ -129,7 +135,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       try { listener(); } catch { /* Isolate listeners. */ }
     }
   };
-  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const watchers = new Map<string, Set<(kind?: "inflight", turnVersion?: string) => void>>();
   // An array, not a Set, so calling them on every token allocates no iterator.
   const turnWatchers: TurnWatcher[] = [];
   const toTurnWatchers = (call: (watcher: TurnWatcher) => void) => {
@@ -186,7 +192,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
   let rosterReuse: {at: number; bots: Bot[]} | undefined;
   const serviceAuth = options.authMode === 'service';
   // Without a bot, every watched conversation may have changed, as when the connection drops or returns.
-  function changed(botId?: string, kind?: "inflight"): void {
+  // `turnVersion` is set for a structural frame a turn event will carry (see `turnCovered`), and names the structural
+  // version that event reaches once the server's turn read lands. A stream that gets turn events can wait for it
+  // instead of sending its change notice; every other stream gets the notice as before.
+  function changed(botId?: string, kind?: "inflight", turnVersion?: boolean): void {
     if (!kind) {
       rosterChanged();
       if (botId) structurallyChanged(botId);
@@ -195,8 +204,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     else touched(botId);
     for (const [watched, listeners] of watchers) {
       if (botId !== undefined && watched !== botId) continue;
+      const version = turnVersion && watched === botId ? versionOf(structuralGenerationOf(botId)) : undefined;
       for (const listener of listeners) {
-        try { listener(kind); } catch { /* A watcher never stops frame processing. */ }
+        // Without a version the listener is called as it always was, so a watcher that checks its arguments sees no change.
+        try { if (version === undefined) listener(kind); else listener(kind, version); } catch { /* A watcher never stops frame processing. */ }
       }
     }
   }
@@ -273,7 +284,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       if (delta && state.state !== previousActivity) rosterChanged();
       if (!delta) { snapshots.delete(botId); turnSnapshots.delete(botId); }
       if (delta && params.type === 'tool.start') structurallyChanged(botId);
-      changed(botId, delta ? "inflight" : undefined);
+      changed(botId, delta ? "inflight" : undefined, !delta && frame.method === 'event' && turnCovered.has(params.type));
       // A turn read already on its way is superseded by a tool start too, so it is read again.
       if (!delta || params.type === 'tool.start' && turnReads.has(botId)) readTurn(botId);
     }
