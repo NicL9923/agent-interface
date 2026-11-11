@@ -88,13 +88,18 @@ def timestamp(value):
 # The subprocess runs in the current native PM-selected interpreter, activates
 # its managed dependency generation, and reads credentials only from stdin.
 # rpc waits `wait` seconds (default 15) for each message. A failure exits nonzero as before,
-# after printing one marker as the last stdout line, so a caller can tell three things apart
-# (.agents/tools/deploy_common.py reads the first):
+# after printing one marker as the last stdout line, so a caller can tell four things apart
+# (.agents/tools/deploy_common.py reads the first three):
 #   {"answeredError": ERROR}  the add-on answered with an error, so its handler returned
 #   {"unsent": true}          the service ticket or the socket failed before the request was sent,
 #                             so the add-on never saw it
+#   {"deadlinePassed": true}  the request carried a `deadline` shorter than `wait`, and the whole
+#                             `wait` has passed since it was sent without an answer. An add-on that
+#                             honors the deadline writes no lease after it, so none can appear
 #   no marker                 the request may have reached the add-on and no answer came back
-# Successful output is the add-on's result alone.
+# A failure after the send waits out the rest of `wait` first, so a dropped socket gets the same
+# proof as a silent one. Method `capabilities` asks `agent-interface.capabilities`, which takes no
+# credentials; every other method is a maintenance action. Successful output is the add-on's result alone.
 NATIVE = r'''
 import json,sys
 from pathlib import Path
@@ -109,7 +114,7 @@ elif v['action']=='runtime':
     print(json.dumps({'python':str(project_python(Path(v['source'])))}))
 elif v['action']=='rpc':
     try:
-        import urllib.request
+        import time,urllib.request
         from websockets.sync.client import connect
         req=urllib.request.Request(v['origin']+'/api/agent-interface/service-ticket',data=b'{}',headers={'Authorization':'Bearer '+v['key'],'Content-Type':'application/json'})
         with urllib.request.urlopen(req,timeout=10) as r: ticket=json.load(r)['ticket']
@@ -118,15 +123,28 @@ elif v['action']=='rpc':
         print(json.dumps({'unsent':True}),flush=True)
         raise
     with ws:
-        ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'agent-interface.maintenance','params':{'action':v['method'],'operation_id':v['operation'],'service_key':v['key']}}))
-        for _ in range(100):
-            result=json.loads(ws.recv(timeout=v.get('wait',15)))
-            if result.get('id')==1:
-                if 'error' in result:
-                    print(json.dumps({'answeredError':result['error']}),flush=True)
-                    raise RuntimeError('Native maintenance request rejected')
-                print(json.dumps(result['result'])); break
-        else: raise RuntimeError('Native maintenance result unavailable')
+        if v['method']=='capabilities': call,params='agent-interface.capabilities',{}
+        else:
+            call,params='agent-interface.maintenance',{'action':v['method'],'operation_id':v['operation'],'service_key':v['key']}
+            if v.get('deadline') is not None: params['deadline']=v['deadline']
+        answered=False
+        sent=time.monotonic()
+        try:
+            ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':call,'params':params}))
+            for _ in range(100):
+                result=json.loads(ws.recv(timeout=v.get('wait',15)))
+                if result.get('id')==1:
+                    if 'error' in result:
+                        answered=True
+                        print(json.dumps({'answeredError':result['error']}),flush=True)
+                        raise RuntimeError('Native maintenance request rejected')
+                    print(json.dumps(result['result'])); break
+            else: raise RuntimeError('Native maintenance result unavailable')
+        except Exception:
+            if not answered and v.get('deadline') is not None and v.get('wait',15)>v['deadline']:
+                time.sleep(max(0,sent+v['wait']-time.monotonic()))
+                print(json.dumps({'deadlinePassed':True}),flush=True)
+            raise
 '''
 
 # The add-on's answer to an acquire while it sees active work. Its handler returns this before it
@@ -139,6 +157,16 @@ BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no mainte
 # at a time, and nothing caps the chain. 120 s covers three full waits, as in the release tool.
 MAINTENANCE_WAIT = {"acquire": 120}
 DEFAULT_MAINTENANCE_WAIT = 15
+# The add-on's acquire takes an optional `deadline`, the seconds the caller will wait, counted from the moment its
+# handler starts, and writes no lease after it (src/hermes/extension.py, acquire_lease); an add-on that honors it says
+# `maintenance_deadline: true` in `agent-interface.capabilities`. The deadline is the wait less this margin, so the
+# whole wait passing with no answer proves no lease can appear. The margin covers what the add-on does not bound: the
+# handler starting late, since a request waits for a free thread in Hermes's dispatch pool, and its answer crossing
+# the socket. Its own overrun past the deadline is one 50 ms lock attempt and a 20 ms poll (src/hermes/compaction.py,
+# LOCK_SECONDS, preempt), so 30 s, one full preempt wait, is over 100 times that. 90 s is three full preempt waits,
+# the chain the 120 s wait was sized for, and a longer chain now ends in a refusal, not a held review.
+DEADLINE_MARGIN = 30
+ACQUIRE_DEADLINE = MAINTENANCE_WAIT["acquire"] - DEADLINE_MARGIN
 # Beyond the wait: 10 s for the service ticket, 10 s to open the socket, 5 s to close it, and 5 s to
 # start the interpreter. Status and release keep the 45 s they always had.
 MAINTENANCE_OVERHEAD = 30
@@ -167,6 +195,14 @@ class Answered(RuntimeError):
         self.error = error
 
 
+class DeadlinePassed(RuntimeError):
+    """An acquire sent with a deadline got no answer for the whole wait, which is longer than the deadline. The
+    add-on writes no lease after the deadline, so none can appear and a release is final."""
+
+    def __init__(self, method, deadline):
+        super().__init__("Hermes did not answer maintenance " + method + " within its " + str(deadline) + " s deadline")
+
+
 class Unanswered(RuntimeError):
     """A maintenance RPC may have reached the add-on, but no answer came back. Its handler can
     still be running, and an acquire handler can still write the lease."""
@@ -192,9 +228,20 @@ def answered_error(stdout):
     return None
 
 
+def marker(stdout, key):
+    """Whether NATIVE's last stdout line is exactly {key: true}. JSON 1 equals True in Python, so `is True`."""
+    answer = last_line(stdout)
+    return isinstance(answer, dict) and list(answer) == [key] and answer[key] is True
+
+
 def unsent(stdout):
     """Whether NATIVE's last stdout line is exactly its failed-before-sending line."""
-    return last_line(stdout) == {"unsent": True}
+    return marker(stdout, "unsent")
+
+
+def deadline_passed(stdout):
+    """Whether NATIVE's last stdout line is exactly its deadline-passed line."""
+    return marker(stdout, "deadlinePassed")
 
 
 class Platform:
@@ -337,13 +384,17 @@ class Platform:
         if len(matches) != 1: raise RuntimeError("Private service key is missing or ambiguous")
         return matches[0]
 
-    def rpc(self, method):
-        """The add-on's maintenance RPC. Raises Answered when the add-on answered with an error,
-        NotSent when the service ticket or the connection failed before the request was sent, and
-        Unanswered when the request may have reached it but no answer came back. A failure before
-        NATIVE runs, such as a missing key, raises as itself."""
+    def rpc(self, method, deadline=None):
+        """The add-on's maintenance RPC, or its capabilities for method "capabilities". Raises Answered when the
+        add-on answered with an error, NotSent when the service ticket or the connection failed before the request
+        was sent, DeadlinePassed when a request sent with a ``deadline`` got no answer for the whole wait, and
+        Unanswered when the request may have reached it but no answer came back. A failure before NATIVE runs,
+        such as a missing key, raises as itself."""
         wait = MAINTENANCE_WAIT.get(method, DEFAULT_MAINTENANCE_WAIT)
         values = dict(origin=self.config["dashboardOrigin"], key=self.key(), method=method, operation=self.operation, wait=wait)
+        if deadline is not None:
+            if deadline >= wait: raise ValueError("A deadline must be shorter than the wait for its answer")
+            values["deadline"] = deadline
         python = self.store_python()
         try:
             return self.native("rpc", python=python, timeout=wait + MAINTENANCE_OVERHEAD, **values)
@@ -351,6 +402,7 @@ class Platform:
             error = answered_error(failed.stdout)
             if error is not None: raise Answered(error) from None
             if unsent(failed.stdout): raise NotSent(method, failed) from None
+            if deadline is not None and deadline_passed(failed.stdout): raise DeadlinePassed(method, deadline) from None
             raise Unanswered(method, failed) from None
         except subprocess.TimeoutExpired as failed:
             raise Unanswered(method, failed) from None
@@ -554,13 +606,15 @@ print(json.dumps({'ok':True,'state':'synced'}))
         except Exception as refusal:
             print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
             raise SystemExit(75) from None
+        # Read before the phase is saved: asking for capabilities changes nothing and may fail without consequence.
+        deadline = self.acquire_deadline()
         self.save({"baseline": baseline, "phase": "acquiring"})
         # 75 is a proven harmless rejection: the add-on's acquire handler returned or never received
         # the request, and a release then left no lease, drain or changed host state. The handler preempts compactions before it
         # writes the lease when it would otherwise succeed, so an acquire with no answer may still take it after any release; that
-        # is never 75. Every other failure, including any cleanup uncertainty, fails closed.
+        # is never 75, unless it carried a deadline and the whole wait has passed (DeadlinePassed). Every other failure, including any cleanup uncertainty, fails closed.
         try:
-            gate = self.rpc("acquire")
+            gate = self.rpc("acquire", deadline=deadline)
         except Answered as answer:
             # Every error answer comes before the handler writes a lease, but only the busy one is
             # work a later check can outwait. Any other is a configuration or ownership problem.
@@ -570,6 +624,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
             # The request never reached the add-on, so no lease can appear. The release below proves
             # it: 75 when that confirms, and the release's own failure (exit 1) when it cannot.
             refusal = unsent_request
+        except DeadlinePassed as passed:
+            # The add-on honors the deadline, writes no lease after it and the whole wait is longer, so no lease
+            # can appear. The release below is final, and also shows the add-on answers again before 75.
+            refusal = passed
         except Unanswered as lost:
             self.save({"baseline": baseline, "phase": "acquire_unanswered"})
             if not self.late_lease():
@@ -595,6 +653,15 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save({"baseline": baseline, "phase": "rejected"})
         print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
         raise SystemExit(75) from None
+
+    def acquire_deadline(self):
+        """ACQUIRE_DEADLINE when the running add-on says it honors one, else None.
+
+        A read that fails is None as well: an older add-on is held for review exactly as before, and a
+        dashboard that cannot be asked will fail the acquire the same way."""
+        try: capabilities = self.rpc("capabilities")
+        except (Answered, NotSent, Unanswered, ValueError): return None
+        return ACQUIRE_DEADLINE if isinstance(capabilities, dict) and capabilities.get("maintenance_deadline") is True else None
 
     def late_lease(self):
         """Whether this operation's lease appears within LATE_LEASE_SECONDS of an unanswered acquire.
