@@ -49,6 +49,21 @@ it("cuts long plain text at a word", () => {
   const long = excerpt("word ".repeat(80), 40);
   expect(long.endsWith("word…")).toBe(true);
   expect(long.length).toBeLessThanOrEqual(41);
+  // A cut falls between characters: an emoji at the limit goes whole, and a word-less run is cut near the limit's 60%.
+  const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+  for (const unit of ["😀", "🇹🇷", "👨‍👩‍👧‍👦"]) {
+    const text = unit.repeat(60), cut = excerpt(text, 40);
+    const kept = cut.slice(0, -1);
+    expect(cut).not.toMatch(lone);
+    expect(cut.endsWith("…")).toBe(true);
+    expect(text.startsWith(kept)).toBe(true);
+    expect(kept.length).toBeGreaterThan(20);
+    expect(kept.length).toBeLessThanOrEqual(40);
+    // Whole characters as the runtime counts them, not only whole code points.
+    const ends = new Set<number>();
+    for (const { index, segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)) ends.add(index + segment.length);
+    expect(ends.has(kept.length)).toBe(true);
+  }
   // Callers pass words, so a literal mark stays as written.
   expect(excerpt("Call __init__ with **kwargs and use # for comments.")).toBe("Call __init__ with **kwargs and use # for comments.");
 });

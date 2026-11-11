@@ -360,6 +360,18 @@ describe("talk progress", () => {
     expect(spokenProgress("word ".repeat(200)).length).toBeLessThanOrEqual(280);
     expect(spokenProgress("```\ncode\n```")).not.toContain("`");
     expect(spokenProgress("  \u200b ")).toBe("");
+    // Whole characters, whatever the line is made of; with no space to cut at, the line is cut at the limit.
+    for (const unit of ["😀", "🇹🇷", "今日は晴れです"]) {
+      const said = spokenProgress(unit.repeat(200));
+      expect(said).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+      expect(unit.repeat(200).startsWith(said)).toBe(true);
+      expect(said.length).toBeGreaterThan(200);
+      expect(said.length).toBeLessThanOrEqual(280);
+    }
+    // A limit inside a character gives up that character: 101 and 103 units are 50 emoji or 25 flags.
+    expect(spokenProgress("😀".repeat(200), 101)).toBe("😀".repeat(50));
+    expect(spokenProgress("🇹🇷".repeat(200), 103)).toBe("🇹🇷".repeat(25));
+    expect(spokenProgress("😀".repeat(200), 100)).toBe("😀".repeat(50));
   });
   it("skips a line that has no words to say, but still names it as heard", () => {
     const read = run([asked(), noted("n1", "I'll check."), noted("blank", "\u200b")], working);
@@ -493,6 +505,44 @@ describe("talk answer states", () => {
     expect(spoken.length).toBeLessThanOrEqual(4000);
     expect(spoken).toMatch(/Hay is in\. The rest is in the chat\.$/);
     expect(spokenText("  Short.  ")).toBe("Short.");
+  });
+  // A cut falls on a whole character, whatever the text is made of: an emoji, a flag, a family emoji, Chinese with no spaces.
+  const lone = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+  const family = "👨‍👩‍👧‍👦", flag = "🇹🇷";
+  const tail = " The rest is in the chat.";
+  it.each<[string, string, string]>([
+    ["emoji", "😀", "😀".repeat(30)],
+    ["flags", flag, flag.repeat(15)],
+    ["family emoji", family, family.repeat(5)],
+    ["Chinese with no spaces", "今日は晴れです", "今日は晴れです".repeat(8) + "今日は晴"],
+  ])("speaks the start of a long reply of %s, cut at the limit and not after its first character", (_, unit, expected) => {
+    // The head is 60 units: 30 emoji, 15 flags, 5 families (55) or 60 characters.
+    const spoken = spokenText(unit.repeat(200), 100);
+    expect(spoken).toBe(`${expected}${tail}`);
+    expect(spoken).not.toMatch(lone);
+  });
+  it("keeps each character whole when the limit falls inside one, at every limit", () => {
+    for (let limit = 41; limit < 140; limit++) {
+      for (const unit of ["😀", flag, family, "e\u0301"]) {
+        const spoken = spokenText(unit.repeat(80), limit);
+        expect(spoken).not.toMatch(lone);
+        expect(spoken.endsWith(tail)).toBe(true);
+        const body = spoken.slice(0, -tail.length);
+        expect(unit.repeat(80).startsWith(body)).toBe(true);
+        expect(body.length).toBeLessThanOrEqual(limit - 40);
+      }
+    }
+  });
+  it("still cuts text with spaces at the last space, and at a late sentence end", () => {
+    expect(spokenText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda", 60)).toBe(`alpha beta gamma${tail}`);
+    expect(spokenText(`${"a".repeat(45)}. ${"b ".repeat(40)}`, 100)).toBe(`${"a".repeat(45)}.${tail}`);
+  });
+  it("names the assistant by whole characters when its name is cut", () => {
+    // 80 units fall in the middle of the 40th emoji, so 39 go.
+    const persona = talkPersona({ name: `x${"😀".repeat(100)}`, description: "🇹🇷".repeat(200) });
+    expect(persona).not.toMatch(lone);
+    expect(persona).toContain(`voice of x${"😀".repeat(39)}, a household assistant`);
+    expect(persona).toContain(`assistant: ${"🇹🇷".repeat(100)}\n`);
   });
   it("describes only the assistant it speaks for", () => {
     const persona = talkPersona({ name: "Ranch\u0000 Hand\u202e", description: "x".repeat(1000) });
