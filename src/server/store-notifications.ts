@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { digestCopy, notificationCopy } from "../shared/event-copy.js";
 import { markdownPlain } from "../shared/plain-text.js";
 import type { RuntimeEvent } from "../shared/types.js";
@@ -13,6 +13,13 @@ import type { StoreDatabase } from "./store-database.js";
 /** How long a web push action such as Decline stays usable after its notification is sent. */
 export const pushActionTtl = 60 * 60000;
 export type PushAction = { userId: string; botId: string; approvalId: string; decision: "denied" };
+/** Whether a stored subscription carries exactly these keys, which only the browser that made it holds. */
+function sameKeys(stored: string, keys: { p256dh: string; auth: string }) {
+  let held: { keys?: { p256dh?: unknown; auth?: unknown } };
+  try { held = JSON.parse(stored); } catch { return false; }
+  const same = (a: unknown, b: string) => typeof a === "string" && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return same(held.keys?.p256dh, keys.p256dh) && same(held.keys?.auth, keys.auth);
+}
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 // Exponential backoff spends about an hour on these; later news is stale.
 export const maxDeliveryAttempts = 12;
@@ -193,19 +200,27 @@ export class NotificationRepository {
   markCleared(id: string, endpoint: string) {
     this.markDelivered(id, clearedEndpoint(endpoint));
   }
+  /**
+   * Records this person's browser subscription. An endpoint names one browser profile, which has one
+   * cookie jar, so a member signing in there while another's subscription for it is still held, as
+   * after that member's session lapsed, is the browser's account now: the endpoint moves to them, and
+   * the previous member's row and device label go, so the previous member can never be sent a push
+   * through it. Only a request that holds the subscription's own keys may move it. A member who knows an
+   * endpoint alone is refused, so one member cannot silence another's browser.
+   */
   subscribe(
     userId: string,
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
     deviceId?: string,
   ) {
     const existing = this.db
-      .prepare("SELECT user_id FROM subscriptions WHERE endpoint=?")
-      .get(subscription.endpoint) as { user_id: string } | undefined;
-    if (existing && existing.user_id !== userId)
-      throw httpError(409, "This browser push subscription belongs to another household member. Remove it from that session before subscribing.");
+      .prepare("SELECT user_id,value FROM subscriptions WHERE endpoint=?")
+      .get(subscription.endpoint) as { user_id: string; value: string } | undefined;
+    if (existing && existing.user_id !== userId && !sameKeys(existing.value, subscription.keys))
+      throw httpError(409, "This browser push subscription belongs to another household member.");
     this.db
       .prepare(
-        "INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET value=excluded.value",
+        "INSERT INTO subscriptions VALUES(?,?,?) ON CONFLICT(endpoint) DO UPDATE SET user_id=excluded.user_id,value=excluded.value",
       )
       .run(subscription.endpoint, userId, JSON.stringify(subscription));
     // A registration from a client without a device ID forgets any earlier one: that ID may be stale.
