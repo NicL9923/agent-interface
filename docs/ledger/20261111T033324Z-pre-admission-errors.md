@@ -53,7 +53,7 @@ rejected receipt itself and answers a result, never an error), and every failure
   restores the draft, and shows the message in the dock.
 - Server (`src/server/store-submissions.ts` `receipt`): a rejected receipt is final for that request ID. Each send gets a new request ID,
   so resending the restored draft is a new request.
-- Talk (`src/server/talk.ts:139`): a rejected receipt is a refused turn that speaks the message.
+- Talk (`src/server/talk.ts:139`): a rejected receipt answers `refused` with the message as its text.
 
 ## Tests
 
