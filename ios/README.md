@@ -162,7 +162,9 @@ sets its own server there before building. A link for a different server shows a
 
 Haptics are subtle: a light tap when a send is accepted, a soft success when a reply
 finishes in the open chat, a firmer tap when an approval is decided, and an error
-for a refused send or a failed approval or stop. Swipe an assistant row left to pin
+for a refused send or a failed approval or stop. A typed stop phrase that ends Hermes's voice chat is accepted but admits
+nothing: it keeps the draft, plays neither tap, and the chat says why, as on the web. A message
+Hermes puts into the running turn reads as added guidance. Swipe an assistant row left to pin
 or unpin it. With a hardware keyboard, Cmd+1 to 9 open pinned assistants in order,
 Cmd+F finds in the open chat or opens Search, and Cmd+. asks before stopping active
 work. Hold Command on an iPad to see them. Return still sends and Shift-Return
