@@ -81,7 +81,7 @@ With motion on, the real Avatar draws a frame every 16 ms of virtual time, and t
 unloaded machine `home-groups-ui` "does not poll any room's log from home" went from 42 ms to 1,291 ms and the file from 620 ms to 2,585 ms, and
 under a loaded full run (8 cores, 32 busy loops) that test timed out at 15 s and dragged seven others after it. `tests/setup-ui.ts` now answers
 only the reduced-motion query when a test stubs nothing, `reducedMotionOnly` in `ui-harness.ts` does the same where a file stubs `matchMedia` for
-layout, and the eight files that stubbed it with the avatar mock gone use it, except `transcript-ui`, whose tests assert motion. `bot-details-ui`,
+layout, and seven of the eight files that stubbed it use it. `transcript-ui` failed with it, because its tests assert motion, and keeps motion. `bot-details-ui`,
 which asserts a live avatar, and the one `app-ui` test about which avatars move turn motion on. Full `npx vitest run`, user CPU time in two
 runs each: `origin/main` 357 s and 375 s, this branch 401 s and 398 s, wall time 18 to 19 s for both. The heaviest files stay heavier because they
 render the real Avatar's artwork: `bot-settings` about three times its old time, `avatar-editor` and `transcript-ui` about twice.
