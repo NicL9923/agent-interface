@@ -480,9 +480,9 @@ exited, and it requested no drain.
    the hook gave up. It stops each assistant's idle compaction in turn, waiting at
    most 30 s for each canonical Bot Chat session, so it runs at most 30 s times
    the number of assistants (Hermes profiles with a Bot Chat). At least 300 s have
-   passed since the request by the time exit `76` shows. With 10 assistants or
-   fewer it has finished by then. With more, wait a further 30 s for each one
-   past 10. The add-on logs nothing when the handler finishes, so the lease file
+   passed since the request by the time exit `76` shows. With 9 assistants or
+   fewer it has finished by then, with time to spare for the handler's own
+   overhead. With more, wait a further 30 s for each one past 9. The add-on logs nothing when the handler finishes, so the lease file
    is the only sign: after the wait, check that `maintenanceFile` still does not
    exist. If it exists now, go back to step 1. A lease that the old acquire writes
    after step 5 releases would stay behind and close Hermes again.

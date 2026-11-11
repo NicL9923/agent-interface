@@ -975,7 +975,10 @@ def result(value): return json.dumps({"id": 1, "result": value})
 class Socket:
     def __enter__(self): return self
     def __exit__(self, *_): return False
-    def send(self, message): self.params = json.loads(message)["params"]
+    def send(self, message):
+        # A send that fails may still have reached the add-on, so the hook must not call it unsent.
+        if SCRIPT.exists() and json.loads(SCRIPT.read_text()).get("failSend"): raise ConnectionResetError("connection reset during send")
+        self.params = json.loads(message)["params"]
     def recv(self, timeout):
         action, operation = self.params["action"], self.params["operation_id"]
         record("recv", action, timeout)
@@ -1182,6 +1185,16 @@ class MaintenanceRpcTests(HostFixture):
                 self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(probe.getsockname()[1]))
         else:
             self.scripted(refuseConnect=True)
+
+    def test_a_send_that_fails_is_unanswered_not_unsent(self):
+        # The request may have left before the socket failed, so a lease can still appear: held, never 75.
+        self.script.write_text(json.dumps({"failSend": True}))
+        states = self.states.read_bytes()
+        with patch.object(linux, "LATE_LEASE_SECONDS", 0.3): code, log = self.quiescence()
+        self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+        self.assertIn("Hermes did not answer maintenance acquire", log)
+        self.assertEqual(self.phase(), "acquire_unanswered")
+        self.assert_unchanged(states)
 
     def test_a_failure_before_the_request_is_sent_is_not_an_unanswered_acquire(self):
         # Neither failure reached the add-on, so there is no lease to wait for and no handler running.

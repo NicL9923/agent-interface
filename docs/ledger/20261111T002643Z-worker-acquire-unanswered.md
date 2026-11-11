@@ -169,3 +169,19 @@ On `59a1b49` (the branch merged with `origin/main` at `785f4f2`) plus these chan
 `NATIVE` against the local ticket server and the fake WebSocket client. A failure of the interpreter's own
 `hermes_bootstrap` import still prints no marker, so it still counts as no answer; the baseline's launcher and runtime
 checks run that interpreter first.
+
+## Second review: Claude Opus 5.5 on `f2ab78f`
+
+Same-provider review: the cross-provider reviewers were unavailable, so this branch's pull request carries the
+`independent-review-owed` label. Ready, two P3s, both applied by the orchestrator, Claude Opus 5.5.
+
+- Nothing tested a failing `ws.send`. Moving the send inside `NATIVE`'s unsent region left every test green, though a
+  send that fails may already have delivered the request, so calling it unsent could release and exit 75 while a lease
+  can still appear. The fake add-on's socket now fails its send when the script asks, and
+  `test_a_send_that_fails_is_unanswered_not_unsent` expects exit 76 and phase `acquire_unanswered`. With the send moved
+  into the unsent region the test errors, because the hook then goes to the release path; restored, 65 tests pass.
+- The runbook's step 3 counted from 10 assistants, which `preempt`'s small overrun per session could exceed by about a
+  second. It now counts from 9.
+
+The reviewer cleared the unsent region, the release after `NotSent`, the baseline checks and every other caller of
+`NATIVE`. Of its six breaks, five went red; the sixth is the send above.
