@@ -16,8 +16,10 @@ if (typeof document !== "undefined") {
   const realDigest = crypto.subtle.digest.bind(crypto.subtle);
   Object.defineProperty(crypto.subtle, "digest", { configurable: true, writable: true, value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
     const name = digestNames[(typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase()];
-    if (!name) return realDigest(algorithm, data);
-    const bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+    // Web Crypto rejects data that is neither a view nor an ArrayBuffer; the real call keeps that refusal.
+    const buffer = Object.prototype.toString.call(data) === "[object ArrayBuffer]";
+    if (!name || !(ArrayBuffer.isView(data) || buffer)) return realDigest(algorithm, data);
+    const bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data as ArrayBuffer);
     const digest = createHash(name).update(bytes).digest();
     return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength);
   } });

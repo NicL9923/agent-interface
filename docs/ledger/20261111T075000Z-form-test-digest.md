@@ -83,3 +83,10 @@ All 6 checks passed (18m58s total, 17m03s of it queued for heavy slots)
 A full loaded run does not saturate one worker's thread pool the way the hog does, so no full run reproduced the original failure; the
 hog is the reproduction, and it is not in the repository. Other tests that await `crypto.subtle.digest` outside the UI files have no
 equivalent shim; `retry-id.test.ts` is a node file and awaits the real digest on purpose.
+
+## Review fix
+
+The Opus review found one P3: the shim hashed data Web Crypto rejects, so `digest("SHA-256", "abc")` resolved to the hash of
+nothing. The shim now hands anything that is neither a view nor an `ArrayBuffer` to the real digest. The new test "leaves data
+that is neither a view nor a buffer to Web Crypto" failed with the old guard (`promise resolved "" instead of rejecting`) and
+passes with the new one; the 6 other digest tests still pass.

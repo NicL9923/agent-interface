@@ -28,4 +28,8 @@ describe("the digest the UI tests run on", () => {
   it("leaves an algorithm it does not replace to Web Crypto, which refuses it", async () => {
     await expect(crypto.subtle.digest("MD5", new Uint8Array(1))).rejects.toMatchObject({ name: "NotSupportedError" });
   });
+
+  it("leaves data that is neither a view nor a buffer to Web Crypto, which refuses it rather than hashing nothing", async () => {
+    await expect(crypto.subtle.digest("SHA-256", "abc" as unknown as BufferSource)).rejects.toBeInstanceOf(TypeError);
+  });
 });
