@@ -61,6 +61,8 @@ type Reply = (status: number, body: unknown) => Promise<void>;
 let root: Root, container: HTMLDivElement;
 let calls: string[], unexpected: string[];
 let held: Record<string, Reply[]>;
+/** Whether a sign-in request hangs, as one does when the tab that made it closes before the server answers. */
+let signInHangs: boolean;
 const respond = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const reads = (prefix: string) => calls.filter(call => call.startsWith(prefix));
 
@@ -76,10 +78,12 @@ beforeEach(() => {
   calls = [];
   unexpected = [];
   held = {};
+  signInHangs = false;
   vi.stubGlobal("fetch", vi.fn(async (input: string, init: RequestInit = {}) => {
     const url = new URL(input, location.origin);
     const call = `${init.method ?? "GET"} ${url.pathname.replace(/^\/api/, "")}${url.search}`;
     calls.push(call);
+    if (call === "POST /auth/local" && signInHangs) return new Promise<Response>(() => {});
     // Bootstrap and the group catalog wait for the test.
     if (call === "GET /bootstrap?roster=lean" || call === "GET /groups") {
       let settle!: (response: Response) => void;
@@ -716,6 +720,38 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     expect(reads("POST /auth/logout")).toHaveLength(0);
     expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ logout: true });
     expect(button("Enter local workspace")).toBeDefined();
+  });
+
+  // Fifth review, P1: a sign-in begun over the offline sign-out, whose tab closes mid-request, left a mark
+  // that dropped the flag, and the next page read with the cookie the sign-out never cleared.
+  it("still reads nothing as member one when a sign-in begun over the offline sign-out hangs, its tab closes and a later page opens", async () => {
+    store(authEpochKey, { id: "offline", at: NOW - 60_000, signedOut: true, logout: true, user: "one" });
+    // A later page shows sign-in, and its attempt to end the server's session is refused.
+    await open();
+    expect(button("Enter local workspace")).toBeDefined();
+    await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
+    expect(reads("POST /auth/logout")).toHaveLength(0);
+    // Someone submits the sign-in form and the request never answers.
+    signInHangs = true;
+    await act(async () => button("Enter local workspace").click());
+    await advance(0);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ changing: true, fromSignedOut: true, user: "one" });
+    expect(reads("POST /auth/local")).toHaveLength(1);
+    // The tab closes. Its mark goes stale 65 seconds after it was written.
+    await act(async () => root.unmount());
+    await advance(66_000);
+    vi.resetModules();
+    const { App: FreshApp } = await import("../src/App");
+    history.replaceState(null, "", "/");
+    await act(async () => root.render(createElement(FreshApp)));
+    // The new page shows sign-in, and the only read it makes is the one that ends the server's session.
+    expect(button("Enter local workspace")).toBeDefined();
+    await answer("GET /bootstrap?roster=lean", 200, one);
+    expect(reads("POST /auth/logout")).toHaveLength(1);
+    expect(container.textContent).not.toMatch(/Ranch Hand|Sam Rivers|Home/);
+    expect(rail()).toBeNull();
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ signedOut: true, user: "one" });
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).not.toHaveProperty("logout");
   });
 
   // The record that says the server's session may still be live is what keeps a later page from reading
