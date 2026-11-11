@@ -217,7 +217,7 @@ class Deployment:
                 self.refuse(rpc, status, blocked, previous, unsent,
                             "Hermes could not be reached: the service ticket or the connection failed before the request was sent.")
             except Exception as lost:
-                # The add-on preempts compactions before it decides, so a lost answer can mean the
+                # An acquire that would succeed preempts compactions before it writes, so a lost answer can mean the
                 # handler is still running. Release removes a lease it already wrote, never one it
                 # writes afterwards, so this is never reported as nothing changed.
                 with contextlib.suppress(Exception): rpc("release")

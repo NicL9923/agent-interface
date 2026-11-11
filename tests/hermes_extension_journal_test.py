@@ -911,6 +911,11 @@ class AdmissionTurnTests(unittest.TestCase):
         with FakeHermes([]) as hermes:
             self.assertIs(hermes.registered["agent-interface.capabilities"]("caps", {})["result"]["admission_turn"], True)
 
+    def test_the_add_on_says_it_honors_a_maintenance_deadline(self):
+        # An older add-on ignores the parameter and would write a lease after its caller gave up, so a caller asks first.
+        with FakeHermes([]) as hermes:
+            self.assertIs(hermes.registered["agent-interface.capabilities"]("caps", {})["result"]["maintenance_deadline"], True)
+
 
 class InlineGuidanceTests(unittest.TestCase):
     def pending_app_turn(self, hermes):

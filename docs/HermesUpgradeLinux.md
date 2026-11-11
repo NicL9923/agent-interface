@@ -291,8 +291,14 @@ cause to the private log. Other failures keep maintenance closed for installer r
 
 Exit `75` after the gate request also needs the add-on's acquire handler to have
 returned, since a release cannot remove a lease the handler writes afterwards. The
-handler first stops each running idle compaction, one at a time for up to 30 s
-each, so the hook waits up to 120 s for its answer. A request fails in one of three
+handler first refuses at once, without stopping anything, if the request would be refused
+anyway. Otherwise it stops each running idle compaction, one at a time for up to 30 s
+each, so the hook waits up to 120 s for its answer. The add-on also accepts a `deadline`
+on acquire, the seconds the caller will wait, and writes no lease after it passes; it
+reports that as `maintenance_deadline` in its capabilities. The deadline starts when the
+handler starts, after the request crossed the socket, so a caller sends less than its own
+read timeout, with a margin of a few seconds, or a lease can still land just after it gave up. The hook does not send one yet, so
+everything below still applies to an acquire the hook gave up on. A request fails in one of three
 ways, and the hook reads each differently. The add-on answered with an error: its
 handler returned. The service ticket or the socket failed before the request was
 sent: the add-on never saw it. Or no answer came back after the request may have
