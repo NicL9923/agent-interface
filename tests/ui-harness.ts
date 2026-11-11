@@ -91,6 +91,8 @@ export async function waitForUi(check: () => unknown, timeout = 1000, interval =
   }
 }
 
+/** Only reduced motion matches, which holds every Avatar still, as tests/setup-ui.ts does when a test stubs nothing. */
+export const reducedMotionOnly = (query: string) => query === "(prefers-reduced-motion: reduce)";
 /** Replaces matchMedia; `matches` may be fixed or decided per query. */
 export function stubMatchMedia(matches: boolean | ((query: string) => boolean) = false) {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
@@ -99,6 +101,19 @@ export function stubMatchMedia(matches: boolean | ((query: string) => boolean) =
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   })));
+}
+/**
+ * Runs every animation frame request at once. A request made from inside a frame is dropped, so the
+ * real Avatar's loop, which asks for its next frame each time, runs once and ends instead of recursing.
+ */
+export function stubImmediateFrames() {
+  let inside = false;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    if (inside) return 0;
+    inside = true;
+    try { callback(0); } finally { inside = false; }
+    return 0;
+  });
 }
 /**
  * The props React last rendered onto an element. React replaces this object whenever the element's

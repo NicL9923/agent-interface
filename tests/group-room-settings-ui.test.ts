@@ -8,7 +8,6 @@ import { defaultPreferences, type Bootstrap } from '../src/shared/types';
 import type { GroupState } from '../src/shared/collaboration';
 import { click, mountRoot, typeInto } from './ui-harness';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
-vi.mock('../src/components/Avatar',()=>({Avatar:({botId}:{botId?:string})=>createElement('span',{'data-avatar':botId})}));
 
 // A group chat's live work, its settings and its lead's hand-offs.
 let root: Root, container: HTMLDivElement;

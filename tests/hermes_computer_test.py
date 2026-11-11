@@ -777,13 +777,31 @@ class ModernInstallToolsTests(InstallToolsTests):
     def test_a_megabyte_of_scheme_occurrences_scans_in_near_linear_time(self):
         installed = computer.install_tools()
         self.stand_in_metadata_matcher()
-        # The review's input: 58,252 schemes in one string, each authority running to its end.
-        text = "'" + ",".join(["http:example.test"] * 58252) + "'.split(',')"
+
+        def schemes(count):
+            return "'" + ",".join(["http:example.test"] * count) + "'.split(',')"
+
+        def cpu_seconds(text, runs=3, limit=None):
+            """CPU time of the best run: another process on the machine delays a run but does not make it use more CPU.
+            With a limit, stop at the first run under it, or at one half again over it. A linear scan measures about 4.2
+            times the quarter size even on a loaded core, against a limit of 8, so 12 is not noise, and a quadratic scan
+            (16 times) fails after one slow run instead of three."""
+            best = float("inf")
+            for _ in range(runs):
+                began = time.process_time()
+                self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": text}), "native dispatch")
+                best = min(best, time.process_time() - began)
+                if limit is not None and (best < limit or best > limit * 1.5):
+                    break
+            return best
+
+        # The review's input: 58,252 schemes in one string, each authority running to its end. Four times the input costs
+        # four times the work when the scan is linear and sixteen times when it is quadratic, so the budget is a ratio of
+        # two sizes measured together, which a slow machine leaves alone. The quadratic scan took over 10 s on the full size.
+        text = schemes(58252)
         self.assertGreater(len(text), 1_000_000)
-        began = time.perf_counter()
-        self.assertEqual(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": text}), "native dispatch")
-        # About 0.1 s on the Mac mini. The quadratic scan took over 10 s; 2 s leaves room for a slow runner.
-        self.assertLess(time.perf_counter() - began, 2.0)
+        limit = cpu_seconds(schemes(58252 // 4)) * 8
+        self.assertLess(cpu_seconds(text, limit=limit), limit)
         poisoned = text.replace("'.split", ",http:/169.254.169.254'.split")
         self.assertEqual(json.loads(self.dispatch_cdp(installed, "Runtime.evaluate", {"expression": poisoned})),
                          {"success": False, "error": "Blocked: URL targets a cloud metadata endpoint"})

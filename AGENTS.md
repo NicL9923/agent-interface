@@ -17,8 +17,11 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
 
 - Server tests run the real Fastify app with the in-memory store and a fake
   runtime that throws on any method the test did not configure. UI tests mock
-  only the client API module. Python tests use temp directories and fake
-  executables on PATH, never patched private methods of the code under test.
+  only the client API module. The kept exceptions are `preparePortrait`, which
+  needs an image decoder and canvas that jsdom lacks, and the retired chunks in
+  `view-failure`, which cannot fail to load from disk. Python tests use temp
+  directories and fake executables on PATH, never patched private methods of
+  the code under test.
 - Every validation guard and every decision table gets bad-input and
   cross-state cases, not just the path through. Upgrade restore-or-restart,
   delivery pruning, and live-activity filters are the past misses.
@@ -29,6 +32,8 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   One smoke case plus specific assertions beats fifty "the SVG changed" cases.
 - A test written to protect a specific line is broken by hand once to prove it
   goes red before it is committed. Record the run in `docs/ledger/`.
+- Python red runs go through `python3 .agents/tools/mutate-py.py`. It clears the stale
+  bytecode that a hand edit and `git checkout` leave behind, and restores the file byte for byte.
 
 # Production host
 

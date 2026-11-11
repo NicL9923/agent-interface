@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement } from "react";
+import { act, createElement, Profiler } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
@@ -9,7 +9,7 @@ import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, renderedProps, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
+import { advance, mountRoot, renderedProps, reducedMotionOnly, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -17,27 +17,9 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   write: vi.fn().mockResolvedValue({}),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}))(original)));
-vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => createElement("span", { className: "avatar-stub" }),
-}));
-// Passes everything through and lets a test see each commit of the open assistant's composer, which holds Stop.
-const seen = vi.hoisted(() => ({ onCommit: undefined as undefined | ((props: { botId: string; onStop(): void }) => void) }));
-vi.mock("../src/app/Composer", async original => {
-  const real = await original<typeof import("../src/app/Composer")>();
-  const { useLayoutEffect } = await import("react");
-  const Composer = (props: Parameters<typeof real.Composer>[0]) => {
-    useLayoutEffect(() => { seen.onCommit?.(props); });
-    return createElement(real.Composer, props);
-  };
-  return { ...real, Composer };
-});
-vi.mock("../src/components/MessageMarkdown", () => {
-  const markdown = (props: { text: string }) => createElement("div", { className: "message-markdown" }, props.text);
-  return { MessageMarkdown: markdown, ReplyMarkdown: markdown };
-});
+}))(original), { heartbeats: false }));
+// Lets a test act inside a commit of the app, as a Profiler's onRender runs after that commit's DOM is in place.
+const seen = vi.hoisted(() => ({ onCommit: undefined as undefined | (() => void) }));
 
 const capabilities = Object.fromEntries([
   "chat", "steering", "approvals", "uploads", "generatedFiles", "botConfiguration",
@@ -54,7 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   history.replaceState(null, "", "/");
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
@@ -78,7 +60,7 @@ beforeEach(() => {
   mount = mountRoot();
 });
 
-const render = async () => { await mount.render(createElement(App)); await advance(0); };
+const render = async () => { await mount.render(createElement(Profiler, { id: "app", onRender: () => seen.onCommit?.() }, createElement(App))); await advance(0); };
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
 const key = (init: KeyboardEventInit, target: EventTarget = document.body) => act(async () => {
   target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
@@ -238,9 +220,14 @@ describe("keyboard shortcuts", () => {
     // The commit that first shows Kitchen still holds Shared's conversation, and its Stop handler is live until the next one.
     // Pressing Stop there is simulated from the commit itself, since a test cannot land an event between two commits.
     let pressed = 0;
-    seen.onCommit = props => { if (props.botId === "kitchen" && !pressed++) props.onStop(); };
+    seen.onCommit = () => {
+      const kitchen = [...mount.container.querySelectorAll("label")].some(label => label.textContent?.trim() === "Message Kitchen companion");
+      if (!kitchen || pressed) return;
+      const stop = mount.container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]');
+      if (stop) { pressed++; stop.click(); }
+    };
     await key({ key: "1", ctrlKey: true });
-    // Guards the test: it proves nothing if no commit showed Kitchen with Stop pressed.
+    // Guards the test: it proves nothing if no commit showed Kitchen with Stop to press.
     expect(pressed).toBeGreaterThan(0);
     expect(write).toHaveBeenCalledWith("/bots/kitchen/stop", {});
     expect(write).not.toHaveBeenCalledWith("/bots/kitchen/stop", { runId: "shared-run" });
@@ -546,9 +533,9 @@ describe("composer", () => {
     });
 
     it.each([
-      ["Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Enter", "a hardware keyboard", () => stubMatchMedia(reducedMotionOnly)],
       ["Enter", "a touch screen", touchOnly],
-      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia(reducedMotionOnly)],
       ["Ctrl+Enter", "a touch screen", touchOnly],
     ])("leaves the %s that confirms an IME word to the input method with %s", async (keys, _, device) => {
       device();

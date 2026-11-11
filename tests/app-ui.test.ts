@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, uploadFile, write } from "../src/client-api";
-import { useChatPresence } from "../src/app/use-chat-presence";
+import { takeHeartbeats } from "./helpers/request-mock";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
 import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
-import { advance, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -20,24 +20,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   write: vi.fn().mockResolvedValue({}),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}))(original)));
-const renders = vi.hoisted(() => ({ avatar: 0, markdown: 0 }));
-// SVG geometry and animation are browser concerns, not part of these state regressions.
-// Presence heartbeats would interleave with the writes these tests count; they have their own tests.
-vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
-// Covered by device-activity-ui.test.ts; here its heartbeats would interleave with the writes under test.
-vi.mock("../src/app/use-device-activity", () => ({ useDeviceActivity: vi.fn() }));
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: (props: { state?: string; size?: number; prop?: string; reducedMotion?: boolean }) => (renders.avatar++, createElement("span", {
-    "data-avatar-state": props.state, "data-avatar-size": props.size, "data-avatar-prop": props.prop, "data-avatar-still": props.reducedMotion ? "" : undefined,
-  })),
-}));
-// Unmemoized on purpose, so the count shows whether the transcript re-renders.
-vi.mock("../src/components/MessageMarkdown", () => {
-  const markdown = (props: { text: string }) => (renders.markdown++, createElement("div", { className: "message-markdown" }, props.text));
-  return { MessageMarkdown: markdown, ReplyMarkdown: markdown };
-});
+}))(original), { heartbeats: false }));
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -64,7 +47,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  // Reduced motion shows a live reply as it arrives, not paced over the next 300 ms, and holds the avatars still; streaming-reveal.test.ts
+  // covers the pacing.
+  stubMatchMedia(reducedMotionOnly);
+  // The window counts as attended, which chat presence needs before it reports a chat as read.
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  takeHeartbeats();
   history.replaceState(null, "", "/");
   conversation = {
     botId: "shared", messages: [], approvals: [], files: [],
@@ -83,6 +71,11 @@ beforeEach(() => {
 async function render() {
   await act(async () => root.render(createElement(App)));
 }
+
+/** A running avatar of the given size. Its width is the one size the wrapper sets in style. */
+const avatarOf = (scope: ParentNode, size: number) => scope.querySelector<HTMLElement>(`.avatar-wrap[style*="--avatar-size: ${size}px"]`);
+/** Reduced motion holds the avatar still, whether the system asks for it or the row does. */
+const still = (avatar: Element | null | undefined) => avatar?.getAttribute("data-reduced-motion") === "true";
 
 /** The server reports a change, as Hermes frames or a write would. */
 async function changed() {
@@ -695,8 +688,18 @@ describe("conversation state", () => {
     await advance(10_000);
     await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
     await advance(2000);
-    const settled = renders.avatar;
-    expect(settled).toBeGreaterThan(0);
+    // The row menu loads once after first paint and swaps the row's contents when it lands. Without this wait, a run that starts cold
+    // sees the swap land in real time somewhere in the six minutes, and a run after another test does not.
+    await act(async () => { await preloadBotMenu(); });
+    // React gives an element new props whenever the component that renders it renders again. Sidebar and Conversation are memoized, so an
+    // app render that reaches no avatar still gives the shell, which App renders itself, new props. Avatars are not memoized, so a render
+    // from above them gives their wrapper new props, and a remount a new element. The reduced motion this file runs in holds them still.
+    // A Profiler would also count the minute clock's own commits.
+    const shell = container.querySelector(".app-shell")!;
+    const shellProps = renderedProps(shell);
+    const avatars = () => [...container.querySelectorAll<HTMLElement>(".avatar-wrap")].map(element => [element, renderedProps(element)]);
+    const settled = avatars();
+    expect(settled.length).toBeGreaterThan(0);
     const bootstraps = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/bootstrap?roster=lean").length;
     const before = bootstraps();
     // Six minutes of live streams, as a server that pings every 10 seconds keeps them: the bootstrap
@@ -708,20 +711,26 @@ describe("conversation state", () => {
     await act(async () => FakeEventSource.notifyAll());
     await advance(1500);
     expect(bootstraps()).toBeGreaterThan(before);
-    expect(renders.avatar).toBe(settled);
+    // Identity, not structure: a re-render gives equal-looking props a new object.
+    expect(container.querySelector(".app-shell") === shell && renderedProps(shell) === shellProps, "the app shell was rendered again").toBe(true);
+    const after = avatars();
+    expect(after).toHaveLength(settled.length);
+    expect(after.filter(([element, props], index) => element !== settled[index][0] || props !== settled[index][1])).toHaveLength(0);
   });
 
   it("shows current work inline in the transcript and stops claiming work during a disconnect", async () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
       toolCalls: [{ id: "shell", name: "terminal", status: "running" }] };
+    // Motion is on here: this test is about which avatars move.
+    stubMatchMedia(() => false);
     await render();
-    expect(container.querySelector('.transcript .conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("working");
-    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-prop")).toBe("computer");
+    expect(avatarOf(container.querySelector(".transcript .conversation-activity")!, 52)?.getAttribute("data-state")).toBe("working");
+    expect(avatarOf(container.querySelector(".conversation-activity")!, 52)?.querySelector(".avatar-prop")?.getAttribute("data-prop")).toBe("computer");
     // The inline work indicator, the header avatar and pinned assistants animate; the home list stays still.
-    expect(container.querySelector(".conversation-activity [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
-    expect(container.querySelector(".chat-header [data-avatar-state]")?.hasAttribute("data-avatar-still")).toBe(false);
-    expect([...container.querySelectorAll(".home-pinned [data-avatar-state]")].every(item => !item.hasAttribute("data-avatar-still"))).toBe(true);
-    expect([...container.querySelectorAll(".home-list [data-avatar-state]")].every(item => item.hasAttribute("data-avatar-still"))).toBe(true);
+    expect(still(container.querySelector(".conversation-activity .avatar-wrap"))).toBe(false);
+    expect(still(container.querySelector(".chat-header .avatar-wrap"))).toBe(false);
+    expect([...container.querySelectorAll(".home-pinned .avatar-wrap")].every(item => !still(item))).toBe(true);
+    expect([...container.querySelectorAll(".home-list .avatar-wrap")].every(still)).toBe(true);
     expect(container.querySelector(".activity-copy")?.textContent).toContain("Shared is running terminal...");
     // The sweeping highlight is a visual copy of the text, so assistive technology must hear the line once.
     const highlight = container.querySelector(".activity-shimmer .shimmer-band");
@@ -739,8 +748,8 @@ describe("conversation state", () => {
     await changed();
     // One failed read that may be a blip shows once no read has succeeded for the grace period.
     await advance(DISCONNECT_GRACE_MS);
-    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.getAttribute("data-avatar-state")).toBe("disconnected");
-    expect(container.querySelector('.conversation-activity [data-avatar-size="52"]')?.hasAttribute("data-avatar-prop")).toBe(false);
+    expect(avatarOf(container.querySelector(".conversation-activity")!, 52)?.getAttribute("data-state")).toBe("disconnected");
+    expect(avatarOf(container.querySelector(".conversation-activity")!, 52)?.querySelector(".avatar-prop")).toBeNull();
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
   });
 
@@ -917,12 +926,16 @@ describe("conversation state", () => {
   it("keeps the transcript from re-rendering while typing", async () => {
     conversation = { ...conversation, activity: { state: "idle" }, messages: [{ id: "answer", role: "assistant", text: "Ready when you are." }] };
     await render();
-    const settled = renders.markdown;
-    expect(settled).toBeGreaterThan(0);
+    expect(container.querySelector(".message-markdown")?.textContent).toContain("Ready when you are.");
+    // A turn renders with the transcript, so the props React keeps on its element change only when the transcript renders again.
+    const turns = [...container.querySelectorAll<HTMLElement>(".conversation-turn")];
+    expect(turns.length).toBeGreaterThan(0);
+    const settled = turns.map(renderedProps);
     const textarea = container.querySelector("textarea")!;
     for (const text of ["H", "He", "Hey"]) await typeInto(textarea, text);
     expect(textarea.value).toBe("Hey");
-    expect(renders.markdown).toBe(settled);
+    // Identity, not structure: a re-render gives equal-looking props a new object.
+    expect(turns.filter((turn, index) => renderedProps(turn) !== settled[index])).toHaveLength(0);
   });
 
   it("spins Send without a status bar until a send ends without a receipt", async () => {
@@ -1293,17 +1306,18 @@ describe("conversation state", () => {
     const rail = () => container.querySelector(".bot-rail")!;
     expect(rail().classList.contains("open")).toBe(true);
     expect(container.querySelector("main")!.hasAttribute("inert")).toBe(true);
-    // Only the chat on screen counts as being read.
-    expect(useChatPresence).toHaveBeenLastCalledWith(undefined, bootstrap.user.id);
+    // Only the chat on screen counts as being read: home reports nothing, the chat reports itself, and Back reports leaving it.
+    const reported = () => takeHeartbeats().filter(({ url }) => url.endsWith("/presence")).map(({ url, body }) => `${url} ${(body as { state: string }).state}`);
+    expect(reported()).toEqual([]);
     await act(async () => container.querySelector<HTMLButtonElement>(".bot-row")!.click());
     expect(rail().classList.contains("open")).toBe(false);
     expect(container.querySelector("main")!.hasAttribute("inert")).toBe(false);
-    expect(useChatPresence).toHaveBeenLastCalledWith("shared", bootstrap.user.id);
+    expect(reported()).toEqual(["/bots/shared/presence active"]);
     const back = container.querySelector<HTMLButtonElement>('[aria-label="Back to assistants"]')!;
     expect(document.activeElement).toBe(back);
     await act(async () => back.click());
     expect(rail().classList.contains("open")).toBe(true);
-    expect(useChatPresence).toHaveBeenLastCalledWith(undefined, bootstrap.user.id);
+    expect(reported()).toEqual(["/bots/shared/presence left"]);
     expect(document.activeElement).toBe(container.querySelector(".bot-rail [aria-current='page']"));
   });
 
@@ -1544,7 +1558,7 @@ describe("conversation state", () => {
     await render();
     const activity = container.querySelector(".message-activity")!;
     expect(activity.previousElementSibling?.querySelector("[data-message-id]")?.getAttribute("data-message-id")).toBe("question");
-    expect(activity.querySelector("[data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("thinking");
+    expect(activity.querySelector(".avatar-wrap")?.getAttribute("data-state")).toBe("thinking");
     conversation = { ...conversation, activity: { state: "done", detail: "Finished finding the file." }, messages: [
       ...conversation.messages,
       { id: "answer", role: "assistant", text: "The file is in your Documents folder." },
@@ -1552,7 +1566,7 @@ describe("conversation state", () => {
     await changed();
     expect(container.querySelector(".transcript-content")?.lastElementChild?.textContent).toContain("The file is in your Documents folder.");
     expect(container.querySelector(".conversation-activity")).toBeNull();
-    expect(container.querySelector(".chat-header [data-avatar-state]")?.getAttribute("data-avatar-state")).toBe("idle");
+    expect(container.querySelector(".chat-header .avatar-wrap")?.getAttribute("data-state")).toBe("idle");
   });
 
   it("keeps Simple readable and exposes real reasoning and deduplicated tool details in Advanced", async () => {

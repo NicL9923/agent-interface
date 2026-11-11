@@ -7,7 +7,7 @@ import { useConversation } from "../src/app/use-conversation";
 import { GroupRoomView } from "../src/components/GroupChats";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, unmountAll } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia, unmountAll } from "./ui-harness";
 
 // A page hidden and shown again is a pause, not the end of an outage. Every owner closes its stream's
 // connection while the page is hidden, and the stream keeps its retry budget for when it is shown: a
@@ -19,8 +19,6 @@ import { advance, mountRoot, stubMatchMedia, unmountAll } from "./ui-harness";
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest({
   ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
 }));
-// jsdom cannot measure SVG paths, and portraits have their own tests.
-vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => null }));
 
 const START = Date.parse("2026-11-10T12:00:00Z");
 const CHAT = "/api/bots/shared/events?inflight=3&drafts=1&ping=10";
@@ -55,7 +53,7 @@ beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0.5);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   history.replaceState(null, "", "/");
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });

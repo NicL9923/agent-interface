@@ -8,11 +8,9 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { FakeEventSource } from "./fake-event-source";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS } from "../src/app/use-session";
-import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
-vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: () => {} }));
-vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: ({ name }: { name?: string }) => createElement("span", { "data-face": name }) }));
+vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original), { heartbeats: false }));
 
 const member = (id: string, name: string) => ({ member_id: id, profile: id, handle: id, display_name: name });
 const supper: GroupRoom = { room_id: "supper", name: "Supper planning", members: [member("ranch", "Ranch hand"), member("kitchen", "Kitchen companion")],
@@ -34,7 +32,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(api).mockReset(); vi.mocked(write).mockReset().mockResolvedValue({});
   FakeEventSource.reset(); vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) { this.removeAttribute("open"); };
   history.replaceState(null, "", "/");
@@ -63,8 +61,8 @@ describe("group chats on home", () => {
     expect(quietRow.querySelector("small")?.textContent).toContain("No messages yet");
     expect(quietRow.querySelector("time")).toBeNull();
     // Overlapping faces: two for a pair, three for a bigger room.
-    expect([...fence.querySelectorAll("[data-face]")].map(face => face.getAttribute("data-face"))).toEqual(["Ranch hand", "Kitchen companion", "Garden planner"]);
-    expect(supperRow.querySelectorAll("[data-face]")).toHaveLength(2);
+    expect([...fence.querySelectorAll(".avatar-wrap")].map(face => face.getAttribute("aria-label")?.split(":")[0])).toEqual(["Ranch hand", "Kitchen companion", "Garden planner"]);
+    expect(supperRow.querySelectorAll(".avatar-wrap")).toHaveLength(2);
     expect(container.querySelector(".home-list")?.getAttribute("aria-label") ?? container.querySelector(".bot-section")?.getAttribute("aria-label")).toBe("Your chats");
   });
 

@@ -11,10 +11,6 @@ import { mountRoot } from "./ui-harness";
 import type { ComponentProps } from "react";
 import type { Root } from "react-dom/client";
 
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
 
 const bots = ["ranch", "garden", "barn", "well"].map(id => ({ id, name: id, activity: "idle" }));
 const page = (botId: string, text = "Hello") => ({

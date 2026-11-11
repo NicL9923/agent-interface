@@ -12,10 +12,9 @@ import { RoutineEnhancements, RoutineSchedulePreview } from "../src/components/R
 import type { ProfileMemory, TodayOverview } from "../src/shared/experience";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap } from "../src/shared/types";
-import { click, mountRoot, typeInto } from "./ui-harness";
+import { click, mountRoot, stubImmediateFrames, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
-vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => createElement("span") }));
 let root: Root; let container: HTMLDivElement;
 beforeEach(() => {
   vi.mocked(api).mockReset(); vi.mocked(write).mockReset();
@@ -23,7 +22,7 @@ beforeEach(() => {
   for (const [name, open] of [["showModal", true], ["close", false]] as const) {
     Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value: function(this: HTMLDialogElement) { this.open = open; } });
   }
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+  stubImmediateFrames();
 
   ({ container, root } = mountRoot());
 });

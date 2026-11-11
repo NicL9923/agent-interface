@@ -281,7 +281,8 @@ export function Avatar({
   const wrapper = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(true);
   useEffect(() => {
-    if (!wrapper.current) return;
+    // Without the observer, as in jsdom or an old browser, the avatar stays visible and keeps moving.
+    if (!wrapper.current || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(([entry]) =>
       setVisible(entry.isIntersecting),
     );
