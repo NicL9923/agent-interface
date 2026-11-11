@@ -98,3 +98,66 @@ describe("the mark a sign-in or sign-out writes", () => {
     expect(written.user).toBe(user);
   });
 });
+
+// A sign-out made while the server could not be reached leaves its session live. `logout` on the record
+// keeps every page from reading with that cookie until the sign-in screen ends it, and a sign-in begun
+// over it carries the flag, so a tab that closes mid-request does not undo the sign-out.
+describe("a sign-out the server may not have heard of", () => {
+  const offline = { signedOut: true, logout: true, user: "one" };
+  const stale = (fields: object) => JSON.stringify({ id: "stale", at: NOW - 66_000, changing: true, ...fields });
+
+  it.each([
+    { name: "the offline sign-out", before: settled(offline), logout: true },
+    { name: "another tab's mark begun over it, a mark that carries it", before: mark({ fromSignedOut: true, logout: true, user: "one" }), logout: true },
+    { name: "a sign-out the server took", before: settled({ signedOut: true, user: "one" }), logout: undefined },
+    { name: "member one signed in", before: settled({ user: "one" }), logout: undefined },
+    { name: "nothing stored", before: null, logout: undefined },
+  ])("writes a sign-in's mark with the flag only over $name", async ({ before, logout }) => {
+    const epoch = await openWith(before);
+    epoch.accountStart();
+    await epoch.beginAccountChange();
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!).logout).toBe(logout);
+  });
+
+  it("waits on a fresh mark that carries it, and owes nothing yet", async () => {
+    const epoch = await openWith(mark({ fromSignedOut: true, logout: true, user: "one" }));
+    expect(epoch.accountStart()).toEqual({ wait: NOW + epoch.CHANGE_STALE_MS });
+    expect(epoch.pendingSignOut()).toBeNull();
+  });
+
+  it("starts signed out, and owes the logout, once a mark that carries it goes stale", async () => {
+    const epoch = await openWith(stale({ fromSignedOut: true, logout: true, user: "one" }));
+    expect(epoch.accountStart()).toEqual({ start: "signed-out", leftAccount: false });
+    expect(epoch.pendingSignOut()).toBe("one");
+    // The server's session ended: only the flag and the mark go.
+    epoch.signOutFinished();
+    expect(epoch.pendingSignOut()).toBeNull();
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toEqual({ id: expect.any(String), at: NOW, signedOut: true, user: "one" });
+  });
+
+  it("owes it for a stale mark begun over another tab's mark too, whose own flag was inherited", async () => {
+    const epoch = await openWith(stale({ logout: true, user: "one" }));
+    expect(epoch.accountStart()).toMatchObject({ start: "signed-out" });
+    expect(epoch.pendingSignOut()).toBe("one");
+  });
+
+  it("lets bootstrap decide for a stale mark that carries no flag, as before", async () => {
+    const epoch = await openWith(stale({ fromSignedOut: true, user: "one" }));
+    expect(epoch.accountStart()).toMatchObject({ start: "bootstrap" });
+    expect(epoch.pendingSignOut()).toBeNull();
+  });
+
+  it("tells the worker no one is signed in when it starts from such a mark, as it does at a settled sign-out", async () => {
+    const told: unknown[] = [];
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {
+      getRegistration: async () => ({ active: { postMessage: (message: { user: unknown }) => { told.push(message.user); } } }),
+    } });
+    try {
+      const epoch = await openWith(stale({ fromSignedOut: true, logout: true, user: "one" }));
+      epoch.accountStart();
+      await vi.waitFor(() => expect(told).toEqual([null]));
+    } finally {
+      Reflect.deleteProperty(navigator, "serviceWorker");
+    }
+  });
+});

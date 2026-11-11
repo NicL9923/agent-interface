@@ -29,6 +29,13 @@ export type AuthEpoch = {
   fromSignedOut?: true;
   /** Settled with no session. */
   signedOut?: true;
+  /**
+   * With `signedOut`: this browser signed out while the server could not be reached, so the server's
+   * session may still be live. Nothing reads with it; the sign-in screen ends it on the server first.
+   * A changing mark begun over such a record, or over a mark that carries it, keeps it: the sign-in
+   * it stands for may never have reached the server, and a mark gone stale owes the same logout.
+   */
+  logout?: true;
   /** The account the last answer named, kept through a sign-out so the next sign-in can tell another account from the same one. */
   user?: string;
 };
@@ -67,10 +74,27 @@ function store(text: string) {
   unwritten = now === text ? undefined : { over: now, text };
   return stored();
 }
+/**
+ * Writes `text` and says whether storage now holds it. Unlike `store`, a write storage refuses or does
+ * not keep is not kept in memory: the caller acts only once every tab and later page can read it.
+ */
+function persisted(text: string) {
+  try { localStorage.setItem(authEpochKey, text); } catch { return false; }
+  if (readStored() !== text) return false;
+  unwritten = undefined;
+  return true;
+}
 const newId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const settled = (fields: Pick<AuthEpoch, "signedOut" | "user">) =>
-  JSON.stringify({ id: newId(), at: Date.now(), ...fields.signedOut ? { signedOut: true } : {}, ...fields.user ? { user: fields.user } : {} } satisfies AuthEpoch);
+type Settled = Pick<AuthEpoch, "signedOut" | "user" | "logout">;
+const settled = (fields: Settled) => JSON.stringify({ id: newId(), at: Date.now(), ...fields.signedOut ? { signedOut: true } : {},
+  ...fields.signedOut && fields.logout ? { logout: true } : {}, ...fields.user ? { user: fields.user } : {} } satisfies AuthEpoch);
 const changingNow = (record: AuthEpoch | null) => !!record?.changing && Date.now() - record.at < CHANGE_STALE_MS;
+/**
+ * Whether the server's session may still be live for an account this browser signed out of without
+ * reaching it: the settled sign-out, or a sign-in begun over it whose tab closed mid-request, so its
+ * mark went stale. Neither reads anything until the server's session ends.
+ */
+const owesLogout = (record: AuthEpoch | null) => !!record?.logout && (!!record.signedOut || !!record.changing && !changingNow(record));
 
 // Never equal to stored text: a tab that loads during another tab's transition acts under nothing until it settles.
 const WAITING = "\u0000waiting";
@@ -89,8 +113,8 @@ let era = 0;
 let guarding = false;
 /**
  * The account whose chats, panels, rooms and messages the address may name: the one the record named
- * when the generation started, or the one its bootstrap named since, which can be learned before the
- * record says it. `{}` is an account not yet named.
+ * when the generation started, or the one a screen of it drew since (`drawingAccount`), as the saved
+ * home and bootstrap do, which can be learned before the record says it. `{}` is an account not yet named.
  * Null when it can name none, as an address opened while signed out, which the next account keeps;
  * undefined before this tab's first start, when the address is the one the page opened with.
  */
@@ -101,7 +125,9 @@ let addressFor: { user?: string } | null | undefined;
  * the next sign-in to compare, and otherwise the account the record named, `{}` when it named none.
  */
 const accountOf = (record: AuthEpoch | null) =>
-  !record || record.signedOut || record.changing && record.fromSignedOut ? null : { ...record.user ? { user: record.user } : {} };
+  !record || record.signedOut || owesLogout(record) || record.changing && record.fromSignedOut ? null : { ...record.user ? { user: record.user } : {} };
+/** The account a screen of this generation drew first, as the saved home does before bootstrap answers. */
+let drawnHere: string | undefined;
 const listeners = new Set<() => void>();
 const endHooks = new Set<() => void>();
 
@@ -114,6 +140,7 @@ export function onAccountEnd(hook: () => void) {
 }
 function end() {
   generation++;
+  drawnHere = undefined;
   for (const hook of endHooks) hook();
 }
 function notify() {
@@ -182,7 +209,7 @@ export function watchAccount(listener: () => void) {
     if (listeners.size) return;
     // No app draws any more, as after a test unmounts it, so none shows an account.
     guarding = false;
-    addressFor = undefined;
+    addressFor = drawnHere = undefined;
     window.removeEventListener("storage", heard);
     window.removeEventListener("pagehide", cover);
     window.removeEventListener("pageshow", woke);
@@ -274,14 +301,20 @@ export function accountStart(): AccountStart {
   told = undefined;
   // A worker the browser stopped while it closed the account that left still names it, and no later
   // page says again that no one is signed in, so a settled sign-out says so at every start.
-  if (record?.signedOut) tellWorker(null);
-  return { start: generation > 0 && record?.signedOut ? "signed-out" : "bootstrap", leftAccount };
+  if (record?.signedOut || owesLogout(record)) tellWorker(null);
+  // A sign-out whose server session may still be live shows sign-in even on a fresh page, which would otherwise read it.
+  const out = owesLogout(record) || !!record?.signedOut && generation > 0;
+  return { start: out ? "signed-out" : "bootstrap", leftAccount };
 }
 
 /** Writes a settled record and ends this tab's generation, as every other tab will. */
-function transition(fields: Pick<AuthEpoch, "signedOut" | "user">) {
+function transition(fields: Settled) {
+  settledAs(store(settled(fields)), fields);
+}
+/** Takes `text`, the settled record now stored, and ends this tab's generation, as every other tab will. */
+function settledAs(text: string, fields: Settled) {
   owned = null;
-  seen = store(settled(fields));
+  seen = text;
   tellWorker(fields.signedOut ? null : fields.user ?? null);
   end();
   notify();
@@ -318,15 +351,29 @@ export const beginAccountChange = ({ ownTree = false } = {}) => exclusive(() => 
   const before = stored(), previous = parseEpoch(before);
   // A record this code cannot read says nothing of who is signed in, so it does not count as signed out.
   const fromSignedOut = !before || !!previous?.signedOut;
+  // A sign-out the server may not have heard of stays owed, whatever happens to this request.
   const mark = store(JSON.stringify({
-    id: newId(), at: Date.now(), changing: true, ...fromSignedOut ? { fromSignedOut: true } : {}, ...previous?.user ? { user: previous.user } : {},
+    id: newId(), at: Date.now(), changing: true, ...fromSignedOut ? { fromSignedOut: true } : {}, ...previous?.logout ? { logout: true } : {},
+    ...previous?.user ? { user: previous.user } : {},
   } satisfies AuthEpoch));
   owned = held = seen = mark;
   era++;
   // Until it settles, the cookie may belong to either account, so no push is shown for either.
   tellWorker(null);
   return {
-    settle: (fields: Pick<AuthEpoch, "signedOut" | "user">) => exclusive(() => transition(fields)),
+    settle: (fields: Settled) => exclusive(() => transition(fields)),
+    /**
+     * Settles only once storage holds the record, so every tab and every later page reads it too, and
+     * runs `kept` just before this tab's generation ends. Returns false, having changed nothing, when
+     * storage refuses the write or does not keep it; the mark stays until `undo`.
+     */
+    settleKept: (fields: Settled, kept: () => void) => exclusive(() => {
+      const text = settled(fields);
+      if (!persisted(text)) return false;
+      kept();
+      settledAs(text, fields);
+      return true;
+    }),
     undo: () => exclusive(() => {
       owned = null;
       era++;
@@ -358,11 +405,13 @@ export function accountRefused(hadAccount: boolean) {
 }
 
 /**
- * A bootstrap named `user`. `drawn` is the account this generation already shows, if any. Returns
- * whether the generation may use the answer: not if another account was drawn, which ends it, nor
- * while a transition is under way or after one, when the answer may be for either cookie.
+ * A bootstrap named `user`. `drawn` is the account this generation already shows, if any, from an
+ * earlier bootstrap or else from the saved home. Returns whether the generation may use the answer:
+ * not if another account was drawn, which ends it, nor while a transition is under way or after one,
+ * when the answer may be for either cookie.
  */
-export function accountNamed(user: string, drawn: string | undefined) {
+export function accountNamed(user: string, drawnByBootstrap: string | undefined) {
+  const drawn = drawnByBootstrap ?? drawnHere;
   checkAccount();
   const now = stored(), record = parseEpoch(now);
   if (now !== held || changingNow(record)) return false;
@@ -379,9 +428,32 @@ export function accountNamed(user: string, drawn: string | undefined) {
     held = seen = store(settled({ user }));
   }
   tellWorker(user);
-  // From here the address may name this account's chats, whatever the record named when the generation started.
-  addressFor = { user };
+  drawingAccount(user);
   return true;
+}
+
+/**
+ * A screen of this generation draws `user`'s account, from bootstrap or, before it answers, from the
+ * saved home. From here the address may name that account's chats, whatever the record named when the
+ * generation started, and a bootstrap that names another account ends the generation.
+ */
+export function drawingAccount(user: string) {
+  addressFor = { user };
+  drawnHere ??= user;
+}
+
+/** The account this browser signed out of while the server could not be reached, until the server's session ends. */
+export function pendingSignOut() {
+  const record = current();
+  return record && owesLogout(record) ? record.user ?? "" : null;
+}
+/** The server's session ended. Only the mark goes: every tab already shows sign-in. */
+export function signOutFinished() {
+  const record = current();
+  if (!record || !owesLogout(record)) return;
+  const mine = stored() === held;
+  const now = store(settled({ signedOut: true, user: record.user }));
+  if (mine) held = seen = now;
 }
 
 /**
@@ -418,6 +490,14 @@ export function closeShownNotifications() {
  */
 function leaving() {
   closeShownNotifications();
+  endPushSubscription();
+}
+/**
+ * Ends this browser's push subscription, as a sign-out that could not reach the server must: the
+ * server still holds it for the account that left, and sends that account's pushes here until the
+ * push service answers that it is gone. Turning notifications on again subscribes anew.
+ */
+export function endPushSubscription() {
   const container = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
   void container?.getRegistration().then(registration => registration?.pushManager.getSubscription())
     .then(subscription => subscription?.unsubscribe()).catch(() => {});
