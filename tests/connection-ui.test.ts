@@ -7,13 +7,9 @@ import { SignIn } from '../src/components/SignIn';
 import { api, cachedResponse, write } from '../src/client-api';
 import { defaultPreferences, type Bootstrap, type Conversation } from '../src/shared/types';
 import { FakeEventSource } from './fake-event-source';
-import { advance, button, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
+import { advance, button, mountRoot, reducedMotionOnly, stubMatchMedia, typeInto } from './ui-harness';
 
-vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}))(original)));
-// Presence heartbeats would interleave with the writes these tests count; they have their own tests.
-vi.mock('../src/app/use-chat-presence',()=>({useChatPresence:()=>{}}));
-vi.mock('../src/app/use-device-activity',()=>({useDeviceActivity:()=>{}}));
-vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
+vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn().mockResolvedValue({}),clearResponseCache:vi.fn()}))(original), { heartbeats: false }));
 let root:Root,container:HTMLDivElement,boot:Bootstrap,conversation:Conversation;
 let authConfig:{localDevAuth:boolean;googleClientId?:string};
 let pendingBootstrap:Promise<Bootstrap>|undefined;
@@ -21,7 +17,7 @@ let hermesDown:boolean;
 beforeEach(()=>{
   vi.useFakeTimers();vi.clearAllMocks();  FakeEventSource.reset();vi.stubGlobal('EventSource',FakeEventSource);
   vi.mocked(write).mockReset().mockResolvedValue({});
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   history.replaceState(null,'','/');
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:"assistant"},bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'}],capabilities:Object.fromEntries(['chat','steering','approvals','uploads','generatedFiles','botConfiguration','tools','skills','routines','durableEvents','idempotency','imageGeneration','stop','portraitGeneration','avatarMetadata'].map(key=>[key,{supported:true}])) as Bootstrap['capabilities'],connection:{connected:true},csrfToken:'csrf-one'};
   conversation={botId:'shared',messages:[{id:'answer-one',role:'assistant',text:'Existing canonical answer'}],approvals:[],files:[],activity:{state:'idle'}};

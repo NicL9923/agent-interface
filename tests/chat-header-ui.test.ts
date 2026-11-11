@@ -5,7 +5,6 @@ import { ChatHeader } from "../src/app/ChatHeader";
 import type { Bootstrap, Bot } from "../src/shared/types";
 import { mountRoot } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
 const bot = { id: "ranch", name: "Ranch hand", model: "claude-opus-5-5", modelName: "Claude Opus 5.5", provider: "anthropic", shared: true, activity: "idle" } as Bot;
 const boot = (presentation: "simple" | "advanced") => ({ preferences: { presentation, modelFavorites: [] }, capabilities: { botConfiguration: { supported: true } } }) as unknown as Bootstrap;
 let mount: ReturnType<typeof mountRoot>;

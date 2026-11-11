@@ -5,13 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PreferencesDialog } from "../src/app/PreferencesDialog";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
-import { button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { button, mountRoot, reducedMotionOnly, stubMatchMedia, typeInto } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
-vi.mock("../src/components/DeviceNotifications", () => ({ NotificationSettings: () => null }));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -21,7 +16,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   ({ container, root } = mountRoot());
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   saved = [];
   props = {
     boot: {

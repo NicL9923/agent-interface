@@ -1,34 +1,13 @@
 // @vitest-environment jsdom
-import { createElement, createRef } from "react";
+import { Profiler, createElement, createRef } from "react";
 import type { ComponentProps } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Bootstrap, Message, ToolCall } from "../src/shared/types";
 import type { SavedConversation } from "../src/app/storage";
-import { mountRoot } from "./ui-harness";
+import { mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
 
-// Counts how often each message's pieces render. A turn that bails out renders none of them.
-const renders = vi.hoisted(() => ({ markdown: new Map<string, number>(), actions: new Map<string, number>(), when: new Map<string, number>() }));
-const bump = (map: Map<string, number>, key: string) => map.set(key, (map.get(key) ?? 0) + 1);
-vi.mock("../src/components/MessageMarkdown", async () => {
-  const { createElement } = await import("react");
-  const part = (props: { text: string; messageId: string }) => { bump(renders.markdown, props.messageId); return createElement("p", null, props.text); };
-  return { MessageMarkdown: part, ReplyMarkdown: part };
-});
-// The animated avatar needs SVG geometry jsdom lacks, and has nothing to do with the transcript rows.
-vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
-vi.mock("../src/components/When", async () => {
-  const { createElement } = await import("react");
-  return { When: (props: { value: string }) => { bump(renders.when, props.value); return createElement("time", null, props.value); } };
-});
-vi.mock("../src/app/ReplyActions", async importActual => {
-  const { createElement } = await import("react");
-  return {
-    ...await importActual<typeof import("../src/app/ReplyActions")>(),
-    ReplyActions: (props: { message: { id: string } }) => { bump(renders.actions, props.message.id); return createElement("span"); },
-  };
-});
-const { Conversation } = await import("../src/app/Conversation");
+import { Conversation } from "../src/app/Conversation";
 
 type Props = ComponentProps<typeof Conversation>;
 const boot = {
@@ -63,22 +42,48 @@ const page = (messages: Message[], extra: Partial<SavedConversation> = {}) => ({
 }) as unknown as SavedConversation;
 const tick = (text: string) => page([...base.slice(0, -1), { ...base.at(-1)!, text }]);
 
+// Counts how often each message's pieces render, from the real components. React keeps the props it last rendered onto each element,
+// and that object is new whenever the element's component renders again, so every commit compares them to the last commit's. A Profiler
+// takes the sample after each commit, not after each view(), so a turn that renders twice for one update counts twice. A turn that
+// bails out renders none of its pieces. A message's row is the element its turn renders for it, so it counts the turn's renders even
+// where the memoized Markdown inside it would skip. The ReplyActions this file once replaced no longer exists, so its counts were
+// always 0; `.message-meta` is the row that holds a message's time and actions.
+const renders = { rows: new Map<string, number>(), actions: new Map<string, number>(), when: new Map<string, number>() };
+const seen = new Map<Element, unknown>();
+const pieces: [keyof typeof renders, string, (element: Element) => string | undefined][] = [
+  ["rows", "article[data-message-id]", element => element.getAttribute("data-message-id") ?? undefined],
+  ["actions", "[data-message-id] .message-meta", element => element.closest("[data-message-id]")?.getAttribute("data-message-id") ?? undefined],
+  ["when", "time[datetime]", element => element.getAttribute("datetime") ?? undefined],
+];
+function observe() {
+  for (const [kind, selector, key] of pieces) {
+    for (const element of mount.container.querySelectorAll(selector)) {
+      const id = key(element), props = renderedProps(element);
+      if (id !== undefined && seen.get(element) !== props) renders[kind].set(id, (renders[kind].get(id) ?? 0) + 1);
+      seen.set(element, props);
+    }
+  }
+}
+
 let mount: Mount;
 beforeEach(() => {
   for (const map of Object.values(renders)) map.clear();
+  seen.clear();
+  // Reduced motion shows a live reply as it arrives, so a streamed update is one render, not a paced run of them.
+  stubMatchMedia(reducedMotionOnly);
   mount = mountRoot();
 });
 const refs = { scroll: createRef<HTMLDivElement>(), endSpace: createRef<HTMLDivElement>() };
-function view(conversation: SavedConversation, props: Partial<Props> = {}) {
-  return mount.render(createElement(Conversation, {
+async function view(conversation: SavedConversation, props: Partial<Props> = {}) {
+  await mount.render(createElement(Profiler, { id: "transcript", onRender: observe }, createElement(Conversation, {
     boot, selected: bot, botId: "bot", conversation, canonical: conversation, ownRows: new Set<string>(), echo: null, state: "working", showActivity: true, avatarState: "working",
     connectionLost: false, offline: false, appUnavailable: false, checkingConnection: false, reconnect: async () => {}, error: "", setError: () => {},
     notifications: { prompt: false } as Props["notifications"], scroll: refs.scroll, endSpace: refs.endSpace,
     content: () => {}, history: { earlier: false, complete: false, atLatest: true } as Props["history"],
     reply: null, onScroll: () => {}, onCreate: () => {}, onDraft: () => 0, ...props,
-  } as Props));
+  } as Props)));
 }
-const snapshot = () => ({ markdown: new Map(renders.markdown), actions: new Map(renders.actions), when: new Map(renders.when) });
+const snapshot = () => ({ rows: new Map(renders.rows), actions: new Map(renders.actions), when: new Map(renders.when) });
 type Counts = ReturnType<typeof snapshot>;
 /** How many more times each of these rendered since `before`. */
 const grew = (before: Counts, map: keyof Counts, ids: string[]) => ids.map(id => (renders[map].get(id) ?? 0) - (before[map].get(id) ?? 0));
@@ -91,21 +96,21 @@ async function mounted(props?: Partial<Props>) {
 describe("transcript re-rendering", () => {
   it("re-renders only the live turn while a reply streams", async () => {
     const before = await mounted();
-    expect(before.markdown.get(live)).toBe(1);
+    expect(before.rows.get(live)).toBe(1);
     // Older messages keep their objects, as use-conversation's inflight patches leave them.
     await view(tick("Starting to"));
     await view(tick("Starting to answer"));
     expect(mount.container.textContent).toContain("Starting to answer");
-    expect(grew(before, "markdown", replies)).toEqual([0, 0]);
+    expect(grew(before, "rows", replies)).toEqual([0, 0]);
     expect(grew(before, "actions", replies)).toEqual([0, 0]);
     expect(grew(before, "when", finishedStamps)).toEqual(unchanged(finishedStamps));
-    expect(grew(before, "markdown", [live])).toEqual([2]);
+    expect(grew(before, "rows", [live])).toEqual([2]);
   });
 
   it("re-renders nothing when a full reload returns identical content", async () => {
     const before = await mounted();
     await view(page(structuredClone(base)));
-    expect(grew(before, "markdown", [...replies, live])).toEqual([0, 0, 0]);
+    expect(grew(before, "rows", [...replies, live])).toEqual([0, 0, 0]);
     expect(grew(before, "actions", replies)).toEqual([0, 0]);
     expect(grew(before, "when", stamps)).toEqual(unchanged(stamps));
   });
@@ -116,8 +121,8 @@ describe("transcript re-rendering", () => {
     edited[2]!.text = "first answer, corrected";
     await view(page(edited));
     expect(mount.container.textContent).toContain("first answer, corrected");
-    expect(grew(before, "markdown", replies)).toEqual([1, 0]);
-    expect(grew(before, "markdown", [live])).toEqual([0]);
+    expect(grew(before, "rows", replies)).toEqual([1, 0]);
+    expect(grew(before, "rows", [live])).toEqual([0]);
   });
 
   it("re-renders a finished turn when a saved line turns out to be a progress line", async () => {
@@ -126,7 +131,7 @@ describe("transcript re-rendering", () => {
     marked[2]!.interim = true;
     await view(page(marked));
     expect(mount.container.querySelector(`[data-message-id="a1"]`)!.classList.contains("message-interim")).toBe(true);
-    expect(grew(before, "markdown", replies)).toEqual([1, 0]);
+    expect(grew(before, "rows", replies)).toEqual([1, 0]);
   });
 
   it("re-renders the turn whose tool call settles, and no other", async () => {
@@ -135,14 +140,14 @@ describe("transcript re-rendering", () => {
     const messages = structuredClone(base);
     messages[1]!.toolCall = done;
     await view(page(messages, { toolCalls: [done] }));
-    expect(grew(before, "markdown", replies)).toEqual([1, 0]);
-    expect(grew(before, "markdown", [live])).toEqual([0]);
+    expect(grew(before, "rows", replies)).toEqual([1, 0]);
+    expect(grew(before, "rows", [live])).toEqual([0]);
   });
 
   it("re-renders the latest turn when its run ends", async () => {
     const before = await mounted();
     await view(page(base, { activity: { state: "done" } as SavedConversation["activity"] }), { state: "done", showActivity: false });
-    expect(grew(before, "markdown", [...replies, live])).toEqual([0, 0, 1]);
+    expect(grew(before, "rows", [...replies, live])).toEqual([0, 0, 1]);
   });
 
   it("re-renders only the turn that holds the message still on its way", async () => {
@@ -150,7 +155,7 @@ describe("transcript re-rendering", () => {
     const echo = { request: { requestId: "u3" }, status: "sending" } as unknown as Props["echo"];
     await view(page(base), { echo });
     expect(mount.container.textContent).toContain("Sending…");
-    expect(grew(before, "markdown", [...replies, live])).toEqual([0, 0, 1]);
+    expect(grew(before, "rows", [...replies, live])).toEqual([0, 0, 1]);
   });
 });
 

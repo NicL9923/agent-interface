@@ -17,8 +17,11 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
 
 - Server tests run the real Fastify app with the in-memory store and a fake
   runtime that throws on any method the test did not configure. UI tests mock
-  only the client API module. Python tests use temp directories and fake
-  executables on PATH, never patched private methods of the code under test.
+  only the client API module. The kept exceptions are `preparePortrait`, which
+  needs an image decoder and canvas that jsdom lacks, and the retired chunks in
+  `view-failure`, which cannot fail to load from disk. Python tests use temp
+  directories and fake executables on PATH, never patched private methods of
+  the code under test.
 - Every validation guard and every decision table gets bad-input and
   cross-state cases, not just the path through. Upgrade restore-or-restart,
   delivery pruning, and live-activity filters are the past misses.

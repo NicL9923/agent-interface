@@ -7,6 +7,17 @@ if (typeof document !== "undefined") {
   // jsdom has no canvas. Its getContext already returns null, but logs "Not implemented" each
   // time; this returns the same null quietly. Tests that need a context still stub their own.
   HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+  // jsdom has no SVG path geometry or media queries, which the real Avatar reads on every render. These stand in for the browser, so no
+  // test replaces the Avatar itself: a path is 100 units long and a point at a distance lies at x = distance. Nothing asserts a pose's
+  // geometry here; tests/avatar-motion.test.ts covers the rig. Only reduced motion matches: an animating Avatar draws a frame every 16 ms
+  // of virtual time, which costs a test most of a second and is what no UI test looks at, so avatars stay still unless a test asks for motion.
+  Object.assign(SVGElement.prototype, {
+    getTotalLength: () => 100,
+    getPointAtLength: (distance: number) => ({ x: distance, y: 0 }),
+  });
+  if (!window.matchMedia) {
+    window.matchMedia = ((query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)", media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+  }
   // A test's own console mock would otherwise swallow React's act warnings; see tests/act-guard.ts.
   const logError = console.error;
   console.error = (...args: unknown[]) => { if (!recordActWarning(args)) logError.apply(console, args); };

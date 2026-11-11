@@ -12,7 +12,7 @@ import { useTurnRetry } from "../src/app/use-turn-retry";
 import { formRequestId, retryRequestId } from "../src/shared/retry-id";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
-import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -20,13 +20,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   write: vi.fn().mockResolvedValue({}),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}))(original)));
-vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
-vi.mock("../src/app/use-device-activity", () => ({ useDeviceActivity: vi.fn() }));
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => createElement("span"),
-}));
+}))(original), { heartbeats: false }));
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
@@ -58,7 +52,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   writeText.mockReset().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
   history.replaceState(null, "", "/");
@@ -459,6 +453,8 @@ describe("questions", () => {
 
 describe("approval decisions", () => {
   it("cheers the assistant on an approval, nods on a decline and folds a settled card away", async () => {
+    // Motion is on here: the avatar reacts only when it moves.
+    stubMatchMedia(() => false);
     const reactions: unknown[] = [];
     const heard = (event: Event) => reactions.push((event as CustomEvent).detail);
     window.addEventListener("wildbots:avatar-react", heard);
