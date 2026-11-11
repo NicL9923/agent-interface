@@ -70,19 +70,19 @@ is what the `bot` dependency is tested by. No production code changed.
 
 ## Checks
 
-`.agents/tools/check-all` at the commit:
+`.agents/tools/check-all` at the review-fix commit `51a4e59`, after merging `origin/main`:
 
 ```
 check      result   queued  run    counts
 typecheck  pass     -       0.6s   -
 lint       pass     -       0.3s   -
 ruff       pass     -       0.0s   -
-test       pass     -       15.5s  207 files, 3685 tests
+test       pass     -       16.6s  207 files, 3688 tests
 build      pass     -       1.4s   893 modules
-e2e        pass     -       1m14s  40 tests
+e2e        pass     -       1m15s  40 tests
 py         skipped  -       -      no changes to Python or a file the Python tests read against origin/main
 
-All 6 checks passed (1m32s total, 0.0s of it queued for heavy slots)
+All 6 checks passed (1m34s total, 0.0s of it queued for heavy slots)
 ```
 
 ## Not exercised
