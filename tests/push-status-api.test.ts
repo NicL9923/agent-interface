@@ -41,7 +41,7 @@ it("requires Origin and CSRF for status reads and rejects identities supplied in
 // A lapsed session cannot remove its subscription, and the browser keeps it. The next member to
 // sign in there subscribes with the same endpoint and keys, which moves it to them.
 const keys = { p256dh: "member-one-key", auth: "member-one-auth" };
-const subscribe = (s: Awaited<ReturnType<typeof setup>>, headers: object, payload: object) =>
+const subscribe = (s: Awaited<ReturnType<typeof setup>>, headers: Record<string, string>, payload: object) =>
   s.app.inject({ method: "POST", url: "/api/push/subscriptions", headers, payload });
 const owned = (s: Awaited<ReturnType<typeof setup>>) => ({ one: s.store.subscriptions("one").map(item => item.endpoint), two: s.store.subscriptions("two").map(item => item.endpoint) });
 
@@ -86,7 +86,7 @@ it.each([
 it("accepts a subscription only as a signed-in member's complete https request, for that member and no one the body names", async () => {
   const s = await setup();
   await subscribe(s, s.one, { endpoint, keys });
-  const cases: [string, object, object, number][] = [
+  const cases: [string, Record<string, string>, object, number][] = [
     ["no session", {}, { endpoint, keys }, 401],
     ["no CSRF token", { cookie: s.two.cookie, origin }, { endpoint, keys }, 403],
     ["an http endpoint", s.two, { endpoint: endpoint.replace("https", "http"), keys }, 400],
