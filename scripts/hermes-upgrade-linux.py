@@ -87,6 +87,9 @@ def timestamp(value):
 
 # The subprocess runs in the current native PM-selected interpreter, activates
 # its managed dependency generation, and reads credentials only from stdin.
+# rpc waits `wait` seconds (default 15) for each message. An error answer exits
+# nonzero as before, after printing it as the last stdout line, so a caller can tell
+# "the add-on refused" from "no answer arrived" (.agents/tools/deploy_common.py).
 NATIVE = r'''
 import json,sys
 from pathlib import Path
@@ -107,9 +110,11 @@ elif v['action']=='rpc':
     with connect(v['origin'].replace('http://','ws://',1)+'/api/ws?ticket='+ticket,open_timeout=10,close_timeout=5) as ws:
         ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'agent-interface.maintenance','params':{'action':v['method'],'operation_id':v['operation'],'service_key':v['key']}}))
         for _ in range(100):
-            result=json.loads(ws.recv(timeout=15))
+            result=json.loads(ws.recv(timeout=v.get('wait',15)))
             if result.get('id')==1:
-                if 'error' in result: raise RuntimeError('Native maintenance request rejected')
+                if 'error' in result:
+                    print(json.dumps({'answeredError':result['error']}),flush=True)
+                    raise RuntimeError('Native maintenance request rejected')
                 print(json.dumps(result['result'])); break
         else: raise RuntimeError('Native maintenance result unavailable')
 '''

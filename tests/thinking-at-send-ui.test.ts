@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { api, ApiError, write } from "../src/client-api";
 import { COPY_HANDOFF_MS, ECHO_PATIENCE, SENDING_ROW_MS } from "../src/app/sent-echo";
+import { draftKey, localRead, type Draft } from "../src/app/storage";
 import { defaultPreferences } from "../src/shared/types";
 import type { ActivityState, Bootstrap, Conversation, SubmissionReceipt } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
@@ -327,7 +328,7 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     expect(status()).toBeNull();
   });
 
-  it("goes after the echo's patience when an accepted message never starts a turn, as a typed stop phrase does", async () => {
+  it("goes after the echo's patience when an accepted message never starts a turn, as a typed stop phrase does from an older add-on", async () => {
     await open();
     await send();
     await act(async () => sent!.resolve({}));
@@ -335,6 +336,45 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await advance(ECHO_PATIENCE + 200);
     expect(row()).toBeNull();
     expect(echo()).toBeUndefined();
+  });
+
+  // Nothing reached the assistant, so the words go back into the message box, and the next send is a new message.
+  it("goes at once, with the message, when Hermes says a typed stop phrase admitted nothing, says why, and keeps the draft", async () => {
+    await open();
+    await send();
+    expect(status()).toBe("Shared is thinking...");
+    expect(container.querySelector("textarea")!.value).toBe("");
+    await act(async () => sent!.resolve({ turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." }));
+    expect(row()).toBeNull();
+    expect(echo()).toBeUndefined();
+    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    expect(container.querySelector("textarea")!.value).toBe("Feed the horses");
+    // A reload finds the words too, no longer marked as the copy on its way.
+    expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
+    expect(localRead<Draft>(draftKey("one", "shared"))).not.toHaveProperty("sentHash");
+    expect(sendButton().disabled).toBe(false);
+  });
+
+  it("keeps the draft when a check finds a lost send was a typed stop that admitted nothing", async () => {
+    await open();
+    await send();
+    lookup = requestId => ({ requestId, status: "accepted", runId: "run", turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." });
+    await act(async () => sent!.reject(new ApiError("Hermes is unavailable.", 503)));
+    await waitForUi(() => expect(container.querySelector("textarea")!.value).toBe("Feed the horses"));
+    expect(echo()).toBeUndefined();
+    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    // A reload finds the words too, no longer marked as the copy on its way.
+    expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
+    expect(localRead<Draft>(draftKey("one", "shared"))).not.toHaveProperty("sentHash");
+  });
+
+  it("adds no row once Hermes says it put the message into the running turn", async () => {
+    await open();
+    await send();
+    await act(async () => sent!.resolve({ steered: false, turn: "joined" }));
+    expect(row()).toBeNull();
+    expect(echo()).toBeDefined();
+    expect(echo()!.textContent).not.toContain("Added to the current task");
   });
 
   it("refuses a send during a failed read, so no row appears", async () => {
@@ -415,6 +455,37 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     expect(retry()).toBeDefined();
     watch.stop();
     expect(watch.nodes).toHaveLength(1);
+  });
+
+  // Two reads asked while Hermes admits the message both report the last turn's failure, the second ordered after the
+  // first. Hermes's answer says the turn started, at the version it reached the server, so neither ends the row.
+  it("keeps thinking through the last turn's failure in every read asked during a started turn's admission, and shows this turn's from the first read after", async () => {
+    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed" }, version: "boot:0:4" };
+    await open();
+    const retry = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry");
+    await send();
+    const watch = watchStatusNodes();
+    await act(async () => sent!.resolve({ turn: "started", admittedVersion: "boot:0:7" }));
+    await report({ messages: [answer, prompt, copy()], version: "boot:0:5" });
+    expect(status()).toBe("Shared is thinking...");
+    await report({ version: "boot:0:6" });
+    expect(status()).toBe("Shared is thinking...");
+    expect(retry()).toBeUndefined();
+    await report({ version: "boot:0:8" });
+    expect(row()?.textContent).toContain("Shared couldn't finish.");
+    expect(retry()).toBeDefined();
+    watch.stop();
+    expect(watch.nodes).toHaveLength(1);
+  });
+
+  it("shows a started turn's failure at once when the read that brings the copy was asked after its admission", async () => {
+    conversation = { ...conversation, version: "boot:0:4" };
+    await open();
+    await send();
+    await act(async () => sent!.resolve({ turn: "started", admittedVersion: "boot:0:7" }));
+    await report({ messages: [prompt, answer, copy()], activity: { state: "failed" }, version: "boot:0:8" });
+    expect(row()?.textContent).toContain("Shared couldn't finish.");
+    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(true);
   });
 
   it("never paints thinking on returning to the chat after the handoff bound passed in another chat", async () => {

@@ -161,6 +161,7 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     ["the message went to another assistant", [{ ...sending, request: { ...request, botId: "other" } }], conversation()],
     ["it ended without a receipt", [step(sending, { pending: request })!], conversation()],
     ["Hermes steered it into the running task", [step(sending, { receipt: { ...accepted, steered: true } })!], conversation()],
+    ["Hermes put it into the running turn", [step(sending, { receipt: { ...accepted, steered: false, turn: "joined" } })!], conversation()],
     ["it was sent while the chat showed work", [step(null, { pending: request, sending: true, conversation: conversation(undefined, "working") })!], conversation()],
     ["its turn already showed work", [{ ...acceptedEcho, ran: true }], conversation()],
     ["Hermes's copy is in the chat with a reply after it",
@@ -244,5 +245,54 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     const elsewhere = { ...conversation(), botId: "other" };
     expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
     expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+  });
+
+  // Hermes's answer says what became of the turn. A typed stop phrase admitted nothing and Hermes saved nothing.
+  it("leaves at once when a typed stop phrase admitted nothing, and a joined message reads as no steer of its own", () => {
+    expect(step(sending, { receipt: { ...accepted, turn: "none" } })).toBeNull();
+    expect(nextEchoes([sending], { pending: null, receipt: { ...accepted, turn: "none" }, sending: false, conversation: conversation(), sender, now: 1000 })).toEqual([]);
+    // Joined text goes into the running turn, but Hermes's copy does not say so, so the echo does not either.
+    const joined = step(sending, { receipt: { ...accepted, steered: false, turn: "joined" } })!;
+    expect(withEchoes(conversation(), [joined])!.messages.at(-1)).not.toHaveProperty("steered");
+    // Joined, its copy hands nothing off: the running turn's row is already Hermes's.
+    expect(step(joined, { receipt: accepted, conversation: copied, now: 2000 })).toBeNull();
+  });
+
+  // Two reads asked inside one admission: the second is ordered after the first, and both report the turn before.
+  // Only a started turn's answer, stamped with the version it reached the server at, tells them from this turn's.
+  const started: SubmissionReceipt = { ...accepted, turn: "started", admittedVersion: "b:0:7" };
+  it("ends on a settled report only from a read asked after a started turn's admission, however the reads arrive", () => {
+    const echo = step(sending, { receipt: started })!;
+    expect(echo).toMatchObject({ turn: "started", admittedVersion: "b:0:7" });
+    for (const state of ["failed", "interrupted", "done"] as const) {
+      const kept = step(echo, { receipt: started, conversation: settled(state, "b:0:5"), now: 2000 })!;
+      expect(awaitingTurn([kept], settled(state, "b:0:5"), 2000)).toBe(true);
+      // Later than the copy's read, still inside the admission, and the read at the answer's own version may have
+      // been asked just before it: each is the turn before's report.
+      for (const version of ["b:0:6", "b:0:7"]) {
+        expect(awaitingTurn([kept], settled(state, version), 2100)).toBe(true);
+        expect(step(kept, { receipt: started, conversation: settled(state, version), now: 2100 })).toBe(kept);
+      }
+      expect(awaitingTurn([kept], settled(state, "b:0:8"), 2100)).toBe(false);
+      expect(step(kept, { receipt: started, conversation: settled(state, "b:0:8"), now: 2100 })).toBeNull();
+      // Asked after the admission, the read that brings the copy reports this turn, so it ends the row itself.
+      expect(step(echo, { receipt: started, conversation: settled(state, "b:0:8"), now: 2000 })).toBeNull();
+    }
+  });
+
+  it("falls back to the copy's read without a started turn or a version that compares", () => {
+    const after = (receipt: SubmissionReceipt, version: string) => {
+      const kept = step(step(sending, { receipt })!, { receipt, conversation: settled("failed", "b:0:5"), now: 2000 })!;
+      return awaitingTurn([kept], settled("failed", version), 2100);
+    };
+    // Only a started turn's answer orders reads by admission. Queued, unknown and an older add-on's answer keep
+    // the rule before: a read later than the copy's ends the row.
+    for (const turn of ["queued", "unknown", undefined] as const)
+      expect(after({ ...accepted, admittedVersion: "b:0:7", ...turn ? { turn } : {} }, "b:0:6")).toBe(false);
+    // Without the version, or from another server process, the same.
+    expect(after({ ...accepted, turn: "started" }, "b:0:6")).toBe(false);
+    expect(after({ ...started, admittedVersion: "c:0:1" }, "b:0:6")).toBe(false);
+    // And the copy's own read still never ends it.
+    expect(after({ ...started, admittedVersion: "c:0:1" }, "b:0:5")).toBe(true);
   });
 });

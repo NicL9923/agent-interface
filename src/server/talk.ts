@@ -10,6 +10,7 @@ import { redactAgents, type Roster } from "./bot-access.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
+import { withAdmission } from "./store-submissions.js";
 
 // Each Talk start mints a paid Realtime session on the household's ChatGPT sign-in.
 const MINT_INTERVAL_MS = 5_000;
@@ -138,6 +139,8 @@ export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversatio
   if (receipt.status === "rejected") return { state: "refused", text: receipt.message };
   if (receipt.status === "interrupted") return { state: "interrupted" };
   if (receipt.status !== "accepted") return undefined;
+  // A typed stop phrase ended Hermes's voice chat and sent nothing to the assistant, so no turn will ever show.
+  if (receipt.turn === "none") return { state: "refused", text: receipt.message || "Hermes ended its voice chat. Nothing was sent to the assistant." };
   const { activity } = conversation;
   const active = ["waiting", "blocked", ...running].includes(activity.state);
   // Without a run ID, as from an older add-on, any work may be this request's.
@@ -222,10 +225,11 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     let receipt = await send(botId, userId, requestId, request);
     const idempotent = (await runtime.capabilities()).idempotency.supported;
     // Hermes settles an admitted request's receipt, as when its work is interrupted; the recorded one stays as admitted.
+    // A lookup never carries the admission's turn, so an accepted one keeps the turn this request was admitted with.
     const refresh = async () => {
       if (!idempotent || !["accepted", "uncertain"].includes(receipt.status)) return;
       const known = await runtime.lookupSubmission(requestId).catch(() => null);
-      if (known && known.status !== "uncertain") { store.receipt(known); receipt = known; }
+      if (known && known.status !== "uncertain") { store.receipt(known); receipt = withAdmission(known, receipt); }
     };
     await refresh();
     if (receipt.status === "uncertain") return { state: "working" };

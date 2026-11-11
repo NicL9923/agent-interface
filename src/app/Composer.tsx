@@ -240,9 +240,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   const drop = useFileDrop(footer, addFiles);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
   const declinedStep = useDeclined(botId);
-  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message.
+  // Only a receipt arriving after the decline counts: the one already showing belongs to an earlier message. A typed
+  // stop phrase that ended Hermes's voice chat reached no one, so the question stays.
   useEffect(() => {
-    if (declinedStep && receipt?.status === "accepted") clearDecline(botId);
+    if (declinedStep && receipt?.status === "accepted" && receipt.turn !== "none") clearDecline(botId);
   }, [receipt?.requestId, receipt?.status]);
   // Up and Down in an empty composer browse this person's earlier messages here, newest first.
   const [recall, setRecall] = useState<Recall>(null);
@@ -299,6 +300,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   </div> });
   if (receipt?.status === "rejected") notices.push({ id: "send-rejected", kind: "send", node: <div className="notice attention" role="alert">
     {receipt.message || "Hermes did not accept this message. Your draft is saved."}
+  </div> });
+  // A typed stop phrase ended Hermes's voice chat. Hermes saved nothing, so the sent message leaves the chat and this says why.
+  if (receipt?.status === "accepted" && receipt.turn === "none") notices.push({ id: "send-not-admitted", kind: "send", node: <div className="notice" role="status">
+    {receipt.message || "Hermes ended its voice chat. Nothing was sent to the assistant."}
   </div> });
   if (receipt?.status === "interrupted") notices.push({ id: "send-interrupted", kind: "send", node: <div className="notice attention">
     This submission was interrupted. Review its last actions before trying again.
