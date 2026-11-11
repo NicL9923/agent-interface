@@ -82,7 +82,7 @@ Each protecting line broken, the file run, the source restored:
 
 | Break | Result |
 | --- | --- |
-| `plain-text.ts` reads the whole input, not 2,000 characters | failed: 3 tests (the two ratio tests and the first-1,000 test) |
+| `plain-text.ts` parse skips its read cuts and parses the whole input | failed: 3 tests (the two ratio tests and the first-1,000 test). The review found that removing only the outer `slice(0, READ_CHARS * 2)` fails nothing, because the inner `READ_CHARS` cut still bounds the read; the break has to bypass both, and that fails 5 tests |
 | `conversation-routes.ts` throttle `last + 1000 - Date.now()` replaced by 0 | failed: the growth-notice test |
 | `event-stream.ts` `closed` always false | failed: 2 `group-watch` tests |
 | `compaction.py` `lock.acquire(timeout=...)` without the timeout | failed: the held-lock test, at its 10 s release |
@@ -113,3 +113,14 @@ No production code changed, so nothing here proves a product timing is right; on
 e2e `growth steps` check still depends on a real browser's pacing. The ledger entries `20261110T150036Z-flaky-digest-ui-tests.md` and
 `20261111T075000Z-form-test-digest.md` list the tests that still fail under heavy starvation (`account-transitions-ui`, `live-updates-ui`,
 `message-markdown`, `reply-keys`, `streaming-hold-back`) and that this change leaves alone.
+
+## Review fixes
+
+The Opus review found three P3s. Each fix and its red run:
+
+| Change | Break | Result |
+| --- | --- | --- |
+| `plain-text` gets "parses a list nested as deep as the read window holds without stalling": one 498-deep list, one parse, under 3 s of CPU. The ratio test can't see a slowdown inside the window, and the old 2 s wall-clock budget could | `parse` burns 3.5 s when the text starts with a list marker | failed: 3,579 ms against 3,000. Unbroken, 3 of 3 passed |
+| The megabyte scan stops measuring the full size at the first run under the limit, or at one 1.5 times over it | `_Delimiters.next` scans positions linearly, so the whole scan is quadratic | failed: 129.1 s against 64.8 s, after 154 s. The same break took 419 s before this change, running the slow size three times. Unbroken, 0.53 s |
+| The hand-break row for `plain-text.ts` says which break fails the tests | none, wording only | not applicable |
+

@@ -79,6 +79,13 @@ it("reads adversarial text in one pass", () => {
   expect(whole).toBeLessThan(window * 4);
 });
 
+it("parses a list nested as deep as the read window holds without stalling", () => {
+  // The ratio above can't see a slowdown inside the window, so one text that fills it with nesting gets a ceiling of its own.
+  // One parse takes about 185 ms of CPU; 3 s of CPU is a hang, not a slow machine.
+  const deepest = ("- ".repeat(498) + "x\n").padEnd(WINDOW, "x");
+  expect(cpuMs(() => markdownPlain(deepest), 1)).toBeLessThan(3000);
+});
+
 it("skips a horizontal rule when titling a reply", () => {
   expect(replyTitle("---\nActual summary.")).toBe("Actual summary.");
 });
