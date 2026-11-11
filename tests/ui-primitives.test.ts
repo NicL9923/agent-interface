@@ -112,6 +112,33 @@ it("never opens a nested dialog that unmounted while it waited for its outer one
   expect(showModal.mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"))).toEqual(["outer"]);
 });
 
+/** Both dialogs mounted, the outer one left closed by a `showModal` that does nothing, so a test opens it by hand. */
+async function mountNestedUnderClosedOuter() {
+  const showModal = vi.mocked(HTMLDialogElement.prototype.showModal);
+  showModal.mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
+  const inner = () => showModal.mock.contexts.filter(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label") === "inner").length;
+  return { outer: container.querySelector<HTMLDialogElement>('dialog[aria-label="outer"]')!, inner };
+}
+
+it("stops watching its outer dialog once it has opened, so a later change to it does not open it again", async () => {
+  const { outer, inner } = await mountNestedUnderClosedOuter();
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+  await act(async () => { outer.open = false; });
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+});
+
+it("waits for its outer dialog's next opening when that opened and closed before it could open", async () => {
+  const { outer, inner } = await mountNestedUnderClosedOuter();
+  // One change notice for both: by the time it runs, the outer dialog is closed again.
+  await act(async () => { outer.open = true; outer.open = false; });
+  expect(inner()).toBe(0);
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+});
+
 it.each([false, true])("portals a popover into its native dialog when nested=%s", async (nested) => {
   const popover = h(Popover, { defaultOpen: true }, h(PopoverTrigger, null, "Options"),
     h(PopoverContent, { "aria-label": "Options" }, h(Button, null, "Action")));

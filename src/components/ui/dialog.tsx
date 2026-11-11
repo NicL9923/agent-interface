@@ -70,6 +70,8 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
       const outer = element.parentElement?.closest("dialog");
       if (outer && !outer.open) {
         waiting = new MutationObserver(() => {
+          // An outer dialog that opened and closed again before this ran is not open to sit above; wait for its next opening.
+          if (!outer.open) return;
           waiting?.disconnect();
           present();
         });

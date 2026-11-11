@@ -43,3 +43,29 @@ An earlier browser red run that replaced the condition with `if (false)` did not
 
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 199 files, 3382 tests
 passed. `npm run test:e2e` (`E2E_PORT=4580`): 28 passed.
+
+## Review fixes: the observer's callback
+
+Merged `origin/main` at `2f1670e` first, as its own commit. Review found two things in the callback of the observer an
+inner dialog uses while it waits for its outer one (`src/components/ui/dialog.tsx`).
+
+- Removing `waiting?.disconnect()` from the callback failed no test.
+- The callback opened the inner dialog without checking `outer.open` again. An outer dialog that opened and closed before
+  the callback ran (one notice for both changes) left the inner one open above nothing. It now returns when the outer
+  dialog is closed, before it disconnects, so the inner dialog opens at the outer one's next opening.
+
+### Tests and red proof
+
+`tests/ui-primitives.test.ts`: "stops watching its outer dialog once it has opened, so a later change to it does not
+open it again" (the outer dialog closes and opens again after the inner one opened; the inner one's `showModal` ran
+once) and "waits for its outer dialog's next opening when that opened and closed before it could open" (opened and closed
+in one change, then opened again). Each line broken by hand, the two vitest files run, then restored:
+
+- `waiting?.disconnect()` removed from the callback: "stops watching" fails.
+- `if (!outer.open) return;` removed: "waits for its outer dialog's next opening" fails.
+- `disconnect()` moved before the guard (the inner dialog would then never open): the same test fails.
+
+### Checks
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 202 files, 3526 tests
+passed. `npm run test:e2e` (`E2E_PORT=4580`): 39 passed.
