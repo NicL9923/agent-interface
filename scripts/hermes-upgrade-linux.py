@@ -95,7 +95,8 @@ def timestamp(value):
 #                             so the add-on never saw it
 #   {"deadlinePassed": true}  the request carried a `deadline` shorter than `wait`, and the whole
 #                             `wait` has passed since it was sent without an answer. An add-on that
-#                             honors the deadline writes no lease after it, so none can appear
+#                             honors the deadline writes no lease after it, which counts from its handler's
+#                             start, so a caller watches for a late one (DEADLINE_WATCH_SECONDS)
 #   no marker                 the request may have reached the add-on and no answer came back
 # A failure after the send waits out the rest of `wait` first, so a dropped socket gets the same
 # proof as a silent one. Method `capabilities` asks `agent-interface.capabilities`, which takes no
@@ -159,14 +160,30 @@ MAINTENANCE_WAIT = {"acquire": 120}
 DEFAULT_MAINTENANCE_WAIT = 15
 # The add-on's acquire takes an optional `deadline`, the seconds the caller will wait, counted from the moment its
 # handler starts, and writes no lease after it (src/hermes/extension.py, acquire_lease); an add-on that honors it says
-# `maintenance_deadline: true` in `agent-interface.capabilities`. The deadline is the wait less this margin, so the
-# whole wait passing with no answer proves no lease can appear. The margin covers what the add-on does not bound: the
-# handler starting late, since a request waits for a free thread in Hermes's dispatch pool, and its answer crossing
-# the socket. Its own overrun past the deadline is one 50 ms lock attempt and a 20 ms poll (src/hermes/compaction.py,
-# LOCK_SECONDS, preempt), so 30 s, one full preempt wait, is over 100 times that. 90 s is three full preempt waits,
-# the chain the 120 s wait was sized for, and a longer chain now ends in a refusal, not a held review.
+# `maintenance_deadline: true` in `agent-interface.capabilities`, with an `executor_epoch` naming its process. The
+# deadline is the wait less this margin. The margin covers what the add-on does not bound: the handler starting late,
+# since a request waits for a free thread in Hermes's dispatch pool, and its answer crossing the socket. Its own overrun
+# past the deadline is one 50 ms lock attempt and a 20 ms poll (src/hermes/compaction.py, LOCK_SECONDS, preempt), so
+# 30 s, one full preempt wait, is over 100 times that. 90 s is three full preempt waits, the chain the 120 s wait was
+# sized for, and a longer chain now ends in a refusal, not a held review. The release tool holds the same values
+# (.agents/tools/deploy_common.py).
 DEADLINE_MARGIN = 30
 ACQUIRE_DEADLINE = MAINTENANCE_WAIT["acquire"] - DEADLINE_MARGIN
+# The clock starts when the handler does, not when the request was sent, and a handler that starts late can write its
+# lease after the wait is over. So an acquire with no answer for the whole wait does not prove there is no lease: a
+# release confirmed at that point proves only that none existed then. What bounds a late handler is the order of
+# the queue. Hermes dispatches each WebSocket request with asyncio.to_thread(server.dispatch) (tui_gateway/ws.py,
+# _dispatch_request), the loop's default executor, whose work queue is first in, first out, and the maintenance
+# methods are not among the handlers that move to the separate RPC pool. The acquire was sent over its own socket
+# at least a full wait before the release, so it was queued first, and its handler started no later than the
+# release's. Its lease is therefore written no later than the deadline, ACQUIRE_DEADLINE s, plus the overrun above
+# after the release's handler began, and the release's answer came after that. So the worker watches for this
+# operation's lease for ACQUIRE_DEADLINE s plus this grace, which covers a few threads taking the add-on's
+# maintenance lock in another order (it is only ever held for a file read or write, never across a preempt),
+# and releases again if the lease shows. This rests on that queue order. A change of Hermes's dispatch that
+# stops queuing in order, or runs maintenance elsewhere, breaks it.
+DEADLINE_WATCH_GRACE = 10
+DEADLINE_WATCH_SECONDS = ACQUIRE_DEADLINE + DEADLINE_WATCH_GRACE
 # Beyond the wait: 10 s for the service ticket, 10 s to open the socket, 5 s to close it, and 5 s to
 # start the interpreter. Status and release keep the 45 s they always had.
 MAINTENANCE_OVERHEAD = 30
@@ -196,8 +213,9 @@ class Answered(RuntimeError):
 
 
 class DeadlinePassed(RuntimeError):
-    """An acquire sent with a deadline got no answer for the whole wait, which is longer than the deadline. The
-    add-on writes no lease after the deadline, so none can appear and a release is final."""
+    """An acquire sent with a deadline got no answer for the whole wait, which is longer than the deadline. The add-on
+    writes no lease after the deadline, which counts from when its handler started: a release is final only after a
+    watch (DEADLINE_WATCH_SECONDS) for a handler that started late."""
 
     def __init__(self, method, deadline):
         super().__init__("Hermes did not answer maintenance " + method + " within its " + str(deadline) + " s deadline")
@@ -607,12 +625,14 @@ print(json.dumps({'ok':True,'state':'synced'}))
             print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
             raise SystemExit(75) from None
         # Read before the phase is saved: asking for capabilities changes nothing and may fail without consequence.
-        deadline = self.acquire_deadline()
+        deadline, epoch = self.acquire_deadline()
         self.save({"baseline": baseline, "phase": "acquiring"})
         # 75 is a proven harmless rejection: the add-on's acquire handler returned or never received
         # the request, and a release then left no lease, drain or changed host state. The handler preempts compactions before it
         # writes the lease when it would otherwise succeed, so an acquire with no answer may still take it after any release; that
-        # is never 75, unless it carried a deadline and the whole wait has passed (DeadlinePassed). Every other failure, including any cleanup uncertainty, fails closed.
+        # is never 75, unless it carried a deadline, the whole wait has passed (DeadlinePassed), the add-on is still the
+        # process that was asked for its capabilities and no lease showed in DEADLINE_WATCH_SECONDS after a confirmed release.
+        # Every other failure, including any cleanup uncertainty, fails closed.
         try:
             gate = self.rpc("acquire", deadline=deadline)
         except Answered as answer:
@@ -625,16 +645,12 @@ print(json.dumps({'ok':True,'state':'synced'}))
             # it: 75 when that confirms, and the release's own failure (exit 1) when it cannot.
             refusal = unsent_request
         except DeadlinePassed as passed:
-            # The add-on honors the deadline, writes no lease after it and the whole wait is longer, so no lease
-            # can appear. The release below is final, and also shows the add-on answers again before 75.
-            refusal = passed
+            # The add-on writes no lease after its deadline, but the deadline counts from when its handler started,
+            # which may be late: the release below is followed by a watch for one (DEADLINE_WATCH_SECONDS). A restart
+            # since the capability read puts an add-on there that may ignore the deadline, so that is held like any lost answer.
+            refusal = passed if self.same_add_on(epoch) else self.unanswered(baseline, Unanswered("acquire", passed))
         except Unanswered as lost:
-            self.save({"baseline": baseline, "phase": "acquire_unanswered"})
-            if not self.late_lease():
-                print("Quiescence held for review, maintenance may still be taken: " + describe(lost), file=sys.stderr)
-                raise SystemExit(upgrade_worker().MAINTENANCE_UNANSWERED) from None
-            # The handler wrote this operation's lease, so it has returned and a release is final.
-            refusal = lost
+            refusal = self.unanswered(baseline, lost)
         else:
             try:
                 if gate.get("active") is not True or gate.get("operationId") != self.operation or gate.get("busy") != []: raise RuntimeError("The native dashboard gate was not acquired without active work")
@@ -648,6 +664,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.clear_drain()
         release = self.rpc("release")
         if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed") from refusal
+        if isinstance(refusal, DeadlinePassed):
+            # Held while the watch runs, so a worker that dies in it leaves the phase recovery works from.
+            self.save({"baseline": baseline, "phase": "acquire_unanswered"})
+            if self.late_lease(DEADLINE_WATCH_SECONDS):
+                # The handler started late and wrote its lease after the release. It has returned, so a second release is final.
+                release = self.rpc("release")
+                if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed after a late lease") from refusal
         self.wait_gateway()
         if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
         self.save({"baseline": baseline, "phase": "rejected"})
@@ -655,20 +678,42 @@ print(json.dumps({'ok':True,'state':'synced'}))
         raise SystemExit(75) from None
 
     def acquire_deadline(self):
-        """ACQUIRE_DEADLINE when the running add-on says it honors one, else None.
+        """(ACQUIRE_DEADLINE, executor_epoch) when the running add-on says it honors a deadline, else (None, None).
 
-        A read that fails is None as well: an older add-on is held for review exactly as before, and a
-        dashboard that cannot be asked will fail the acquire the same way."""
+        A read that fails is (None, None) as well: an older add-on is held for review exactly as before, and a
+        dashboard that cannot be asked will fail the acquire the same way. An add-on that names no process epoch
+        cannot be told apart from a restart later, so it gets no deadline either."""
         try: capabilities = self.rpc("capabilities")
-        except (Answered, NotSent, Unanswered, ValueError): return None
-        return ACQUIRE_DEADLINE if isinstance(capabilities, dict) and capabilities.get("maintenance_deadline") is True else None
+        except (Answered, NotSent, Unanswered, ValueError): return None, None
+        if not isinstance(capabilities, dict) or capabilities.get("maintenance_deadline") is not True: return None, None
+        epoch = capabilities.get("executor_epoch")
+        return (ACQUIRE_DEADLINE, epoch) if isinstance(epoch, str) and epoch else (None, None)
 
-    def late_lease(self):
-        """Whether this operation's lease appears within LATE_LEASE_SECONDS of an unanswered acquire.
-        The handler writes it last, so its lease means the handler returned. Anything else in the
+    def same_add_on(self, epoch):
+        """Whether the add-on that was asked for its capabilities before the acquire is still the process answering.
+
+        A restart between the two can put an add-on that ignores the deadline in its place, and its silence then
+        proves nothing. A read that fails is not the same add-on."""
+        try: capabilities = self.rpc("capabilities")
+        except (Answered, NotSent, Unanswered, ValueError): return False
+        return isinstance(capabilities, dict) and capabilities.get("executor_epoch") == epoch
+
+    def unanswered(self, baseline, lost):
+        """An acquire that may still be running: hold for review unless this operation's lease shows up within
+        LATE_LEASE_SECONDS, and return `lost` as the refusal when it does."""
+        self.save({"baseline": baseline, "phase": "acquire_unanswered"})
+        if not self.late_lease():
+            print("Quiescence held for review, maintenance may still be taken: " + describe(lost), file=sys.stderr)
+            raise SystemExit(upgrade_worker().MAINTENANCE_UNANSWERED) from None
+        # The handler wrote this operation's lease, so it has returned and a release is final.
+        return lost
+
+    def late_lease(self, seconds=None):
+        """Whether this operation's lease appears within `seconds` (LATE_LEASE_SECONDS by default) of an unanswered
+        acquire. The handler writes it last, so its lease means the handler returned. Anything else in the
         file ends the watch: it is not this operation's to release."""
         path = Path(self.config["maintenanceFile"])
-        deadline = time.monotonic() + LATE_LEASE_SECONDS
+        deadline = time.monotonic() + (LATE_LEASE_SECONDS if seconds is None else seconds)
         while True:
             if os.path.lexists(path):
                 try: return json.loads(private(path).read_text()) == {"operationId": self.operation}

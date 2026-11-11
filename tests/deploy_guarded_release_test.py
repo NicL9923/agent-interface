@@ -358,7 +358,7 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         self.assertEqual((self.stopped(), self.phase()), ([], "maintenance-held-needs-review"))
         self.assertEqual(self.acquire_requests(), [(120, None)])
 
-    CAPABLE = [{"result": {"revision": "r", "maintenance_deadline": True}}]
+    CAPABLE = [{"result": {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-1"}}]
 
     def test_a_capable_add_on_is_asked_first_and_sent_a_deadline_shorter_than_the_wait(self):
         self.script(capabilities=self.CAPABLE, acquire=[self.acquired()])
@@ -370,12 +370,22 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         self.assertEqual(self.stopped(), [["--user", "stop", "agent-interface.service"]])
 
     def test_no_answer_after_the_deadline_is_a_refusal_with_nothing_stopped(self):
-        self.script(capabilities=self.CAPABLE, acquire=[{"deadlinePassed": True}], release=[self.released()])
+        # The capabilities are read again after the deadline passed, for the process epoch.
+        self.script(capabilities=self.CAPABLE * 2, acquire=[{"deadlinePassed": True}], release=[self.released()])
         self.assert_refused(self.run_tool(), r"Hermes did not answer the maintenance request within its deadline, so none was granted\. Busy work at release: \[\]")
         # Not asked again: the add-on answered nothing for the whole wait.
         self.assertEqual(self.rpc_calls(), ["status", "acquire", "release"])
         self.assertEqual(self.acquire_requests(), [(120, 90)])
-        self.assertEqual(self.sleeps.call_count, 0)
+        # The tool watched for a late lease for at least as long as the deadline it sent, with the blocked status kept.
+        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), 90)
+
+    def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_not_refused(self):
+        restarted = [{"result": {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-2"}}]
+        self.script(capabilities=self.CAPABLE + restarted, acquire=[{"deadlinePassed": True}], release=[self.released()])
+        code, out = self.run_tool()
+        self.assertEqual(code, 2)
+        self.assertIn("Stopped at fence: Hermes answered maintenance acquire.", out)
+        self.assertEqual((self.stopped(), self.phase(), self.sleeps.call_count), ([], "maintenance-held-needs-review", 0))
 
     def test_a_capable_add_ons_plain_failure_is_still_held_for_review(self):
         # Only the marker NATIVE prints after the wait proves no lease can appear.

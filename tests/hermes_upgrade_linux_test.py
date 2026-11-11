@@ -992,10 +992,14 @@ class Socket:
     def recv(self, timeout):
         script = json.loads(SCRIPT.read_text())
         if self.method == "agent-interface.capabilities":
-            # Asked once per attempt and never consumed: an object is the result, "silence" and an error go as scripted.
+            # An object is the result, "silence" and an error go as scripted. One step is asked again and again; a list
+            # answers each read with its next step and keeps repeating the last, like an add-on that restarted in between.
             record("recv", "capabilities", timeout, None)
             step = script.get("capabilities", "unscripted")
             if step == "unscripted": raise AssertionError("unscripted maintenance capabilities")
+            if isinstance(step, list):
+                step, script["capabilities"] = step[0], step[1:] or step[-1:]
+                SCRIPT.write_text(json.dumps(script))
             if step == "silence":
                 skew[0] += timeout
                 raise TimeoutError("timed out while waiting for a message")
@@ -1020,6 +1024,12 @@ class Socket:
             if held() == {"operationId": operation}: LEASE.unlink()
             return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
         if step == "status": return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
+        if "releaseThenLease" in step:
+            # The release finds no lease and answers; the handler that started late writes it afterwards.
+            if held() == {"operationId": operation}: LEASE.unlink()
+            subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["releaseThenLease"]],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
         if "lateLease" in step:
             subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["lateLease"]],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -1067,6 +1077,8 @@ class MaintenanceRpcTests(HostFixture):
         self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(server.server_address[1]))
         # Long enough for a test whose lease appears late; the rest end their watch at once or never start it.
         patcher = patch.object(linux, "LATE_LEASE_SECONDS", 10); patcher.start(); self.addCleanup(patcher.stop)
+        # The watch after a deadline passes is 100 s; a test that wants it long patches it, the rest wait one second.
+        patcher = patch.object(linux, "DEADLINE_WATCH_SECONDS", 1); patcher.start(); self.addCleanup(patcher.stop)
 
     def scripted(self, **steps):
         # An add-on older than the maintenance_deadline capability, which every test not about it meets.
@@ -1258,7 +1270,7 @@ class MaintenanceRpcTests(HostFixture):
     def test_an_acquire_refused_before_it_is_sent_is_a_finished_refusal_once_the_release_confirms(self):
         # The second service ticket, the acquire's, is refused; the capability read before it was answered.
         self.refused_tickets = {2}
-        self.scripted(capabilities={"maintenance_deadline": True}, release=["release"])
+        self.scripted(capabilities=self.CAPABLE, release=["release"])
         states = self.states.read_bytes()
         code, log = self.quiescence()
         self.assertEqual(code, 75)
@@ -1269,7 +1281,7 @@ class MaintenanceRpcTests(HostFixture):
         self.assertFalse(self.lease.exists())
         self.assert_unchanged(states)
 
-    CAPABLE = {"revision": "r", "maintenance_deadline": True}
+    CAPABLE = {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-1"}
 
     def test_a_capable_add_on_is_asked_before_the_acquire_and_sent_a_deadline_shorter_than_the_wait(self):
         self.scripted(capabilities=self.CAPABLE, acquire=["busy"], release=["release"])
@@ -1297,19 +1309,85 @@ class MaintenanceRpcTests(HostFixture):
         self.assertEqual(saves[0], ("acquiring", 1))
         self.assertEqual(len(self.capability_reads()), 1)
 
-    def test_no_answer_after_the_deadline_is_a_finished_refusal_with_no_watch_for_a_late_lease(self):
+    def test_no_answer_after_the_deadline_is_a_finished_refusal_once_a_watch_after_the_release_sees_no_lease(self):
         self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=["release"])
         states = self.states.read_bytes()
         started = time.monotonic()
         code, log = self.quiescence()
-        # Exit 75, not the held 76: the add-on writes no lease after its deadline and the whole wait has passed.
+        # Exit 75, not the held 76: the add-on writes no lease after its deadline, the whole wait has passed and
+        # nothing showed for the watch that follows the release. That watch is DEADLINE_WATCH_SECONDS, patched to 1 here.
         self.assertEqual(code, 75)
         self.assertIn("Quiescence refused and released maintenance: Hermes did not answer maintenance acquire within its 90 s deadline", log)
-        self.assertLess(time.monotonic() - started, 5, "no five-minute watch for a late lease")
+        self.assertGreaterEqual(time.monotonic() - started, 1, "the watch for a late lease ran after the release")
+        self.assertLess(time.monotonic() - started, 5, "not the five-minute watch of an add-on with no deadline")
+        # The capability read, asked again for the epoch, is not a maintenance request.
         self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        self.assertEqual(len(self.capability_reads()), 2)
         self.assertEqual(self.phase(), "rejected")
         self.assertFalse(self.lease.exists())
         self.assert_unchanged(states)
+
+    def test_a_handler_that_starts_late_and_writes_its_lease_after_the_release_is_released_again(self):
+        # The acquire handler waited for a thread in Hermes's pool, so its deadline ran past the tool's wait. The first
+        # release found no lease and the handler wrote one afterwards. Exit 75 would leave Hermes refusing every chat.
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"],
+                      release=[{"releaseThenLease": self.platform.operation}, "release"])
+        states = self.states.read_bytes()
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, log = self.quiescence()
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes did not answer maintenance acquire within its 90 s deadline", log)
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15], ["release", 15]])
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
+
+    def test_the_phase_holds_for_review_while_the_watch_runs_and_a_second_release_that_fails_closes(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[{"releaseThenLease": self.platform.operation}, "silence"])
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10), self.assertRaisesRegex(linux.Unanswered, "^Hermes did not answer maintenance release"):
+            self.platform.quiescence()
+        # A worker that dies here leaves the phase the app's Cancel recovers from, with the late lease in place.
+        self.assertEqual(self.phase(), "acquire_unanswered")
+        self.assertTrue(self.lease.exists())
+
+    def test_a_second_release_that_reports_the_lease_still_held_fails_closed(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"],
+                      release=[{"releaseThenLease": self.platform.operation}, {"result": {"active": True, "operationId": self.platform.operation, "busy": []}}])
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10), self.assertRaisesRegex(RuntimeError, "^Maintenance release was not confirmed after a late lease$"):
+            self.platform.quiescence()
+        self.assertEqual(self.phase(), "acquire_unanswered")
+
+    def test_another_operations_lease_in_the_watch_is_left_alone_and_is_not_released(self):
+        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[{"releaseThenLease": "another-operation"}])
+        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, _ = self.quiescence()
+        # Not this operation's, so not this operation's to release; the acquire it sent can never have written it.
+        self.assertEqual(code, 75)
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "another-operation"})
+
+    def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_with_no_release(self):
+        # The acquire went to a different process than the one that said it honors a deadline, so its silence proves nothing.
+        cases = (("a new epoch", [self.CAPABLE, {**self.CAPABLE, "executor_epoch": "epoch-2"}]),
+                 ("a restart into an add-on that ignores the deadline", [self.CAPABLE, {"revision": "r"}]),
+                 ("the second read gets no answer", [self.CAPABLE, "silence"]),
+                 ("the second read is an error", [self.CAPABLE, {"error": {"code": -32601, "message": "unknown method"}}]))
+        for name, capabilities in cases:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.scripted(capabilities=capabilities, acquire=["silence"])
+                states = self.states.read_bytes()
+                with patch.object(linux, "LATE_LEASE_SECONDS", 0.3): code, log = self.quiescence()
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review, maintenance may still be taken", log)
+                self.assertEqual(self.requests(), [["acquire", 120]])
+                self.assertEqual(self.deadlines(), [90])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+                self.assert_unchanged(states)
+
+    def test_an_add_on_restarted_since_the_capability_read_whose_lease_appears_is_released_and_refused(self):
+        self.scripted(capabilities=[self.CAPABLE, {**self.CAPABLE, "executor_epoch": "epoch-2"}],
+                      acquire=[{"lateLease": self.platform.operation}], release=["release"])
+        code, _ = self.quiescence()
+        self.assertEqual((code, self.requests(), self.phase(), self.lease.exists()), (75, [["acquire", 120], ["release", 15]], "rejected", False))
 
     def test_a_connection_lost_after_the_send_waits_out_the_rest_of_the_wait_then_is_a_finished_refusal(self):
         self.scripted(capabilities=self.CAPABLE, acquire=["drop"], release=["release"])
@@ -1337,7 +1415,10 @@ class MaintenanceRpcTests(HostFixture):
         # answer it never gives would then be read as proof that no lease can appear.
         cases = (("an older add-on", {"revision": "r"}), ("false", {"revision": "r", "maintenance_deadline": False}),
                  ("a string", {"maintenance_deadline": "true"}), ("the number one", {"maintenance_deadline": 1}),
-                 ("an unrelated key", {"maintenance_deadlines": True}), ("an empty object", {}))
+                 ("an unrelated key", {"maintenance_deadlines": True}), ("an empty object", {}),
+                 # A restart cannot be told apart later without the process's epoch, so no epoch is no deadline.
+                 ("no epoch", {"maintenance_deadline": True}), ("an empty epoch", {"maintenance_deadline": True, "executor_epoch": ""}),
+                 ("a numeric epoch", {"maintenance_deadline": True, "executor_epoch": 7}))
         for name, capabilities in cases:
             with self.subTest(name):
                 self.calls.unlink(missing_ok=True)
