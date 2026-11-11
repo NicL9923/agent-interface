@@ -168,7 +168,8 @@ it('shares a read still running however long it takes, and counts freshness from
   const second = s.get('?refresh=1');
   // Let the second request list the accounts again and reach the read that is still out.
   await vi.waitFor(() => expect(s.ask.mock.calls.filter(([input]) => input.operation === 'accounts')).toHaveLength(6));
-  await new Promise(resolve => setTimeout(resolve, 20));
+  // The request's continuation after that read runs in memory, so turns of the event loop finish it however slow the machine.
+  for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve));
   s.advance(1);
   answer(snapshotFixture(CLAUDE, 'anthropic', { windows: [window('Current week', 30)] }));
   await Promise.all([first, second]);

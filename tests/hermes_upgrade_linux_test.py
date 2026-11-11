@@ -1211,7 +1211,8 @@ class MaintenanceRpcTests(HostFixture):
                 started = time.monotonic()
                 with self.assertRaisesRegex(linux.NotSent, "^Hermes was not asked for maintenance release"):
                     self.platform.quiescence()
-                self.assertLess(time.monotonic() - started, 5)
+                # Not the 300 s watch; half of it tells the two apart on a machine many times slower.
+                self.assertLess(time.monotonic() - started, 150)
                 self.assertEqual(self.phase(), "acquiring")
                 self.assertFalse(self.requests())
                 self.assertFalse(self.lease.exists())

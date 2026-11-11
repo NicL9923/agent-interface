@@ -40,9 +40,10 @@ async function stream(query: string) {
 }
 /** Lets the socket deliver what the server wrote. */
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
-async function until(test: () => boolean) {
+/** Waits for what the stream is expected to have written, by the stream's own bytes; the step count only ends a stream that never writes it. */
+async function until(test: () => boolean, expected = "its opening") {
   for (let step = 0; !test(); step++) {
-    if (step > 100) throw new Error("The stream never sent its opening");
+    if (step > 100) throw new Error(`The stream never sent ${expected}`);
     await settle();
   }
 }
@@ -69,7 +70,7 @@ describe("a stream's pings", () => {
     await settle();
     expect(got.text).toBe(FALLBACK_OPEN);
     vi.advanceTimersByTime(1);
-    await settle();
+    await until(() => got.text === FALLBACK_OPEN + FALLBACK_PING, "the ping");
     expect(got.text).toBe(FALLBACK_OPEN + FALLBACK_PING);
     await stop();
   });
@@ -84,10 +85,10 @@ describe("a stream's pings", () => {
     await settle();
     expect(got.text).toBe(FALLBACK_OPEN + FAST_PING);
     vi.advanceTimersByTime(1);
-    await settle();
+    await until(() => got.text === FALLBACK_OPEN + FAST_PING.repeat(2), "the ping");
     expect(got.text).toBe(FALLBACK_OPEN + FAST_PING.repeat(2));
     vi.advanceTimersByTime(10_000);
-    await settle();
+    await until(() => got.text === FALLBACK_OPEN + FAST_PING.repeat(3), "the ping");
     expect(got.text).toBe(FALLBACK_OPEN + FAST_PING.repeat(3));
     await stop();
   });

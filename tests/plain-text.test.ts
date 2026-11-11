@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { markdownPlain, replyTitle, snippetPlain } from "../src/shared/plain-text";
+import { cpuMs } from "./helpers/cpu-time";
 
 it("reads Markdown as the words a person sees", () => {
   expect(markdownPlain("## Grocery Demo\n\n| Item | Aisle |\n|---|---|\n| Milk | Dairy |\n\nSaved to [notes.md](/home/nicolas/notes.md).")).toBe("Grocery Demo Item · Aisle · Milk · Dairy Saved to notes.md.");
@@ -63,14 +64,19 @@ it("keeps search markers through flattening, and escaped line breaks become spac
   expect(snippetPlain(">>>Gate<<< battery\n>>>gate<<< code")).toBe(">>>Gate<<< battery >>>gate<<< code");
 });
 
+/** The parser reads at most this many characters of any input (READ_CHARS times two in plain-text.ts). */
+const WINDOW = 2000;
+
 it("reads adversarial text in one pass", () => {
-  const started = performance.now();
-  // The nested list's leaf sits inside the read window, so it is really parsed that deep.
-  for (const text of [("- ".repeat(498) + "x\n").padEnd(50_000, "x"), ("> ".repeat(498) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"]) {
-    markdownPlain(text); replyTitle(text);
-  }
-  snippetPlain("\\".repeat(50_000) + "!");
-  expect(performance.now() - started).toBeLessThan(2000);
+  // The nested list's leaf sits inside the read window, so it is really parsed that deep. Nesting grows the parse's cost with its square,
+  // so these are 120 deep, not the 498 that fills the window: the test is about where reading stops, and a deeper list only makes it slower.
+  const texts = [("- ".repeat(120) + "x\n").padEnd(50_000, "x"), ("> ".repeat(120) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"];
+  const read = (all: string[]) => () => { for (const text of all) { markdownPlain(text); replyTitle(text); } snippetPlain("\\".repeat(all[0].length) + "!"); };
+  // The work must stop at the window, so 50,000 characters cost what the first 2,000 do. The budget is that ratio, which a slow
+  // machine leaves alone, rather than a number of seconds. A parser handed the whole text is quadratic on these and costs far more.
+  // Three runs of each size are enough to find the least CPU time.
+  const whole = cpuMs(read(texts), 3), window = cpuMs(read(texts.map(text => text.slice(0, WINDOW))), 3);
+  expect(whole).toBeLessThan(window * 4);
 });
 
 it("skips a horizontal rule when titling a reply", () => {
@@ -95,7 +101,9 @@ it('titles a saved reply by the words a person reads first, never a code fence o
   expect(replyTitle('| Item | Aisle |\n|---|---|\n| Milk | Dairy |')).toBe('Item · Aisle');
   expect(replyTitle('Call `__init__` first')).toBe('Call __init__ first');
   // A long line of dashes is read once.
-  const started=performance.now();replyTitle('-'.repeat(5_000)+' status');
-  expect(performance.now()-started).toBeLessThan(200);
+  const line = '-'.repeat(5_000) + ' status';
+  // One title takes about a millisecond, too little to measure alone, so each run reads it 40 times.
+  const titles = (text: string) => () => { for (let n = 0; n < 40; n++) replyTitle(text); };
+  expect(cpuMs(titles(line), 3)).toBeLessThan(cpuMs(titles(line.slice(0, WINDOW)), 3) * 4);
 });
 

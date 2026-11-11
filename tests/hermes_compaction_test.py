@@ -376,14 +376,25 @@ class PreemptTests(unittest.TestCase):
     def test_a_held_session_lock_cannot_keep_an_input_past_the_bound(self):
         fixture = Fixture(self)
         thread, _ = fixture.running()
-        fixture.idle.monotonic = time.monotonic
-        holder = threading.Thread(target=lambda: (fixture.session["history_lock"].acquire(), time.sleep(2), fixture.session["history_lock"].release()), daemon=True)
+        # The bound runs on a clock that moves a tenth of a second at each look, so preempt gives up after a few polls
+        # whatever the machine's speed. The lock stays held until the test lets it go.
+        reads = itertools.count()
+        fixture.idle.monotonic = lambda: next(reads) * 0.1
+        held, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+        def hold():
+            with fixture.session["history_lock"]:
+                held.set()
+                release.wait(10)
+            finished.set()
+        holder = threading.Thread(target=hold, daemon=True)
         with self.assertLogs(compaction.log, logging.WARNING):
             holder.start()
-            time.sleep(0.05)
-            started = time.monotonic()
+            self.assertTrue(held.wait(5))
             self.assertTrue(fixture.idle.preempt("sid", wait=0.3))
-            self.assertLess(time.monotonic() - started, 1)
+        # Preempt returned while the lock was still held, so it did not wait for the lock.
+        self.assertFalse(finished.is_set())
+        release.set()
         holder.join(5)
         thread.join(5)
 
@@ -640,11 +651,14 @@ class BridgeTests(unittest.TestCase):
             fixture = bridge_with_compaction(self, hermes)
             # Hermes's release admits any queued turn through the guarded retirement gate.
             fixture.native.on_release = hermes.retirement.acquire
-            # Waiting under maintenance_lock would hold that release until this bound ran out.
-            started = time.monotonic()
-            with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 2):
+            # Waiting under maintenance_lock would hold that release until this bound ran out. The bound runs on a clock
+            # that moves a hundredth of a second at each look, so it is 200 polls (about 4 s) whatever the machine's
+            # speed, and running it out logs the warning asserted absent below.
+            reads = itertools.count()
+            hermes.bridge.compaction.monotonic = lambda: next(reads) * 0.01
+            bridge_compaction = sys.modules[type(hermes.bridge.compaction).__module__]
+            with patch.object(bridge_compaction, "PREEMPT_WAIT", 2), self.assertNoLogs(bridge_compaction.log, logging.WARNING):
                 lease = hermes.methods["agent-interface.maintenance"]("lease", {"service_key": "key", "action": "acquire", "operation_id": "operation-1"})
-            self.assertLess(time.monotonic() - started, 1)
             self.assertNotIn("error", lease)
             self.assertEqual((lease["result"]["active"], lease["result"]["busy"]), (True, []))
             self.assertEqual(fixture.events, [("cancel", True, True)])

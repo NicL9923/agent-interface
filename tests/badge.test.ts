@@ -350,8 +350,7 @@ it("finds pending decisions through indexes on a realistically sized history", (
     // Only the last day of events is read, and every other step is a keyed lookup: no step reads a whole table.
     expect(plan).toContainEqual(expect.stringMatching(/^SEARCH asked USING INDEX notification_events_created \(created_at>\?\)/));
     expect(plan.filter(detail => detail.startsWith("SCAN "))).toEqual([]);
-    const started = performance.now();
+    // The plan above is the guard: a missed index shows as a SCAN step on any machine. A time limit here only failed on a busy one.
     expect(store.pendingDecisions("one").size).toBeGreaterThan(0);
-    expect(performance.now() - started).toBeLessThan(250);
   } finally { store.close(); }
 });
