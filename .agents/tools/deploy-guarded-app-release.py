@@ -52,10 +52,11 @@ fence(c["newWorkerConfig"]["qualificationReceipt"]==str(qualification_target), "
 for environment,key in ((service_env,"HERMES_AGENT_INTERFACE_QUALIFICATION_FILE"),(app_env,"HERMES_QUALIFICATION_FILE")):
  values=dict(line.split("=",1) for line in environment.read_text().splitlines() if "=" in line)
  fence(values.get(key)==str(qualification_target), "environment names the qualification receipt")
-def rpc(action):
+def rpc(action,deadline=None):
  code="import runpy; m=runpy.run_path("+repr(str(release/"scripts/hermes-upgrade-linux.py"))+"); exec(m['NATIVE'])"
  secret=dict(line.split("=",1) for line in service_env.read_text().splitlines() if "=" in line)["HERMES_AGENT_INTERFACE_TOKEN"]
  req={"action":"rpc","source":str(source),"origin":"http://127.0.0.1:9119","key":secret,"operation":operation,"method":action}
+ if deadline is not None:req["deadline"]=deadline
  return d.maintenance_rpc([c["managedPython"],"-I","-c",code],req)
 def not_started(why):
  """Hermes was busy or unreachable at the preflight, before anything changed: the same exit as a refused acquire."""

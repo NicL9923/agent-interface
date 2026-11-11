@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { request as httpRequest } from "node:http";
 import { createApp } from "../src/server/app.js";
-import { LIVE_TICK_MS, TURN_TICK_MS } from "../src/server/conversation-routes.js";
+import { LIVE_TICK_MS, TURN_HOLD_MS, TURN_TICK_MS } from "../src/server/conversation-routes.js";
 import { loadConfig } from "../src/server/config.js";
 import { hash } from "../src/server/auth.js";
 import type { Activity, Bot, Inflight, Message, Runtime, ToolCall } from "../src/shared/types.js";
@@ -30,7 +30,7 @@ async function pass(ms: number) {
 
 // An app contract double whose watched conversations change when a test says so.
 function runtimeDouble() {
-  const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
+  const watchers = new Map<string, Set<(kind?: "inflight", turnVersion?: string) => void>>();
   const rosterWatchers = new Set<() => void>();
   const bots: Bot[] = [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }];
   const fixed: Partial<Runtime> = {
@@ -52,7 +52,7 @@ function runtimeDouble() {
       return () => set.delete(changed);
     },
   };
-  return { bots, rosterChanged: () => { for (const changed of rosterWatchers) changed(); }, runtime: fixed as Runtime, change: (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); }, watchers };
+  return { bots, rosterChanged: () => { for (const changed of rosterWatchers) changed(); }, runtime: fixed as Runtime, change: (botId: string, kind?: "inflight", turnVersion?: string) => { for (const changed of watchers.get(botId) ?? []) changed(kind, turnVersion); }, watchers };
 }
 async function setup() {
   const fake = runtimeDouble();
@@ -279,6 +279,201 @@ describe("conversation change stream", () => {
       await pass(TURN_TICK_MS);
       expect(frames(events.text).map(([event]) => event)).toEqual(["turn"]);
       await events.close();
+    });
+
+    // A `?inflight=3` stream waits for the turn event a covered change brings, in place of its change notice. The runtime
+    // names that change's version, calls `restored` when its read lands, and answers `turn` with what it built.
+    describe("the change notice on a turn stream, for a change a turn event carries", () => {
+      type Turn = NonNullable<ReturnType<NonNullable<Runtime["turn"]>>>;
+      const turnOf = (text: string, version: string): Turn => ({ ...live(text), version, turn: { messages: [], after: null } });
+      async function turnStream(version = "b:1:1") {
+        const s = await setup();
+        let restored: (() => void) | undefined, built: Turn | undefined;
+        s.runtime.followTurns = (_botId, callback) => { restored = callback; return () => { restored = undefined; }; };
+        s.runtime.turn = () => built;
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        return { s, events, version,
+          /** The server's read landed with this live reply, or with none. */
+          land: async (reply: Turn | undefined) => { built = reply; restored!(); await pass(TURN_TICK_MS); } };
+      }
+
+      it("sends the turn event and no change notice when the event reaches the change", async () => {
+        const { s, events, land } = await turnStream();
+        s.change("shared", undefined, "b:1:2");
+        await pass(TURN_HOLD_MS - 100);
+        expect(events.notices()).toBe(0);
+        await land(turnOf("Found it.", "b:1:2"));
+        expect(frames(events.text).map(([event]) => event)).toEqual(["turn"]);
+        await pass(TURN_HOLD_MS * 2);
+        expect(events.notices()).toBe(0);
+        await events.close();
+      });
+
+      it("sends the change notice the moment a read lands that no turn event follows", async () => {
+        const { s, events, land } = await turnStream();
+        s.change("shared", undefined, "b:1:2");
+        await land(undefined);
+        expect(events.notices()).toBe(1);
+        expect(frames(events.text)).toEqual([]);
+        // Once: the hold ended with it.
+        await pass(TURN_HOLD_MS * 2);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      it("keeps waiting through a turn event from before the change, which does not carry it", async () => {
+        const { s, events, land } = await turnStream();
+        s.change("shared", undefined, "b:1:3");
+        await land(turnOf("Early.", "b:1:2"));
+        expect(frames(events.text).map(([event]) => event)).toEqual(["turn"]);
+        expect(events.notices()).toBe(0);
+        // The event that reaches it ends the wait; a version from another process orders against nothing and never does.
+        await land(turnOf("Later.", "other:1:9"));
+        expect(events.notices()).toBe(0);
+        await pass(TURN_HOLD_MS);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      it("holds one wait for several changes, for the newest of them", async () => {
+        const { s, events, land } = await turnStream();
+        s.change("shared", undefined, "b:1:2");
+        s.change("shared", undefined, "b:1:4");
+        s.change("shared", undefined, "b:1:3");
+        await land(turnOf("Three.", "b:1:3"));
+        expect(events.notices()).toBe(0);
+        await land(turnOf("Four.", "b:1:4"));
+        await pass(TURN_HOLD_MS * 2);
+        expect(events.notices()).toBe(0);
+        await events.close();
+      });
+
+      it("sends the change notice after TURN_HOLD_MS when no read lands, and not before", async () => {
+        const { s, events } = await turnStream();
+        s.change("shared", undefined, "b:1:2");
+        await pass(TURN_HOLD_MS - 1);
+        expect(events.notices()).toBe(0);
+        await pass(2);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      // The read that lands while the client has not taken what it was sent is answered once the client catches up, and
+      // still counts as the read the held change waits for. If the stalled tick used it up, the change would wait out
+      // the whole hold even though its read had landed.
+      it("sends the change notice when the read that landed during a stalled client's backlog is answered", async () => {
+        const s = await setup();
+        let restored: (() => void) | undefined, built: Turn | undefined;
+        s.runtime.followTurns = (_botId, callback) => { restored = callback; return () => { restored = undefined; }; };
+        s.runtime.turn = () => built;
+        const responses: import("node:http").ServerResponse[] = [];
+        s.app.server.on("request", (req, res) => { if (req.url?.includes("/events")) responses.push(res); });
+        // A real client socket that stops reading after the stream opens, as a stalled phone does.
+        const url = new URL(s.base);
+        const response = await new Promise<import("node:http").IncomingMessage>(resolve => {
+          httpRequest({ host: url.hostname, port: url.port, path: "/api/bots/shared/events?inflight=3", headers: { cookie: s.cookie } }, resolve).end();
+        });
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", chunk => { text += chunk; });
+        for (let waited = 0; !text.includes("retry"); waited++) { if (waited > 200) throw new Error("The stream never opened"); await realDelay(5); }
+        response.pause();
+        const socket = responses[0], write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+        const noticeWrites: number[] = [];
+        vi.spyOn(socket, "write").mockImplementation(((...args: unknown[]) => {
+          if (args[0] === "data: change\n\n") noticeWrites.push(Date.now());
+          return write(...args);
+        }) as typeof socket.write);
+        // Grow the reply half a megabyte a tick until the socket holds an update the client has not taken. How much the
+        // kernel takes before then differs between machines, so nothing here counts on a size for it.
+        let reply = "";
+        for (let tick = 0; !socket.writableNeedDrain; tick++) {
+          if (tick >= 60) throw new Error("The socket never filled");
+          reply += "x".repeat(512 * 1024);
+          built = turnOf(reply, "b:1:1");
+          s.change("shared", "inflight");
+          await pass(TURN_TICK_MS);
+        }
+        // A change a turn event would carry, and the read that follows it landing with no live reply to send.
+        const changedAt = Date.now();
+        s.change("shared", undefined, "b:1:2");
+        built = undefined;
+        restored!();
+        await pass(TURN_TICK_MS);
+        expect(noticeWrites).toEqual([]);
+        // The client catches up. The answer to that read finds nothing to send, so it releases the held notice now.
+        response.resume();
+        for (let waited = 0; socket.writableNeedDrain; waited++) { if (waited > 2000) throw new Error("The client never caught up"); await realDelay(5); }
+        await pass(TURN_TICK_MS);
+        await pass(0);
+        expect(noticeWrites).toHaveLength(1);
+        // The premise: this is before the hold would have ended on its own.
+        expect(noticeWrites[0] - changedAt).toBeLessThan(TURN_HOLD_MS);
+        await pass(TURN_HOLD_MS * 2);
+        expect(noticeWrites).toHaveLength(1);
+        response.destroy();
+      });
+
+      it("sends a change that names no version at once, as a write's own notice and every other change do", async () => {
+        const { s, events } = await turnStream();
+        s.change("shared");
+        await pass(0);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      it("sends the change notice at once from a runtime that cannot read turns, whatever version it names", async () => {
+        const s = await setup();
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        s.change("shared", undefined, "b:1:2");
+        await pass(0);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      it.each(["1", "2"])("never waits on ?inflight=%s, which gets no turn events", async mode => {
+        const s = await setup();
+        s.runtime.followTurns = () => () => {};
+        s.runtime.turn = () => undefined;
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        s.change("shared", undefined, "b:1:2");
+        await pass(0);
+        expect(events.notices()).toBe(1);
+        await events.close();
+      });
+
+      it("stops waiting when the stream closes, leaving no timer behind", async () => {
+        const { s, events } = await turnStream();
+        await events.close();
+        // Watch the hold's own timer rather than the global count, which other timers of the app change on their
+        // own schedule (a throttle firing during the wait made the count drop on a busy runner).
+        const holds: unknown[] = [], cleared: unknown[] = [];
+        const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+        const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) => {
+          const timer = set(handler, ms, ...rest);
+          if (ms === TURN_HOLD_MS) holds.push(timer);
+          return timer;
+        }) as typeof setTimeout);
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+          cleared.push(timer);
+          return clear(timer);
+        }) as typeof clearTimeout);
+        try {
+          const held = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+          await held.until(() => held.text.includes("retry"));
+          s.change("shared", undefined, "b:1:2");
+          expect(holds).toHaveLength(1);
+          await held.close();
+          await pass(100);
+          expect(cleared).toContain(holds[0]);
+        } finally {
+          setSpy.mockRestore();
+          clearSpy.mockRestore();
+        }
+      });
     });
 
     // The turn ends with a structural notice. Growth still waiting for its tick is dropped, not sent after the

@@ -1,4 +1,4 @@
-import type { Inflight, InflightDelta, Message, TurnEvent, TurnRows } from "./types";
+import type { FileRef, Inflight, InflightDelta, Message, TurnEvent, TurnRows } from "./types";
 
 /**
  * Applies a streamed growth notice to the live reply a client holds. Returns undefined when the
@@ -64,11 +64,17 @@ export function placeTurn(messages: Message[], turn: TurnRows): Message[] | unde
 /**
  * The conversation with a turn event's saved messages and activity, without its live reply, which the
  * caller adds. The same conversation when it is newer than the event; undefined when the turn cannot be placed.
+ * The conversation's file list, which a read builds from the saved rows, gains the files the turn's rows carry,
+ * so a file a tool made shows with its reply without a read.
  */
-export function withTurn<C extends { messages: Message[]; activity: Inflight["activity"]; toolCalls?: Inflight["toolCalls"]; version?: string }>(
+export function withTurn<C extends { messages: Message[]; activity: Inflight["activity"]; toolCalls?: Inflight["toolCalls"]; version?: string; files?: FileRef[] }>(
   conversation: C, turn: TurnEvent): C | undefined {
   const order = compareVersions(turn.version, conversation.version);
   if (order !== undefined && order < 0) return conversation;
   const messages = placeTurn(conversation.messages, turn);
-  return messages && { ...conversation, messages, version: turn.version, activity: turn.activity, toolCalls: turn.toolCalls };
+  if (!messages) return undefined;
+  const known = new Set(conversation.files?.map(file => file.id));
+  const added = turn.messages.flatMap(message => message.files ?? []).filter(file => !known.has(file.id) && known.add(file.id));
+  return { ...conversation, messages, version: turn.version, activity: turn.activity, toolCalls: turn.toolCalls,
+    ...conversation.files && added.length ? { files: [...conversation.files, ...added] } : {} };
 }
