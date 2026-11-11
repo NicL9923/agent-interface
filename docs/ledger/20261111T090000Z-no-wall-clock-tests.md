@@ -124,3 +124,15 @@ The Opus review found three P3s. Each fix and its red run:
 | The megabyte scan stops measuring the full size at the first run under the limit, or at one 1.5 times over it | `_Delimiters.next` scans positions linearly, so the whole scan is quadratic | failed: 129.1 s against 64.8 s, after 154 s. The same break took 419 s before this change, running the slow size three times. Unbroken, 0.53 s |
 | The hand-break row for `plain-text.ts` says which break fails the tests | none, wording only | not applicable |
 
+## A machine-load flake found by check-all
+
+`check-all --py always` on the merged branch failed `deploy_guarded_release_test` "a busy acquire is asked three times": the sleeps it
+recorded were `[0.001, 2, 2]`, not `[2, 2]`. The test patched `sleep` on the shared `time` module, so it also recorded the 1 ms waits of
+Python's `subprocess` wait loop, which runs only when a child has not exited by the time its pipes close. That happens under load. The test
+came from #346; `deploy_common_test` counts sleeps the same way. Both now give `deploy_common` its own copy of the `time` module and patch
+sleep there, so only the tool's own pauses are recorded.
+
+Red run: `Deployment.execute` temporarily ran `subprocess.run(["sleep", "0.05"], timeout=5)` before each command, which forces the wait
+loop every time. With the shared module patched: `deploy_common_test` failed 1 test and `deploy_guarded_release_test` 3. With the fix:
+both pass. The injected line was removed.
+

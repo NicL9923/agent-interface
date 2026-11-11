@@ -16,6 +16,8 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import time
+import types
 import unittest
 import urllib.error
 from unittest import mock
@@ -35,6 +37,14 @@ def executable(path, body):
     path.write_text("#!" + sys.executable + "\n" + body)
     path.chmod(0o700)
     return path
+
+
+# The tool's own time module, so a patched sleep sees only the tool's pauses. Patching the shared module also records the
+# 1 ms waits of Python's subprocess wait loop, which run only when a child has not exited yet, so a loaded machine added one.
+def tool_time():
+    own = types.ModuleType("time")
+    own.__dict__.update(vars(time))
+    return mock.patch.object(deploy_common, "time", own)
 
 
 class Response:
@@ -138,6 +148,9 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         self.config_path.chmod(0o600)
         self.app_status = {"active_agents": 0, "active_sessions": 0}
         self.gateway()
+        own_time = tool_time()
+        own_time.start()
+        self.addCleanup(own_time.stop)
         patches = (mock.patch.object(deploy_common.Deployment, "systemctl", str(systemctl)),
                    mock.patch("urllib.request.urlopen", side_effect=self.urlopen),
                    mock.patch.object(deploy_common.time, "sleep"),
