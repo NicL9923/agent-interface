@@ -34,11 +34,16 @@ test("the app opens offline from the service worker, then recovers when the netw
   await expect(page.getByRole("heading", { name: "You're offline" })).toBeVisible();
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
 
-  // The app never stores API data, so a cold open offline cannot show the conversation. It must still open
-  // the shell from the worker's cache and explain itself, not hand over the browser's error page.
+  // The device keeps home's roster but no message, so a cold open offline draws home and cannot show the
+  // conversation. It must open the shell from the worker's cache and explain itself, not hand over the
+  // browser's error page.
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Your assistants, in one familiar place." })).toBeVisible();
-  await expect(page.getByRole("status").filter({ hasText: "Can't reach the app right now" })).toBeVisible();
+  await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+  await expect(railStatus(page)).toHaveText("Offline");
+  await expect(page.getByText("Fence check is done.")).toHaveCount(0);
+  await expect(page.getByText("Can't reach the app right now")).toBeVisible();
+  // The app's one connection live region says it too, once.
+  await expect(page.getByRole("status").filter({ hasText: "You're offline" })).toHaveCount(1);
 
   await context.setOffline(false);
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
@@ -81,6 +86,10 @@ test("a link to a chat shows sign-in when signed out, then reads the chat beside
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   expect(heldUntil[0]).toBe(true);
 });
+
+/** What home's rail says of its connection, read as a person reads it beside the account button. */
+const railStatus = (page: Page) => page.getByRole("complementary", { name: "Assistants" })
+  .getByText(/^(Connecting|Reconnecting|Can't connect|Offline)$/);
 
 test.describe("a returning member's load", () => {
   // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
@@ -151,6 +160,81 @@ test.describe("a returning member's load", () => {
     // Before the event stream connects (which reads bootstrap again by design), one read, sent before the bundle arrived.
     expect(order.slice(0, order.indexOf("/api/events"))).toEqual(["/api/bootstrap", "bundle"]);
     expect(await page.evaluate(() => (window as unknown as { themeAtBody?: string }).themeAtBody)).toBe("dark");
+  });
+});
+
+test.describe("a returning member's home", () => {
+  // Routes see only what the page itself fetches.
+  test.use({ serviceWorkers: "block" });
+
+  // The saved copy is edited to what an earlier visit would have left, so bootstrap's answer differs.
+  type SavedCopy = { bots: { id: string; name: string; shared: boolean }[] };
+  const changes: [string, (saved: SavedCopy) => SavedCopy][] = [
+    // At the top of the list, where a row that comes or goes moves every row below it.
+    ["an assistant bootstrap no longer lists", saved => ({ ...saved, bots: [{ id: "old", name: "Old Hand", shared: true }, ...saved.bots] })],
+    ["an assistant new since the last visit", saved => ({ ...saved, bots: saved.bots.slice(1) })],
+    ["assistants in another order", saved => ({ ...saved, bots: [...saved.bots].reverse() })],
+    ["an assistant renamed since", saved => ({ ...saved, bots: saved.bots.map(bot => bot.id === "ranch" ? { ...bot, name: "Ranch Helper" } : bot) })],
+  ];
+  for (const [width, height, label] of [[1280, 720, "desktop"], [390, 844, "phone"]] as const) {
+    for (const [name, change] of changes) {
+      test(`swaps to bootstrap's roster with ${name}, at ${label} width, without a shift a person would notice`, async ({ page }) => {
+        await page.setViewportSize({ width, height });
+        await signIn(page);
+        await expect.poll(() => page.evaluate(() => localStorage.getItem("agent-interface:roster"))).not.toBeNull();
+        await page.evaluate(source => {
+          const edit = new Function("saved", `return (${source})(saved)`) as (saved: unknown) => unknown;
+          localStorage.setItem("agent-interface:roster", JSON.stringify(edit(JSON.parse(localStorage.getItem("agent-interface:roster")!))));
+        }, change.toString());
+        let release!: () => void;
+        const answered = new Promise<void>(resolve => { release = resolve; });
+        await page.route("**/api/bootstrap?*", async route => { await answered; await route.continue(); });
+        // Home itself, so a phone shows the list rather than the Today the last address named.
+        await page.goto("/");
+        await expect(railStatus(page)).toHaveText("Connecting");
+        await expect(assistants(page)).toBeVisible();
+        await page.evaluate(() => {
+          const shifts: number[] = [];
+          (window as unknown as { shifts: number[] }).shifts = shifts;
+          new PerformanceObserver(list => { for (const entry of list.getEntries()) shifts.push((entry as unknown as { value: number }).value); })
+            .observe({ type: "layout-shift" });
+        });
+        release();
+        await expect(railStatus(page)).toHaveCount(0);
+        await expect(assistants(page).getByRole("button", { name: /Trail Cook/ })).toBeVisible();
+        await page.waitForTimeout(500);
+        const shifts = await page.evaluate(() => (window as unknown as { shifts: number[] }).shifts);
+        const total = Math.round(shifts.reduce((sum, value) => sum + value, 0) * 10_000) / 10_000;
+        test.info().annotations.push({ type: "layout shift", description: `${label}, ${name}: ${total}` });
+        console.log(`layout shift, ${label}, ${name}: ${total}`);
+        // Web Vitals call a page's whole cumulative layout shift good below 0.1.
+        expect(total).toBeLessThan(0.1);
+      });
+    }
+  }
+
+  test("is drawn from this device before bootstrap answers, without its messages, then brought up to date in place", async ({ page }) => {
+    await signIn(page);
+    let release!: () => void;
+    const answered = new Promise<void>(resolve => { release = resolve; });
+    await page.route("**/api/bootstrap?*", async route => { await answered; await route.continue(); });
+    await page.reload();
+    const ranch = assistants(page).getByRole("button", { name: /Ranch Hand/ });
+    await expect(ranch).toBeVisible();
+    await expect(railStatus(page)).toHaveText("Connecting");
+    await expect(page.getByText("Fence check is done.")).toHaveCount(0);
+    await ranch.focus();
+    // The page's own layout-shift entries, from the swap that follows.
+    await page.evaluate(() => {
+      (window as unknown as { shifted: number }).shifted = 0;
+      new PerformanceObserver(list => { for (const entry of list.getEntries()) (window as unknown as { shifted: number }).shifted += (entry as unknown as { value: number }).value; })
+        .observe({ type: "layout-shift" });
+    });
+    release();
+    await expect(ranch.getByText("Fence check is done.")).toBeVisible();
+    await expect(railStatus(page)).toHaveCount(0);
+    await expect(ranch).toBeFocused();
+    expect(await page.evaluate(() => (window as unknown as { shifted: number }).shifted)).toBeLessThan(0.01);
   });
 });
 
