@@ -359,6 +359,62 @@ describe("conversation change stream", () => {
         await events.close();
       });
 
+      // The read that lands while the client has not taken what it was sent is answered once the client catches up, and
+      // still counts as the read the held change waits for. If the stalled tick used it up, the change would wait out
+      // the whole hold even though its read had landed.
+      it("sends the change notice when the read that landed during a stalled client's backlog is answered", async () => {
+        const s = await setup();
+        let restored: (() => void) | undefined, built: Turn | undefined;
+        s.runtime.followTurns = (_botId, callback) => { restored = callback; return () => { restored = undefined; }; };
+        s.runtime.turn = () => built;
+        const responses: import("node:http").ServerResponse[] = [];
+        s.app.server.on("request", (req, res) => { if (req.url?.includes("/events")) responses.push(res); });
+        // A real client socket that stops reading after the stream opens, as a stalled phone does.
+        const url = new URL(s.base);
+        const response = await new Promise<import("node:http").IncomingMessage>(resolve => {
+          httpRequest({ host: url.hostname, port: url.port, path: "/api/bots/shared/events?inflight=3", headers: { cookie: s.cookie } }, resolve).end();
+        });
+        let text = "";
+        response.setEncoding("utf8");
+        response.on("data", chunk => { text += chunk; });
+        for (let waited = 0; !text.includes("retry"); waited++) { if (waited > 200) throw new Error("The stream never opened"); await realDelay(5); }
+        response.pause();
+        const socket = responses[0], write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+        const noticeWrites: number[] = [];
+        vi.spyOn(socket, "write").mockImplementation(((...args: unknown[]) => {
+          if (args[0] === "data: change\n\n") noticeWrites.push(Date.now());
+          return write(...args);
+        }) as typeof socket.write);
+        // Grow the reply half a megabyte a tick until the socket holds an update the client has not taken. How much the
+        // kernel takes before then differs between machines, so nothing here counts on a size for it.
+        let reply = "";
+        for (let tick = 0; !socket.writableNeedDrain; tick++) {
+          if (tick >= 60) throw new Error("The socket never filled");
+          reply += "x".repeat(512 * 1024);
+          built = turnOf(reply, "b:1:1");
+          s.change("shared", "inflight");
+          await pass(TURN_TICK_MS);
+        }
+        // A change a turn event would carry, and the read that follows it landing with no live reply to send.
+        const changedAt = Date.now();
+        s.change("shared", undefined, "b:1:2");
+        built = undefined;
+        restored!();
+        await pass(TURN_TICK_MS);
+        expect(noticeWrites).toEqual([]);
+        // The client catches up. The answer to that read finds nothing to send, so it releases the held notice now.
+        response.resume();
+        for (let waited = 0; socket.writableNeedDrain; waited++) { if (waited > 2000) throw new Error("The client never caught up"); await realDelay(5); }
+        await pass(TURN_TICK_MS);
+        await pass(0);
+        expect(noticeWrites).toHaveLength(1);
+        // The premise: this is before the hold would have ended on its own.
+        expect(noticeWrites[0] - changedAt).toBeLessThan(TURN_HOLD_MS);
+        await pass(TURN_HOLD_MS * 2);
+        expect(noticeWrites).toHaveLength(1);
+        response.destroy();
+      });
+
       it("sends a change that names no version at once, as a write's own notice and every other change do", async () => {
         const { s, events } = await turnStream();
         s.change("shared");

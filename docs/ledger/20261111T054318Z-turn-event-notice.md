@@ -77,6 +77,17 @@ Reads saved per turn are one per covered frame the notice throttle would not alr
 | `message.start` covered | 20 red: the runtime table, the native-turn cases, the timing figures |
 | `message.complete` covered | the runtime table and the settling test red |
 | `withTurn` not merging files | "gains the files a turn's rows carry…" red |
+| `restoredRead` consumed before the `writable()` check (review fix) | only the new "sends the change notice when the read that landed during a stalled client's backlog is answered" red: no notice written after the client catches up. It survived every other test before |
+
+## Review fixes (Claude Opus 5.5 on `fa11cc9`)
+
+- P3, `tests/conversation-events.test.ts`: the backpressure-plus-hold path. A real client socket stops reading, the reply
+  grows until the socket holds an update the client has not taken, a change naming a version is held, and the server's read
+  lands with no live reply. Nothing is written while the client stalls; once it catches up the stalled tick's read is
+  answered and the held notice goes at once, before the hold's 1.5 s would have ended and once only. Run six times in a row
+  without a failure.
+- P3, `docs/native-api.md`: the released notice goes through the stream's one-a-second limit, so the worst case, no read
+  landing, is about 2.5 s after the change (1.5 s hold, then up to 1 s of throttle). The paragraph says so.
 
 ## Checks
 
