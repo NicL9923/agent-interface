@@ -345,8 +345,12 @@ returns to the entry's static imports.
 ### Motion and ambience
 
 `src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
-animation in it runs only when the system allows motion, and the existing reduced-motion rules
-still win.
+timed animation in it runs only when the system allows motion, and the existing reduced-motion rules
+still win. The header's lift follows scroll position rather than time, and the phone slide is a view
+transition the app does not start under reduced motion. The built app links some component stylesheets after it, so an animation the layer
+gives an element is that element's only one. Springs are sampled `linear()` easings. A browser without
+`linear()` gets the app's ease-out for the soft spring (menus, sheets, the status dock) and a cubic-bezier
+with about 5% overshoot for the livelier one (the toast, the jump button, sent messages, the work strip).
 
 - On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
   flies between its home row and the chat header while the screens slide. Browsers without the
