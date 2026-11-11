@@ -69,6 +69,7 @@ it("moves a browser's subscription to the next member who subscribes with its ke
 it.each([
   ["a different p256dh", { p256dh: "other-key", auth: keys.auth }],
   ["a different auth secret", { p256dh: keys.p256dh, auth: "other-auth" }],
+  ["an auth secret of the same length", { p256dh: keys.p256dh, auth: keys.auth.slice(0, -1) + "X" }],
   ["a prefix of the stored auth secret", { p256dh: keys.p256dh, auth: keys.auth.slice(0, -1) }],
 ])("refuses to move another member's subscription for %s, and leaves it with its holder", async (_name, offered) => {
   const s = await setup();
