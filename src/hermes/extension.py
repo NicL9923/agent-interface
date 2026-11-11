@@ -1440,6 +1440,26 @@ class Bridge:
                 if credential:
                     request["app_credential"] = credential
 
+    @staticmethod
+    def mark_turn_start(session, value):
+        """Say when the native turn Hermes reports as running started, in epoch seconds, as ``inflight.started_at``.
+
+        Hermes sets ``started_at`` on the session's turn when it starts (``_start_inflight_turn``) but leaves it out of
+        the ``inflight`` snapshot it reports. The server places the turn's saved rows by it, since a prompt's words cannot
+        tell a new native turn from guidance steered into the running one. Only a turn that is still the one the snapshot
+        describes is stamped: another turn may have started since the snapshot was taken, and its start would put the
+        snapshot's rows before the turn.
+        """
+        inflight, turn = value.get("inflight"), session.get("inflight_turn")
+        if not isinstance(inflight, dict) or not isinstance(turn, dict):
+            return
+        started = turn.get("started_at")
+        if type(started) not in (int, float) or not math.isfinite(started) or started <= 0:
+            return
+        if str(turn.get("user") or "").strip() != inflight.get("user") or not str(turn.get("assistant") or "").startswith(inflight.get("assistant") or ""):
+            return
+        inflight["started_at"] = started
+
     def describe_task(self, profile, sid, session, value):
         if self.compaction.owns(sid):
             # Hermes holds the session running while it compacts. That is not anyone's task,
@@ -1452,6 +1472,7 @@ class Bridge:
             if value["inflight"] is None:
                 value["inflight"] = {}
             value["inflight"]["reasoning"] = session["app_exposed_reasoning"]
+        self.mark_turn_start(session, value)
         session["app_manual_recovery"] = True
         # A registered keeper marks a session prepared for app work; open_canonical relies on it.
         keeper = self.keepers.get(sid) or Keeper()

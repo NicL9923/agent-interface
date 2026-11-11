@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHermesRuntime } from "../src/server/hermes.js";
-import { turnRows } from "../src/server/hermes-mapping.js";
+import { nativeStartedAt, promptSaved, turnRows, turnStart } from "../src/server/hermes-mapping.js";
 import { compareVersions } from "../src/shared/inflight.js";
 import type { Message, Runtime } from "../src/shared/types.js";
 import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-hermes.js";
@@ -455,3 +455,77 @@ describe("turnRows", () => {
   });
 });
 
+
+describe("the native turn's start, as the add-on reports it", () => {
+  const stamp = (seconds: number) => new Date(seconds * 1000).toISOString();
+  const message = (id: string, role: Message["role"], seconds?: number, extra: Partial<Message> = {}): Message =>
+    ({ id, role, text: id, ...(seconds === undefined ? {} : { createdAt: stamp(seconds) }), ...extra });
+  // An earlier turn at 100 and 101, a native turn from 200 whose guidance was steered in at 202.
+  const rows = [message("u1", "user", 100), message("a1", "assistant", 101), message("u2", "user", 200), message("a2", "assistant", 201),
+    message("s1", "user", 202, { steered: true })];
+  const start = (startedAt: unknown, prompt?: string, from = 0, shown = rows) => turnStart(shown, prompt, from, nativeStartedAt({ started_at: startedAt }));
+
+  it.each([
+    ["missing", undefined], ["null", null], ["a string", "1790779733"], ["not a number", NaN], ["infinite", Infinity], ["zero", 0], ["negative", -5],
+  ])("reports no start for a started_at that is %s, so the words decide", (_name, value) => {
+    expect(nativeStartedAt({ started_at: value })).toBeUndefined();
+    expect(nativeStartedAt(undefined)).toBeUndefined();
+    expect(start(value, "u2")).toBe(2);
+    // With no usable start the last prompt is the fallback, as on main.
+    expect(start(value, "none")).toBe(4);
+  });
+
+  it("starts at the first row Hermes saved at or after the start, on both sides of the boundary", () => {
+    expect(start(200)).toBe(2);
+    expect(start(199.999)).toBe(2);
+    expect(start(200.001)).toBe(3);
+    expect(start(201.5)).toBe(4);
+  });
+  it("starts after the last row when the turn has saved nothing yet, wherever its prompt's words point", () => {
+    expect(start(300, "u2")).toBe(rows.length);
+    expect(start(300, "s1")).toBe(rows.length);
+  });
+  it("takes the start over the prompt's words, so guidance worded like the prompt is not the start", () => {
+    expect(start(199, "s1")).toBe(2);
+    expect(turnStart(rows, "s1")).toBe(4);
+  });
+  it("reads a row's time as whole milliseconds, as a row's createdAt is, so a row saved at the start is never before it", () => {
+    const at = 1790779733.179978;
+    const saved = [message("u1", "user", at - 60), message("u2", "user", at)];
+    expect(Date.parse(saved[1].createdAt!)).toBe(1790779733179);
+    expect(nativeStartedAt({ started_at: at })).toBe(1790779733179);
+    expect(turnStart(saved, undefined, 0, nativeStartedAt({ started_at: at }))).toBe(1);
+  });
+  it("never reaches back past the window's earlier context", () => {
+    expect(start(100, undefined, 2)).toBe(2);
+    expect(start(300, undefined, 2)).toBe(rows.length);
+  });
+  it("falls back to the words when a message after the start has no time, since where the start falls cannot be said", () => {
+    const untimed = [message("u1", "user", 100), message("a1", "assistant", 101), message("u2", "user"), message("a2", "assistant", 201)];
+    expect(start(200, "u2", 0, untimed)).toBe(2);
+    expect(start(200, "none", 0, untimed)).toBe(2);
+    expect(start(200, undefined, 0, [message("u1", "user", 100), message("a1", "assistant", 101), message("u2", "user", 200), message("a2", "assistant")])).toBe(2);
+    // An untimed message before the first one the start rules out is never looked at.
+    expect(start(200, "none", 0, [message("u0", "user"), ...rows])).toBe(3);
+  });
+  it("says the turn's prompt is saved when the turn's first saved message is a prompt, and by its words without a start", () => {
+    const saved = (startedAt: number | undefined, prompt: string | undefined, shown = rows) => promptSaved(shown, prompt, nativeStartedAt({ started_at: startedAt }));
+    // The turn from 200 starts with a prompt row, whatever words Hermes reports.
+    expect(saved(200, "other words")).toBe(true);
+    // The turn's first saved message is a segment, as for a hidden prompt, or nothing has been saved yet.
+    expect(saved(200.5, "u2")).toBe(false);
+    expect(saved(300, "u2")).toBe(false);
+    // An older add-on: the words decide, among the trailing prompts.
+    expect(saved(undefined, "u2")).toBe(true);
+    expect(saved(undefined, "s1")).toBe(true);
+    expect(saved(undefined, "u1")).toBe(false);
+    // A message with no time leaves the words to decide.
+    expect(saved(200, "s1", [message("u2", "user"), message("a2", "assistant", 201), message("s1", "user", 202, { steered: true })])).toBe(true);
+    expect(saved(200, "other words", [message("u2", "user"), message("a2", "assistant", 201)])).toBe(false);
+  });
+  it("starts the turn with its own rows through turnRows, and with none when it has saved nothing", () => {
+    const shown = [...rows, message("live-inflight", "assistant")];
+    expect(turnRows(shown, "s1", "live-inflight", 0, false, nativeStartedAt({ started_at: 200 }))).toEqual({ after: "a1", messages: rows.slice(2) });
+    expect(turnRows(shown, "s1", "live-inflight", 0, false, nativeStartedAt({ started_at: 300 }))).toEqual({ after: "s1", messages: [] });
+  });
+});
