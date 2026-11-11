@@ -177,6 +177,16 @@ describe("talk ask", () => {
     expect((await ask(s, randomUUID(), "Hello")).json()).toEqual({ state: "refused", text: "Images cannot be added." });
   });
 
+  // A spoken request has no typed draft, so no refusal may send the person to one.
+  it.each([
+    ["Hermes is being upgraded. Your draft is saved; send it after the update finishes.", { state: "refused", text: "Hermes is being upgraded." }],
+    ["Hermes is paused for maintenance. Your draft is saved. Try again when maintenance finishes.", { state: "refused", text: "Hermes is paused for maintenance. Try again when maintenance finishes." }],
+    ["Your draft is saved.", { state: "refused" }],
+  ])("does not tell a spoken request's refusal that a draft is saved: %s", async (message, expected) => {
+    const s = await setup({ receipt: input => ({ requestId: input.requestId, status: "rejected", message }) });
+    expect((await ask(s, randomUUID(), "Hello")).json()).toEqual(expected);
+  });
+
   // Hermes saved nothing, so no read will ever show the request; the person hears why at once.
   it("answers a typed stop that ended Hermes's voice chat with its message at once, also when asked again", async () => {
     const requestId = randomUUID(), message = "Hermes ended its voice chat. Nothing was sent to the assistant.";

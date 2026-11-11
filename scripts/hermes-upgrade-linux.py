@@ -134,7 +134,7 @@ elif v['action']=='rpc':
 # check can outwait. The guarded release tool keeps the same value (.agents/tools/deploy_common.py);
 # tests/hermes_send_lanes_test.py pins both against the add-on's real answer.
 BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
-# How long NATIVE waits for each WebSocket message. Before it decides, acquire preempts each
+# How long NATIVE waits for each WebSocket message. An acquire that would succeed first preempts each
 # canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py PREEMPT_WAIT), one
 # at a time, and nothing caps the chain. 120 s covers three full waits, as in the release tool.
 MAINTENANCE_WAIT = {"acquire": 120}
@@ -557,7 +557,7 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save({"baseline": baseline, "phase": "acquiring"})
         # 75 is a proven harmless rejection: the add-on's acquire handler returned or never received
         # the request, and a release then left no lease, drain or changed host state. The handler preempts compactions before it
-        # writes the lease, so an acquire with no answer may still take it after any release; that
+        # writes the lease when it would otherwise succeed, so an acquire with no answer may still take it after any release; that
         # is never 75. Every other failure, including any cleanup uncertainty, fails closed.
         try:
             gate = self.rpc("acquire")

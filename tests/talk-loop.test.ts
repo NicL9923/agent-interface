@@ -217,6 +217,14 @@ describe("talk progress narration", () => {
     expect(s.items().join("\n")).not.toContain("Now the radar.");
     expect(s.items().join("\n")).toContain("could not reach");
   });
+  it("does not tell a spoken request that its draft is saved when the app refuses it during an upgrade", async () => {
+    const s = setup([new Error("Hermes is being upgraded. Your draft is saved; send it after the update finishes.")]);
+    s.call();
+    await s.settle();
+    const said = s.items().join("\n");
+    expect(said).toContain("could not reach Ranch Hand: Hermes is being upgraded.");
+    expect(said).not.toContain("draft");
+  });
   it("reports at most the newest 500 lines heard, so a long run never makes its own next ask invalid", async () => {
     const ids = Array.from({ length: 600 }, (_, index) => `n${index}`);
     const s = setup([{ state: "working", progress: { ids, text: "Checking." } }, { state: "done", text: "Sunny." }]);

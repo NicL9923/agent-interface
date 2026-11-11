@@ -569,7 +569,11 @@ export interface Runtime {
   watchRoster?(changed: () => void): () => void;
   saveBot(input: BotInput, id?: string): Promise<Bot>;
   deleteBot(id: string): Promise<void>;
-  stop(botId: string): Promise<void>;
+  /**
+   * Interrupts the assistant's session, which Hermes does for every run and every member's queued message in it. Refuses with
+   * a 409 and sends nothing when no run is open, or, with `runId`, when the open run is another one.
+   */
+  stop(botId: string, runId?: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   /** Saves the Talk voice with the profile, beside its avatar. */
@@ -690,8 +694,9 @@ export interface SubmissionReceipt {
   /** Whether this message joined the running task. Absent from an older add-on. */
   steered?: boolean;
   /**
-   * What Hermes did with this message's turn, on an accepted new task only. Absent when nobody can say: an add-on
-   * too old to report it, a receipt recovered by lookup, a steer (see `steered`), or a receipt that is not accepted.
+   * What Hermes did with this message's turn, on an accepted new task only, from the admission answer and from a
+   * receipt lookup alike. Absent when nobody can say: an answer saved by an add-on older than the field, a steer (see
+   * `steered`), or a receipt that is not accepted. Never read a missing one as `started`.
    */
   turn?: AdmissionTurn;
   /**

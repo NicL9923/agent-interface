@@ -1000,6 +1000,23 @@ struct Receipt: Codable, Equatable {
   var text: String? = nil
   /// Whether the message joined the running task. Nil from an older add-on.
   var steered: Bool? = nil
+  /// What Hermes did with an accepted new task's turn (src/shared/types.ts AdmissionTurn): `started`,
+  /// `queued` (its busy queue, no separate later turn promised), `joined` (put into the running turn),
+  /// `none` (a typed stop phrase ended Hermes's voice chat and nothing was admitted) or `unknown`.
+  /// Nil when nobody can say: an older add-on, a receipt recovered by lookup, a steer, or a receipt
+  /// that is not accepted.
+  var turn: String? = nil
+  /// The server's structural version when Hermes's admission answer reached it. This client has no early
+  /// "thinking" row to end with it, so it is only decoded, as the web's `SubmissionReceipt` carries it.
+  var admittedVersion: String? = nil
+
+  /// A typed stop phrase ended Hermes's voice chat: accepted, but nothing reached the assistant, so no
+  /// copy of the message is coming and its words belong back in the draft.
+  var admittedNothing: Bool { status == "accepted" && turn == "none" }
+  /// Hermes took the message into the assistant's turn: accepted and not a stop phrase.
+  var admitted: Bool { status == "accepted" && turn != "none" }
+  /// The message went into work already running, by the add-on's steer or by Hermes into the running turn.
+  var joinedRunningWork: Bool { steered == true || turn == "joined" }
 }
 /// A failed turn's retry as the server records it: the receipt of the request that claimed the turn.
 struct RetryClaim: Codable, Equatable {
@@ -1008,6 +1025,8 @@ struct RetryClaim: Codable, Equatable {
   var runId: String?
   var messageId: String?
   var message: String?
+  /// As `Receipt.turn`: a retry whose words were a typed stop phrase is accepted with `none`.
+  var turn: String? = nil
   var retryOf: String
 }
 struct PendingSubmission: Codable, Equatable {
@@ -1050,23 +1069,11 @@ struct SentEcho: Equatable {
   /// Accepted, it reads as any other message until Hermes's own copy takes its place.
   var delivery: Delivery? { status == .accepted ? nil : Delivery(id: request.requestId, status: status) }
 
-  /// Whether Hermes's own copy of the message is in the conversation.
+  /// Whether Hermes's own copy of the message is in the conversation. Only a message Hermes accepted is
+  /// matched by its words; see `copyIndex`.
   func shown(in conversation: Conversation) -> Bool {
-    let messages = conversation.messages
-    if messages.contains(where: { $0.id == request.requestId || $0.id == messageId }) { return true }
-    // Hermes names a staged prompt by its request ID. Other rows, such as image-only prompts, are
-    // matched by their words once it accepted them, after the message that was last when it was sent.
-    let text = Self.trimmed(request.text)
-    guard status == .accepted, !text.isEmpty else { return false }
-    var start = 0
-    if let after {
-      // Without its anchor, an older message with the same words could pass for this one.
-      guard let anchor = messages.firstIndex(where: { $0.id == after }) else { return false }
-      start = anchor + 1
-    }
-    return messages[start...].contains {
-      $0.role == "user" && Self.trimmed($0.text) == text && ($0.sender == nil || $0.sender?.id == sender.id)
-    }
+    Self.copyIndex(requestId: request.requestId, messageId: messageId, text: status == .accepted ? request.text : "", after: after,
+      senderId: sender.id, in: conversation.messages) != nil
   }
   /// The echo after the submission, its receipt or the conversation changed. Nil removes it.
   static func next(_ echo: SentEcho?, pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
@@ -1085,12 +1092,13 @@ struct SentEcho: Equatable {
     if pending?.requestId == next.request.requestId {
       next.status = sending ? .sending : .unconfirmed
     } else if next.status != .accepted {
-      // A refused, interrupted or abandoned send leaves only the draft it came from.
-      guard let receipt, receipt.requestId == next.request.requestId, receipt.status == "accepted" else { return nil }
+      // A refused, interrupted or abandoned send leaves only the draft it came from. So does a typed stop
+      // phrase that ended Hermes's voice chat: it admitted nothing, so no copy is coming.
+      guard let receipt, receipt.requestId == next.request.requestId, receipt.admitted else { return nil }
       next.status = .accepted
       next.messageId = receipt.messageId
       next.acceptedAt = now
-      next.steered = receipt.steered == true
+      next.steered = receipt.joinedRunningWork
     }
     guard let conversation, conversation.botId == next.request.botId else { return next }
     if next.shown(in: conversation) { return nil }
@@ -1141,7 +1149,7 @@ struct SentEcho: Equatable {
     guard sending, let pending, draft.isSentCopy else { return false }
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
-  private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
   private static func timestamp(_ date: Date) -> String { ServerDate.string(date) }
 }
 struct AuthConfig: Codable {

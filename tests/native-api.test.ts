@@ -13,7 +13,8 @@ import { Store } from "../src/server/store.js";
 import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 import Fastify from "fastify";
-import { errorHandler } from "../src/server/http-error.js";
+import { errorHandler, httpError } from "../src/server/http-error.js";
+import { nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
 
 const origin = "http://127.0.0.1:3000";
 const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
@@ -638,4 +639,41 @@ it("lets a Live Activity's Stop act only for the account it names", async () => 
   expect((await stop({})).statusCode).toBe(200);
   expect((await stop({ account: "x".repeat(65) })).statusCode).toBe(400);
   expect(stopped).toEqual(["bot", "bot", "bot"]);
+});
+
+it("hands a Stop's run to the runtime, refuses a malformed one, and passes the runtime's refusal on", async () => {
+  const stops: [string, string | undefined][] = [];
+  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
+    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
+    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }),
+    stop: async (botId: string, runId?: string) => {
+      stops.push([botId, runId]);
+      if (runId === "finished") throw httpError(409, nothingToStopMessage, { code: "nothing_to_stop" });
+      if (runId === "replaced") throw httpError(409, runChangedMessage, { code: "run_changed" });
+    },
+    close: async () => {},
+  }), { background: false });
+  apps.push(result);
+  const { app } = result, { token } = await connectNative(app);
+  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  expect((await stop({ runId: "run-one" })).statusCode).toBe(200);
+  expect((await stop({ runId: "run-one", account: accountMarker("local-one") })).statusCode).toBe(200);
+  // No body and an empty one name no run: the runtime decides from what runs now.
+  expect((await stop()).statusCode).toBe(200);
+  expect((await stop({})).statusCode).toBe(200);
+  expect(stops).toEqual([["bot", "run-one"], ["bot", "run-one"], ["bot", undefined], ["bot", undefined]]);
+  // The runtime's refusals reach the person as they are, with the code a client can tell apart.
+  const finished = await stop({ runId: "finished" });
+  expect([finished.statusCode, finished.json().code, finished.json().error]).toEqual([409, "nothing_to_stop", nothingToStopMessage]);
+  const replaced = await stop({ runId: "replaced" });
+  expect([replaced.statusCode, replaced.json().code, replaced.json().error]).toEqual([409, "run_changed", runChangedMessage]);
+  stops.length = 0;
+  // Another account's Live Activity is refused before the runtime is asked at all.
+  const other = await stop({ runId: "run-one", account: accountMarker("local-two") });
+  expect([other.statusCode, other.json().error]).toEqual([409, "This activity belongs to a different account"]);
+  for (const bad of [{ runId: "" }, { runId: "x".repeat(201) }, { runId: 7 }, { runId: "run-one", extra: true }]) {
+    const refused = await stop(bad);
+    expect([refused.statusCode, refused.json().error], JSON.stringify(bad).slice(0, 40)).toEqual([400, "Invalid request"]);
+  }
+  expect(stops).toEqual([]);
 });

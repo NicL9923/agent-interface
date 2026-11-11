@@ -233,9 +233,12 @@ struct ComposerView: View {
   private func recallArrow(_ up: Bool) -> Bool {
     guard store.draftReady, !store.sending, !store.sendingDraft, store.selectedBotId == bot.id else { recall.reset(); return false }
     let userId = store.bootstrap?.user.id
+    let othersCanWrite = bot.othersCanWrite
     let text = store.composerDraft.text
     // The conversation is read only when recall starts, so streamed replies never render the composer.
-    guard let next = recall.arrow(up: up, text: text, messages: { PromptRecall.ownMessages(store.conversation?.messages ?? [], userId: userId) })
+    guard let next = recall.arrow(up: up, text: text, messages: {
+      PromptRecall.ownMessages(store.conversation?.messages ?? [], userId: userId, othersCanWrite: othersCanWrite, ownRows: store.ownRows)
+    })
     else { return false }
     if next != text { store.editComposer { $0.text = next } }
     return true

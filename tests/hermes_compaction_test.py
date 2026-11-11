@@ -5,8 +5,10 @@ compaction's commit fence, and its token estimator. The real gateway contract, i
 message sent during a held compaction, lives in scripts/spike/compaction_probe.py.
 """
 import contextlib
+import itertools
 import json
 import logging
+import math
 import sqlite3
 import sys
 import tempfile
@@ -529,14 +531,17 @@ class PreemptTests(unittest.TestCase):
         self.assertFalse(fixture.idle.owns("sid"))
 
 
-def bridge_with_compaction(test, hermes):
-    """The bridge's own IdleCompaction, enabled, running a compaction Hermes holds until cancelled."""
+def bridge_with_compaction(test, hermes, answers=None):
+    """The bridge's own IdleCompaction, enabled, running a compaction Hermes holds until cancelled.
+
+    ``answers`` are the commit fence's successive cancel results; ``[None]`` is a commit that never lets go."""
     events = []
     server, idle = hermes.server, hermes.bridge.compaction
     session = server._sessions["sid"]
     session.update(agent=Agent(), history_lock=threading.RLock(), history_version=1, history=[{}] * 30)
     server._session_uses_compute_host = lambda session: False
     native = Native(server, "sid", events)
+    native.answers = answers or [True]
     idle.delay, idle.native, idle.size = DELAY, native, lambda session: (2000, 1000)
     idle.activity["sid"] = time.time() - DELAY
     thread = threading.Thread(target=lambda: idle.compact("default", "sid"), daemon=True)
@@ -643,6 +648,198 @@ class BridgeTests(unittest.TestCase):
             self.assertNotIn("error", lease)
             self.assertEqual((lease["result"]["active"], lease["result"]["busy"]), (True, []))
             self.assertEqual(fixture.events, [("cancel", True, True)])
+
+
+class MaintenanceDeadlineTests(unittest.TestCase):
+    """An acquire whose caller gave up writes no lease, and one that is refused anyway stops no compaction."""
+
+    BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+    OWNED = {"code": 409, "message": "Another maintenance operation owns this lease"}
+
+    def host(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.lease = Path(directory.name) / "maintenance.json"
+        hermes = FakeHermes([], environment={"HERMES_AGENT_INTERFACE_MAINTENANCE_FILE": str(self.lease), "HERMES_AGENT_INTERFACE_TOKEN": "key"})
+        hermes.__enter__()
+        self.addCleanup(hermes.__exit__, None, None, None)
+        hermes.open()
+        # Hermes holds one admission reservation for each native call, a compaction's session.compress included.
+        hermes.retirement.active_count = lambda: 1 + hermes.bridge.compaction.running()
+        return hermes
+
+    def call(self, hermes, action, operation="operation-1", **params):
+        params = {"service_key": "key", "action": action, **({} if operation is None else {"operation_id": operation}), **params}
+        return hermes.methods["agent-interface.maintenance"]("rid", params)
+
+    def acquire_on_thread(self, hermes, operation, **params):
+        answers = []
+        thread = threading.Thread(target=lambda: answers.append(self.call(hermes, "acquire", operation, **params)), daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        return thread, answers
+
+    def test_a_refused_acquire_stops_no_compaction(self):
+        def other_lease(hermes):
+            self.lease.write_text(json.dumps({"operationId": "another-operation"}))
+            self.lease.chmod(0o600)
+        def work_beside_compaction(hermes):
+            # Another client's turn waiting to start beside the compaction is work the acquire must not preempt for.
+            hermes.server._sessions["sid"]["_auto_continue_scheduled"] = True
+        def turn_elsewhere(hermes):
+            hermes.server._sessions["elsewhere"] = {"running": True}
+        def reservation(hermes):
+            # A queued RPC holds a reservation of its own beside the compaction's.
+            hermes.retirement.active_count = lambda: 2 + hermes.bridge.compaction.running()
+        def send_on_a_lane(hermes):
+            hermes.bridge.sends_in_flight[1] = ("default", "queued")
+        busy, owned = self.BUSY, self.OWNED
+        cases = [("another operation owns the lease", other_lease, {}, owned),
+                 ("work beside the compaction", work_beside_compaction, {}, busy),
+                 ("a turn running on another session", turn_elsewhere, {}, busy),
+                 ("a queued reservation", reservation, {}, busy),
+                 ("a send waiting for its lane", send_on_a_lane, {}, busy),
+                 ("a malformed operation", lambda hermes: None, {"operation": "short"}, {"code": 400, "message": "Invalid maintenance operation"})]
+        cases += [("deadline " + repr(value), lambda hermes: None, {"deadline": value}, {"code": 400, "message": "Invalid maintenance deadline"})
+                  for value in (0, -1, "5", True, float("nan"), math.inf, [])]
+        for name, arrange, params, expected in cases:
+            with self.subTest(name):
+                hermes = self.host()
+                fixture = bridge_with_compaction(self, hermes)
+                arrange(hermes)
+                before = self.lease.read_text() if self.lease.exists() else None
+                refused = self.call(hermes, "acquire", **params)
+                self.assertEqual(refused.get("error"), expected)
+                self.assertEqual(fixture.events, [])
+                self.assertTrue(fixture.thread.is_alive())
+                # Whatever lease was there is untouched, and none was written.
+                self.assertEqual(self.lease.read_text() if self.lease.exists() else None, before)
+
+    def test_a_compactions_own_hold_is_no_work_to_refuse_for(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes)
+        result = self.call(hermes, "acquire")["result"]
+        self.assertEqual(result, {"active": True, "operationId": "operation-1", "busy": []})
+        self.assertEqual(fixture.events, [("cancel", True, True)])
+        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "operation-1"})
+
+    def test_an_acquire_without_a_deadline_waits_out_the_preempt_bound_then_writes_nothing_while_busy(self):
+        hermes = self.host()
+        bridge_with_compaction(self, hermes, [None])
+        started = time.monotonic()
+        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 0.3):
+            refused = self.call(hermes, "acquire")
+        # The compaction still holds its session: busy, as before the deadline existed.
+        self.assertEqual((refused["error"], self.lease.exists()), (self.BUSY, False))
+        self.assertGreaterEqual(time.monotonic() - started, 0.3)
+
+    def test_an_acquire_whose_deadline_passes_during_the_preempts_writes_no_lease(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes, [None])
+        started = time.monotonic()
+        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5):
+            refused = self.call(hermes, "acquire", deadline=0.3)
+        # The deadline, not the 5 s preempt bound, ended the wait.
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(refused["error"], self.BUSY)
+        fixture.native.release.set()
+        fixture.thread.join(5)
+        self.assertFalse(self.lease.exists())
+
+    def test_a_deadline_that_passed_before_the_first_preempt_stops_no_compaction(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes)
+        # The first look takes time too: this clock moves a second at every reading, and the caller allowed half of one.
+        readings = itertools.count(100)
+        hermes.bridge.monotonic = lambda: float(next(readings))
+        refused = self.call(hermes, "acquire", deadline=0.5)
+        self.assertEqual(refused["error"], self.BUSY)
+        self.assertEqual(fixture.events, [])
+        self.assertTrue(fixture.thread.is_alive())
+        self.assertFalse(self.lease.exists())
+
+    def test_the_time_an_acquire_waits_for_the_lock_counts_against_its_deadline(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes)
+        with hermes.bridge.maintenance_lock:
+            thread, answers = self.acquire_on_thread(hermes, "operation-1", deadline=0.3)
+            time.sleep(0.6)
+        thread.join(5)
+        # The caller stopped waiting while the acquire queued behind another maintenance call, so nothing is stopped or written.
+        self.assertEqual(answers[0]["error"], self.BUSY)
+        self.assertEqual(fixture.events, [])
+        self.assertFalse(self.lease.exists())
+
+    def test_the_lease_is_written_only_before_the_deadline_the_caller_gave(self):
+        for finished, written in ((109.9, True), (110.0, False), (111.0, False)):
+            with self.subTest(finished=finished):
+                self.check_deadline_boundary(finished, written)
+
+    def check_deadline_boundary(self, finished, written):
+        hermes = self.host()
+        hermes.retirement.active_count = lambda: 1
+        clock = [100.0]
+        hermes.bridge.monotonic = lambda: clock[0]
+        fixture = bridge_with_compaction(self, hermes)
+        # The preempt takes until `finished`; the caller allowed ten seconds from 100.
+        fixture.native.on_release = lambda: clock.__setitem__(0, finished)
+        answer = self.call(hermes, "acquire", deadline=10)
+        if written:
+            self.assertEqual(answer["result"], {"active": True, "operationId": "operation-1", "busy": []})
+            self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "operation-1"})
+        else:
+            self.assertEqual(answer["error"], self.BUSY)
+            self.assertFalse(self.lease.exists())
+
+    def test_work_that_arrives_during_the_preempts_still_refuses_the_acquire(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes)
+        # An app turn takes the session as Hermes lets go of the compaction.
+        fixture.native.on_release = lambda: hermes.server._sessions["sid"].__setitem__("_auto_continue_scheduled", True)
+        self.assertEqual(self.call(hermes, "acquire")["error"], self.BUSY)
+        self.assertFalse(self.lease.exists())
+
+    def test_status_and_release_are_answered_while_an_acquire_preempts(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes, [None])
+        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 3):
+            thread, answers = self.acquire_on_thread(hermes, "operation-1")
+            time.sleep(0.2)
+            started = time.monotonic()
+            status = self.call(hermes, "status", None)["result"]
+            release = self.call(hermes, "release", "operation-2")["result"]
+            # Neither waited for the compaction, and the lease did not exist yet.
+            self.assertLess(time.monotonic() - started, 1)
+            self.assertEqual((status["active"], release["active"]), (False, False))
+            self.assertEqual([item["sessionId"] for item in status["busy"]], ["sid"])
+            fixture.native.release.set()
+            thread.join(5)
+        self.assertEqual(answers[0]["result"]["active"], True)
+        self.assertEqual(self.call(hermes, "status", None)["result"]["operationId"], "operation-1")
+
+    def test_two_acquires_at_once_leave_one_lease_for_one_operation(self):
+        hermes = self.host()
+        fixture = bridge_with_compaction(self, hermes, [None])
+        with patch.object(sys.modules[type(hermes.bridge.compaction).__module__], "PREEMPT_WAIT", 5):
+            first, first_answers = self.acquire_on_thread(hermes, "operation-1")
+            second, second_answers = self.acquire_on_thread(hermes, "operation-2")
+            # Both found no lease and no work, and wait in their preempts for the compaction.
+            time.sleep(0.4)
+            self.assertEqual((first_answers, second_answers), ([], []))
+            fixture.native.release.set()
+            first.join(5)
+            second.join(5)
+        answers = {"operation-1": first_answers[0], "operation-2": second_answers[0]}
+        winners = [name for name, answer in answers.items() if "result" in answer]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": winners[0]})
+        loser = answers["operation-2" if winners[0] == "operation-1" else "operation-1"]
+        self.assertEqual(loser["error"], self.OWNED)
+
+    def test_an_acquire_repeated_for_its_own_lease_is_idempotent(self):
+        hermes = self.host()
+        self.assertTrue(self.call(hermes, "acquire")["result"]["active"])
+        self.assertEqual(self.call(hermes, "acquire")["result"], {"active": True, "operationId": "operation-1", "busy": []})
 
 
 class OriginalRowTests(unittest.TestCase):

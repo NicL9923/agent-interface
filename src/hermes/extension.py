@@ -173,9 +173,16 @@ class Journal:
             self.db.execute("INSERT OR IGNORE INTO events(profile,session_id,run_id,kind,title,body,occurred,epoch,event_key,routine_id) VALUES(?,?,?,?,?,?,?,?,?,?)", (profile, sid, run_id, kind, title, body, time.time(), self.epoch, event_key, routine_id))
 
     def receipt(self, request_id):
-        row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor,steering FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+        row = self.db.execute("SELECT status,COALESCE(run_id,request_id),row_id,actor,steering,admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+        if row is None:
+            return None
         # steering is the decision made under the submission lock: this input joined the running task.
-        return None if row is None else {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3], "steering": bool(row[4])}
+        value = {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3], "steering": bool(row[4])}
+        # The turn the saved answer carried, for a caller whose answer was lost. A receipt saved before the add-on
+        # stored a started turn, a steer and a refusal carry none.
+        if row[5] and (stored := json.loads(row[5]).get("turn")) is not None:
+            value["turn"] = stored
+        return value
 
     def last_terminal(self, profile, sid, stored):
         """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
@@ -533,6 +540,9 @@ def approval_id(row):
 
 
 # The run a session's newest unsettled receipt belongs to.
+# A receipt Hermes put into the running turn (admission turn "joined") marks its row as a steer, as a steering receipt does.
+# It is its own run, because the turn it joined may be another client's, so it is bound through its own turn_rows.
+JOINED = "json_extract(%sadmission_response,'$.turn')='joined'"
 OPEN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1"
 # The run an open names: OPEN_RUN without receipts whose admission Hermes has not answered yet.
 SHOWN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 AND request_id NOT IN (SELECT value FROM json_each(?)) ORDER BY created DESC LIMIT 1"
@@ -572,16 +582,17 @@ ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined
 
 
 def admission_turn(result):
-    """What a new task's successful prompt.submit answer says about its turn; None only for a started turn.
+    """What a new task's successful prompt.submit answer says about its turn.
 
-    Only "streaming" says Hermes started the turn (methods_prompt.py:973; compute_host_bridge.py:327
-    for an isolated turn). A typed stop phrase while the session's voice mode is on ends the voice
+    Only "streaming" says Hermes started the turn, answered "started" (methods_prompt.py:973; compute_host_bridge.py:327
+    for an isolated turn). It is saved like every other turn, so a saved answer without one was saved by an add-on
+    older than the field and says nothing. A typed stop phrase while the session's voice mode is on ends the voice
     chat and admits nothing: {"voice_stopped": true} (methods_prompt.py:265-268, checked first at :835-836, and :760-761), "none".
     Any answer this does not know is "unknown", never taken for a started turn.
     """
     status = result.get("status")
     if status == "streaming":
-        return None
+        return "started"
     if status is None and result.get("voice_stopped") is True:
         return "none"
     return ADMISSION_TURN.get(status, "unknown")
@@ -631,6 +642,8 @@ class RowCache:
             del table[next(iter(table))]
 
 # Methods a held maintenance lease still admits: status, history and discovery reads.
+# Session marks that count as work to maintenance, besides app sends that hold a lane.
+BUSY_MARKS = ("running", "queued_prompt", "queued_prompts", "pending_steer", "_auto_continue_scheduled")
 MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
                      "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
                      "groups.capabilities", "groups.list", "groups.state", "groups.log"}
@@ -660,6 +673,11 @@ class Bridge:
         # Maintenance status lists them as active work, as acquire already counts their reservations.
         self.sends_in_flight = {}
         self.sends_in_flight_lock = threading.Lock()
+        # The clock a maintenance deadline runs on; a test pins it.
+        self.monotonic = time.monotonic
+        # Each session's accepted sends that Hermes put into its running turn and the turn has not yet completed:
+        # the rows that completion reports are kept with them. Memory only, so a restart leaves them unbound.
+        self.joined, self.joined_lock = {}, threading.Lock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
@@ -724,12 +742,16 @@ class Bridge:
             raise RuntimeError("Maintenance lease is not private.")
         return json.loads(path.read_text())
 
-    def busy_sessions(self):
+    def busy_sessions(self, ignoring_compaction=False):
         """Active work for maintenance: busy sessions, then app sends that wait for or hold a lane.
 
         A send staging images or inside Hermes's admission call has not marked its session running,
         and one waiting on its lane has not reached Hermes at all. Each holds an admission
         reservation, so acquire refuses; status lists them so its callers refuse first.
+
+        A background compaction holds its session running, but only acquire's preempt stops it, so
+        acquire's first look passes ``ignoring_compaction``: a session whose only mark is that
+        compaction's own running flag is no work yet. Queued input beside it is work.
         """
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
@@ -737,13 +759,15 @@ class Bridge:
         sessions = self.server._sessions.copy()
         with self.sends_in_flight_lock:
             sends = [tuple(send) for send in self.sends_in_flight.values()]
+        def working(sid, session):
+            marks = [key for key in BUSY_MARKS if session.get(key)]
+            return bool(marks) and not (ignoring_compaction and marks == ["running"] and self.compaction.owns(sid))
         return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
-                for sid, session in sessions.items()
-                if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
-                or session.get("pending_steer") or session.get("_auto_continue_scheduled")] + [
+                for sid, session in sessions.items() if working(sid, session)] + [
             {"sessionId": self.canonical.get(profile), "profile": profile, "state": state} for profile, state in sends]
 
     def maintenance(self, rid, params):
+        arrived = self.monotonic()
         server = self.server
         secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
         supplied = params.get("service_key", "")
@@ -751,35 +775,71 @@ class Bridge:
             return server._err(rid, 403, "Private maintenance authentication required")
         if not self.maintenance_file:
             return server._err(rid, 409, "Host maintenance lease is not configured")
-        if params.get("action") == "acquire":
-            # A background compaction is no work to wait for, so stop it first. Never under
-            # maintenance_lock: Hermes's release of the session takes it.
-            for sid in list(self.canonical.copy().values()):
-                self.compaction.preempt(sid)
+        action = params.get("action", "status")
+        operation = params.get("operation_id")
+        if action not in ("status", "acquire", "release"):
+            return server._err(rid, 400, "Unknown maintenance action")
+        if action != "status" and (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation)):
+            return server._err(rid, 400, "Invalid maintenance operation")
+        if action == "acquire":
+            # How long the caller will wait, in seconds, counted from this request's arrival. Unknown to an
+            # add-on older than the maintenance_deadline capability, which ignores it and acquires regardless.
+            seconds = params.get("deadline")
+            if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds < math.inf):
+                return server._err(rid, 400, "Invalid maintenance deadline")
+            return self.acquire_lease(rid, operation, None if seconds is None else arrived + seconds)
         with self.maintenance_lock:
             lease = self.maintenance_state()
-            action = params.get("action", "status")
-            operation = params.get("operation_id")
-            if action not in ("status", "acquire", "release"):
-                return server._err(rid, 400, "Unknown maintenance action")
-            if action != "status" and (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation)):
-                return server._err(rid, 400, "Invalid maintenance operation")
             if lease and lease.get("operationId") != operation and action != "status":
                 return server._err(rid, 409, "Another maintenance operation owns this lease")
             busy = self.busy_sessions()
-            if action == "acquire":
-                # This request holds one native reservation. Queued RPCs and
-                # deferred work reserve before execution and must also be idle.
-                if busy or self.retirement.active_count() > 1:
-                    return server._err(rid, 409, "Hermes still has active work; no maintenance lease acquired")
-                path = Path(self.maintenance_file)
-                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                private_fs.atomic_json(path, {"operationId": operation})
-                lease = {"operationId": operation}
-            elif action == "release" and lease:
+            if action == "release" and lease:
                 Path(self.maintenance_file).unlink()
                 lease = None
             return server._ok(rid, {"active": lease is not None, "operationId": (lease or {}).get("operationId"), "busy": busy})
+
+    def acquire_lease(self, rid, operation, deadline):
+        """Write the maintenance lease unless refused, or unless the caller's ``deadline`` (this clock) has passed.
+
+        The first look, under maintenance_lock, refuses what would be refused anyway, so a refused
+        acquire stops no compaction. Only an acquire that would otherwise succeed stops them, outside
+        the lock: Hermes's release of a compacting session takes it. The look is repeated under the lock
+        immediately before the write, because the preempts took time: another acquire or input may have
+        come in, and the caller may have given up. A caller that gave up cannot know whether a lease will
+        appear, so none is written after its deadline.
+        """
+        def refused(message="Hermes still has active work; no maintenance lease acquired"):
+            return self.server._err(rid, 409, message)
+        def look(first):
+            lease = self.maintenance_state()
+            if lease and lease.get("operationId") != operation:
+                return refused("Another maintenance operation owns this lease")
+            # This request holds one native reservation. Queued RPCs and deferred work reserve before
+            # execution and must also be idle. At the first look each running compaction holds one too,
+            # and a compaction ending between the two reads only makes this count low: the second look is exact.
+            compacting = self.compaction.running() if first else 0
+            if self.busy_sessions(ignoring_compaction=first) or self.retirement.active_count() - compacting > 1:
+                return refused()
+            return None
+        with self.maintenance_lock:
+            refusal = look(True)
+        if refusal:
+            return refusal
+        for sid in list(self.canonical.copy().values()):
+            remaining = None if deadline is None else deadline - self.monotonic()
+            if remaining is not None and remaining <= 0:
+                return refused()
+            self.compaction.preempt(sid, wait=None if remaining is None else min(remaining, sibling_module("compaction").PREEMPT_WAIT))
+        with self.maintenance_lock:
+            refusal = look(False)
+            if refusal:
+                return refusal
+            if deadline is not None and self.monotonic() >= deadline:
+                return refused()
+            path = Path(self.maintenance_file)
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_fs.atomic_json(path, {"operationId": operation})
+            return self.server._ok(rid, {"active": True, "operationId": operation, "busy": []})
 
     def guarded_acquire(self):
         with self.maintenance_lock:
@@ -1102,6 +1162,24 @@ class Bridge:
         with self.journal.lock, self.journal.db:
             self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
+    def keep_joined_turn(self, sid, payload):
+        """Keep the rows of the turn that just completed with each send Hermes put into it.
+
+        A send answered ``steered`` or ``redirected`` joined the turn running when its answer came, which can be
+        another client's, so no receipt holds that turn's rows. The completion's committed rows, without the turn's own
+        prompt row, are kept as the send's ``turn_rows``, and bind_steers binds it by the steer rule. A completion that
+        reports no rows, or no prompt row to leave out, keeps none.
+        """
+        with self.joined_lock:
+            requests = self.joined.pop(sid, None)
+        persisted = payload.get("persisted_turn") or {}
+        prompt, extent = persisted.get("user_row_id"), turn_extent(persisted.get("row_ids"))
+        if not requests or type(prompt) is not int or extent is None:
+            return
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE receipts SET turn_rows=? WHERE request_id IN (SELECT value FROM json_each(?))",
+                                    (json.dumps([row for row in extent if row != prompt]), json.dumps(requests)))
+
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
         with self.journal.lock:
@@ -1159,6 +1237,7 @@ class Bridge:
             # Image-only admission has no staged row. Native completion reports the turn's
             # committed rows, which bind the receipt only if this turn ran its prompt.
             self.bind_turn_row(sid, payload)
+            self.keep_joined_turn(sid, payload)
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
@@ -1469,7 +1548,7 @@ class Bridge:
         messages = value.get("messages", [])
         self.bind_steers(profile, stored, messages)
         attributed = {}
-        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
+        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering=1 OR " + JOINED % "" + " FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
         # Which records each call has comes from the index alone; their bodies come from the cache.
         calls = {row[0]: row[1:] for row in journal.db.execute("SELECT id,tool_id,run_id FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str])))}
@@ -1532,13 +1611,18 @@ class Bridge:
         of the run, bound or not, sent the same words. The second is the slack between the
         add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
         time cannot be read or compared binds nothing.
+
+        A send Hermes put into the running turn instead of starting its own (admission turn ``joined``)
+        is bound by the same rule, with itself as the root: ``keep_joined_turn`` keeps the rows of the turn
+        it joined, less that turn's own prompt row, as its ``turn_rows``. A later send into that turn
+        steers into the joined send's run, so the rule's guard on words of one run covers both.
         Anything else leaves it unbound and its row shows unattributed. Known limit: a native
         client's identical words in the same turn, saved after the steer was sent or within that
         second, can still take the steer's place, because Hermes names no steer's row
         (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
         """
         journal = self.journal
-        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND (steer.steering=1 OR steer.run_id=steer.request_id AND " + JOINED % "steer." + ") AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
         def saved(row_id):
             # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
             # zero one as now. None for a time that cannot be read or compared, which binds nothing.
@@ -1694,7 +1778,7 @@ class Bridge:
         if message is not None:
             value["message"] = message
         if turn is not None:
-            # A new task Hermes did not start at once: see admission_turn.
+            # A new task's turn, saved with the answer so a replay and the receipt lookup say the same: see admission_turn.
             value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
         return self.server._ok(rid, value)
@@ -1982,6 +2066,10 @@ class Bridge:
                 journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
+            if turn == "joined" and status == "accepted" and self.server._sessions.get(sid, {}).get("running"):
+                # The turn it joined is the one running now; one that ended already has no completion to wait for.
+                with self.joined_lock:
+                    self.joined.setdefault(sid, []).append(request_id)
             response = self.admitted(rid, request_id, "Hermes ended its voice chat. Nothing was sent to the assistant." if turn == "none" else None, turn=turn)
             self.admitting.discard(request_id)
         timed("journal", mark)
@@ -2149,7 +2237,7 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "maintenance_deadline": True, "idle_compaction_seconds": bridge.compaction.delay}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
