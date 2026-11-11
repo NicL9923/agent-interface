@@ -533,6 +533,9 @@ def approval_id(row):
 
 
 # The run a session's newest unsettled receipt belongs to.
+# A receipt Hermes put into the running turn (admission turn "joined") marks its row as a steer, as a steering receipt does.
+# It is its own run, because the turn it joined may be another client's, so it is bound through its own turn_rows.
+JOINED = "json_extract(%sadmission_response,'$.turn')='joined'"
 OPEN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 ORDER BY created DESC LIMIT 1"
 # The run an open names: OPEN_RUN without receipts whose admission Hermes has not answered yet.
 SHOWN_RUN = "SELECT COALESCE(run_id,request_id) FROM receipts WHERE session_id=? AND terminal=0 AND request_id NOT IN (SELECT value FROM json_each(?)) ORDER BY created DESC LIMIT 1"
@@ -660,6 +663,9 @@ class Bridge:
         # Maintenance status lists them as active work, as acquire already counts their reservations.
         self.sends_in_flight = {}
         self.sends_in_flight_lock = threading.Lock()
+        # Each session's accepted sends that Hermes put into its running turn and the turn has not yet completed:
+        # the rows that completion reports are kept with them. Memory only, so a restart leaves them unbound.
+        self.joined, self.joined_lock = {}, threading.Lock()
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
@@ -1102,6 +1108,24 @@ class Bridge:
         with self.journal.lock, self.journal.db:
             self.journal.db.execute("UPDATE receipts SET row_id=COALESCE(row_id,?),turn_rows=? WHERE request_id=? AND steering=0", (row_id, extent, claim["request_id"]))
 
+    def keep_joined_turn(self, sid, payload):
+        """Keep the rows of the turn that just completed with each send Hermes put into it.
+
+        A send answered ``steered`` or ``redirected`` joined the turn running when its answer came, which can be
+        another client's, so no receipt holds that turn's rows. The completion's committed rows, without the turn's own
+        prompt row, are kept as the send's ``turn_rows``, and bind_steers binds it by the steer rule. A completion that
+        reports no rows, or no prompt row to leave out, keeps none.
+        """
+        with self.joined_lock:
+            requests = self.joined.pop(sid, None)
+        persisted = payload.get("persisted_turn") or {}
+        prompt, extent = persisted.get("user_row_id"), turn_extent(persisted.get("row_ids"))
+        if not requests or type(prompt) is not int or extent is None:
+            return
+        with self.journal.lock, self.journal.db:
+            self.journal.db.execute("UPDATE receipts SET turn_rows=? WHERE request_id IN (SELECT value FROM json_each(?))",
+                                    (json.dumps([row for row in extent if row != prompt]), json.dumps(requests)))
+
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
         with self.journal.lock:
@@ -1159,6 +1183,7 @@ class Bridge:
             # Image-only admission has no staged row. Native completion reports the turn's
             # committed rows, which bind the receipt only if this turn ran its prompt.
             self.bind_turn_row(sid, payload)
+            self.keep_joined_turn(sid, payload)
         if sid and kind == "tool.complete":
             with journal.lock, journal.db:
                 session = server._sessions.get(sid, {})
@@ -1469,7 +1494,7 @@ class Bridge:
         messages = value.get("messages", [])
         self.bind_steers(profile, stored, messages)
         attributed = {}
-        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
+        for row in journal.db.execute("SELECT row_id,request_id,actor,COALESCE(run_id,request_id),attachments,input_text,steering=1 OR " + JOINED % "" + " FROM receipts WHERE profile=? AND row_id IN (SELECT value FROM json_each(?)) ORDER BY created DESC", (profile, json.dumps([m["row_id"] for m in messages if type(m.get("row_id")) is int]))):
             attributed.setdefault(row[0], row[1:])
         # Which records each call has comes from the index alone; their bodies come from the cache.
         calls = {row[0]: row[1:] for row in journal.db.execute("SELECT id,tool_id,run_id FROM tools WHERE profile=? AND stored_session=? AND tool_id IN (SELECT value FROM json_each(?)) ORDER BY id", (profile, server._sessions[sid].get("session_key", sid), json.dumps([m["tool_call_id"] for m in messages if m.get("role") == "tool" and type(m.get("tool_call_id")) is str])))}
@@ -1532,13 +1557,18 @@ class Bridge:
         of the run, bound or not, sent the same words. The second is the slack between the
         add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
         time cannot be read or compared binds nothing.
+
+        A send Hermes put into the running turn instead of starting its own (admission turn ``joined``)
+        is bound by the same rule, with itself as the root: ``keep_joined_turn`` keeps the rows of the turn
+        it joined, less that turn's own prompt row, as its ``turn_rows``. A later send into that turn
+        steers into the joined send's run, so the rule's guard on words of one run covers both.
         Anything else leaves it unbound and its row shows unattributed. Known limit: a native
         client's identical words in the same turn, saved after the steer was sent or within that
         second, can still take the steer's place, because Hermes names no steer's row
         (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
         """
         journal = self.journal
-        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND steer.steering=1 AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND (steer.steering=1 OR steer.run_id=steer.request_id AND " + JOINED % "steer." + ") AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
         def saved(row_id):
             # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
             # zero one as now. None for a time that cannot be read or compared, which binds nothing.
@@ -1982,6 +2012,10 @@ class Bridge:
                 journal.db.execute("DELETE FROM interruptions WHERE profile=? AND stored_session=?", (profile, stored))
             if steering and status == "accepted":
                 self.steered.value = (profile, sid, actor, text)
+            if turn == "joined" and status == "accepted" and self.server._sessions.get(sid, {}).get("running"):
+                # The turn it joined is the one running now; one that ended already has no completion to wait for.
+                with self.joined_lock:
+                    self.joined.setdefault(sid, []).append(request_id)
             response = self.admitted(rid, request_id, "Hermes ended its voice chat. Nothing was sent to the assistant." if turn == "none" else None, turn=turn)
             self.admitting.discard(request_id)
         timed("journal", mark)

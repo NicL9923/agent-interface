@@ -10,7 +10,7 @@ import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
 import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
 import { formatBytes } from '../shared/uploads.js';
-import { IncompleteCreationError, interruptionPendingMessage, nothingToStopMessage, runChangedMessage } from '../shared/errors.js';
+import { hermesMaintenanceSendMessage, IncompleteCreationError, interruptionPendingMessage, nothingToStopMessage, runChangedMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
 
 const approvalSettingsUnsupported = "This Hermes integration can't list always-allowed commands. Update it to manage them here.";
@@ -42,6 +42,28 @@ const SHARED_READ_MS = 3_000;
 const DESCRIPTION_MS = 10_000;
 // How long a roster read answers later requests when Hermes reported no change meanwhile.
 export const ROSTER_REUSE_MS = 2_000;
+/**
+ * The JSON-RPC errors `agent-interface.submit` answers before it admits anything, so the message was not sent and its
+ * draft is still the person's (src/hermes/extension.py; tests/hermes_send_lanes_test.py and
+ * tests/hermes_extension_journal_test.py pin that each leaves no receipt and calls nothing in Hermes):
+ *  409    Hermes is being upgraded, answered before the handler runs.
+ *  5035   the backend is retiring, or maintenance took the lease first, answered before the send is queued.
+ *  -32602 the parameters are invalid, or the profile's canonical conversation is not the one named, answered before its receipt.
+ *  4093   the request ID already belongs to a different input; that earlier input's receipt is untouched.
+ * Any other error, and every failure of the connection itself, may have followed admission and stays uncertain.
+ */
+const BEFORE_ADMISSION = new Set([409, 5035, -32602, 4093]);
+/**
+ * Refusals that pass: Hermes will take the same request once the upgrade ends or the backend is back. A retry carries one
+ * request ID for its failed turn, and the app keeps a rejected receipt for good, so a retry refused for one of these stays
+ * uncertain. Its reviewed resend then asks Hermes again. A new message takes a fresh ID and keeps its draft, so it may be rejected.
+ */
+const TEMPORARY_REFUSAL = new Set([409, 5035]);
+function beforeAdmissionMessage(code: number, detail?: string): string {
+  if (code === 409) return hermesMaintenanceSendMessage;
+  const reason = detail?.trim().replace(/[.\s]+$/, '');
+  return reason ? `Hermes did not accept this message: ${reason}. Your draft is saved.` : 'Hermes did not accept this message. Your draft is saved.';
+}
 
 /**
  * Native cron job fields the app reads as routine settings, and those Hermes's scheduler writes as
@@ -401,6 +423,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       // Refused before admission: nothing reached the assistant.
       if (input.retryOf !== undefined && error instanceof TransportError && error.rpcCode === 4091)
         return {requestId: input.requestId, status: 'rejected', message: 'Another reply started before this retry, so it was not sent.'};
+      if (error instanceof TransportError && error.rpcCode !== undefined && BEFORE_ADMISSION.has(error.rpcCode)
+        && !(input.retryOf !== undefined && TEMPORARY_REFUSAL.has(error.rpcCode)))
+        return {requestId: input.requestId, status: 'rejected', message: beforeAdmissionMessage(error.rpcCode, error.rpcMessage)};
       return {requestId: input.requestId, status: 'uncertain', message: error instanceof Error ? error.message : 'Hermes response lost. Review before retrying.'};
     }
   }
