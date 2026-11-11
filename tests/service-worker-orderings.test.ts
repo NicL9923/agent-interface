@@ -63,7 +63,8 @@ const hold = <T>(browser: Browser, kind: string, value: () => T, mayFail = false
     if (fail && mayFail) reject(new Error(`${kind} refused`)); else resolve(value());
   } });
 });
-const refuse = (browser: Browser, name: string) => () => {
+// A plain function, not an arrow, so a worker that calls it with `new`, as with `new MessageChannel()`, is logged too.
+const refuse = (browser: Browser, name: string) => function refused() {
   browser.refused.push(name);
   throw new Error(`The worker used ${name}, which this test does not fake`);
 };

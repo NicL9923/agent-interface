@@ -1309,6 +1309,31 @@ describe('service worker pushes for the account signed in here', () => {
     expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
   });
 
+  // Sixth review: a refused write of the badge's owner record must not stop the step before it closes
+  // the departed member's notifications.
+  it("closes the notification of the member who left even when the browser refuses to record the badge's owner", async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    sw.refusedPuts.add('/badge');
+    await push(sw, forOne);
+    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+    await sw.signedIn('two');
+    expect(sw.shown).toEqual([]);
+  });
+
+  // Sixth review: the page repeats a word it already sent, and the invariants comment relies on that
+  // repeat to write a word whose first write the browser refused.
+  it('writes a refused sign-out when the page says the same word again', async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    sw.refusedPuts.add('/account');
+    await sw.signedIn(null);
+    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
+    sw.refusedPuts.delete('/account');
+    await sw.signedIn(null);
+    expect(await savedAccount(sw)).toEqual({ signedOut: true });
+  });
+
   // Fifth review, P1: a notification that comes back after a tap, or a notice of a failed decline,
   // belongs to its account like the push it came from.
   describe('a tapped notification that comes back', () => {

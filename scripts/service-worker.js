@@ -135,6 +135,9 @@ self.addEventListener('message', (event) => {
 //   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
 //   latest account's. The worker changes the badge only for a push: a badge the page set is the
 //   page's (src/app/badge.ts).
+// When the browser refuses a write of the saved account, Cache Storage keeps the older word until a
+// later step's write succeeds; the step still closes the departed account's notifications, and the page
+// repeats its word at the next account change or start, which writes it.
 // Known limit: all of this holds for one worker instance. While a release updates, the old worker
 // can still be running steps it held across the new worker's activation, and the two share the saved
 // account and the badge's owner but not this chain, generation or memory. An old instance's step
