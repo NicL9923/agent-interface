@@ -68,6 +68,36 @@ import XCTest
     XCTAssertFalse(privateChat.staticTexts["Household member"].exists, "Nobody else can have written in a private chat")
   }
 
+  func testUpArrowRecallsANoSenderMessageOnlyInAPrivateChat() throws {
+    // In the shared chat a no-sender message could be another member's, so recall passes over it.
+    let shared = launch(["UNKNOWN_SENDER"])
+    let sharedComposer = shared.textViews["messageComposer"]
+    XCTAssertTrue(sharedComposer.waitForExistence(timeout: 15), shared.debugDescription)
+    XCTAssertTrue(shared.staticTexts["Noted your note."].waitForExistence(timeout: 10))
+    sharedComposer.tapWhenReady()
+    XCTAssertTrue(sharedComposer.waitForKeyboardFocus())
+    shared.typeKey(.upArrow, modifierFlags: [])
+    XCTAssertTrue(sharedComposer.wait(until: "value == %@", "Fixture note from me"), "\(sharedComposer.value ?? "")")
+    shared.typeKey(.upArrow, modifierFlags: [])
+    // The history is only this person's one message: Down past it is the empty draft. Had the older
+    // no-sender message been recalled, Up would have shown it and Down would return to this one.
+    shared.typeKey(.downArrow, modifierFlags: [])
+    XCTAssertTrue(sharedComposer.wait(until: "value == nil OR value == %@", ""), "Not the native client's message: \(sharedComposer.value ?? "")")
+    shared.terminate()
+    // Nobody else can have written in a private chat, so its no-sender message is this person's own.
+    let privateChat = launch(["UNKNOWN_SENDER"], home: true)
+    privateChat.buttons["bot.personal"].tapWhenReady()
+    let composer = privateChat.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15), privateChat.debugDescription)
+    XCTAssertTrue(privateChat.staticTexts["Noted your note."].waitForExistence(timeout: 10))
+    composer.tapWhenReady()
+    XCTAssertTrue(composer.waitForKeyboardFocus())
+    privateChat.typeKey(.upArrow, modifierFlags: [])
+    XCTAssertTrue(composer.wait(until: "value == %@", "Fixture note from me"), "\(composer.value ?? "")")
+    privateChat.typeKey(.upArrow, modifierFlags: [])
+    XCTAssertTrue(composer.wait(until: "value == %@", "Fixture note from a native client"), "\(composer.value ?? "")")
+  }
+
   func testDockCountsWaitingDecisionsAndOffersReview() throws {
     let app = launch(["QUESTION"])
     XCTAssertTrue(app.staticTexts["1 decision waiting"].waitForExistence(timeout: 15), app.debugDescription)

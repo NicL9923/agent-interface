@@ -78,7 +78,7 @@ extension SentEcho {
     conversation: Conversation?) -> [OwnSend]
   {
     var next = sends.filter { $0.senderId == sender?.id }
-    if let receipt, receipt.status == "accepted", let sender,
+    if let receipt, receipt.admitted, let sender,
       let echo = before.first(where: { $0.request.requestId == receipt.requestId && $0.sender.id == sender.id }),
       !next.contains(where: { $0.requestId == echo.request.requestId })
     {

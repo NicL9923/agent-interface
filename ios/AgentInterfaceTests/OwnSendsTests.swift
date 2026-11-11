@@ -45,6 +45,17 @@ final class OwnSendsTests: XCTestCase {
     }
   }
 
+  func testATypedStopPhraseThatAdmittedNothingLeavesNoRecordButEveryOtherTurnDoes() {
+    let echo = sending("Avoid flights")
+    let none = Receipt(requestId: "req", status: "accepted", messageId: "row-9", turn: "none")
+    XCTAssertEqual(SentEcho.nextSends([], before: [echo], after: [echo], receipt: none, sender: sender, conversation: nil), [],
+      "Hermes ended its voice chat and saved no copy, so there is no send to claim a row")
+    for turn in [nil, "started", "queued", "joined", "unknown", "from-a-newer-server"] {
+      let receipt = Receipt(requestId: "req", status: "accepted", messageId: "row-9", turn: turn)
+      XCTAssertEqual(recorded("Avoid flights", receipt: receipt).map(\.requestId), ["req"], "turn \(turn ?? "absent")")
+    }
+  }
+
   func testRecordsASendOnceAndForgetsTheLastPersonsOnSignOutOrAnotherSignIn() {
     let sends = recorded("Avoid flights")
     let echo = sending("Avoid flights")
