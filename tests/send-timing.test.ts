@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { setTimeout as realDelay } from "node:timers/promises";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
@@ -394,7 +395,7 @@ describe("sendTimingHeader", () => {
 
 describe("send timing through the app", () => {
   const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void } }[] = [];
-  afterEach(async () => { for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); } });
+  afterEach(async () => { vi.useRealTimers(); for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); } });
 
   async function setup(receipt: Partial<SubmissionReceipt> = {}) {
     const turns = new Set<TurnWatcher>();
@@ -413,8 +414,8 @@ describe("send timing through the app", () => {
     const answer = (steer: boolean) => async (input: { requestId: string; text: string }): Promise<SubmissionReceipt> => {
       sent.push(input.text);
       hermes.during(steer);
-      // Hermes takes a moment to admit, so the hermes phase has a floor.
-      await new Promise(resolve => setTimeout(resolve, 20));
+      // Hermes takes a moment to admit, so the hermes phase has a floor. Node's own timer, so a test that fakes the global one still admits.
+      await realDelay(20);
       return { requestId: input.requestId, status: "accepted", runId: "run", ...receipt };
     };
     const runtime: Runtime = fakeRuntime({
@@ -486,6 +487,9 @@ describe("send timing through the app", () => {
   it("counts a growth notice as the first live event when the send's change notice is still held", async () => {
     const s = await setup();
     const stream = await openStream(s.base, s.headers.cookie);
+    // The stream's one-second throttle runs on virtual time, as in live-turn-stream.test.ts, so a slow machine cannot
+    // let the second second pass between the two sends. Sockets stay real.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     await post(s.base, s.headers, "steer");
     s.token();
     await vi.waitFor(() => expect(s.timingLines()).toHaveLength(1));
@@ -494,6 +498,8 @@ describe("send timing through the app", () => {
     s.live.text = "Live reply grows";
     s.token();
     await vi.waitFor(() => expect(s.timingLines()).toHaveLength(2));
+    // The line is logged as the delta is written; the socket delivers it a moment later.
+    await vi.waitFor(() => expect(stream.text).toContain("event: inflight-delta"));
     expect(stream.text.split("event: inflight-delta").length - 1).toBe(1);
     expect(stream.text.indexOf("event: inflight-delta")).toBeGreaterThan(stream.text.lastIndexOf("event: inflight\n"));
     expect(s.timingLines()[1].sendTiming).toMatchObject({ route: "steer", firstLiveMs: expect.any(Number) });

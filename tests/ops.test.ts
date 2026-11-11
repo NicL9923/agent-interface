@@ -213,9 +213,13 @@ describe("health", () => {
     expect(refused.outcome).toBe("ECONNREFUSED");
     expect(metadataVerdict(refused)).toBe("refused");
     // A socket that never connects stands in for a SYN nobody answers.
-    const silent = await attemptConnect("127.0.0.1", port, { timeoutMs: 50, open: () => new Socket() });
-    expect(silent.outcome).toBe("timeout");
-    expect(silent.ms).toBeLessThan(1000);
+    // Its timer and clock are virtual, so the 50 ms limit is exact on any machine; the default would give up at 1,500.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const attempt = attemptConnect("127.0.0.1", port, { timeoutMs: 50, open: () => new Socket() });
+    await vi.advanceTimersByTimeAsync(1500);
+    const silent = await attempt;
+    vi.useRealTimers();
+    expect(silent).toEqual({ outcome: "timeout", ms: 50 });
     expect(metadataVerdict(silent)).toBe("inconclusive");
     const exhausted = await attemptConnect("127.0.0.1", port, { open: () => { throw Object.assign(new Error("too many open files"), { code: "EMFILE" }); } });
     expect([exhausted.outcome, metadataVerdict(exhausted)]).toEqual(["EMFILE", "inconclusive"]);

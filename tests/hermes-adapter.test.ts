@@ -1203,7 +1203,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     stream.resume();
     await new Promise(resolve=>setTimeout(resolve,10));
     stream.destroy();
-    await new Promise(resolve=>setTimeout(resolve,10));
+    await vi.waitFor(()=>expect(cancel).toHaveBeenCalled());
     expect(cancel).toHaveBeenCalledOnce();
   });
 

@@ -1365,7 +1365,8 @@ class CommandTest(TempCase):
         self.assertIsNone(code)
         self.assertIn("ready", output)
         self.assertGreaterEqual(took, 1.2)  # the 0.3s timeout, then the whole 1s grace
-        self.assertLess(took, 5)
+        # The child sleeps 60 s, so waiting for it to finish would take 60. Half of that tells the two apart on a machine many times slower.
+        self.assertLess(took, 30)
 
     def test_a_stop_returns_only_when_a_descendant_that_ignores_it_and_closed_its_output_is_gone_too(self):
         # No pipe holds run_process open for this one, so only the stop itself can make it wait for the group.
@@ -1396,13 +1397,14 @@ class CommandTest(TempCase):
             time.sleep(60)
         """)
         marker = self.tmp / "cleanup-marker"
-        with mock.patch.object(check_all, "STOP_GRACE", 10.0):
+        with mock.patch.object(check_all, "STOP_GRACE", 60.0):
             started = time.monotonic()
             code, _ = check_all.run_process([str(self.tmp / "polite"), str(marker)], self.tmp, dict(os.environ), self.tmp / "log", 0.3, False)
             took = time.monotonic() - started
         self.assertIsNone(code)
         self.assertEqual(marker.read_text(), "cleaned up")
-        self.assertLess(took, 3)
+        # Returning as soon as the group is gone, not after the 60 s grace; half of it tells the two apart on a machine many times slower.
+        self.assertLess(took, 30)
 
     def test_the_command_file_runs_and_describes_itself(self):
         result = subprocess.run([str(TOOLS / "check-all"), "--help"], capture_output=True, text=True, check=False)

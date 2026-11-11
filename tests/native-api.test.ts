@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID, generateKeyPairSync, verify } from
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig, type Config } from "../src/server/config.js";
@@ -19,7 +19,7 @@ import { nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js
 const origin = "http://127.0.0.1:3000";
 const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
-afterEach(async () => { for (const { app } of apps.splice(0)) await app.close(); });
+afterEach(async () => { vi.useRealTimers(); for (const { app } of apps.splice(0)) await app.close(); });
 async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"]) {
   const result = await createApp(config, runtime, { background: false, verifyGoogle, sendApns: config.apns ? async () => {} : undefined });
   apps.push(result); return result;
@@ -137,12 +137,16 @@ it("records signing in to the app as confirming it's you, from Google's issue ti
   expect(store.nativeSessionConfirmedAt(await signIn())).toBeUndefined();
 });
 
+/** Freezes Date, and only Date, so a time the server stores can be compared exactly instead of within a window a slow machine can overrun. */
+const freezeNow = () => vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+
 it("confirms a signed-in app's person with a fresh PKCE-bound code for the same account, never signing it out", async () => {
+  freezeNow();
   const { app, store } = await setup();
   const { token } = await connectNative(app, "one");
   const headers = { authorization: `Bearer ${token}` };
   // Signing in with a local member counts as confirming now.
-  expect(Date.now() - store.nativeSessionConfirmedAt(hash(token))!).toBeLessThan(5000);
+  expect(store.nativeSessionConfirmedAt(hash(token))).toBe(Date.now());
   store.db.prepare("DELETE FROM native_session_confirmations").run();
   const confirm = (payload: unknown, extra: Record<string, string> = headers) =>
     app.inject({ method: "POST", url: "/api/auth/native/confirm", headers: extra, payload: payload as object });
@@ -169,7 +173,7 @@ it("confirms a signed-in app's person with a fresh PKCE-bound code for the same 
   expect(confirmed.statusCode).toBe(200);
   const at = Date.parse(confirmed.json().confirmedAt);
   expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
-  expect(Math.abs(Date.now() - at)).toBeLessThan(5000);
+  expect(at).toBe(Date.now());
   // Each code works once, for confirming or for signing in.
   expect((await confirm(good)).json().code).toBe("confirmation_expired");
   expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good })).statusCode).toBe(401);
@@ -320,6 +324,7 @@ it("authorizes native reads and downloads, rejects malformed bearer fallback, an
 });
 
 it("renews a native session in place, keeping its push registrations, until 90 days after sign-in", async () => {
+  freezeNow();
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
   const { app, store } = await setup(config);
   const { token } = await connectNative(app);
@@ -332,7 +337,7 @@ it("renews a native session in place, keeping its push registrations, until 90 d
   store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(Date.now() - 6 * day, hash(token));
   const renewed = await renew();
   expect(renewed.statusCode).toBe(200);
-  expect(Math.abs(Date.parse(renewed.json().expiresAt) - (Date.now() + 7 * day))).toBeLessThan(5000);
+  expect(Date.parse(renewed.json().expiresAt)).toBe(Date.now() + 7 * day);
   expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(200);
   expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
   // Near the 90-day limit, renewal stops at the limit instead of granting another week.

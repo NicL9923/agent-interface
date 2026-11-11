@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import types
 import unittest
 from unittest import mock
 
@@ -283,7 +285,13 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         # An add-on older than the maintenance_deadline capability, which every test not about it meets.
         self.answers = {"capabilities": dict}
         self.deadlines = []
-        # The retry pause is a clock; pin it so no test waits.
+        # The retry pause is a clock; pin it so no test waits. Only the tool's own time module is patched: the shared one also
+        # records the 1 ms waits of Python's subprocess wait loop, which run only when a child has not exited yet, under load.
+        own = types.ModuleType("time")
+        own.__dict__.update(vars(time))
+        own_time = mock.patch.object(deploy_common, "time", own)
+        own_time.start()
+        self.addCleanup(own_time.stop)
         sleep = mock.patch.object(deploy_common.time, "sleep")
         self.sleeps = sleep.start()
         self.addCleanup(sleep.stop)
