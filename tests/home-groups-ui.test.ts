@@ -8,7 +8,7 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { GroupCatalog, GroupRoom } from "../src/shared/collaboration";
 import { FakeEventSource } from "./fake-event-source";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS } from "../src/app/use-session";
-import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original), { heartbeats: false }));
 
@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(api).mockReset(); vi.mocked(write).mockReset().mockResolvedValue({});
   FakeEventSource.reset(); vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) { this.setAttribute("open", ""); };
   HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) { this.removeAttribute("open"); };
   history.replaceState(null, "", "/");

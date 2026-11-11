@@ -12,7 +12,7 @@ import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
 import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
-import { advance, mountRoot, renderedProps, stubMatchMedia, typeInto } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -47,8 +47,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  // Reduced motion shows a live reply as it arrives, not paced over the next 300 ms; streaming-reveal.test.ts covers the pacing.
-  stubMatchMedia(query => query === "(prefers-reduced-motion: reduce)");
+  // Reduced motion shows a live reply as it arrives, not paced over the next 300 ms, and holds the avatars still; streaming-reveal.test.ts
+  // covers the pacing.
+  stubMatchMedia(reducedMotionOnly);
   // The window counts as attended, which chat presence needs before it reports a chat as read.
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
   takeHeartbeats();
@@ -711,7 +712,7 @@ describe("conversation state", () => {
     conversation = { ...conversation, activity: { state: "working", detail: "Running terminal" },
       toolCalls: [{ id: "shell", name: "terminal", status: "running" }] };
     // Motion is on here: this test is about which avatars move.
-    stubMatchMedia();
+    stubMatchMedia(() => false);
     await render();
     expect(avatarOf(container.querySelector(".transcript .conversation-activity")!, 52)?.getAttribute("data-state")).toBe("working");
     expect(avatarOf(container.querySelector(".conversation-activity")!, 52)?.querySelector(".avatar-prop")?.getAttribute("data-prop")).toBe("computer");

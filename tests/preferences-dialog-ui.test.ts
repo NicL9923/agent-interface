@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PreferencesDialog } from "../src/app/PreferencesDialog";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
-import { button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { button, mountRoot, reducedMotionOnly, stubMatchMedia, typeInto } from "./ui-harness";
 
 
 let root: Root;
@@ -16,7 +16,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   ({ container, root } = mountRoot());
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   saved = [];
   props = {
     boot: {

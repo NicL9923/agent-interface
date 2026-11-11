@@ -4,7 +4,7 @@ import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Bootstrap, Message, ToolCall } from "../src/shared/types";
 import type { SavedConversation } from "../src/app/storage";
-import { mountRoot, renderedProps, stubMatchMedia } from "./ui-harness";
+import { mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
 
 import { Conversation } from "../src/app/Conversation";
@@ -69,7 +69,7 @@ beforeEach(() => {
   for (const map of Object.values(renders)) map.clear();
   seen.clear();
   // Reduced motion shows a live reply as it arrives, so a streamed update is one render, not a paced run of them.
-  stubMatchMedia(query => query === "(prefers-reduced-motion: reduce)");
+  stubMatchMedia(reducedMotionOnly);
   mount = mountRoot();
 });
 const refs = { scroll: createRef<HTMLDivElement>(), endSpace: createRef<HTMLDivElement>() };

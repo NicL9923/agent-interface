@@ -7,7 +7,7 @@ import { useConversation } from "../src/app/use-conversation";
 import { GroupRoomView } from "../src/components/GroupChats";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia, unmountAll } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia, unmountAll } from "./ui-harness";
 
 // A page hidden and shown again is a pause, not the end of an outage. Every owner closes its stream's
 // connection while the page is hidden, and the stream keeps its retry budget for when it is shown: a
@@ -54,7 +54,7 @@ beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0.5);
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   history.replaceState(null, "", "/");
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });

@@ -9,7 +9,7 @@ import { defaultPreferences } from "../src/shared/types";
 import { submissionKey } from "../src/app/storage";
 import type { Bootstrap, Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, renderedProps, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
+import { advance, mountRoot, renderedProps, reducedMotionOnly, stubMatchMedia, typeInto, type Mount } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -36,7 +36,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   history.replaceState(null, "", "/");
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
@@ -533,9 +533,9 @@ describe("composer", () => {
     });
 
     it.each([
-      ["Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Enter", "a hardware keyboard", () => stubMatchMedia(reducedMotionOnly)],
       ["Enter", "a touch screen", touchOnly],
-      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia()],
+      ["Ctrl+Enter", "a hardware keyboard", () => stubMatchMedia(reducedMotionOnly)],
       ["Ctrl+Enter", "a touch screen", touchOnly],
     ])("leaves the %s that confirms an IME word to the input method with %s", async (keys, _, device) => {
       device();

@@ -91,6 +91,8 @@ export async function waitForUi(check: () => unknown, timeout = 1000, interval =
   }
 }
 
+/** Only reduced motion matches, which holds every Avatar still, as tests/setup-ui.ts does when a test stubs nothing. */
+export const reducedMotionOnly = (query: string) => query === "(prefers-reduced-motion: reduce)";
 /** Replaces matchMedia; `matches` may be fixed or decided per query. */
 export function stubMatchMedia(matches: boolean | ((query: string) => boolean) = false) {
   vi.stubGlobal("matchMedia", vi.fn((query: string) => ({

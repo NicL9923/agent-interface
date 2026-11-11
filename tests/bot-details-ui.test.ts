@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { BotDetails } from "../src/app/BotDetails";
 import { defaultPreferences, type Bootstrap, type Preferences } from "../src/shared/types";
 import type { ComponentProps } from "react";
-import { mountRoot, typeInto } from "./ui-harness";
+import { mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 
 let root: Root;
@@ -13,6 +13,8 @@ let container: HTMLDivElement;
 let props: ComponentProps<typeof BotDetails>;
 let saved: Preferences[];
 beforeEach(() => {
+  // This file looks at a live avatar, so motion is on.
+  stubMatchMedia(() => false);
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   ({ container, root } = mountRoot());

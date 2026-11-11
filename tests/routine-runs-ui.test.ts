@@ -8,7 +8,7 @@ import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Conversation, Message, Preferences } from "../src/shared/types";
 import type { RoutineRun } from "../src/shared/routine-runs";
 import { FakeEventSource } from "./fake-event-source";
-import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -45,7 +45,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
-  stubMatchMedia();
+  stubMatchMedia(reducedMotionOnly);
   // jsdom has no modal dialogs; without these the full-results dialog crashes into the load-failure boundary.
   for (const [name, open] of [["showModal", true], ["close", false]] as const) {
     Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value(this: HTMLDialogElement) { this.open = open; } });
