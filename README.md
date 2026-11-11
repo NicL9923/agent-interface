@@ -355,8 +355,9 @@ returns to the entry's static imports.
 `src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
 timed animation in it runs only when the system allows motion, and the existing reduced-motion rules
 still win. The header's lift follows scroll position rather than time, and the phone slide is a view
-transition the app does not start under reduced motion. The built app links some component stylesheets after it, so an animation the layer
-gives an element is that element's only one. Springs are sampled `linear()` easings. A browser without
+transition the app does not start under reduced motion. The built app links some component stylesheets
+after it, so a property the layer sets on a selector, whether an animation or a depth style such as the dark
+lit edge and the rail's grain, is that selector's only one. Springs are sampled `linear()` easings. A browser without
 `linear()` gets the app's ease-out for the soft spring (menus, sheets, the status dock) and a cubic-bezier
 with about 5% overshoot for the livelier one (the toast, the jump button, sent messages, the work strip).
 
@@ -408,8 +409,11 @@ The rest of this section is web-only. The avatar conductor and pose math that iO
 A render failure anywhere outside a lazy screen shows a "Something went wrong" page with
 Reload instead of a blank screen. A lazy screen that cannot load, as when a tab stayed
 open across a deploy and the screen's file is gone, says "This screen could not load" with
-Reload, and the rest of the app keeps working. The server answers a missing `/assets/` path
-with an uncached plain-text 404, never the app shell. The page never reloads itself; Reload
+Reload, and the rest of the app keeps working. A hashed `/assets/` file the live release no longer
+has is sent from the release it replaced, when the deploy tooling named that release
+(`dist/previous-release.json`, see docs/Hosting.md), so a tab open across one deploy still loads its
+screens. The server answers any other missing `/assets/` path with an uncached plain-text 404,
+never the app shell. The page never reloads itself; Reload
 loads the release the server has now, since the worker fetches the app shell from the network
 first. Chat and group drafts are written to the device on
 every edit, so a reload keeps them. While someone is signed in, the web client sends

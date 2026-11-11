@@ -19,7 +19,16 @@ const family = (property: string) => {
   return shorthand?.[1] ?? property;
 };
 
+/**
+ * The `background` shorthand sets every background longhand, but two longhands are independent: the rail's color in
+ * home.css and the grain image here do not meet. Any other family stays whole, which can only over-report.
+ */
+const sameBackground = (first: string, second: string) => family(first) !== "background"
+  || first === "background" || second === "background" || first === second
+  || first.startsWith(`${second}-`) || second.startsWith(`${first}-`);
+
 const overlap = (motion: Declaration, other: Declaration) => family(motion.property) === family(other.property)
+  && sameBackground(motion.property, other.property)
   && motionsOf(motion).some(setting => motionsOf(other).includes(setting))
   && conditionsMeet(conditionsOf(motion), conditionsOf(other));
 
@@ -44,15 +53,24 @@ describe("the motion layer's stylesheet order", () => {
         }
       }
     }
-    // Dark mode's lit top edge on raised panels and the rail's grain, which the built app drops today. Their base
-    // rules in home.css and shell.css set the same box-shadow and background. That is its own change; when it lands,
-    // this list empties. The rail's two are its base background and the phone layout's.
-    expect([...shared].map(([key, found]) => `${key} x${found.size}`).sort()).toEqual([
-      ".bot-menu box-shadow: src/app/home.css x1",
-      ".bot-rail background: src/app/home.css x2",
-      ".command-palette box-shadow: src/app/shell.css x1",
-      ".home-new-menu box-shadow: src/app/home.css x1",
-      ".settings-sheet box-shadow: src/app/home.css x1",
-    ]);
+    expect([...shared].map(([key, found]) => `${key} x${found.size}`).sort()).toEqual([]);
+  });
+
+  // The lit edge is one shared rule for selectors with no shadow of their own. A selector that has one gets its own
+  // rule with both, because the shared one replaces whatever a sheet before it set, in the build and on the dev server.
+  it("lists in the lit-edge rule only selectors no other sheet gives a shadow", () => {
+    const edge = all.filter(declaration => declaration.path === "src/motion.css" && declaration.property === "box-shadow"
+      && declaration.value === "inset 0 1px 0 var(--depth-edge)");
+    expect(edge.length).toBeGreaterThan(0);
+    const replaced = edge.flatMap(motion => selectorsOf(motion).flatMap(selector =>
+      all.filter(other => other.path !== "src/motion.css" && other.property === "box-shadow" && selectorsOf(other).includes(selector))
+        .map(other => `${selector}: ${other.path}:${other.line}`)));
+    expect(replaced).toEqual([]);
+  });
+
+  // The phone layout ends at `max-width: 620px`, so its counterpart is `width > 620px`. `min-width: 621px` leaves the
+  // widths between 620 and 621 px, which a fractional viewport can have, in neither.
+  it("pairs the phone layout's width with a range that has no gap", () => {
+    expect([...new Set(all.filter(({ blocks }) => blocks.some(block => /min-width:\s*621px/.test(block))).map(({ path }) => path))]).toEqual([]);
   });
 });

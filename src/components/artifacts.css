@@ -74,7 +74,7 @@
   .artifact-actions { padding: 12px 18px 18px; }
   .artifacts-toolbar, .artifacts-notice, .artifact-detail > header, .artifact-preview, .artifact-actions { padding-left: max(18px, env(safe-area-inset-left)); padding-right: max(18px, env(safe-area-inset-right)); }
 }
-@media (max-height: 520px) and (min-width: 621px) {
+@media (max-height: 520px) and (width > 620px) {
   .artifacts-dialog { top: max(12px, env(safe-area-inset-top)); bottom: max(12px, env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); width: calc(100vw - max(12px, env(safe-area-inset-left)) - max(12px, env(safe-area-inset-right))); height: calc(100dvh - max(12px, env(safe-area-inset-top)) - max(12px, env(safe-area-inset-bottom))); }
   .artifacts-header { padding: 12px 18px; }
   .artifacts-header .eyebrow { display: none; }
