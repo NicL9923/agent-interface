@@ -251,7 +251,7 @@ Claude Opus 5.5 re-reviewed `9859f80` and found it ready with three P3s. This ro
   multiplexing first sends the owner scope's reads to the executor (`gateway/session_authorities.py` `async_owner_scope`, `:316`) and then
   `to_thread(dispatch_legacy)` (`tui_gateway/ws.py:396`). Each trip is first in, first out and a chain of them is not, so a release can
   overtake the acquire if the pool is blocked over 120 s and then again over 10 s at the wrong moment. The 10 s grace covers it in
-  practice and is not a proof. The comments (`deploy_common.py:76-96`, `hermes-upgrade-linux.py:173-193`) and the runbook (the quiescence
+  practice and is not a proof. The comments (`deploy_common.py:76-94`, `hermes-upgrade-linux.py:172-190`) and the runbook (the quiescence
   hook's dispatch paragraph and "A lease that appears after exit `75`") now say what the watch rests on, what remains, and that the
   runbook's recovery can be needed on today's Hermes, not only after a Hermes change.
 - **P3, exit 75 for a lease that was not ours.** `late_lease` returned `False` for "nothing appeared" and "something not ours appeared",
