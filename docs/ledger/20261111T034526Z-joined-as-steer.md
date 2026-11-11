@@ -81,3 +81,12 @@ explicit statement of which receipts bind.
 
 Not exercised: a real Hermes, a real compaction or queue drain, iOS, and production. The app server and web client did not
 change; they already render `app_steering` as the steer mark.
+
+## Review: Claude Opus 5.5 on `a0ab22a`
+
+Same-provider review: the cross-provider reviewers were unavailable, so this branch's pull request carries the
+`independent-review-owed` label. Approved, no P1 or P2. One P3, applied by the orchestrator, Claude Opus 5.5: the
+capability matrix said the add-on keeps "that turn's" next completion, where the code keeps the session's next one.
+Upstream emits `message.complete` before it sets `running = False`, so a send answered joined in that moment takes the
+following completion; in steer mode that is the turn the steer is delivered in, and in interrupt mode Hermes answers
+queued and nothing registers. The matrix now says so. The reviewer broke six lines: five red, one equivalent.
