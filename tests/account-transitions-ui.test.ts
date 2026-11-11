@@ -1026,4 +1026,60 @@ describe("what the service worker is told", () => {
       Reflect.deleteProperty(navigator, "serviceWorker");
     }
   });
+
+  // Fifth review, P3: a worker the browser stopped mid sign-out still names the member who left, and
+  // no later page repeats the word, since each tab tells the worker only what changed.
+  async function withWorker(run: (told: unknown[]) => Promise<void>) {
+    const told: unknown[] = [];
+    const registration = { active: { postMessage: (message: { type: string; user: unknown }) => { told.push(message.user); } } };
+    Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {
+      getRegistration: async () => registration, controller: null, addEventListener() {}, removeEventListener() {},
+    } });
+    try { await run(told); } finally { Reflect.deleteProperty(navigator, "serviceWorker"); }
+  }
+
+  it("tells the worker no one is signed in when a tab starts from another tab's settled sign-out", async () => {
+    await withWorker(async told => {
+      signedInAs("one");
+      const tab = await openTab("/?bot=ranch");
+      expect(tab.text()).toContain("Gate code is 4471");
+      expect(told).toEqual(["one"]);
+      // The other tab signed out and its worker message never arrived: this tab is all that can say so.
+      cookie = null;
+      await elsewhere({ id: "signed-out", at: NOW, signedOut: true, user: "one" });
+      expect(tab.text()).toContain("Enter local workspace");
+      expect(told).toEqual(["one", null]);
+    });
+  });
+
+  it("tells the worker no one is signed in when a page opens signed out and the server refuses it, with nothing stored", async () => {
+    await withWorker(async told => {
+      const tab = await openTab();
+      expect(tab.text()).toContain("Enter local workspace");
+      expect(told).toEqual([null]);
+    });
+  });
+
+  it("tells the worker no one is signed in when a page opens after a sign-out, before the server answers", async () => {
+    await withWorker(async told => {
+      data.set(authEpochKey, JSON.stringify({ id: "earlier-out", at: NOW - 60_000, signedOut: true, user: "one" }));
+      holding = ["GET /bootstrap"];
+      await openTab();
+      expect(told).toEqual([null]);
+    });
+  });
+
+  it("clears the app badge when a page starts signed out, so a count a stopped worker left for the member who left goes", async () => {
+    const setAppBadge = vi.fn(async () => {}), clearAppBadge = vi.fn(async () => {});
+    Object.defineProperties(navigator, { setAppBadge: { configurable: true, value: setAppBadge }, clearAppBadge: { configurable: true, value: clearAppBadge } });
+    try {
+      data.set(authEpochKey, JSON.stringify({ id: "earlier-out", at: NOW - 60_000, signedOut: true, user: "one" }));
+      const tab = await openTab();
+      expect(tab.text()).toContain("Enter local workspace");
+      expect(clearAppBadge).toHaveBeenCalled();
+      expect(setAppBadge).not.toHaveBeenCalled();
+    } finally {
+      for (const name of ["setAppBadge", "clearAppBadge"]) Reflect.deleteProperty(navigator, name);
+    }
+  });
 });

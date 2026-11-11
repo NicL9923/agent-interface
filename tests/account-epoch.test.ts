@@ -85,6 +85,9 @@ describe("the mark a sign-in or sign-out writes", () => {
     { name: "a sign-out of member one", before: settled({ signedOut: true, user: "one" }), fromSignedOut: true, user: "one" },
     { name: "member one signed in", before: settled({ user: "one" }), fromSignedOut: undefined, user: "one" },
     { name: "a record this code cannot read", before: "{not json", fromSignedOut: undefined, user: undefined },
+    // The other tab's request may sign member one in or leave the cookie alone, so a mark begun over its mark
+    // does not take its flag: it would call an account that may be signed in "signed out" and drop no address.
+    { name: "another tab's mark that began signed out, after member one", before: mark({ fromSignedOut: true, user: "one" }), fromSignedOut: undefined, user: "one" },
   ])("says whether it began signed out, over $name", async ({ before, fromSignedOut, user }) => {
     const epoch = await openWith(before);
     epoch.accountStart();

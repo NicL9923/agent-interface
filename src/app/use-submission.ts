@@ -6,6 +6,12 @@ import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy,
 import type { Draft, Pending } from "./storage";
 import { contentHash } from "./draft-merge";
 import { restoreSent } from "./sent-echo";
+/**
+ * Whether Hermes refused the message, or settled it without the assistant ever getting it: a typed stop phrase
+ * that ended Hermes's voice chat is accepted with `turn: "none"`. Either way its words go back into the draft.
+ */
+const notTaken = (receipt: SubmissionReceipt) =>
+  receipt.status === "rejected" || receipt.status === "interrupted" || receipt.status === "accepted" && receipt.turn === "none";
 // A submission whose outcome is unknown stays pending (and blocks sending) until Hermes confirms it.
 export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError }: {
   botId: string;
@@ -72,18 +78,15 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
         const result = await apiRequest("GET /submissions/:id", { params: { id: pending.requestId } });
         if (!live || epoch !== identityEpoch.current) return;
         setReceipt(result);
-        if (result.status === "accepted") {
+        if (notTaken(result)) {
+          refused(userId, pending);
+          setPending(null);
+          localRemove(key);
+        } else if (result.status === "accepted") {
           clearSavedDraft(userId, pending);
           setPending(null);
           localRemove(key);
           clearSent(userId, pending);
-        } else if (
-          result.status === "rejected" ||
-          result.status === "interrupted"
-        ) {
-          refused(userId, pending);
-          setPending(null);
-          localRemove(key);
         }
       } catch {
         /* Unknown submission stays pending until a reliable reconciliation. */
@@ -128,16 +131,13 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
       if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
-      if (result.status === "accepted") {
-        clearSavedDraft(userId, request);
-        clearSent(userId, request);
+      if (notTaken(result)) {
+        refused(userId, request);
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
-      } else if (
-        result.status === "rejected" ||
-        result.status === "interrupted"
-      ) {
-        refused(userId, request);
+      } else if (result.status === "accepted") {
+        clearSavedDraft(userId, request);
+        clearSent(userId, request);
         if (activeBotRef.current === request.botId) setPending(null);
         localRemove(submissionKey(userId, request.botId));
       }
