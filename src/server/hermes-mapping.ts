@@ -324,32 +324,70 @@ export function promptRow(messages: Message[], prompt: string | undefined, from 
   return -1;
 }
 /**
- * Where the native turn Hermes is running starts. Hermes sets its prompt when a native turn starts, from a person's message or
+ * When the add-on says the native turn Hermes is running started, `inflight.started_at`, in whole milliseconds as a row's
+ * `createdAt` is read, truncated the same way: a row Hermes saved at or after the start is never earlier than it here.
+ * Undefined when the add-on reports none, as an add-on older than the field does, or when the value is not a time.
+ */
+export function nativeStartedAt(inflight: Wire | undefined): number | undefined {
+  const started = inflight?.started_at;
+  return Number.isFinite(started) && started > 0 ? Math.trunc(started * 1000) : undefined;
+}
+/**
+ * The first of the trailing messages from `from` that Hermes saved at or after `startedAt`: the native turn's own first
+ * saved message, which is its prompt for a turn a person started and a segment for a hidden prompt such as a goal
+ * continuation. `messages.length` when it has saved none yet. Undefined, so the caller falls back to words, when a message
+ * between the end and the turn's start has no usable time, since where it falls cannot be said.
+ */
+function startedRow(messages: Message[], startedAt: number, from: number): number | undefined {
+  let first = messages.length;
+  for (let index = messages.length - 1; index >= from; index--) {
+    const at = Date.parse(messages[index].createdAt ?? '');
+    if (Number.isNaN(at)) return undefined;
+    if (at < startedAt) break;
+    first = index;
+  }
+  return first;
+}
+/**
+ * Where the native turn Hermes is running starts, as the index of its first saved message: its prompt row when a person or
+ * Hermes sent one it has saved, and `messages.length` when it has saved nothing yet. Rows Hermes saved at or after the turn's
+ * start (`startedAt`, from the add-on) are the turn's, so the start is the first of them. That needs no words: it holds for a
+ * prompt worded like an earlier one, for guidance steered into the turn worded like its prompt, for a prompt Hermes changed
+ * (bracketed-paste markers, another client's image lines) and for a hidden prompt.
+ *
+ * Without `startedAt`, an add-on older than the field, or when a saved message has no usable time, the start is found from
+ * the prompt's words as before (`promptRow`). Hermes sets the prompt when a native turn starts, from a person's message or
  * from guidance it queued instead of steering in, and keeps it when guidance is steered into the running turn. The turn's live
  * text accumulates from that same start, so the turn's saved messages and the live reply's removal of saved text both start
- * at its prompt row (`promptRow`).
+ * there.
  *
  * Only steered guidance follows a running turn's prompt, so the search stops at the first prompt that is not guidance, and an
  * older prompt worded the same is never reached. When no trailing prompt has the reported text, as for a hidden prompt such as
- * a goal continuation, one Hermes has not saved yet, or no prompt reported, the boundary is the last prompt, as on main. A
- * hidden prompt's turn saves its segments after the last shown prompt, so that is right for it. A prompt not saved yet whose
- * live text starts with what the native turn before it saved under the same app run loses those words, as on main. So the
- * boundary is main's except where guidance was steered into the running turn: there the turn's own prompt keeps the
- * segments saved before the guidance out of the live reply.
+ * a goal continuation, one Hermes has not saved yet, or no prompt reported, the boundary is the last prompt, as on main.
  *
- * Two known gaps, each needing prompts worded exactly alike:
+ * Two known gaps of the words rule, each needing prompts worded exactly alike, which `startedAt` closes:
  * - Guidance steered in place and worded exactly like the turn's prompt is taken as the start, so a segment the turn saved
- *   before it shows again in the live reply. Main does the same.
- * - A native turn whose prompt is not shown yet repeats word for word a trailing prompt other than the last, such as the app
- *   run's first prompt after queued guidance, and its live text starts with what that prompt's turn saved first. Those
- *   words are left out of the live reply; main shows them. Rows and text cannot tell this from guidance steered into the
- *   earlier turn. It clears when Hermes saves the prompt, which is then the last match. A hidden prompt is never saved
- *   as a shown row, so for one worded like a person's prompt it lasts the turn.
- * A marker from the add-on for where a native turn starts would close both. -1 when there is no prompt at all.
+ *   before it shows again in the live reply.
+ * - A native turn whose prompt is not shown yet repeats word for word a trailing prompt other than the last, and its live
+ *   text starts with what that prompt's turn saved first. Those words are left out of the live reply. A hidden prompt is never
+ *   saved as a shown row, so for one worded like a person's prompt it lasted the turn.
+ * -1 when there is no start to find: no prompt and no user message at all.
  */
-export function turnStart(messages: Message[], prompt: string | undefined, from = 0): number {
+export function turnStart(messages: Message[], prompt: string | undefined, from = 0, startedAt?: number): number {
+  const marked = startedAt === undefined ? undefined : startedRow(messages, startedAt, from);
+  if (marked !== undefined) return marked;
   const matched = promptRow(messages, prompt, from);
   return matched >= 0 ? matched : messages.findLastIndex((message, index) => index >= from && message.role === 'user');
+}
+/**
+ * Whether the native turn's prompt is one of the saved messages: when the add-on reports the turn's start, whether the turn's
+ * first saved message is a prompt, and otherwise whether a trailing prompt has the reported words (`promptRow`). A hidden
+ * prompt is never one of the messages, so its turn's first message is a segment, and a prompt Hermes has not saved yet leaves
+ * the turn no message at all.
+ */
+export function promptSaved(messages: Message[], prompt: string | undefined, startedAt?: number): boolean {
+  const marked = startedAt === undefined ? undefined : startedRow(messages, startedAt, 0);
+  return marked === undefined ? promptRow(messages, prompt) >= 0 : messages[marked]?.role === 'user';
 }
 /**
  * The running native turn's saved messages in a read's shown messages: from where it starts (`turnStart`) to the end, without
@@ -357,9 +395,9 @@ export function turnStart(messages: Message[], prompt: string | undefined, from 
  * for files and origins, which are never part of a turn. `after` is the message just before the turn, null when the turn starts
  * the whole history, and absent when the read began inside it. Without a prompt in the window, the whole window.
  */
-export function turnRows(shown: Message[], prompt: string | undefined, liveId: string, windowStart: number, cut: boolean): TurnRows {
+export function turnRows(shown: Message[], prompt: string | undefined, liveId: string, windowStart: number, cut: boolean, startedAt?: number): TurnRows {
   const saved = shown.at(-1)?.id === liveId ? shown.slice(0, -1) : shown;
-  let start = turnStart(saved, prompt, windowStart);
+  let start = turnStart(saved, prompt, windowStart, startedAt);
   if (start < 0) start = Math.min(windowStart, saved.length);
   const after = start > windowStart ? saved[start - 1].id : cut ? undefined : null;
   return {messages: saved.slice(start), ...(after !== undefined ? {after} : {})};
@@ -471,8 +509,9 @@ export function inflightMessage(value: Wire, rows: Message[], state: LiveState |
   const prompt = nativePrompt(inflight);
   // A finished turn can leave its whole reply in the snapshot after history saved it. Remove
   // the saved turn too, unless the snapshot names a prompt none of the trailing prompts has.
-  const savedPrompt = !prompt || promptRow(rows, prompt) >= 0;
-  const lastTurn = rows.slice(turnStart(rows, prompt) + 1).filter(row => row.role === 'assistant');
+  const startedAt = nativeStartedAt(inflight);
+  const savedPrompt = !prompt || promptSaved(rows, prompt, startedAt);
+  const lastTurn = rows.slice(Math.max(0, turnStart(rows, prompt, 0, startedAt))).filter(row => row.role === 'assistant');
   const persisted = run ? lastTurn.filter(row => row.runId === run) : !active && savedPrompt ? lastTurn : [];
   const text = unseen(inflight.assistant || (active ? state?.text : undefined), persisted.map(row => row.text));
   const reasoning = unseen(typeof inflight.reasoning === 'string' ? inflight.reasoning : active ? state?.reasoning : undefined,

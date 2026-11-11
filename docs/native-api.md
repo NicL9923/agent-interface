@@ -191,35 +191,48 @@ synthetic assistant row whose ID ends in `-inflight`, including optional
 reasoning are empty, and replace `activity` and `toolCalls` without a GET.
 The same persisted-segment and origin rules as conversation reads apply,
 and private agent handoffs are redacted. A persisted segment is any assistant row
-saved since the prompt of the Hermes turn that is running, the prompt Hermes
-reports for it. Guidance steered into that turn keeps the segments saved before
-it, so the live reply never repeats them. Guidance Hermes queued instead starts a
-turn of its own, so only that turn's segments count. Only steered guidance follows
-a running turn's prompt, so the reported prompt is looked for only among the
-trailing prompts: the last shown prompt and, while the prompts before it are
-steered guidance, those, back to and including the first prompt that is not
-guidance. The last of them with the reported text is the turn's prompt, and an
-older prompt worded the same is never reached. The reported prompt is compared
-trimmed and without its trailing file references, as the saved prompt shows it,
-so a file sent alone is matched by its empty text, and an image sent alone, which
-Hermes reports as an empty prompt, too. When no trailing prompt has the reported
-text, as for a hidden prompt such as a goal continuation or one Hermes has not
-saved yet, the segments count from the last shown prompt, as before turn events
-existed. So the segments counted are the same as before except where guidance was
-steered into the running turn.
+saved since the start of the Hermes turn that is running. The add-on reports when
+that turn started as `inflight.started_at` (epoch seconds, Hermes's own clock, the
+`started_at` Hermes keeps on the session's turn and leaves out of its snapshot),
+and the turn's saved messages are those Hermes saved at or after it, whose first is
+the turn's prompt when it has saved one. Hermes saves a queued prompt's row at the
+end of the transcript before it starts that prompt's turn, so its own `started_at`
+is later than the prompt. For such a turn the add-on reports the earlier time, that
+of the row it staged for the turn's prompt, which keeps the prompt in the turn. A
+prompt sent while Hermes was idle starts the turn first and is saved after, and
+keeps Hermes's own start. Wording plays no part, so a prompt worded
+like an earlier one, guidance steered into the turn and worded like its prompt, a
+prompt Hermes changed (bracketed-paste markers, another client's image lines) and a
+hidden prompt such as a goal continuation each start the turn where it started. A
+turn that has saved nothing yet has no persisted segment, so all of its live text
+shows. The add-on stamps the field only while the session's turn is still the one
+its snapshot describes, and a time is compared in whole milliseconds, as a message's
+`createdAt` is read.
 
-Two known gaps remain, each needing prompts worded exactly alike. Guidance steered
-into the running turn and worded exactly like its prompt is taken as the turn's
-start, so a segment the turn saved before the guidance shows again in the live
-reply, as it did before turn events existed. And a turn whose prompt is not shown
-yet, that repeats word for word a trailing prompt other than the last, such as the
-run's first prompt after queued guidance, and whose live text starts with what
-that prompt's turn saved first, loses those words from its live reply, which
-showed them before turn events existed. Rows and text cannot tell that turn from
-guidance steered into the earlier one. It clears when Hermes saves the prompt,
-which is then the last one with its text. A hidden prompt is never shown, so for
-one worded like a person's prompt it lasts the turn. A marker from the Hermes
-add-on for where a native turn starts would close both.
+Guidance steered into the running turn keeps the segments saved before it, so the
+live reply never repeats them. Guidance Hermes queued instead starts a turn of its
+own, with its own start, so only that turn's segments count.
+
+An add-on that predates `inflight.started_at`, and a read in which a saved message
+has no time, fall back to the prompt Hermes reports for the turn, which turn events
+used alone before the field existed. Only steered guidance follows a running turn's
+prompt, so the reported prompt is looked for only among the trailing prompts: the
+last shown prompt and, while the prompts before it are steered guidance, those, back
+to and including the first prompt that is not guidance. The last of them with the
+reported text is the turn's prompt, and an older prompt worded the same is never
+reached. The reported prompt is compared trimmed and without its trailing file
+references, as the saved prompt shows it, so a file sent alone is matched by its
+empty text, and an image sent alone, which Hermes reports as an empty prompt, too.
+When no trailing prompt has the reported text, as for a hidden prompt such as a goal
+continuation or one Hermes has not saved yet, the segments count from the last shown
+prompt, as before turn events existed. Two known gaps remain on that fallback, each
+needing prompts worded exactly alike. Guidance steered into the running turn and
+worded exactly like its prompt is taken as the turn's start, so a segment the turn
+saved before the guidance shows again in the live reply. And a turn whose prompt is
+not shown yet, that repeats word for word a trailing prompt other than the last, and
+whose live text starts with what that prompt's turn saved first, loses those words
+from its live reply, until Hermes saves the prompt, or for the whole turn when the
+prompt is hidden. Both are closed whenever the add-on reports the start.
 
 Apply a patch only while the fetched conversation is active and its
 `activity.runId` matches the patch. A settled conversation or a newer run
