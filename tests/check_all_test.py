@@ -456,10 +456,25 @@ class PythonDecisionTest(TempCase):
         self.repo()
         self.commit("web/App.tsx")
         self.git("checkout", "-q", "main")
-        self.commit("scripts/other.py")
+        self.commit("scripts/other.py", "a different file, so git cannot read this as a rename")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.git("checkout", "-q", "feature")
         self.assertEqual(check_all.changed_paths(self.tmp, "origin/main"), ["web/App.tsx"])
+
+    def test_moving_a_python_file_away_still_counts_as_touching_python(self):
+        self.repo()
+        self.commit("src/hermes/journal.py", "def journal(): return 1\n")
+        self.commit("tests/second.py", "def second(): return 2\n")
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.git("checkout", "-q", "-b", "move")
+        (self.tmp / "docs").mkdir()
+        self.git("mv", "src/hermes/journal.py", "docs/journal.txt")
+        self.git("commit", "-m", "move")
+        self.git("mv", "tests/second.py", "docs/second.txt")  # staged, not committed
+        paths = check_all.changed_paths(self.tmp, "origin/main")
+        self.assertIn("src/hermes/journal.py", paths)
+        self.assertIn("tests/second.py", paths)
+        self.assertTrue(check_all.python_touched(paths))
 
     def test_a_base_ref_git_does_not_know_gives_none_not_an_empty_diff(self):
         self.repo()

@@ -360,12 +360,14 @@ def python_touched(paths):
 
 
 def changed_paths(root, base):
-    """Paths changed on this branch since it left `base`, plus uncommitted and untracked ones. None if git cannot say."""
+    """Paths changed on this branch since it left `base`, plus uncommitted and untracked ones. None if git cannot say.
+
+    Renames are listed as a delete and an add, so moving a Python file away still counts as touching Python."""
     def lines(*argv):
         result = subprocess.run(["git", *argv], cwd=root, capture_output=True, text=True, check=False)
         return None if result.returncode != 0 else [part for part in result.stdout.split("\0") if part]
-    committed = lines("diff", "--name-only", "-z", f"{base}...HEAD")
-    working = lines("diff", "--name-only", "-z", "HEAD")
+    committed = lines("diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD")
+    working = lines("diff", "--name-only", "--no-renames", "-z", "HEAD")
     untracked = lines("ls-files", "--others", "--exclude-standard", "-z")
     if committed is None or working is None or untracked is None:
         return None
@@ -613,7 +615,6 @@ def run_battery(root, args, cache, log=None, env=None):
         run_py, py_reason = decide_py(args.py, paths, args.base, py_explicit)
 
     child_env = {**env, "NO_COLOR": "1"}
-    child_env.pop("E2E_PORT", None)
     commands = {"typecheck": ["npm", "run", "typecheck"], "lint": ["npm", "run", "lint"], "test": ["npm", "test"], "build": ["npm", "run", "build"],
                 "e2e": ["npm", "run", "test:e2e"], "py": ["npm", "run", "test:py"]}
     if ruff:
