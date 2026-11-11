@@ -181,6 +181,32 @@ done
 Leaving `auxiliary.voice_chat.model` unset keeps the assistant's own model. An
 add-on older than this flag ignores it, and Talk turns run at the profile's effort.
 
+## Pages open across a deploy
+
+A page that opened under one release keeps asking for that release's hashed `/assets/` files after a
+deploy replaces it, and a lazy screen whose file is gone shows "This screen could not load". So the
+guarded activation names the release it replaces: `Deployment.switch` in `.agents/tools/deploy_common.py`
+writes `dist/previous-release.json` into the release going live, `{"assets": "<previous release>/dist/client/assets"}`,
+before it moves `current`. The app reads that file when it starts. A request for a hashed name
+(`assets/<name>-<8 characters>.<ext>`) that the live release lacks is answered from that directory, with
+the same `immutable` cache headers as a live asset. Anything else still gets the uncached 404.
+
+- Only a regular file directly inside that directory is served. A hashed name holds no slash, so a path
+  cannot climb out, and a link that resolves outside the directory is refused.
+- One release of grace. Each activation, a rollback included, names the release it replaced, and
+  `release-app.py` keeps the rollback target, so the directory is there for as long as it is named. A pruned
+  directory, a missing file or a malformed one only means no grace: the app starts, logs a warning for a
+  malformed file and answers 404 as before.
+- Nothing to configure on the host. The file comes from the release tooling, never from a guessed path,
+  and a failed write to it never stops a cutover (the tool logs it).
+
+Compression: the app does not compress anything (`@fastify/compress` is not installed, and the static
+plugin serves no precompressed files). The JavaScript bundle is compressed in production only if Caddy
+has an `encode` directive for this site. This repository holds no Caddyfile, so that is not checked here.
+On the host, `curl -sI -H 'Accept-Encoding: gzip, br' https://APP_ORIGIN/assets/NAME.js` shows a
+`Content-Encoding` header when it is on. `src/server/event-stream.ts` sends `Content-Encoding: identity`
+on its event streams so that an `encode` directive leaves them uncompressed, which assumes one exists.
+
 ## Metadata egress floor
 
 The host is an OpenStack instance, and its metadata service at

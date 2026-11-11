@@ -15,6 +15,11 @@ import urllib.error
 import urllib.request
 
 
+# Written into the release being activated, naming the assets directory of the release it replaces. The app
+# serves a hashed /assets/ file the live release lacks from there, so a page opened under the previous
+# release can still load its files (src/server/static-cache.ts reads it; tests/static-cache.test.ts compares the name).
+PREVIOUS_RELEASE_FILE = "dist/previous-release.json"
+
 # The Hermes plugin directory name of src/hermes/wildbots_voice; src/hermes/voice.py PLUGIN must match.
 VOICE_PLUGIN = "wildbots-voice"
 
@@ -283,8 +288,27 @@ class Deployment:
         with urllib.request.urlopen(request, timeout=15) as response: return json.load(response)
 
     def switch(self, target):
+        self.name_previous_release(Path(target))
         temporary = self.current.with_name("current." + self.operation)
         temporary.symlink_to(target); temporary.replace(self.current)
+
+    def name_previous_release(self, target):
+        """Tell the release about to go live which release it replaces, for the app's asset grace.
+
+        Writes PREVIOUS_RELEASE_FILE in ``target``, naming the live release's assets directory, and
+        removes one left from an earlier cycle when there is nothing to name: a first release, the
+        release itself, or a previous release without assets. The grace is a courtesy to pages already
+        open, so a failure here is logged and never stops the cutover."""
+        file = target / PREVIOUS_RELEASE_FILE
+        try:
+            previous = self.current.resolve() if self.current.exists() else None
+            assets = previous / "dist/client/assets" if previous is not None and previous != target.resolve() else None
+            if assets is None or not assets.is_dir():
+                file.unlink(missing_ok=True)
+            else:
+                self.atomic(file, (json.dumps({"assets": str(assets)}) + "\n").encode())
+        except OSError as error:
+            self.log.write("The previous release was not named to the app: " + str(error) + "\n"); self.log.flush()
 
     @property
     def voice_plugin(self):
