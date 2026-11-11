@@ -116,6 +116,7 @@
   "src/shared/automation.ts",
   "src/shared/collaboration.ts",
   "src/shared/computer.ts",
+  "src/shared/cut-text.ts",
   "src/shared/discovery.ts",
   "src/shared/errors.ts",
   "src/shared/event-copy.ts",
