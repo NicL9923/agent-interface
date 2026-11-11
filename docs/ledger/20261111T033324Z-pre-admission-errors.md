@@ -123,9 +123,9 @@ it stayed `uncertain` and its reviewed resend asked Hermes again.
 - `src/server/hermes.ts:55-61,426-428`: `TEMPORARY_REFUSAL = new Set([409, 5035])`. A send with `retryOf` whose error is one of these falls
   through to `uncertain`, as on `main`. -32602 and 4093 stay `rejected` for a retry, since no wait changes them, and the client already
   tells a refused retry to send from the message box.
-- `tests/hermes-adapter.test.ts:333`: through the real runtime, a retry refused with 409 and 5035 is `uncertain` with the generic message,
+- `tests/hermes-adapter.test.ts:357`: through the real runtime, a retry refused with 409 and 5035 is `uncertain` with the generic message,
   and one refused with -32602 and 4093 is `rejected`.
-- `tests/hermes-adapter.test.ts:348`: the route test, through `createApp` and the real runtime on the fake Hermes socket. A retry of a
+- `tests/hermes-adapter.test.ts:373`: the route test, through `createApp` and the real runtime on the fake Hermes socket. A retry of a
   failed turn is refused for maintenance and answers `uncertain`; asked again unreviewed, it answers from the recorded receipt and Hermes is
   not asked a second time; once the upgrade ends, the reviewed resend reaches Hermes with the same request ID and `require_idle`, and is
   `accepted`.
@@ -136,9 +136,9 @@ answers a `talk/ask` with the same text, which `src/app/talk-loop.ts` speaks as 
 - `src/shared/errors.ts:62-66` `withoutDraftClause` drops each sentence that mentions a draft. It is applied where Talk takes a refusal's
   text: `src/server/talk.ts:140` (receipts, so also the add-on's own "Your draft is saved" messages in `extension.py`) and
   `src/app/talk-loop.ts:182` (an error thrown by the ask, such as the gate's 409). A message that is only about the draft becomes no text.
-- `tests/talk-api.test.ts:177`: a rejected receipt reads "Hermes is being upgraded." for the maintenance message (semicolon form), the add-on's
+- `tests/talk-api.test.ts:180`: a rejected receipt reads "Hermes is being upgraded." for the maintenance message (semicolon form), the add-on's
   three-sentence message keeps its other two sentences, and a message that is only the draft clause answers `refused` with no text.
-  `tests/talk-loop.test.ts:226`: the maintenance gate's 409 is spoken as "could not reach Ranch Hand: Hermes is being upgraded." with no
+  `tests/talk-loop.test.ts:220`: the maintenance gate's 409 is spoken as "could not reach Ranch Hand: Hermes is being upgraded." with no
   "draft".
 - `docs/HermesCapabilityMatrix.md`: the receipt paragraph says a retry refused for the first two stays uncertain and that Talk drops the draft
   sentences.
