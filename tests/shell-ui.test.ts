@@ -23,6 +23,17 @@ vi.mock("../src/components/Avatar", async (original) => ({
   ...await original<typeof import("../src/components/Avatar")>(),
   Avatar: () => createElement("span", { className: "avatar-stub" }),
 }));
+// Passes everything through and lets a test see each commit of the open assistant's composer, which holds Stop.
+const seen = vi.hoisted(() => ({ onCommit: undefined as undefined | ((props: { botId: string; onStop(): void }) => void) }));
+vi.mock("../src/app/Composer", async original => {
+  const real = await original<typeof import("../src/app/Composer")>();
+  const { useLayoutEffect } = await import("react");
+  const Composer = (props: Parameters<typeof real.Composer>[0]) => {
+    useLayoutEffect(() => { seen.onCommit?.(props); });
+    return createElement(real.Composer, props);
+  };
+  return { ...real, Composer };
+});
 vi.mock("../src/components/MessageMarkdown", () => {
   const markdown = (props: { text: string }) => createElement("div", { className: "message-markdown" }, props.text);
   return { MessageMarkdown: markdown, ReplyMarkdown: markdown };
@@ -38,6 +49,7 @@ let conversation: Conversation;
 let mount: Mount;
 
 beforeEach(() => {
+  seen.onCommit = undefined;
   vi.useFakeTimers();
   vi.clearAllMocks();
   FakeEventSource.reset();
@@ -190,6 +202,48 @@ describe("keyboard shortcuts", () => {
     await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Stop work")!.click());
     expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run" });
     expect(write).not.toHaveBeenCalledWith("/bots/shared/stop", { runId: "next" });
+  });
+
+  it("asks again when the question named no run and an app run began while it was open", async () => {
+    // A Discord turn runs with no app run to name.
+    conversation = { ...conversation, activity: { state: "working" } };
+    await render();
+    await key({ key: ".", ctrlKey: true });
+    conversation = { ...conversation, activity: { state: "working", runId: "app-run" } };
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    const stopWork = () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Stop work")!;
+    await act(async () => stopWork().click());
+    // That run was never shown to the person, so nothing was stopped and the question is asked about it.
+    expect(write).not.toHaveBeenCalledWith("/bots/shared/stop", expect.anything());
+    expect(document.body.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(document.activeElement?.textContent).toBe("Keep working");
+    await act(async () => stopWork().click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "app-run" });
+    expect(document.body.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it("still stops with no run named when none was shown then or at confirm time", async () => {
+    conversation = { ...conversation, activity: { state: "working" } };
+    await render();
+    await key({ key: ".", ctrlKey: true });
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Stop work")!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
+  });
+
+  it("never names another assistant's run, even from the commit that opens an assistant before its own conversation replaces the last one", async () => {
+    boot.bots[1].activity = "working";
+    conversation = { ...conversation, activity: { state: "working", runId: "shared-run" } };
+    await render();
+    // The commit that first shows Kitchen still holds Shared's conversation, and its Stop handler is live until the next one.
+    // Pressing Stop there is simulated from the commit itself, since a test cannot land an event between two commits.
+    let pressed = 0;
+    seen.onCommit = props => { if (props.botId === "kitchen" && !pressed++) props.onStop(); };
+    await key({ key: "1", ctrlKey: true });
+    // Guards the test: it proves nothing if no commit showed Kitchen with Stop pressed.
+    expect(pressed).toBeGreaterThan(0);
+    expect(write).toHaveBeenCalledWith("/bots/kitchen/stop", {});
+    expect(write).not.toHaveBeenCalledWith("/bots/kitchen/stop", { runId: "shared-run" });
   });
 
   it("ignores Ctrl+. when nothing is running", async () => {

@@ -431,7 +431,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   // The run this screen shows. The Stop button names it as of the click, and Cmd+. as of the question it asked.
   const shownRun = ownConversation?.activity.runId;
   const stopShownRun = useStableCallback(() => stop(shownRun));
-  const askedAboutRun = useRef<string | undefined>(undefined);
+  // What Cmd+. asked about: the run shown then, if any, and whether the question was asked again because another run began.
+  const [stopQuestion, setStopQuestion] = useState<{ run: string | undefined; renewed: boolean }>({ run: undefined, renewed: false });
+  const confirmStop = () => {
+    // Asked while no run was shown, as during a Discord turn: whatever runs now began while the question was open and the person
+    // was never shown it, so stopping it would answer a different question. Ask again about this run.
+    if (stopQuestion.run === undefined && shownRun !== undefined) { setStopQuestion({ run: shownRun, renewed: true }); setOverlay("stop"); return; }
+    stop(stopQuestion.run);
+  };
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
@@ -466,7 +473,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       if (!bot) return false;
       setOverlay(null); setPanel(null); selectBot(bot.id);
     },
-    stop: () => { if (!canStop) return false; askedAboutRun.current = shownRun; setOverlay("stop"); },
+    stop: () => { if (!canStop) return false; setStopQuestion({ run: shownRun, renewed: false }); setOverlay("stop"); },
     help: () => { if (!boot) return false; setOverlay("shortcuts"); },
     undo: () => toast.undo(),
   });
@@ -613,7 +620,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} onAsk={askMain} />}
       {choosingMain && <MainAssistantPicker boot={boot} onChoose={setMain} onMakePersonal={bot => setPanel({ kind: "settings", bot })} onClose={() => setChoosingMain(false)} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
-      {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={() => stop(askedAboutRun.current)} onClose={closeOverlay} />}
+      {overlay === "stop" && liveBot && <StopConfirm key={`${stopQuestion.run}`} name={liveBot.name} renewed={stopQuestion.renewed} onStop={confirmStop} onClose={closeOverlay} />}
       <Toast toast={toast.toast} onDismiss={toast.dismiss} onUndo={toast.undo} />
     </div>
   );
