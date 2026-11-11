@@ -285,15 +285,53 @@ describe("the assistant thinking before Hermes reports the turn", () => {
       const kept = step(step(sending, { receipt })!, { receipt, conversation: settled("failed", "b:0:5"), now: 2000 })!;
       return awaitingTurn([kept], settled("failed", version), 2100);
     };
-    // Only a started turn's answer orders reads by admission. Queued, unknown and an older add-on's answer keep
-    // the rule before: a read later than the copy's ends the row.
-    for (const turn of ["queued", "unknown", undefined] as const)
+    // Only a started turn's answer orders reads by admission. Unknown and an older add-on's answer keep
+    // the rule before: a read later than the copy's ends the row. A queued turn's answer does not, see below.
+    for (const turn of ["unknown", undefined] as const)
       expect(after({ ...accepted, admittedVersion: "b:0:7", ...turn ? { turn } : {} }, "b:0:6")).toBe(false);
     // Without the version, or from another server process, the same.
     expect(after({ ...accepted, turn: "started" }, "b:0:6")).toBe(false);
     expect(after({ ...started, admittedVersion: "c:0:1" }, "b:0:6")).toBe(false);
     // And the copy's own read still never ends it.
     expect(after({ ...started, admittedVersion: "c:0:1" }, "b:0:5")).toBe(true);
+  });
+});
+
+describe("a send Hermes queued behind a turn the chat did not show", () => {
+  const queued: SubmissionReceipt = { ...accepted, turn: "queued", admittedVersion: "b:0:7" };
+  const queuedEcho = step(sending, { receipt: queued })!;
+  const copied = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }]);
+  const settled = (state: "done" | "failed" | "interrupted", version?: string): SavedConversation =>
+    ({ ...copied, activity: { state }, ...version ? { version } : {} });
+
+  // Hermes saves a queued row at accept, so the copy shows while the turn it queued behind still runs, and that
+  // turn's settle is not this one's. Nothing in the report says which turn it belongs to.
+  it("keeps the row through the settle of the turn it queued behind, in the copy's read and every read after it", () => {
+    expect(queuedEcho).toMatchObject({ turn: "queued", admittedVersion: "b:0:7" });
+    for (const state of ["failed", "interrupted", "done"] as const) {
+      const kept = step(queuedEcho, { receipt: queued, conversation: settled(state, "b:0:6"), now: 2000 })!;
+      expect(kept).toMatchObject({ copiedAt: 2000 });
+      // Past the copy's read and past the answer's version: a started turn's row would end here.
+      for (const version of ["b:0:7", "b:0:8", "b:0:9"]) {
+        expect(awaitingTurn([kept], settled(state, version), 2100)).toBe(true);
+        expect(step(kept, { receipt: queued, conversation: settled(state, version), now: 2100 })).toBe(kept);
+      }
+      // Even when the first read already comes after the admission.
+      const late = step(queuedEcho, { receipt: queued, conversation: settled(state, "b:0:8"), now: 2000 })!;
+      expect(awaitingTurn([late], settled(state, "b:0:9"), 2100)).toBe(true);
+    }
+  });
+
+  it("ends when a read shows the queued run start, or at the handoff bound", () => {
+    const kept = step(queuedEcho, { receipt: queued, conversation: settled("interrupted", "b:0:8"), now: 2000 })!;
+    const running = { ...copied, activity: { state: "thinking" as const }, version: "b:0:9" };
+    expect(step(kept, { receipt: queued, conversation: running, now: 2100 })).toBeNull();
+    expect(awaitingTurn([kept], running, 2100)).toBe(false);
+    expect(step(kept, { receipt: queued, conversation: settled("interrupted", "b:0:9"), now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
+    expect(step(kept, { receipt: queued, conversation: settled("interrupted", "b:0:9"), now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    // A reply after the copy is the queued turn's own and ends it too.
+    const replied = conversation([...copied.messages, { id: "b", role: "assistant", text: "Done" }]);
+    expect(step(kept, { receipt: queued, conversation: { ...replied, activity: { state: "done" }, version: "b:0:9" }, now: 2100 })).toBeNull();
   });
 });
 
