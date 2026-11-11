@@ -53,6 +53,12 @@ export const ROSTER_REUSE_MS = 2_000;
  * Any other error, and every failure of the connection itself, may have followed admission and stays uncertain.
  */
 const BEFORE_ADMISSION = new Set([409, 5035, -32602, 4093]);
+/**
+ * Refusals that pass: Hermes will take the same request once the upgrade ends or the backend is back. A retry carries one
+ * request ID for its failed turn, and the app keeps a rejected receipt for good, so a retry refused for one of these stays
+ * uncertain. Its reviewed resend then asks Hermes again. A new message takes a fresh ID and keeps its draft, so it may be rejected.
+ */
+const TEMPORARY_REFUSAL = new Set([409, 5035]);
 function beforeAdmissionMessage(code: number, detail?: string): string {
   if (code === 409) return hermesMaintenanceSendMessage;
   const reason = detail?.trim().replace(/[.\s]+$/, '');
@@ -417,7 +423,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       // Refused before admission: nothing reached the assistant.
       if (input.retryOf !== undefined && error instanceof TransportError && error.rpcCode === 4091)
         return {requestId: input.requestId, status: 'rejected', message: 'Another reply started before this retry, so it was not sent.'};
-      if (error instanceof TransportError && error.rpcCode !== undefined && BEFORE_ADMISSION.has(error.rpcCode))
+      if (error instanceof TransportError && error.rpcCode !== undefined && BEFORE_ADMISSION.has(error.rpcCode)
+        && !(input.retryOf !== undefined && TEMPORARY_REFUSAL.has(error.rpcCode)))
         return {requestId: input.requestId, status: 'rejected', message: beforeAdmissionMessage(error.rpcCode, error.rpcMessage)};
       return {requestId: input.requestId, status: 'uncertain', message: error instanceof Error ? error.message : 'Hermes response lost. Review before retrying.'};
     }

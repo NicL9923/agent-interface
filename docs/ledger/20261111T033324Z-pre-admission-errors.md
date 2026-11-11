@@ -107,3 +107,64 @@ No real add-on answered over a socket: the adapter tests answer with the add-on'
 its handler against the fake gateway. A retry of an uncertain request ID is the one place a rejected answer could follow an earlier attempt that
 was admitted: the route reads Hermes's receipt for that ID before it asks again, and a lease cannot be acquired while the first attempt holds its
 reservation, so the window is the time between that read and the retry's own call. It is not closed here.
+
+## Review round 1: a retry, and Talk's draft clause
+
+Claude Opus 5.5 reviewed `283826b` and found two things. Both are fixed on top of it, as Claude Sonnet 5.5 (same provider as the author;
+`independent-review-owed`). Source fingerprint `sha256:2f5c05bd20111d57b51ac2e06a7443361f0a9f64ba09823940f26c24aabf7d3b` (1766 source files)
+with this round's change set, after merging `origin/main` (`acec071`) into the branch.
+
+**P2, a retry refused for maintenance became final.** A retry's request ID comes from its failed turn, so every later retry of that turn
+reuses it, and a rejected receipt is final for an ID (`src/server/conversation-routes.ts` returns it for every later retry, reviewed resends
+included). A 409 or 5035 is a refusal that passes, so a retry saw "Hermes didn't take the retry. Hermes is being upgraded. Your draft is
+saved...", which is false for a retry (it never touches the draft), lost its Retry button after the update, and was never sent. On `main`
+it stayed `uncertain` and its reviewed resend asked Hermes again.
+
+- `src/server/hermes.ts:55-61,426-428`: `TEMPORARY_REFUSAL = new Set([409, 5035])`. A send with `retryOf` whose error is one of these falls
+  through to `uncertain`, as on `main`. -32602 and 4093 stay `rejected` for a retry, since no wait changes them, and the client already
+  tells a refused retry to send from the message box.
+- `tests/hermes-adapter.test.ts:333`: through the real runtime, a retry refused with 409 and 5035 is `uncertain` with the generic message,
+  and one refused with -32602 and 4093 is `rejected`.
+- `tests/hermes-adapter.test.ts:348`: the route test, through `createApp` and the real runtime on the fake Hermes socket. A retry of a
+  failed turn is refused for maintenance and answers `uncertain`; asked again unreviewed, it answers from the recorded receipt and Hermes is
+  not asked a second time; once the upgrade ends, the reviewed resend reaches Hermes with the same request ID and `require_idle`, and is
+  `accepted`.
+
+**P3, Talk spoke a draft that does not exist.** `talkAnswer` spoke a rejected receipt's message as is, and the app's maintenance gate
+answers a `talk/ask` with the same text, which `src/app/talk-loop.ts` speaks as "could not reach ...".
+
+- `src/shared/errors.ts:62-66` `withoutDraftClause` drops each sentence that mentions a draft. It is applied where Talk takes a refusal's
+  text: `src/server/talk.ts:140` (receipts, so also the add-on's own "Your draft is saved" messages in `extension.py`) and
+  `src/app/talk-loop.ts:182` (an error thrown by the ask, such as the gate's 409). A message that is only about the draft becomes no text.
+- `tests/talk-api.test.ts:177`: a rejected receipt reads "Hermes is being upgraded." for the maintenance message (semicolon form), the add-on's
+  three-sentence message keeps its other two sentences, and a message that is only the draft clause answers `refused` with no text.
+  `tests/talk-loop.test.ts:226`: the maintenance gate's 409 is spoken as "could not reach Ranch Hand: Hermes is being upgraded." with no
+  "draft".
+- `docs/HermesCapabilityMatrix.md`: the receipt paragraph says a retry refused for the first two stays uncertain and that Talk drops the draft
+  sentences.
+
+### Red proof
+
+Each break was made by hand, the named files run, and the line restored. The restored tree then passed all three files (296 tests).
+
+| Broken | Red |
+| --- | --- |
+| The retry exemption replaced by `true` | both retry tests (409 expected `uncertain`; the route test expected `uncertain` after the refusal) |
+| `talkAnswer` returns `receipt.message` unchanged | the three table cases in `tests/talk-api.test.ts` |
+| `talk-loop` speaks `error.message` unchanged | the maintenance-gate test in `tests/talk-loop.test.ts` |
+
+### Checks
+
+`.agents/tools/check-all --keep-going`: all 7 passed in 11m07s, 5m03s of it queued for the machine's heavy slot. A first run found two
+type errors in the new code (an optional `message`, an option typed `false`); both were fixed and the run above is the second.
+
+| Check | Result |
+| --- | --- |
+| typecheck, lint, `ruff check .` | passed |
+| `npm test` | 205 files, 3,653 tests passed |
+| `npm run build` | 892 modules |
+| `npm run test:e2e` | 40 tests passed |
+| `npm run test:py` | 45 files passed in 4m25s |
+
+Not exercised: no real add-on answered a retry. The Talk sentence filter is a text rule, so a refusal whose only useful sentence mentions a
+draft is spoken with that sentence missing. The three messages Talk can receive today read correctly without it.

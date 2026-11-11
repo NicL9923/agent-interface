@@ -12,7 +12,10 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
+import { createApp } from '../src/server/app.js';
+import { loadConfig } from '../src/server/config.js';
 import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
+import { retryRequestId } from '../src/shared/retry-id.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import { SendTimings } from '../src/server/send-timing.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
@@ -350,6 +353,51 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     // An answer with no message of its own still says nothing was sent.
     rpcErrors.set('agent-interface.submit', {code: 5035} as {code: number; message: string});
     expect(await runtime.submit({...input(), text: 'Hello'})).toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message. Your draft is saved.'});
+  });
+  it('keeps a retry refused for a passing reason uncertain, and rejects one refused for a permanent reason', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // A retry has one request ID for its failed turn, and a rejected receipt is final, so an upgrade or a retiring
+    // backend must leave it uncertain for the reviewed resend. A refusal that no wait changes may stay rejected.
+    for (const code of [409, 5035]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes is being upgraded.'});
+      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
+        .toEqual({requestId: 'request-one', status: 'uncertain', message: `Hermes refused the request (code ${code}). Review before retrying.`});
+    }
+    for (const code of [-32602, 4093]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Not this request'});
+      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
+        .toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message: Not this request. Your draft is saved.'});
+    }
+  });
+  it('sends a retry again once an upgrade that refused it ends', async () => {
+    canonicalSubmission=true;
+    snapshot.messages=[{row_id: 1, role: 'user', text: 'Order more feed', app_run_id: 'run-1'}];
+    snapshot.info={running:false,failed:true};
+    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    try {
+      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
+      const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
+      const read=await runtime.conversation('shared');
+      const retryOf=read.messages[0].id;
+      const requestId=await retryRequestId('shared',retryOf,read.activity.runId??'');
+      const retry=(reviewedUncertain=false)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers,
+        payload:{requestId,text:'Order more feed',attachments:[],retryOf,...(reviewedUncertain?{reviewedUncertain:true}:{})}});
+      const submits=()=>calls.filter(call=>call.method==='agent-interface.submit');
+      rpcErrors.set('agent-interface.submit',{code:409,message:'Hermes is being upgraded. Your current work and drafts are preserved.'});
+      const refused=await retry();
+      expect(refused.json()).toMatchObject({requestId,status:'uncertain'});
+      // The same retry, not yet reviewed, only reports what the app recorded.
+      expect((await retry()).json().status).toBe('uncertain');
+      expect(submits()).toHaveLength(1);
+      // The update ends. Reviewing the retry sends it again, so Hermes is asked a second time.
+      rpcErrors.delete('agent-interface.submit');
+      const resent=await retry(true);
+      expect(resent.statusCode).toBe(200);
+      expect(resent.json()).toMatchObject({requestId,status:'accepted'});
+      expect(submits()).toHaveLength(2);
+      expect(submits()[1].params).toMatchObject({request_id:requestId,require_idle:true});
+    } finally { await app.close(); }
   });
   it('keeps a send whose error may have followed admission uncertain, whatever Hermes says', async () => {
     canonicalSubmission=true;

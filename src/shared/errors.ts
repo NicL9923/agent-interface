@@ -58,6 +58,13 @@ export type ErrorCode =
 export const submissionConflictMessage = "This submission ID was already used for different content";
 /** Sent when a send reaches the app, or Hermes, while Hermes is being upgraded. The message was not sent and its draft is kept. */
 export const hermesMaintenanceSendMessage = "Hermes is being upgraded. Your draft is saved; send it after the update finishes.";
+/**
+ * A refusal as Talk speaks it. A spoken request has no typed draft, so the sentences that tell the person their draft is
+ * saved are dropped: they would send someone to a draft that does not exist.
+ */
+export function withoutDraftClause(message: string): string {
+  return message.split(/(?<=[.!?])\s+/).filter(sentence => !/\bdraft\b/i.test(sentence)).join(" ");
+}
 /** Sent when a conversation's interrupted task needs review before another message starts. */
 export const interruptionPendingMessage = "Review the interrupted task before starting another message.";
 
