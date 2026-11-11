@@ -272,6 +272,24 @@ class ToolTest(unittest.TestCase):
         # Only the first run had anything to say.
         self.assertEqual(self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", *command, check_exit=0).stderr, "")
 
+    def test_a_record_whose_volume_is_not_mounted_is_kept_with_its_original(self):
+        self.write("gone/m.py", MODULE)
+        tool, child = self.start_hanging_run(name="gone/m.py")
+        tool.kill()
+        tool.communicate(timeout=30)
+        os.killpg(child, signal.SIGKILL)
+        shutil.rmtree(self.repo / "gone")
+        # The checkout looks gone because the volume it lives on is not mounted: the nearest folder that exists is on another device.
+        [record] = self.scratch.rglob("*.json")
+        info = json.loads(record.read_text())
+        record.write_text(json.dumps({**info, "dev": info["dev"] + 1}))
+        self.write("b.py", MODULE)
+        result = self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", "import sys; sys.exit(1)", check_exit=0)
+        self.assertIn("the volume it was on is not mounted", result.stderr)
+        [backup] = self.scratch.rglob("*.orig")
+        self.assertEqual(backup.read_text(), MODULE)
+        self.assertTrue(record.exists())
+
     def test_a_live_runs_record_is_left_alone_when_another_file_starts(self):
         tool, child = self.start_hanging_run()
         self.write("b.py", MODULE)

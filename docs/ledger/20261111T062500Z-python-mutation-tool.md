@@ -158,3 +158,12 @@ All 7 checks passed (7m43s total, 0.0s of it queued for heavy slots)
 
 Windows and macOS: the tool uses process groups, `os.killpg`, `SIGHUP` and `/proc`-free liveness through `os.kill`, which exist on both Unix
 families, but only Linux ran. A command that starts a new session (`setsid`) escapes the process-group kill on a timeout or a stop.
+
+## Orchestrator follow-up
+
+Discarding a record whose directory is gone would also discard the only clean copy of a file on a volume that is not mounted,
+such as the Mac mini's DevSSD. Records now carry the file's device, and a run keeps such a record, and says so, when the nearest
+folder that exists is on another device. `test_a_record_whose_volume_is_not_mounted_is_kept_with_its_original` rewrites the
+record's device to stand in for the unmount. With the device check removed it failed (`discarded the record ... no longer
+exists`); restored, all 31 tests pass.
+

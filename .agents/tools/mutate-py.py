@@ -27,7 +27,7 @@ Restore on every exit path. The mutation is undone in a `finally`, and SIGINT, S
 process group and then restore. SIGKILL cannot be caught, so before touching a file the tool records its original
 bytes in a private directory under the system temp directory, written to a temporary file and renamed so a kill mid-write
 leaves no half record. Every run starts by restoring every file whose record names a dead process, whichever file this
-run targets, and says so. A record whose directory is gone is discarded. It refuses a file another live run is mutating. An unreadable record is reported and kept,
+run targets, and says so. A record whose directory is gone is discarded, unless the volume it was on is not mounted. It refuses a file another live run is mutating. An unreadable record is reported and kept,
 because its saved original may be the only copy; it blocks a run on that file only. A mutant that does not compile is an
 `error:` row, not a caught mutant, because every test would fail on the import.
 """
@@ -145,6 +145,10 @@ def pending_names(path: Path) -> tuple[Path, Path]:
     return pending_dir() / f"{key}.json", pending_dir() / f"{key}.orig"
 
 
+def nearest_existing(path: Path) -> Path:
+    return next(parent for parent in path.parents if parent.exists())
+
+
 def recover_dead_runs() -> list[str]:
     """Restore every file a dead run left mutated, whichever file this run targets. Returns one note per record.
 
@@ -161,6 +165,10 @@ def recover_dead_runs() -> list[str]:
             continue
         path = Path(info["path"])
         if not path.parent.is_dir():
+            # A volume that is not mounted hides a checkout that still exists, so its record waits for the volume to come back.
+            if isinstance(info.get("dev"), int) and nearest_existing(path).stat().st_dev != info["dev"]:
+                notes.append(f"kept the record of {path}: its directory is missing and the volume it was on is not mounted; the original bytes are in {backup}")
+                continue
             # A throwaway checkout deleted after a killed run: nothing can be restored, and the record would warn forever.
             record.unlink(missing_ok=True)
             backup.unlink(missing_ok=True)
@@ -202,7 +210,7 @@ class Pending:
     def save(self) -> None:
         write_atomic(self.backup, self.original)
         write_atomic(self.record, json.dumps({"pid": os.getpid(), "path": str(self.path), "mode": self.stat.st_mode,
-                                              "mtime_ns": self.stat.st_mtime_ns}))
+                                              "mtime_ns": self.stat.st_mtime_ns, "dev": self.stat.st_dev}))
 
     def drop(self) -> None:
         self.record.unlink(missing_ok=True)
