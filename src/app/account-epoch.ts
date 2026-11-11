@@ -126,6 +126,11 @@ let addressFor: { user?: string } | null | undefined;
  */
 const accountOf = (record: AuthEpoch | null) =>
   !record || record.signedOut || owesLogout(record) || record.changing && record.fromSignedOut ? null : { ...record.user ? { user: record.user } : {} };
+/**
+ * The account the stored record names for this browser now, if it names one: not after a sign-out,
+ * and not for a record that names none, as before a first bootstrap has named the account.
+ */
+export const recordedUser = () => accountOf(current())?.user;
 /** The account a screen of this generation drew first, as the saved home does before bootstrap answers. */
 let drawnHere: string | undefined;
 const listeners = new Set<() => void>();
@@ -407,15 +412,21 @@ export function accountRefused(hadAccount: boolean) {
 /**
  * A bootstrap named `user`. `drawn` is the account this generation already shows, if any, from an
  * earlier bootstrap or else from the saved home. Returns whether the generation may use the answer:
- * not if another account was drawn, which ends it, nor while a transition is under way or after one,
- * when the answer may be for either cookie.
+ * not if another account was drawn, or the address belongs to another, which ends it, nor while a
+ * transition is under way or after one, when the answer may be for either cookie.
  */
 export function accountNamed(user: string, drawnByBootstrap: string | undefined) {
   const drawn = drawnByBootstrap ?? drawnHere;
   checkAccount();
   const now = stored(), record = parseEpoch(now);
   if (now !== held || changingNow(record)) return false;
-  if (drawn !== undefined && drawn !== user) {
+  // The address names the account the record did when the generation started. A record that lags the
+  // cookie, as when storage refused the write of a sign-in, names another than the bootstrap does, and
+  // this generation already holds that address's chat, panel and fragment in its state. It ends like
+  // any change of account, so the next start resets the address (`addressLeaves`) before `user` draws.
+  // An address that names no account yet, or was opened signed out, is the next account's to keep.
+  const addressUser = addressFor?.user;
+  if (drawn !== undefined && drawn !== user || addressUser !== undefined && addressUser !== user) {
     leaving();
     forgetSignIn();
     transition({ user });
