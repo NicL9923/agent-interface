@@ -688,9 +688,15 @@ describe("conversation state", () => {
     await advance(10_000);
     await act(async () => { for (const stream of FakeEventSource.streams) stream.emit("ping", "10"); });
     await advance(2000);
-    // Avatars are not memoized, so each re-render of the app that shows one gives its wrapper new props, and a remount gives it a new element.
-    // The reduced motion this file runs in holds them still, so only a render from above can change either. A Profiler would also count the
-    // minute clock's own commits.
+    // The row menu loads once after first paint and swaps the row's contents when it lands. Without this wait, a run that starts cold
+    // sees the swap land in real time somewhere in the six minutes, and a run after another test does not.
+    await act(async () => { await preloadBotMenu(); });
+    // React gives an element new props whenever the component that renders it renders again. Sidebar and Conversation are memoized, so an
+    // app render that reaches no avatar still gives the shell, which App renders itself, new props. Avatars are not memoized, so a render
+    // from above them gives their wrapper new props, and a remount a new element. The reduced motion this file runs in holds them still.
+    // A Profiler would also count the minute clock's own commits.
+    const shell = container.querySelector(".app-shell")!;
+    const shellProps = renderedProps(shell);
     const avatars = () => [...container.querySelectorAll<HTMLElement>(".avatar-wrap")].map(element => [element, renderedProps(element)]);
     const settled = avatars();
     expect(settled.length).toBeGreaterThan(0);
@@ -705,7 +711,11 @@ describe("conversation state", () => {
     await act(async () => FakeEventSource.notifyAll());
     await advance(1500);
     expect(bootstraps()).toBeGreaterThan(before);
-    expect(avatars()).toEqual(settled);
+    // Identity, not structure: a re-render gives equal-looking props a new object.
+    expect(container.querySelector(".app-shell") === shell && renderedProps(shell) === shellProps, "the app shell was rendered again").toBe(true);
+    const after = avatars();
+    expect(after).toHaveLength(settled.length);
+    expect(after.filter(([element, props], index) => element !== settled[index][0] || props !== settled[index][1])).toHaveLength(0);
   });
 
   it("shows current work inline in the transcript and stops claiming work during a disconnect", async () => {
@@ -924,7 +934,8 @@ describe("conversation state", () => {
     const textarea = container.querySelector("textarea")!;
     for (const text of ["H", "He", "Hey"]) await typeInto(textarea, text);
     expect(textarea.value).toBe("Hey");
-    expect(turns.map(renderedProps)).toEqual(settled);
+    // Identity, not structure: a re-render gives equal-looking props a new object.
+    expect(turns.filter((turn, index) => renderedProps(turn) !== settled[index])).toHaveLength(0);
   });
 
   it("spins Send without a status bar until a send ends without a receipt", async () => {
