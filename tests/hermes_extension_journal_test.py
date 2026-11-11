@@ -822,10 +822,14 @@ class AdmissionTurnTests(unittest.TestCase):
         params = {"profile": "default", "request_id": rid, "sender_id": "member", "text": "Hello " + rid, **extra}
         return hermes.methods["agent-interface.submit"](rid, params)["result"], calls, params
 
-    def test_a_new_task_says_when_hermes_did_not_start_its_turn_at_once(self):
+    def lookup(self, hermes, rid):
+        """The receipt a server reads after a lost answer."""
+        return hermes.methods["agent-interface.receipt"]("lookup", {"request_id": rid})["result"]["receipt"]
+
+    def test_a_new_task_says_what_hermes_did_with_its_turn(self):
         # The add-on read the session idle; Hermes's answer says whether a turn had taken it meanwhile.
         # Answers pinned from ed1afb0: methods_prompt.py:973 and :762, compute_host_bridge.py:327, session_auto_continue.py:259 and :454.
-        for native, turn in [("streaming", None), ({"status": "streaming", "turn_isolation": True}, None), ("queued", "queued"),
+        for native, turn in [("streaming", "started"), ({"status": "streaming", "turn_isolation": True}, "started"), ("queued", "queued"),
                              ({"status": "queued", "admission_id": "a1", "forwarded": True}, "queued"),
                              ("redirected", "joined"), ("steered", "joined"),
                              # An answer this add-on does not know is never taken for a started turn.
@@ -835,8 +839,9 @@ class AdmissionTurnTests(unittest.TestCase):
                 answer, calls, params = self.submit(hermes, "send", native)
                 self.assertEqual((calls, answer["status"], answer["steering"], answer["runId"], answer.get("turn")),
                                  (["prompt.submit"], "accepted", False, "send", turn))
-                # A replay answers the same, from what the journal saved.
+                # A replay answers the same, from what the journal saved, and so does the lookup after a lost answer.
                 self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], saved(answer))
+                self.assertEqual(self.lookup(hermes, "send")["turn"], turn)
 
     def test_a_typed_stop_admits_nothing_and_holds_up_no_later_send(self):
         with FakeGateway([]) as hermes:
@@ -848,6 +853,8 @@ class AdmissionTurnTests(unittest.TestCase):
             self.assertEqual((calls, answer["status"], answer["steering"], answer["turn"]), (["prompt.submit"], "accepted", False, "none"))
             self.assertIn("voice chat", answer["message"])
             self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], saved(answer))
+            # A server that lost the answer learns from the lookup that nothing was admitted, so the typed words stay a draft.
+            self.assertEqual((self.lookup(hermes, "stop")["status"], self.lookup(hermes, "stop")["turn"]), ("accepted", "none"))
             self.assertEqual(hermes.journal.db.execute("SELECT terminal FROM receipts WHERE request_id='stop'").fetchone(), (1,))
             # No run is open, so an open names none and the next send is not held up as a task Hermes is finishing.
             self.assertIsNone(hermes.open()["app_run_id"])
@@ -855,8 +862,7 @@ class AdmissionTurnTests(unittest.TestCase):
             unreviewed = hermes.methods["agent-interface.submit"]("send", {"profile": "default", "request_id": "unreviewed", "sender_id": "member", "text": "Next"})
             self.assertEqual(unreviewed["error"]["code"], 4094)
             following, _, _ = self.submit(hermes, "next", "streaming", reviewed_interruption=True)
-            self.assertEqual((following["status"], following["runId"]), ("accepted", "next"))
-            self.assertNotIn("turn", following)
+            self.assertEqual((following["status"], following["runId"], following["turn"]), ("accepted", "next", "started"))
 
     def test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started(self):
         with FakeGateway([]) as hermes:
@@ -879,9 +885,40 @@ class AdmissionTurnTests(unittest.TestCase):
             answer, calls, _ = self.submit(hermes, "steer", "queued")
             self.assertEqual((calls, answer["status"], answer["steering"], answer["runId"]), (["session.steer"], "accepted", True, "first"))
             self.assertNotIn("turn", answer)
+            self.assertNotIn("turn", self.lookup(hermes, "steer"))
+
+    def test_a_refusal_carries_no_turn_in_its_answer_or_its_lookup(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            self.submit(hermes, "first", "streaming")
+            hermes.server._sessions["sid"]["running"] = True
+            refused, calls, _ = self.submit(hermes, "image", "streaming", attachments=[{"path": "/tmp/a.png", "name": "a.png", "mime": "image/png"}], steer=True)
+            self.assertEqual((calls, refused["status"]), ([], "rejected"))
+            self.assertNotIn("turn", refused)
+            self.assertEqual(self.lookup(hermes, "image")["status"], "rejected")
+            self.assertNotIn("turn", self.lookup(hermes, "image"))
+
+    def test_an_answer_saved_before_the_add_on_stored_a_started_turn_says_nothing_about_it(self):
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            answer, _, params = self.submit(hermes, "old", "streaming")
+            self.assertEqual(answer["turn"], "started")
+            # An add-on older than this field saved the same answer without it, for a turn it started or one it queued.
+            with hermes.journal.db:
+                stored = json.loads(hermes.journal.db.execute("SELECT admission_response FROM receipts WHERE request_id='old'").fetchone()[0])
+                del stored["turn"]
+                hermes.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id='old'", (json.dumps(stored),))
+            # The replay and the lookup do not invent a started turn for it.
+            self.assertEqual(hermes.methods["agent-interface.submit"]("again", params)["result"], stored)
+            self.assertNotIn("turn", hermes.methods["agent-interface.submit"]("again", params)["result"])
+            self.assertEqual(self.lookup(hermes, "old")["status"], "accepted")
+            self.assertNotIn("turn", self.lookup(hermes, "old"))
+            # A receipt whose answer was never saved has no turn to give either.
+            with hermes.journal.db:
+                hermes.journal.db.execute("UPDATE receipts SET admission_response=NULL WHERE request_id='old'")
+            self.assertNotIn("turn", self.lookup(hermes, "old"))
 
     def test_the_add_on_says_it_reports_the_turn(self):
-        # A server can read a missing turn as "started at once" only from an add-on that reports it.
         with FakeHermes([]) as hermes:
             self.assertIs(hermes.registered["agent-interface.capabilities"]("caps", {})["result"]["admission_turn"], True)
 

@@ -139,17 +139,17 @@ so: a message Hermes put into the running turn (`joined`) is measured as a steer
 with `steered: true`, and one whose turn did not start (`queued`, `none` or
 `unknown`) is logged at Hermes's answer with `ended: "not-started"` and no moments
 after it. `queued` promises no separate later turn, so no later text is the
-message's own either. With an add-on that does not report `admission_turn`, Hermes's
-answer for this sequence is the same as for a message that started its own turn, so
-the line can still end `measured` with `steered: false` and moments that are too
-early. See [the integration evidence](HermesCapabilityMatrix.md).
+message's own either. With an add-on whose answer carries no `turn` (one older than
+the field), Hermes's answer for this sequence is the same as for a message that
+started its own turn, so the line can still end `measured` with `steered: false` and
+moments that are too early. See [the integration evidence](HermesCapabilityMatrix.md).
 
 `ended` says why the line was written. Only `measured` carries both moments; any
 other value leaves out what could not be tied to the send's run:
 
 - `measured`: both `firstFrameMs` and `firstLiveMs` were recorded. A tool or
   status event written first does not end it; the line waits for text. With an
-  add-on that does not report `admission_turn`, the preempted-compaction sequence
+  add-on whose answer carries no `turn`, the preempted-compaction sequence
   above can produce a wrong `measured` line.
 - `not-started`: Hermes's answer says the message's turn did not start, with `turn`
   `queued`, `none` or `unknown`. It carries `prepareMs` and `admissionMs` only.
@@ -702,7 +702,7 @@ way carries `steered: true`, in every history read and on every device. Show "Ad
 the current task" under it. Absent means unknown, so show nothing.
 
 **Admission turn.** An accepted receipt for a new task carries `turn`, what Hermes
-did with the message's turn, when the add-on reports `admission_turn`:
+did with the message's turn, when the add-on's answer carries one:
 
 | `turn` | Hermes | Show |
 | --- | --- | --- |
@@ -712,13 +712,17 @@ did with the message's turn, when the add-on reports `admission_turn`:
 | `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message, put its text and files back in the draft as for a refused message, and show the receipt's `message` |
 | `unknown` | answered in a way neither the add-on nor this server knows | as for a message that starts a turn; never take it for `started` |
 
-The server sends `started` only when the add-on reports `admission_turn` and its
-answer has no `turn`, because that add-on leaves the field out exactly when the turn
-started. Absent `turn` means nobody can say: an add-on too old to report it, a
-receipt recovered by a lookup after its answer was lost, a steer (it carries
-`steered: true` instead) or a receipt that is not `accepted`. Any other value from
-Hermes becomes `unknown`. `GET /api/submissions/:id` and a repeated request answer
-the recorded receipt's `turn` while it is `accepted`.
+The add-on saves `turn` with its answer, `started` included, so its admission answer,
+its replay of that answer and its receipt lookup all say the same. The server sends
+`started` only for an explicit one. Absent `turn` means nobody can say: an answer an
+add-on older than the field saved (a missing turn is never read as `started`, even
+from an add-on that reports `admission_turn`, because it may have been a queued or
+joined send), a receipt that was never answered, a steer (it carries `steered: true`
+instead) or a receipt that is not `accepted`. Any other value from Hermes becomes
+`unknown`. A lookup carries the saved `turn`, so a typed stop recovered after its
+answer was lost still leaves the draft in place. `GET /api/submissions/:id` answers
+the lookup's `turn`, or the recorded receipt's when the lookup has none, while both
+say `accepted`; `admittedVersion` only ever comes from the recorded receipt.
 
 The same receipt carries `admittedVersion`, the assistant's structural version, as
 `Conversation.version` spells it, when Hermes's admission answer reached the server.

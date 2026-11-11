@@ -690,8 +690,9 @@ export interface SubmissionReceipt {
   /** Whether this message joined the running task. Absent from an older add-on. */
   steered?: boolean;
   /**
-   * What Hermes did with this message's turn, on an accepted new task only. Absent when nobody can say: an add-on
-   * too old to report it, a receipt recovered by lookup, a steer (see `steered`), or a receipt that is not accepted.
+   * What Hermes did with this message's turn, on an accepted new task only, from the admission answer and from a
+   * receipt lookup alike. Absent when nobody can say: an answer saved by an add-on older than the field, a steer (see
+   * `steered`), or a receipt that is not accepted. Never read a missing one as `started`.
    */
   turn?: AdmissionTurn;
   /**
