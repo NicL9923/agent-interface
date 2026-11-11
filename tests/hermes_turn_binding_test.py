@@ -242,12 +242,13 @@ class TurnHermes(FakeHermes):
         """_enqueue_prompt and, for an accepted prompt, _persist_queued_user_row."""
         session = self.session
         head, rest = session.get("queued_prompt"), session.setdefault("queued_prompts", [])
-        if not images and head and not head["images"] and not rest:
+        if not images and head and not head.get("image_paths") and not rest:
             head["text"] = head["text"] + "\n\n" + text
             if head.get("row"):
                 head["row"]["text"] = head["text"]
             return
-        envelope = {"text": text, "images": images}
+        # As _enqueue_prompt keeps them, under "image_paths" and only when there are some (session_auto_continue.py:163).
+        envelope = {"text": text, **({"image_paths": images} if images else {})}
         if accepted and text.strip():
             envelope["row"] = self.write_row(text)
         if head:
@@ -268,7 +269,7 @@ class TurnHermes(FakeHermes):
                 # The accept-time row moves to the end: a fresh row is staged, the early one deactivated.
                 envelope["row"]["inactive"] = True
                 session["_submit_user_row"] = {"content": envelope["text"], "_row_id": self.write_row(envelope["text"])["row_id"]}
-        self.server._run_prompt_submit(rid, "sid", session, envelope["text"], **({"image_paths": envelope["images"]} if envelope["images"] else {}))
+        self.server._run_prompt_submit(rid, "sid", session, envelope["text"], **({"image_paths": envelope["image_paths"]} if envelope.get("image_paths") else {}))
         return True
 
     def run_prompt_submit(self, rid, sid, session, text, *, display_kind=None, image_paths=None, turn_author=None):
