@@ -7,15 +7,11 @@ import { BotSettings } from "../src/BotSettings";
 import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
-import { button, click, mountRoot, typeInto } from "./ui-harness";
+import { button, click, mountRoot, stubImmediateFrames, typeInto } from "./ui-harness";
 
+// jsdom decodes no image and has no canvas, so the real resize and PNG encode cannot run; the upload and error paths around it do.
 vi.mock("../src/portrait-upload", () => ({ preparePortrait: vi.fn(async (file: File) => file) }));
 
-// SVG geometry is a browser concern; these tests cover the form around the avatar.
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => createElement("span", { "data-avatar": "" }),
-}));
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
   api: vi.fn().mockResolvedValue({}),
@@ -613,7 +609,7 @@ describe("phone navigation", () => {
   const compact = async () => {
     const media = { matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() };
     vi.stubGlobal("matchMedia", vi.fn(() => media));
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+    stubImmediateFrames();
     await act(async () => root.unmount());
     ({ container, root } = mountRoot());
     await render();
@@ -955,7 +951,7 @@ describe("existing assistant portraits", () => {
 
 async function openMemoryForEditing() {
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 0; });
+  stubImmediateFrames();
   const memory = { botId: "shared", profile: "shared", scope: "profile" as const, owner: "Hermes", notice: "Shared profile.", documents: [
     { target: "memory" as const, label: "Assistant notes", revision: "a".repeat(64), enabled: true, charLimit: 2200, charCount: 5, entries: [{ id: "1", text: "First" }] },
   ] };

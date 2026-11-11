@@ -8,10 +8,6 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { ComponentProps } from "react";
 import { mountRoot } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
 
 let root: Root;
 let container: HTMLDivElement;

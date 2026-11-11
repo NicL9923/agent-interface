@@ -136,11 +136,11 @@ describe("group room watcher", () => {
 describe("watching a group chat on the app event stream", () => {
   async function setup(extra: Partial<Runtime> = {}) {
     let seq = 1;
-    // A gate the next room lookup waits on, when a test sets one.
-    let gate: Promise<void> | undefined;
+    // A gate the next room lookup waits on, when a test sets one, and the signal that the lookup reached it.
+    let gate: Promise<void> | undefined, reachedGate: (() => void) | undefined;
     const rooms = [state("shared", 1).room, { ...state("private", 1).room, members: [member("ranch"), member("secret")] }];
     const groupRequest = vi.fn(async (input: GroupRequest) => {
-      if (gate && input.operation === "state") { const waiting = gate; gate = undefined; await waiting; }
+      if (gate && input.operation === "state") { const waiting = gate; gate = undefined; reachedGate?.(); await waiting; }
       return input.operation === "list" ? { supported: true, canSend: true, rooms }
         : { ...state((input as { roomId: string }).roomId, seq), room: { ...rooms.find(room => room.room_id === (input as { roomId: string }).roomId)!, latest_seq: seq } };
     });
@@ -155,26 +155,32 @@ describe("watching a group chat on the app event stream", () => {
     const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
     const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
     return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; },
-      holdNextLookup: () => { let release!: () => void; gate = new Promise<void>(resolve => { release = resolve; }); return release; } };
+      holdNextLookup: () => {
+        let release!: () => void;
+        gate = new Promise<void>(resolve => { release = resolve; });
+        const reached = new Promise<void>(resolve => { reachedGate = resolve; });
+        return { release, reached };
+      } };
   }
 
-  // Sends a stream request over a real socket and disconnects once the server is handling it.
-  async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string) {
+  // Sends a stream request over a real socket and disconnects once `reached` says the server is handling it.
+  async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string, reached: Promise<void>) {
     const handled = new Promise<void>(resolve => s.app.server.once("request", (_request, response) => response.once("close", () => resolve())));
     const request = http.get(`${s.base}${path}`, { headers: { cookie: s.cookie } });
     request.on("error", () => {});
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await reached;
     request.destroy();
     await handled;
   }
-  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  /** Turns of the event loop, not milliseconds: the server's work after an event is in memory, so a few turns finish it however slow the machine. */
+  const settle = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)); };
 
   it("frees a watch whose client disconnected while the room was still being looked up", async () => {
     const s = await setup();
     const open: Response[] = [];
     try {
-      const release = s.holdNextLookup();
-      await abandon(s, "/api/events?group=shared");
+      const { release, reached } = s.holdNextLookup();
+      await abandon(s, "/api/events?group=shared", reached);
       release();
       await settle();
       // The abandoned request took no place, so every one of this person's watches still opens.
@@ -200,9 +206,7 @@ describe("watching a group chat on the app event stream", () => {
       // The assistant access check reads Hermes's roster before the stream opens.
       listBots: async () => { if (delay) { delay = false; asked(); await held; } return [botFixture({ id: "ranch" }), botFixture({ id: "planner" })]; } });
     try {
-      const abandoned = abandon(s, "/api/bots/ranch/events");
-      await reached;
-      await abandoned;
+      await abandon(s, "/api/bots/ranch/events", reached);
       release();
       await settle();
       expect(watch).not.toHaveBeenCalled();
@@ -211,8 +215,7 @@ describe("watching a group chat on the app event stream", () => {
       expect(response.status).toBe(200);
       expect(watch).toHaveBeenCalledTimes(1);
       await response.body?.cancel();
-      await settle();
-      expect(unwatch).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(unwatch).toHaveBeenCalledTimes(1));
     } finally { await s.app.close(); }
   });
 

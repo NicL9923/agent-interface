@@ -6,13 +6,12 @@ import { App } from '../src/App';
 import { api, ApiError, write } from '../src/client-api';
 import { contentHash } from '../src/app/draft-merge';
 import { defaultPreferences, type Bootstrap, type SavedDraft } from '../src/shared/types';
-import { advance, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
+import { advance, mountRoot, reducedMotionOnly, stubMatchMedia, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 import { DRAFT_POLL_MS } from '../src/app/use-draft';
 import { LIVE_POLL_MS } from '../src/app/stream-health';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
-vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 
 // The app server's draft rules, for one person: the phone acts on it directly.
 const drafts=new Map<string,SavedDraft>();
@@ -33,7 +32,7 @@ const key=(bot:string)=>`agent-interface:draft:one:${bot}`;
 const cached=(bot:string)=>JSON.parse(localStorage.getItem(key(bot))!);
 const draftPuts=(bot:string)=>vi.mocked(write).mock.calls.filter(([path,,method])=>path===`/bots/${bot}/draft`&&method==='PUT');
 beforeEach(()=>{
-  vi.useFakeTimers();vi.clearAllMocks();stubMatchMedia();
+  vi.useFakeTimers();vi.clearAllMocks();stubMatchMedia(reducedMotionOnly);
   history.replaceState(null,'','/');drafts.clear();
   boot={user:{id:'one',name:'One',email:'one@example.test'},household:[],preferences:{...structuredClone(defaultPreferences),startPage:'assistant'},
     bots:[{id:'shared',name:'Shared',shared:true,model:'test',activity:'idle'},{id:'other',name:'Other',shared:true,model:'test',activity:'idle'}],
@@ -311,7 +310,7 @@ describe('draft sync across devices',()=>{
       await advance(DRAFT_POLL_MS);
       expect(textarea().value).toBe('Mend the fence');
       expect(draftPuts('shared')).toEqual([]);
-    }finally{vi.unstubAllGlobals();stubMatchMedia();}
+    }finally{vi.unstubAllGlobals();stubMatchMedia(reducedMotionOnly);}
   });
 
   it('reads again when a newer revision is announced while a read is still on its way',async()=>{
@@ -333,7 +332,7 @@ describe('draft sync across devices',()=>{
       await act(async()=>stream.emit('draft',String(draft('shared').revision)));await advance(0);
       await act(async()=>release());await advance(0);
       expect(textarea().value).toBe('');
-    }finally{vi.unstubAllGlobals();stubMatchMedia();}
+    }finally{vi.unstubAllGlobals();stubMatchMedia(reducedMotionOnly);}
   });
 
   it('sends a save as an ordinary request when overlapping keepalive saves would exceed the browser budget',async()=>{
