@@ -9,6 +9,9 @@ enum DockItem: Hashable, Comparable {
   case uncertainSend
   /// Hermes refused the last message; it is back in the draft.
   case rejected(String)
+  /// A typed stop phrase ended Hermes's voice chat: it was accepted but nothing reached the assistant,
+  /// and the words are back in the draft. Not an error.
+  case notAdmitted(String)
   /// The last submission was interrupted.
   case interruptedSubmission
   /// The task was interrupted and must be reviewed before anything else is sent.
@@ -25,22 +28,26 @@ enum DockItem: Hashable, Comparable {
     case .connection: 0
     case .uncertainSend: 1
     case .rejected: 2
-    case .interruptedSubmission: 3
-    case .interruptionReview: 4
-    case .decisions: 5
-    case .heldText: 6
+    case .notAdmitted: 3
+    case .interruptedSubmission: 4
+    case .interruptionReview: 5
+    case .decisions: 6
+    case .heldText: 7
     }
   }
   static func < (lhs: DockItem, rhs: DockItem) -> Bool { lhs.priority < rhs.priority }
 
   /// The dock's items for the open chat's state, sorted.
   static func items(connectionLost: Bool, uncertain: Bool, receiptStatus: String?, receiptMessage: String?,
-    interrupted: Bool, decisions: Int, holdsText: Bool) -> [DockItem] {
+    receiptTurn: String?, interrupted: Bool, decisions: Int, holdsText: Bool) -> [DockItem] {
     var items: [DockItem] = []
     if connectionLost { items.append(.connection) }
     if uncertain { items.append(.uncertainSend) }
     if receiptStatus == "rejected" {
       items.append(.rejected(receiptMessage?.isEmpty == false ? receiptMessage! : "Hermes did not accept this message. Your draft is saved."))
+    }
+    if receiptStatus == "accepted" && receiptTurn == "none" {
+      items.append(.notAdmitted(receiptMessage?.isEmpty == false ? receiptMessage! : Self.notAdmittedMessage))
     }
     if receiptStatus == "interrupted" { items.append(.interruptedSubmission) }
     if interrupted { items.append(.interruptionReview) }
@@ -48,6 +55,8 @@ enum DockItem: Hashable, Comparable {
     if holdsText { items.append(.heldText) }
     return items.sorted()
   }
+  /// What the dock says when the receipt carries no message of its own, as on the web.
+  static let notAdmittedMessage = "Hermes ended its voice chat. Nothing was sent to the assistant."
   static func decisionsLabel(_ count: Int) -> String { count == 1 ? "1 decision waiting" : "\(count) decisions waiting" }
 }
 
@@ -73,7 +82,7 @@ struct StatusDock: View {
   }
   var body: some View {
     let items = DockItem.items(connectionLost: connectionLost, uncertain: store.pending != nil && !store.sending,
-      receiptStatus: store.receipt?.status, receiptMessage: store.receipt?.message,
+      receiptStatus: store.receipt?.status, receiptMessage: store.receipt?.message, receiptTurn: store.receipt?.turn,
       interrupted: store.activity == .interrupted, decisions: decisions, holdsText: store.holdsText(for: botId))
     if !items.isEmpty {
       VStack(alignment: .leading, spacing: 8) {
@@ -97,6 +106,9 @@ struct StatusDock: View {
       }.modifier(DockCard())
     case .rejected(let message):
       Text(message).font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)
+    case .notAdmitted(let message):
+      Text(message).font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("sendNotAdmitted")
     case .interruptedSubmission:
       Text("This submission was interrupted. Review its last actions before trying again.")
         .font(.footnote).foregroundStyle(Palette.attention).frame(maxWidth: .infinity, alignment: .leading)

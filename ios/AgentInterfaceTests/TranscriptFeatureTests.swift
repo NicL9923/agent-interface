@@ -304,6 +304,8 @@ import XCTest
     /// Status for a POST of a message, and the receipt status a 200 carries.
     var sendStatus = 200
     var receipt = "accepted"
+    /// The receipt's `turn`, when the add-on reports one.
+    var turn: String?
     /// The server's claim for the failed turn, as `retry` in the conversation.
     var claim: [String: Any]?
     /// Receipts for `GET /submissions/:id`, one per check; the last one repeats.
@@ -318,8 +320,11 @@ import XCTest
       if path == "/api/bots/bot/messages" {
         guard box.sendStatus == 200 else { return .init(status: box.sendStatus, body: #"{"error":"Refused"}"#) }
         let id = (FakeExchange.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["requestId"] as? String ?? ""
-        if box.receipt == "accepted" { box.state = "thinking" }
-        return .init(body: json(["requestId": id, "status": box.receipt, "messageId": id]))
+        // A stop phrase admitted nothing, so the failed turn stays failed.
+        if box.receipt == "accepted" && box.turn != "none" { box.state = "thinking" }
+        var receipt: [String: Any] = ["requestId": id, "status": box.receipt, "messageId": id]
+        if let turn = box.turn { receipt["turn"] = turn; if turn == "none" { receipt["message"] = "Hermes ended its voice chat." } }
+        return .init(body: json(receipt))
       }
       if path.hasPrefix("/api/submissions/") {
         let status = box.checks.count > 1 ? box.checks.removeFirst() : box.checks.first ?? "uncertain"
@@ -438,6 +443,35 @@ import XCTest
     XCTAssertNil(value.putRetriedMessageInDraft(try XCTUnwrap(value.retryRefusal?.message)))
     XCTAssertEqual(value.draft.text, "Keep my words\n\nIs the gate closed?")
     value.sendingRequests = [:]; value.pending = nil
+  }
+
+  func testARetryThatAdmittedNothingIsExplainedAsRefusedWithoutASentCue() async throws {
+    // A typed stop phrase ends Hermes's voice chat: accepted, but nothing reached the assistant.
+    let box = Box(); failedTurn(box); box.turn = "none"
+    let (value, _) = try await store(box)
+    await value.retry()
+    XCTAssertNil(value.retryOffer, "Hermes answers that ID the same way again")
+    XCTAssertEqual(value.retryRefusal?.text, "Hermes didn't take the retry. Hermes ended its voice chat.")
+    XCTAssertNil(value.haptic, "Nothing was sent, and nothing failed either")
+    // Every other turn an accepted retry reports is a retry that went through.
+    for turn in [nil, "started", "queued", "joined", "unknown"] {
+      let box = Box(); failedTurn(box); box.turn = turn
+      let (value, _) = try await store(box)
+      await value.retry()
+      XCTAssertNil(value.retryRefusal, "turn \(turn ?? "absent")")
+      XCTAssertEqual(value.haptic?.kind, .sent, "turn \(turn ?? "absent")")
+    }
+  }
+
+  func testTheServersClaimOfAStopPhraseRetryExplainsItselfAfterAReload() async throws {
+    let box = Box(); failedTurn(box)
+    box.claim = ["requestId": RetryTurn.requestId(botId: "bot", retryOf: "p", runId: "run-1"), "status": "accepted",
+      "turn": "none", "retryOf": "p"]
+    let (value, _) = try await store(box)
+    XCTAssertEqual(value.retryRefusal?.text, "Hermes didn't take the retry.")
+    box.lock.withLock { box.claim?["turn"] = "started" }
+    await value.refreshConversation()
+    XCTAssertNil(value.retryRefusal, "An accepted claim whose turn started is no refusal")
   }
 
   func testTheServersRefusedClaimExplainsItselfAfterAReload() async throws {

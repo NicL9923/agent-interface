@@ -1109,6 +1109,12 @@
         }
       } else if path.hasSuffix("/messages") {
         let id = body["requestId"] as? String ?? UUID().uuidString
+        // A typed stop phrase that ended Hermes's voice chat: accepted, but nothing was admitted or saved.
+        if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_STOP_PHRASE"] == "1" {
+          let receipt: [String: Any] = ["requestId": id, "status": "accepted", "turn": "none", "message": "Hermes ended its voice chat. Nothing was sent to the assistant."]
+          Self.receipts[id] = receipt
+          object = receipt
+        } else {
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_CHAT_CARDS"] == "1" {
           Self.chatCardMessages.append(["id": id, "role": "user", "text": body["text"] ?? "", "sender": ["id": "native-test", "name": "Local test member"]])
         }
@@ -1120,6 +1126,7 @@
         let receipt: [String: Any] = ["requestId": id, "status": "accepted", "messageId": id]
         Self.receipts[id] = receipt
         object = receipt
+        }
       } else if path.hasPrefix("/api/submissions/") {
         object =
           Self.receipts[request.url!.lastPathComponent] ?? [

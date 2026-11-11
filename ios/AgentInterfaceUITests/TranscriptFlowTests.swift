@@ -36,6 +36,19 @@ import XCTest
     return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
   }
 
+  func testATypedStopPhraseKeepsTheDraftAndSaysNothingWasSent() throws {
+    let app = launch(["AGENT_INTERFACE_UI_STOP_PHRASE": "1"])
+    let composer = app.textViews["messageComposer"]
+    XCTAssertTrue(composer.waitForExistence(timeout: 15), app.debugDescription)
+    composer.typeWhenFocused("stop")
+    app.buttons["sendMessage"].tapWhenReady()
+    let notice = app.staticTexts["sendNotAdmitted"]
+    XCTAssertTrue(notice.waitForExistence(timeout: 10), app.debugDescription)
+    XCTAssertEqual(notice.label, "Hermes ended its voice chat. Nothing was sent to the assistant.")
+    XCTAssertTrue(composer.wait(until: "value == %@", "stop"), "The words are still in the draft: \(composer.value ?? "")")
+    XCTAssertFalse(app.staticTexts["stop"].exists, "No sent copy of them is drawn in the transcript")
+  }
+
   func testQuestionOptionsAdvanceAndSendEveryAnswer() throws {
     let app = launch(["AGENT_INTERFACE_UI_QUESTION": "2"])
     let send = app.buttons["Send answers"]
