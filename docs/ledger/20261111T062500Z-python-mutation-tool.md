@@ -1,6 +1,6 @@
 # November 11 one tool for Python hand-break runs
 
-Branch `t3/python-mutation-tool`, started from `origin/main` at `08c8f96` on NicolasLaptop (Fedora 44, Linux x64, 32 cores), Python 3.14.10,
+Branch `t3/python-mutation-tool`, started from `origin/main` at `08c8f96` and rebased onto `589f542`, on NicolasLaptop (Fedora 44, Linux x64, 32 cores), Python 3.14.10,
 Node 24.22.2. No product code changed: the change is `.agents/tools/mutate-py.py`, its tests in `tests/mutate_py_test.py`, a line in
 `.agents/tools/README.md` and one in `AGENTS.md`.
 
@@ -92,7 +92,17 @@ py         pass    -       4m41s  47 files
 
 All 7 checks passed (17m49s total, 11m19s of it queued for heavy slots)
 
-The first run failed `ruff` on an unused `import time`, fixed before the run above.
+The first run failed `ruff` on an unused `import time`, fixed before the run above. That table is for the tree on `08c8f96`. After the rebase
+onto `589f542`, which brought in five commits that touch none of these files, the cheap and the Python checks ran again; `test`, `build`
+and `e2e` were not rerun, because no web or server file changed in the tool's diff:
+
+```
+check      result  queued  run    counts
+typecheck  pass    -       0.7s   -
+lint       pass    -       0.2s   -
+ruff       pass    -       0.0s   -
+py         pass    1m08s   5m03s  47 files
+```
 
 ## Not exercised
 
