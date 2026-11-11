@@ -5,7 +5,7 @@ import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { SEND_TIMING_GIVE_UP_MS, SEND_TIMING_HELD, SendTimings, sendTimingHeader, type SendRecord } from "../src/server/send-timing.js";
 import type { Log } from "../src/server/logging.js";
-import type { Runtime, SubmissionReceipt, TurnWatcher } from "../src/shared/types.js";
+import type { AdmissionTurn, Runtime, SubmissionReceipt, TurnWatcher } from "../src/shared/types.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000";
@@ -32,8 +32,8 @@ function timings() {
   const frame = (event: "start" | "text" | "end", session = "live") => tracker.frame(session, event);
   /** A fresh conversation read of the shared assistant found run open on its session. */
   const read = (run: string | undefined, running = true, session = "live") => tracker.run(session, "shared", run, running);
-  const admit = (record: SendRecord, runId: string | undefined, admitted = 120, steered = false) =>
-    tracker.admitted(record, steered ? "steer" : "messages", steered, { arrival: record.arrival, hermesStart: record.arrival + 40, admitted }, runId);
+  const admit = (record: SendRecord, runId: string | undefined, admitted = 120, steered = false, turn?: AdmissionTurn) =>
+    tracker.admitted(record, steered ? "steer" : "messages", steered, { arrival: record.arrival, hermesStart: record.arrival + 40, admitted }, runId, turn);
   return { tracker, lines, timing, frame, read, admit, at: (ms: number) => { clock = ms; } };
 }
 type Fixture = ReturnType<typeof timings>;
@@ -158,6 +158,34 @@ describe("SendTimings", () => {
     at(330); admit(steer, "run", 330, true);
     at(350); frame("text");
     expect(timing()).toEqual([expect.objectContaining({ route: "steer", steered: true, firstFrameMs: 50, firstLiveMs: 20, ended: "measured" })]);
+  });
+
+  // A read names the send's run while another turn runs, so that turn's text would pass for the send's own.
+  it("logs a send whose turn did not start at the answer, with no moments, though its run streamed", () => {
+    for (const turn of ["queued", "none", "unknown"] as const) {
+      const { tracker, lines, timing, frame, read, admit, at } = timings();
+      const send = tracker.begin("shared", "send", 0);
+      at(10); frame("start"); read("run");
+      at(50); frame("text"); tracker.written("shared", "run");
+      at(120); admit(send, "run", 120, false, turn);
+      expect(timing()).toEqual([{ route: "messages", botId: "shared", requestId: "send", steered: false, turn,
+        prepareMs: 40, admissionMs: 120, firstFrameMs: undefined, firstLiveMs: undefined, ended: "not-started" }]);
+      expect(lines[0].message).toBe("Send timing: Hermes did not start the send's turn");
+      at(200); frame("text"); tracker.written("shared", "run");
+      expect(lines).toHaveLength(1);
+    }
+  });
+
+  it("measures a send Hermes put into the running turn as a steer, and a started one as before", () => {
+    for (const [turn, steered] of [["joined", true], ["started", false]] as const) {
+      const { tracker, timing, frame, read, admit, at } = timings();
+      at(10); frame("start"); read("run");
+      const send = tracker.begin("shared", "send", 100);
+      at(120); admit(send, "run", 120, false, turn);
+      at(150); frame("text");
+      at(170); tracker.written("shared", "run");
+      expect(timing()).toEqual([expect.objectContaining({ route: "messages", steered, turn, firstFrameMs: 50, firstLiveMs: 70, ended: "measured" })]);
+    }
   });
 
   it("treats text after a turn ended, with no start seen, as a new turn", () => {
@@ -481,6 +509,15 @@ describe("send timing through the app", () => {
     await vi.waitFor(() => expect(s.timingLines()).toHaveLength(1));
     expect(s.timingLines()[0].sendTiming).toMatchObject({ route: "steer", steered: true });
     await stream.close();
+  });
+
+  it("logs a send Hermes queued behind another turn as not started, from the route's receipt", async () => {
+    const s = await setup({ turn: "queued" });
+    const response = await post(s.base, s.headers, "messages");
+    expect(await response.json()).toMatchObject({ status: "accepted", turn: "queued" });
+    await vi.waitFor(() => expect(s.timingLines()).toHaveLength(1));
+    expect(s.timingLines()[0].sendTiming).toMatchObject({ route: "messages", turn: "queued", ended: "not-started" });
+    expect(s.timingLines()[0].sendTiming).not.toHaveProperty("firstFrameMs");
   });
 
   it("does not time a send Hermes did not admit", async () => {

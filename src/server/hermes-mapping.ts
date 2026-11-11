@@ -1,4 +1,4 @@
-import type { ActivityState, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall, TurnRows } from '../shared/types.js';
+import type { ActivityState, AdmissionTurn, Bot, Conversation, FileRef, Message, SubmissionReceipt, ToolCall, TurnRows } from '../shared/types.js';
 import type { ExplicitLoginRequest, SecureRequest } from '../shared/vault.js';
 import { computerHandoffMethod as COMPUTER_HANDOFF, terminalCommandPattern, terminalRequestLimits, terminalRequestMethod as TERMINAL_REQUEST, type ComputerHandoff, type TerminalRequest } from '../shared/computer.js';
 import { connectionRequestMethod as CONNECTION_REQUEST, requestableConnectionId, type ConnectionRequest } from '../shared/integrations.js';
@@ -186,7 +186,24 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     lastMessage: preview(row.canonical_session),
   };
 }
-export function receipt(value: Wire): SubmissionReceipt {
+const reportedTurns: readonly unknown[] = ['queued', 'joined', 'none', 'unknown'] satisfies AdmissionTurn[];
+/**
+ * What an accepted new task's admission answer says about its turn. The add-on sends `turn` only when Hermes did
+ * not start the turn, so a missing one means started only from an add-on that reports turns (`reportsTurn`, its
+ * `admission_turn` capability); from an older one, and from a receipt lookup, which never carries it, the turn
+ * stays unknown to clients. A steer carries `steered` instead, and a value this server does not know is `unknown`.
+ */
+function admissionTurn(value: Wire, reportsTurn: boolean): AdmissionTurn | undefined {
+  if (value.status !== 'accepted' || value.steering === true) return undefined;
+  if (value.turn === undefined) return reportsTurn ? 'started' : undefined;
+  return reportedTurns.includes(value.turn) ? value.turn : 'unknown';
+}
+/**
+ * A receipt from the add-on's answer. An admission answer passes whether the add-on reports turns and the
+ * structural version when the answer arrived; a lookup passes neither.
+ */
+export function receipt(value: Wire, admission?: {reportsTurn: boolean; version: string}): SubmissionReceipt {
+  const turn = admissionTurn(value, admission?.reportsTurn === true);
   return {
     requestId: value.requestId,
     status: value.status,
@@ -195,6 +212,8 @@ export function receipt(value: Wire): SubmissionReceipt {
     message: value.message,
     // The add-on's admission decision. An older add-on sends none, which stays unknown.
     ...(value.status === 'accepted' && typeof value.steering === 'boolean' ? {steered: value.steering} : {}),
+    ...(turn ? {turn} : {}),
+    ...(admission && value.status === 'accepted' ? {admittedVersion: admission.version} : {}),
   };
 }
 const approvalChoiceNames: readonly ApprovalChoice[] = ['once', 'session', 'always', 'deny'];

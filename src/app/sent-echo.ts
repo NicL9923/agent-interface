@@ -34,6 +34,9 @@ export type SentEcho = {
   ran?: boolean;
   /** Hermes admitted it into the task that was already running. */
   steered?: boolean;
+  /** What Hermes's answer said about its turn, and the version past its admission; see SubmissionReceipt. */
+  turn?: SubmissionReceipt["turn"];
+  admittedVersion?: string;
   /** The chat showed work when it was sent, so it can only join that work or wait behind it. */
   duringWork?: boolean;
   /** When the request last went out, and whether it has been out longer than SENDING_ROW_MS. */
@@ -89,7 +92,10 @@ export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, con
   } else if (next.status !== "accepted") {
     // A refused, interrupted or abandoned send leaves only the draft it came from.
     if (receipt?.requestId !== next.request.requestId || receipt.status !== "accepted") return null;
-    next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now, ...(receipt.steered ? { steered: true } : {}) };
+    // A typed stop phrase ended Hermes's voice chat and admitted nothing, so no copy is coming; the composer says why.
+    if (receipt.turn === "none") return null;
+    next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now, ...(receipt.steered ? { steered: true } : {}),
+      ...(receipt.turn ? { turn: receipt.turn } : {}), ...(receipt.admittedVersion ? { admittedVersion: receipt.admittedVersion } : {}) };
   }
   // The handoff's bound runs while another chat is open, so a return never finds the echo still standing for a turn.
   if (next.copiedAt !== undefined && now - next.copiedAt >= COPY_HANDOFF_MS) return null;
@@ -128,15 +134,16 @@ export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
  * round trip later, and Hermes's own report takes over the same row. It ends when the send is refused,
  * fails, is given up or comes back uncertain (the echo leaves or reads as unconfirmed), while its request
  * has been out longer than SENDING_ROW_MS (it returns if Hermes then accepts it), when Hermes steers it
- * into a running task, when the chat shows the turn's work, when Hermes's copy is followed by a reply or by
- * nothing for COPY_HANDOFF_MS, when a read after the copy's reports the turn finished, failed or interrupted, and at the latest
+ * into a running task or puts it into the running turn (`joined`), when a typed stop phrase admitted nothing
+ * (the echo leaves), when the chat shows the turn's work, when Hermes's copy is followed by a reply or by
+ * nothing for COPY_HANDOFF_MS, when a read reports this turn finished, failed or interrupted (`settledHere`), and at the latest
  * when the echo's own patience runs out. While the chat shows work, that work's row is already there, so a
  * message sent then never adds one. Both bounds are read from `now`, so a render never shows a row whose bound
  * passed before its timer stepped the echo, as on returning from another chat.
  */
 export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation | null, now: number): boolean {
   if (!conversation || active(conversation.activity.state)) return false;
-  return echoes.some(echo => echo.request.botId === conversation.botId && !echo.duringWork && !echo.steered && !echo.ran
+  return echoes.some(echo => echo.request.botId === conversation.botId && !echo.duringWork && !joinedWork(echo) && !echo.ran
     && (echo.status === "sending" ? !echo.slow && now - (echo.sendingSince ?? now) < SENDING_ROW_MS
       : echo.status === "accepted" && (!echoShown(echo, conversation)
         || handingOff(echo, conversation) && now - (echo.copiedAt ?? now) < COPY_HANDOFF_MS)));
@@ -147,19 +154,31 @@ export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation
  * announced twice. It ends with the report, with a reply after the copy, or after COPY_HANDOFF_MS.
  */
 function handingOff(echo: SentEcho, conversation: SavedConversation) {
-  return echo.status === "accepted" && !echo.duringWork && !echo.steered && !echo.ran && !active(conversation.activity.state)
+  return echo.status === "accepted" && !echo.duringWork && !joinedWork(echo) && !echo.ran && !active(conversation.activity.state)
     && conversation.messages.at(-1)?.role === "user" && !settledHere(echo, conversation);
 }
+/** Hermes put the message into work already running: steered by the add-on, or into the running turn by Hermes. */
+const joinedWork = (echo: SentEcho) => echo.steered || echo.turn === "joined";
 /**
  * Whether the chat reports this message's turn finished, failed or interrupted, so its own row, with its Retry,
  * replaces the early one. While Hermes admits a message it has saved the copy but not opened the run, and a read
  * then still reports the turn before. Nothing in that report names its turn: a settled one carries no run ID, and
- * what the chat showed at the send may be a cached copy or nothing. So a settled report counts as this turn's only
- * from a read that began after the one that brought the copy, by the server's structural version. In the read that
- * brought the copy it never does; the next read or the handoff bound ends the row.
+ * what the chat showed at the send may be a cached copy or nothing.
+ *
+ * When Hermes's answer says the turn started, a read the server's structural version orders after the answer's
+ * arrival (`admittedVersion`) was asked after admission finished, so the run it reports is this one: its settled
+ * report counts at once, also in the read that brings the copy, and an earlier read's never does, however late it
+ * arrives. Reads from another server process do not compare and fall back to the rule below.
+ *
+ * Otherwise, as from an older add-on, a queued or unknown turn, or a receipt without the version, a settled report
+ * counts only from a read that began after the one that brought the copy. In the read that brought the copy it
+ * never does; the next read or the handoff bound ends the row. Two reads asked inside one admission, the second
+ * ordered after the first, still end the row on the turn before's report there.
  */
 function settledHere(echo: SentEcho, conversation: SavedConversation) {
   if (!["done", "failed", "interrupted"].includes(conversation.activity.state)) return false;
+  const admitted = echo.turn === "started" ? compareVersions(conversation.version, echo.admittedVersion) : undefined;
+  if (admitted !== undefined) return admitted > 0;
   return (compareVersions(conversation.version, echo.copiedVersion) ?? 0) > 0;
 }
 /** The conversation with its echoes at the end, as the person's own messages. */

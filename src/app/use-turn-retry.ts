@@ -59,9 +59,10 @@ export function useTurnRetry({ botId, userId, canonical, blocked, resendable, re
   const settled = local?.state === "settled" || !!claim && claim.status !== "uncertain";
   const checking = !settled && local?.state !== "sending" && (local?.state === "checking" || claim?.status === "uncertain");
   const followed = local?.requestId ?? claim?.requestId;
-  // A refused retry keeps its ID, which Hermes refuses again, so the message box sends it anew.
+  // A refused retry keeps its ID, which Hermes refuses again, so the message box sends it anew. So does one that a
+  // typed stop phrase used to end Hermes's voice chat: Hermes answers that ID the same way, and nothing reached the assistant.
   const outcome = local?.state === "settled" ? local.receipt : claim;
-  const refusal = target && outcome && (outcome.status === "rejected" || outcome.status === "interrupted")
+  const refusal = target && outcome && (outcome.status === "rejected" || outcome.status === "interrupted" || outcome.status === "accepted" && outcome.turn === "none")
     ? { text: outcome.message ? `${refused} ${outcome.message}` : refused, message: target } : undefined;
   const settle = (forTurn: string, result: SubmissionReceipt) => record(forTurn, result.status === "uncertain"
     ? { state: "checking", requestId: result.requestId }
