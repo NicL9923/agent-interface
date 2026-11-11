@@ -51,3 +51,40 @@ file, `tests/message-origin.test.ts` and `tests/app-ui.test.ts` run, then restor
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 202 files, 3443 tests
 passed. `npm run test:e2e` (`E2E_PORT=4580`): 29 passed. An earlier full run of this branch failed the existing
 `app-ui` announcement test, described above; it passed after the fix.
+
+## Review fix: a last segment that is still streaming
+
+Merged `origin/main` at `2f1670e` first, as its own commit. Review found that a read taken while the last segment was
+still streaming (`src/server/hermes.ts` adds the streaming row to a conversation read while the assistant works)
+dropped the held row and every row before it. Held "Intro.", a tool, "Answ" streaming, then saved "Answer." read only
+"Answer."; a turn that finished with its last segment unsaved read only that segment.
+
+`watchReplies` now builds `held` from `waitingBefore` whether or not the held row was saved, and adds the held row's
+own text only when it is saved. In the unsaved branch `before` is the held parts and the turn's saved speakable rows
+after the last one seen, and `waitingBefore` carries them while the assistant still works. The held reply is dropped
+when the newest turn is not the one it belongs to, so the watch records that turn (`waitingTurn`) in place of the old
+row-position check, which could not place an unsaved row that had left the conversation. The newest turn is the unsaved
+tail's, or else the newest saved row's.
+
+### Tests and red proof
+
+`tests/reply-announcement.test.ts`, "while its last segment is still streaming" (5): the held segment kept when the saved
+last segment replaces the streaming one; kept through reads that see it grow, with a saved row and a new tail between;
+the finished turn with an unsaved last segment, read once and not again when it is saved; saved rows ahead of a tail no
+read held; a held segment of an earlier turn dropped when the next turn's tail streams. Run against the committed code,
+four of the five fail (the fifth, the earlier-turn drop, already held). Each line broken by hand, the new file,
+`tests/message-origin.test.ts` and `tests/app-ui.test.ts` run, then restored:
+
+- `before = parts` in the unsaved branch replaced by `[]`: 4 failed.
+- the held turn check replaced by `watch.waiting`: 2 failed (earlier turn dropped, saved and streaming).
+- `waitingTurn` not carried: 6 failed.
+- `newest` ignoring the unsaved tail: 2 failed, plus the existing `app-ui` "reads an identical reply in the next turn".
+- `parts` needing an arrived saved row: 2 failed.
+- the held row's text added whether or not it is saved: 2 failed, plus the existing `app-ui` "reads the finished reply
+  when Hermes swaps its in-flight row".
+- `waitingBefore` not carried in the watch: 4 failed.
+
+### Checks
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 203 files, 3537 tests
+passed. `npm run test:e2e` (`E2E_PORT=4580`): 38 passed. The iOS copy of this logic did not change and did not run.

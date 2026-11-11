@@ -114,4 +114,41 @@ describe("a reply that grows across reads", () => {
     const next = [...first, question("q2"), say("b", "Second answer.")];
     expect(announced(waiting.watch, next).said).toBe("Second answer.");
   });
+
+  describe("while its last segment is still streaming", () => {
+    const streaming = (text: string): Message => ({ id: "run-inflight", role: "assistant", text });
+    const intro = [question(), say("a", "Intro."), tool("t")];
+
+    it("keeps the held segment when the saved last segment replaces the streaming one", () => {
+      const held = announced({ lastId: "q" }, [question(), say("a", "Intro.")], "working");
+      const streamed = announced(held.watch, [...intro, streaming("Answ")], "working");
+      expect(streamed.reply).toBeUndefined();
+      expect(announced(streamed.watch, [...intro, say("b", "Answer.")]).said).toBe("Intro. Answer.");
+    });
+
+    it("keeps it through every read that sees the last segment grow", () => {
+      let { watch } = announced(announced({ lastId: "q" }, [question(), say("a", "Intro.")], "working").watch, [...intro, streaming("Answ")], "working");
+      ({ watch } = announced(watch, [...intro, streaming("Answer, ple")], "working"));
+      ({ watch } = announced(watch, [...intro, say("b", "Answer, please."), tool("u"), streaming("More")], "working"));
+      expect(announced(watch, [...intro, say("b", "Answer, please."), tool("u"), say("c", "More.")]).said).toBe("Intro. Answer, please. More.");
+    });
+
+    it("reads the held and saved segments with the streaming last one when the turn finishes before it is saved", () => {
+      const held = announced({ lastId: "q" }, [question(), say("a", "Intro.")], "working");
+      const done = announced(held.watch, [...intro, say("m", "Middle."), streaming("Answer.")]);
+      expect(done.said).toBe("Intro. Middle. Answer.");
+      expect(done.reply?.id).toBe("run-inflight");
+      // Saved later, it is the same words and is not read again.
+      expect(announced(done.watch, [...intro, say("m", "Middle."), say("b", "Answer.")]).reply).toBeUndefined();
+    });
+
+    it("reads the saved rows ahead of a streaming tail that no read held", () => {
+      expect(announced({ lastId: "q" }, [question(), say("a", "Intro."), tool("t"), streaming("Answer.")]).said).toBe("Intro. Answer.");
+    });
+
+    it("drops a held segment of an earlier turn when the next turn's reply is streaming", () => {
+      const held = announced({ lastId: "q" }, [question(), say("a", "Intro.")], "working");
+      expect(announced(held.watch, [question(), say("a", "Intro."), question("q2"), streaming("Second answer.")]).said).toBe("Second answer.");
+    });
+  });
 });
