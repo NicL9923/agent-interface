@@ -930,6 +930,8 @@ acceptance that needs a physical phone or configured external service. Tests wit
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
+`.agents/tools/check-all` runs every local check in CI's order, chooses a free browser-suite port and queues the heavy suites across worktrees; see the [tools index](.agents/tools/README.md).
+
 Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the
 Mac mini using Xcode 27.0. The isolated Hermes probes remain a separate

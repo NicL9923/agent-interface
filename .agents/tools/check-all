@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Run the full check battery in this worktree. The logic and the full description are in check_all.py."""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_all import main  # noqa: E402
+
+sys.exit(main(sys.argv[1:]))
