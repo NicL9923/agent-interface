@@ -204,6 +204,43 @@ it("names Hermes by its commit date, or a short hash without one", async () => {
   expect(container.textContent).toContain(`Connected · Hermes released ${date}`);
 });
 
+describe("opened at the sign-out question", () => {
+  /** Native dialogs stack in the order they open, so the last one open is the one on top. */
+  const trackTopLayer = () => {
+    const stack: HTMLDialogElement[] = [];
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; stack.push(this); } });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; stack.splice(stack.indexOf(this), 1); } });
+    return stack;
+  };
+
+  it("puts the confirmation above the sheet and focuses its default answer", async () => {
+    const stack = trackTopLayer();
+    props.destination = { kind: "signout" };
+    await render();
+    expect(stack.map(dialog => dialog.getAttribute("role") ?? "sheet")).toEqual(["sheet", "alertdialog"]);
+    const confirmation = stack.at(-1)!;
+    expect(confirmation.querySelector("h2")?.textContent).toBe("Sign out?");
+    expect(document.activeElement).toBe(confirmation.querySelector("[data-confirm-default]"));
+    expect(props.onSignOut).not.toHaveBeenCalled();
+  });
+
+  it("returns to the sheet's Sign out row when the question is declined", async () => {
+    const stack = trackTopLayer();
+    props.destination = { kind: "signout" };
+    await render();
+    await act(async () => button("Stay signed in").click());
+    expect(stack).toHaveLength(1);
+    expect(document.activeElement?.id).toBe("settings-signout");
+  });
+
+  it("opens the sheet alone, with its title focused, for any other destination", async () => {
+    const stack = trackTopLayer();
+    await render();
+    expect(stack).toHaveLength(1);
+    expect(document.activeElement?.id).toBe("settings-title");
+  });
+});
+
 describe("keyboard shortcuts row", () => {
   const row = () => Array.from(container.querySelectorAll<HTMLButtonElement>("button.settings-row"))
     .find(item => item.querySelector(".row-label")?.textContent === "Keyboard shortcuts")!;

@@ -44,6 +44,26 @@ test("the app opens offline from the service worker, then recovers when the netw
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
 });
 
+test("the sign-out question opens above Settings and holds focus", async ({ page }) => {
+  await signIn(page);
+  await page.getByRole("button", { name: "Account" }).click();
+  await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
+  const question = page.getByRole("alertdialog", { name: "Sign out?" });
+  await expect(question).toBeVisible();
+  // The top layer stacks dialogs in the order they opened, so the point where the question is drawn
+  // belongs to the question only if it opened after the sheet that holds it.
+  const onTop = await question.evaluate(dialog => {
+    const box = dialog.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return { hit: !!hit && dialog.contains(hit), focused: dialog.contains(document.activeElement) };
+  });
+  expect(onTop).toEqual({ hit: true, focused: true });
+  // Declining returns to Settings, whose Sign out row is focused again.
+  await question.getByRole("button", { name: "Stay signed in" }).click();
+  await expect(question).toBeHidden();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeFocused();
+});
+
 test("a member opens Usage from the profile menu and sees each account once", async ({ page }) => {
   await signIn(page);
   await page.getByRole("button", { name: "Account" }).click();
@@ -93,8 +113,7 @@ test("a sign-out or sign-in in one tab changes the account every other tab shows
   await other.bringToFront();
   await other.getByRole("button", { name: "Account" }).click();
   await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
-  // This checks the tabs, not the sheet's layout, so the press goes to the button whatever overlaps it.
-  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).dispatchEvent("click");
+  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
   await expect(page.getByText("Ranch Hand")).toHaveCount(0);
 
