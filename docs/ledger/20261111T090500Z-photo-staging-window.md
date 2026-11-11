@@ -170,3 +170,19 @@ holds none, and the rerun killed all four.
 | the entry's text is not checked against the send's (before the test fix) | survived |
 | the entry's text is not checked against the send's (after) | failed (the test that is not the last entry) |
 | no entry still said missing | failed |
+
+### Checks
+
+`.agents/tools/check-all --py always` on the committed tree (the commit before this entry), over the merge of
+`origin/main` at `fe4026f0`:
+
+| Check | Result | Queued | Run | Counts |
+| --- | --- | --- | --- | --- |
+| typecheck | pass | - | 0.7s | - |
+| lint | pass | - | 0.2s | - |
+| ruff | pass | - | 0.0s | - |
+| test | pass | - | 17.6s | 209 files, 3779 tests |
+| build | pass | - | 2.7s | 894 modules |
+| e2e | pass | 13.5s | 1m58s | 55 tests |
+| py | pass | - | 5m16s | 48 files |
+
