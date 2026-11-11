@@ -113,6 +113,8 @@ class Journal:
     def __init__(self, path):
         self.epoch = uuid.uuid4().hex
         self.lock = threading.RLock()
+        # Photos a send's turn ran without, by request ID, until the answer that saves them has been written.
+        self.images_missing = {}
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -180,9 +182,32 @@ class Journal:
         value = {"requestId": request_id, "status": row[0], "runId": row[1], "userRowId": row[2], "senderId": row[3], "steering": bool(row[4])}
         # The turn the saved answer carried, for a caller whose answer was lost. A receipt saved before the add-on
         # stored a started turn, a steer and a refusal carry none.
-        if row[5] and (stored := json.loads(row[5]).get("turn")) is not None:
-            value["turn"] = stored
+        stored = json.loads(row[5]) if row[5] else {}
+        if stored.get("turn") is not None:
+            value["turn"] = stored["turn"]
+        # The photos this send's turn ran without: the answer's, or one noted since (``note_images_missing``).
+        missing = self.images_missing.get(request_id, stored.get("imagesMissing"))
+        if type(missing) is int and missing > 0:
+            value["imagesMissing"], value["message"] = missing, images_missing_message(missing)
         return value
+
+    def note_images_missing(self, request_id, count):
+        """Say that this send's turn ran without ``count`` of its photos, in its receipt and every lookup of it.
+
+        The turn can find them gone before the add-on has saved Hermes's answer, which then reads this; after, the
+        saved answer is amended. Never lowers a count already noted.
+        """
+        with self.lock, self.db:
+            row = self.db.execute("SELECT admission_response FROM receipts WHERE request_id=?", (request_id,)).fetchone()
+            if row is None or count <= 0:
+                return
+            stored = json.loads(row[0]) if row[0] else None
+            count = max(count, self.images_missing.get(request_id, 0), (stored or {}).get("imagesMissing") or 0)
+            if stored is None:
+                self.images_missing[request_id] = count
+                return
+            stored.update(imagesMissing=count, message=images_missing_message(count))
+            self.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(stored), request_id))
 
     def last_terminal(self, profile, sid, stored):
         """The newest settled outcome of the session, or of its canonical owner after a cold resume."""
@@ -579,6 +604,12 @@ SEND_WORKERS = 4
 # gateway owns queues it in that owner's queue (methods_prompt.py _submit_to_ledger_owner). "steered"
 # and "redirected" put it into the running turn, which gives it no turn of its own. See admission_turn.
 ADMISSION_TURN = {"queued": "queued", "steered": "joined", "redirected": "joined"}
+
+
+def images_missing_message(count):
+    """What a receipt says when the turn that ran a send did not have ``count`` of its photos."""
+    return (f"{'Your photo was' if count == 1 else f'{count} of your photos were'} not sent with this message: "
+            "another task took them first. Check the reply and send them again.")
 
 
 def admission_turn(result):
@@ -1118,7 +1149,7 @@ class Bridge:
             sent = self.turn_requests.pop(rid, None)
         if sent is None or sent[0] != sid or sent[2] != text or display_kind is not None or author is not None:
             return None
-        return {"sid": sid, "request_id": sent[1], "used": False}
+        return {"sid": sid, "request_id": sent[1], "used": False, "images": sent[3]}
 
     def install_turn_claims(self):
         server = self.server
@@ -1131,10 +1162,78 @@ class Bridge:
             # finished, and must never pass that turn's receipt to its own.
             token = self.turn_claim.set(claim)
             try:
+                if claim is not None and claim["images"]:
+                    self.check_turn_images(session, claim)
                 return original(rid, sid, session, *args, **kwargs)
             finally:
                 self.turn_claim.reset(token)
         server._run_prompt_submit = run
+
+    def check_turn_images(self, session, claim):
+        """Note on the receipt each photo of the send that is no longer staged as its turn starts.
+
+        Hermes's prompt.submit marks the session running and returns; the turn's own thread takes the staged photos
+        after that, and only a turn that is already running can have taken them first. At the turn's start they are
+        still staged unless another client's turn, or a prompt that found the session running, took them. Never
+        stops the turn: it runs, and the receipt says it ran without them.
+        """
+        try:
+            gone = self.photos_gone(session, claim["images"])
+            if gone:
+                logging.getLogger(__name__).warning("A send's turn started without %d of its photos", len(gone))
+                self.journal.note_images_missing(claim["request_id"], len(gone))
+        except Exception:
+            logging.getLogger(__name__).exception("Checking a send's photos at its turn's start failed")
+
+    def photos_not_sent(self, sid, staged, turn, text):
+        """The photos of a send whose prompt found a turn running that did not go with it.
+
+        Hermes puts a prompt into a running turn as text only, so every photo of a ``joined`` send stayed behind, and
+        is taken back here: it would otherwise run in the next turn, whoever's it is. A ``queued`` prompt keeps the
+        photos staged when it arrived with it, in its own queue entry (``_handle_busy_submit``, ``session_auto_continue.py:
+        418-439`` at ``ed1afb0``), so one found in neither the session's list nor that entry went to the turn that
+        took the session first.
+
+        Another client's prompt that was handled as busy first moved every staged photo into its own entry, so only
+        our entry counts: the last one added, the one whose text ends with ours (``_enqueue_prompt`` appends a new
+        entry, or merges text-only into the head). When the last entry is not ours, ours was never queued or has
+        drained already, and nothing is said. The one window left is another entry that ends with the very same text.
+        """
+        session = self.server._sessions.get(sid)
+        if session is None:
+            return []
+        if turn == "joined":
+            self.unstage_images(sid, staged)
+            return list(staged)
+        with session["history_lock"]:
+            entries = [entry for entry in (session.get("queued_prompt"), *(session.get("queued_prompts") or [])) if isinstance(entry, dict)]
+            ours = entries[-1] if entries else None
+            if ours is None or not isinstance(ours.get("text"), str) or not ours["text"].rstrip().endswith(text.rstrip()):
+                return []
+            kept = [*session.get("attached_images", []), *(ours.get("image_paths") or [])]
+        gone = []
+        for image in staged:
+            if image in kept:
+                kept.remove(image)
+            else:
+                gone.append(image)
+        return gone
+
+    @staticmethod
+    def photos_gone(session, staged):
+        """The photos of ``staged`` the session no longer lists, each listed entry counted once.
+
+        Under history_lock, which each snapshot of the list takes for itself alone.
+        """
+        with session["history_lock"]:
+            listed = list(session.get("attached_images", []))
+        gone = []
+        for image in staged:
+            if image in listed:
+                listed.remove(image)
+            else:
+                gone.append(image)
+        return gone
 
     def bind_turn_row(self, sid, payload):
         """Bind the receipt this thread's turn claimed to the prompt row its completion reports.
@@ -1781,6 +1880,7 @@ class Bridge:
             # A new task's turn, saved with the answer so a replay and the receipt lookup say the same: see admission_turn.
             value["turn"] = turn
         self.journal.db.execute("UPDATE receipts SET admission_response=? WHERE request_id=?", (json.dumps(value), request_id))
+        self.journal.images_missing.pop(request_id, None)
         return self.server._ok(rid, value)
 
     def stage_images(self, sid, profile, attachments, staged):
@@ -1821,6 +1921,11 @@ class Bridge:
                             added.remove(image)
                     # One entry at most: an identical path another client attached meanwhile is not told apart.
                     mine = next((image for image in reversed(added) if image in own), None)
+                    if mine is None and isinstance(answered, str):
+                        # Hermes answered the path it appended, so the entry was added even when a turn another client
+                        # started took the list while native read the image's header. The check before the prompt
+                        # finds it gone.
+                        mine = answered
                     if mine is not None:
                         staged.append(mine)
 
@@ -1842,14 +1947,15 @@ class Bridge:
                 if image in snapshot:
                     del images[len(snapshot) - 1 - snapshot[::-1].index(image)]
 
-    def turn_request(self, sid, request_id, text):
+    def turn_request(self, sid, request_id, text, images=()):
         """A request ID of its own for the prompt.submit that carries this receipt's prompt.
 
-        Registered before Hermes is called: the turn can start before the call returns.
+        Registered before Hermes is called: the turn can start before the call returns. ``images`` are the photos
+        staged for it, which its turn finds still staged as it starts.
         """
         native_rid = "agent-interface-submit:" + uuid.uuid4().hex
         with self.turn_requests_lock:
-            self.turn_requests[native_rid] = (sid, request_id, text)
+            self.turn_requests[native_rid] = (sid, request_id, text, tuple(images))
         return native_rid
 
     def turn_started(self, sid, native_rid, streaming):
@@ -2015,7 +2121,24 @@ class Bridge:
             timed("journal", mark)
             return response
         timed("staging", mark)
-        native_rid = self.turn_request(sid, request_id, text) if not steering else "extension-native"
+        native_rid = self.turn_request(sid, request_id, text, staged) if not steering else "extension-native"
+        # Nothing but Hermes's own call follows this check. A photo gone from the session's list since it was attached
+        # went to a turn another client started in between, and the prompt would run, or queue, without it.
+        session = self.server._sessions.get(sid)
+        gone = self.photos_gone(session, staged) if staged and session is not None else []
+        if gone:
+            mark = time.perf_counter()
+            self.turn_started(sid, native_rid, False)
+            self.unstage_images(sid, staged)
+            logging.getLogger(__name__).warning("A send's photos were taken before its prompt was sent: %d of %d", len(gone), len(staged))
+            with journal.lock, journal.db:
+                journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
+                response = self.admitted(rid, request_id, "Another task took your photo before this message was sent. Nothing was sent. Keep this draft and send it again.")
+                # In the same transaction as the refusal, so a reader never sees it settled and still admitting;
+                # admit's finally discards it too, later and outside the lock.
+                self.admitting.discard(request_id)
+            timed("journal", mark)
+            return response
         mark = time.perf_counter()
         try:
             method = "session.steer" if steering else "prompt.submit"
@@ -2058,6 +2181,10 @@ class Bridge:
             # next turn would take them (methods_prompt.py:835-836 at ed1afb0, :580 at b9cb268 and d23cc6b). An
             # unknown answer keeps them: a turn Hermes started takes them on its own thread after it answers.
             self.unstage_images(sid, staged)
+        if staged and turn in ("queued", "joined") and (unsent := self.photos_not_sent(sid, staged, turn, text)):
+            # A turn that was running when the prompt arrived: the photos did not go with it. Said in the receipt below.
+            logging.getLogger(__name__).warning("A send Hermes answered %s went without %d of its %d photos", result.get("status"), len(unsent), len(staged))
+            journal.note_images_missing(request_id, len(unsent))
         if not steering:
             self.turn_started(sid, native_rid, result.get("status") == "streaming")
         with journal.lock, journal.db:
