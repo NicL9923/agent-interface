@@ -105,9 +105,22 @@ answer is saved, and the answer is saved under the same lock, so the line was re
 
 ## Checks
 
-`.agents/tools/check-all --py always` on the committed tree: the table is in the final report. Before it, the Python files
-that exercise admission passed: `hermes_turn_binding_test.py` (39), `hermes_send_lanes_test.py` (16),
-`hermes_extension_journal_test.py` (69), `hermes_compaction_test.py` (47).
+`.agents/tools/check-all --py always` on the committed tree over `origin/main` at `7d794ef` (the commit before this entry):
+
+| Check | Result | Queued | Run | Counts |
+| --- | --- | --- | --- | --- |
+| typecheck | pass | - | 0.6s | - |
+| lint | pass | - | 0.2s | - |
+| ruff | pass | - | 0.0s | - |
+| test | pass | 3m30s | 17.8s | 208 files, 3771 tests |
+| build | pass | - | 1.7s | 894 modules |
+| e2e | pass | 7m03s | 2m00s | 55 tests |
+| py | pass | - | 5m10s | 47 files |
+
+The queue time is other worktrees' suites holding the machine's one heavy slot. Before it, the Python files that exercise
+admission passed on their own: `hermes_turn_binding_test.py` (39), `hermes_send_lanes_test.py` (16),
+`hermes_extension_journal_test.py` (69), `hermes_compaction_test.py` (47). `.agents/tools/mutate-py.py` was not on `main` when
+this started, so the red runs used `python -B`, `PYTHONDONTWRITEBYTECODE=1` and a cleared `__pycache__` by hand.
 
 ## Not done
 
