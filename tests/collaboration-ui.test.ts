@@ -13,7 +13,6 @@ import { click, mountRoot, stubMatchMedia, typeInto } from './ui-harness';
 import { FakeEventSource } from './fake-event-source';
 import { GROUP_FALLBACK_POLL_MS, GROUPS_EVENT } from '../src/app/use-session';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
-// Avatar drawing is covered by its own suite; these tests exercise group interactions.
 let root:Root, container:HTMLDivElement;
 const bootstrap = { user:{id:'one'},bots:[{id:'ranch',name:'Ranch hand'},{id:'planner',name:'Planner'}],preferences:defaultPreferences,connection:{connected:true} } as Bootstrap;
 const room={room_id:'room',name:'Weekend plans',members:[{member_id:'ranch',profile:'ranch',handle:'ranch',display_name:'Ranch hand'},{member_id:'planner',profile:'planner',handle:'planner',display_name:'Planner'}]};
