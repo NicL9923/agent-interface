@@ -40,6 +40,7 @@ if action=='quiescence':
         assert marker.read_text().splitlines()[0]==os.environ['HERMES_UPDATE_HANDOFF_PID']
     if (stage/'refuse').exists(): raise SystemExit(75)
     if (stage/'uncertain').exists(): raise SystemExit(1)
+    if (stage/'unanswered').exists(): raise SystemExit(76)
     (stage/'gate').write_text('exclusive')
 elif action=='backup':
     target=pathlib.Path(os.environ['HERMES_UPGRADE_BACKUP_DIR']); target.mkdir()
@@ -1030,6 +1031,15 @@ print('fixture real candidate patch identity passed')
         self.assertEqual(self.status()['phase'],'blocked'); self.assertFalse(self.status()['maintenance']); self.assertEqual(record['status'],'complete')
         (stage/'refuse').unlink(); (stage/'uncertain').touch(); record=self.install(expect_error=True)
         self.assertEqual(self.status()['phase'],'failed'); self.assertTrue(self.status()['maintenance']); self.assertEqual(record['status'],'pending')
+
+    def test_unanswered_maintenance_acquire_holds_the_app_gate_and_says_what_to_do(self):
+        # Hermes's add-on may still take its lease, so the hook's exit is never the harmless 75.
+        stage=self.check(); (stage/'unanswered').touch(); record=self.install(expect_error=True)
+        status=self.status()
+        self.assertEqual((status['phase'],status['maintenance'],status['error'],record['status']),('failed',True,'install_requires_review','pending'))
+        self.assertEqual(status['message'],str(worker.MaintenanceUnanswered()))
+        self.assertIn('If Cancel appears, use it to restore Hermes',status['message'])
+        self.assertEqual((stage/'hook-order.txt').read_text().splitlines(),['regressions','quiescence'])
 
     def test_tampered_receipt_is_rejected_before_any_install_hook(self):
         stage=self.check(); receipt=json.loads((stage/'qualification.json').read_text()); receipt['checks']['hostRegressions']=False
