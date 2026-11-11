@@ -619,11 +619,18 @@ def remote(host, program, payload, timeout=900):
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+# The guarded tool's exit when Hermes refused maintenance before anything stopped. Nothing changed.
+REFUSED = 75
+
+
 def guarded(host, manifest, check):
+    """The guarded tool's result, REFUSED, or None when it failed."""
     command = f"cd {shlex.quote(manifest['release'])} && python3 {GUARDED_TOOL} --config {shlex.quote(manifest['configPath'])}"
     done = host_access.ssh(host, command + (" --check" if check else ""), timeout=1800, check=False, capture=True)
     output = done.stdout.strip()
     print(output)
+    if done.returncode == REFUSED and not check:
+        return REFUSED
     if done.returncode:
         print(done.stderr.strip()[-3000:], file=sys.stderr)
         return None
@@ -811,6 +818,10 @@ def activate(args):
         raise
     if result is None:
         raise SystemExit(held_for_review())
+    if result == REFUSED:
+        manifest["status"] = "prepared"
+        save_manifest(manifest)
+        raise SystemExit(f"Hermes did not grant maintenance, so the release did not start and nothing changed. Run activate {args.name} again when it is idle.")
     manifest.update(status="activated", guardedResult=result)
     save_manifest(manifest)
     prune_releases(manifest)

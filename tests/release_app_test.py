@@ -641,6 +641,22 @@ class Activation(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 release_app.main([command, self.NAME])
 
+    def test_busy_refusal_leaves_the_release_prepared_to_activate_again(self):
+        release_app.save_manifest({**release_app.load_manifest(self.NAME), "release": "/srv/app/releases/new", "configPath": "/srv/config.json"})
+        commands = []
+        def ssh(host, command, **_):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, release_app.REFUSED, "Release not started: busy\n", "")
+        release_app.guarded = self.saved[2]
+        with patch.object(release_app.host_access, "ssh", ssh), patch("sys.stdout"):
+            with self.assertRaisesRegex(SystemExit, "nothing changed. Run activate " + self.NAME):
+                release_app.main(["activate", self.NAME, "--no-docs-pr"])
+        self.assertEqual(commands, ["cd /srv/app/releases/new && python3 .agents/tools/deploy-guarded-app-release.py --config /srv/config.json"])
+        self.assertEqual((self.status(), self.evidence()), ("prepared", []))
+        # Only the activation's refusal means nothing changed; a preflight's exit is a failure.
+        with patch.object(release_app.host_access, "ssh", ssh), patch("sys.stdout"), patch("sys.stderr"):
+            self.assertIsNone(release_app.guarded("host", release_app.load_manifest(self.NAME), check=True))
+
     def test_failed_post_release_check_can_be_recorded_later(self):
         with self.assertRaises(SystemExit):
             self.activate(lambda *_, **__: {"webBuild": "b" * 16}, {"maintenanceCleared": False})
