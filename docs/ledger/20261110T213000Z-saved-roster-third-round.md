@@ -192,3 +192,75 @@ This branch adds one record to the page-side table, the offline sign-out's
 
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 200 files, 3460
 tests. `npm run build`: pass. `npm run test:e2e`: 38 passed.
+
+## Fifth round: the account transitions' fifth review, merged from `t3/early-bootstrap`, and an owed logout
+
+`t3/early-bootstrap` at `8360a83` merged in as `bcf1de0`, bringing `t3/account-transitions` at
+`6695309` (its fifth round, in `20261110T191900Z-account-transitions.md`) and `origin/main` at
+`785f4f2`. One conflict, in `accountStart` of `src/app/account-epoch.ts`, resolved by hand: it keeps
+the signed-out word to the worker that the base added, and this branch's rule that a sign-out whose
+server session may be live shows sign-in on a fresh page.
+
+### P1: an offline sign-out undone by a sign-in whose tab closed
+
+Reproduced through the real `App` against the test server before the fix: member one signs out
+offline (`{ signedOut, logout, user: one }`); a later page shows sign-in and its attempt to end the
+server's session gets a 503, so the record stays; someone submits the sign-in form and the request
+hangs, so `beginAccountChange` writes `{ changing, fromSignedOut, user: one }` and drops `logout`;
+the tab closes; 66 seconds later a new page's `accountStart` returns `bootstrap` and
+`pendingSignOut()` returns null, so it reads with the live cookie and draws member one's home, with
+zero logout calls.
+
+Changes, all in `src/app/account-epoch.ts`:
+
+- A changing mark begun over a record that carries `logout` carries it too, whether that record is the
+  settled sign-out or another tab's mark that inherited it. A mark over a mark inherits only this flag:
+  `fromSignedOut` stays unset, as the base's writer table says, since the other tab's request may
+  have signed an account in.
+- `owesLogout(record)` is true for the settled `{ signedOut, logout }` and for a mark that carries
+  `logout` once it is stale. `pendingSignOut`, `signOutFinished`, `accountOf` and `accountStart`'s
+  signed-out rule all use it, so a stale mark is the pending sign-out: the page starts signed out,
+  names no account for the address, tells the worker no one is signed in, reads nothing as member
+  one, and the sign-in screen ends the server's session first (a 401 from that read counts as ended).
+  A fresh mark that carries the flag still waits, since another tab's request is on its way.
+- Nothing else about marks changes: a stale mark without the flag goes to bootstrap, as before.
+
+The page-side table gains rows:
+
+| This tab | Record | Address | Test |
+| --- | --- | --- | --- |
+| Opening | Fresh mark that carries `logout` | waits; owes nothing yet | account-epoch: "waits on a fresh mark that carries it" |
+| Opening | The same mark, gone stale | none; signed-out start, logout owed | account-epoch: "starts signed out, and owes the logout, once a mark that carries it goes stale"; saved-roster-ui: "still reads nothing as member one when a sign-in begun over the offline sign-out hangs" |
+| Opening | A stale mark begun over another tab's mark that carried it | none; signed-out start, logout owed | account-epoch: "owes it for a stale mark begun over another tab's mark too" |
+| Opening | A stale mark without the flag | as before: bootstrap decides | account-epoch: "lets bootstrap decide for a stale mark that carries no flag" |
+
+### Red runs
+
+Each protecting line broken by hand, `tests/account-epoch.test.ts` and `tests/saved-roster-ui.test.ts`
+run, the line restored:
+
+| Mutation | Result |
+| --- | --- |
+| The mark drops `logout` (the reviewer's sequence) | failed: the UI sequence and both writer rows over a record that carries it |
+| The mark carries it only over a settled sign-out | failed: the writer row over another tab's mark |
+| The mark carries it over every record | failed: the writer rows over a server-taken sign-out and over member one signed in |
+| `owesLogout` ignores a stale mark | failed: the stale-mark tests and the UI sequence |
+| `owesLogout` counts a fresh mark | failed: the fresh-mark test |
+| `accountStart`'s signed-out rule ignores a stale mark | failed: the stale-mark tests and the UI sequence |
+| `pendingSignOut` ignores a stale mark | failed: the stale-mark tests and the UI sequence |
+| `signOutFinished` ignores a stale mark | failed: the stale-mark test and the UI sequence |
+| `accountStart` does not tell the worker for such a mark | failed: the new worker-word test |
+
+Every mutation in the account-transitions fifth round's table, run again on this branch's merged
+code: the same result for each, with the same counts in the enumeration (4,000 orders from seed 1:
+restore without its settle 2, without its account check 437, a Decline notice without its account
+1,145, without its check 329, without its settle 2, a refused notice that rejects 363; the guard after
+the reads, 4 of 40,000 four-word orders).
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 201 files, 3512
+tests. `npm run build`: pass. `npm run test:e2e`: 38 passed. Orderings, no order broke an invariant:
+three words, 20,000 orders each from seeds 1, 100001 and 200001; four words, 40,000 orders each from
+the same seeds. Ran on the commit before this ledger entry, after a real `npm ci`.
+
