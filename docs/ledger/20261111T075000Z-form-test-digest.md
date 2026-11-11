@@ -17,7 +17,7 @@ three sibling form tests under heavier saturation.
 ## Reproduction
 
 Real load did not do it: 6 loaded full `npm test` runs of `main` (8 cores shared with 32 busy loops) never failed the named test, and
-`transcript-ui.test.ts` alone passed 10 of 10 on 1 to 2 cores with 20 to 40 loops. Those runs did fail other tests, listed below. What
+`transcript-ui.test.ts` passed 7 of 7 on 1 to 2 cores with 20 to 40 loops (4 whole-file runs, 3 of its form tests). Those runs did fail other tests, listed below. What
 reproduces the cause is saturating the thread pool the digest queues on: a setup file (kept outside the repository, run through a copy of
 the vitest config) starts N concurrent `pbkdf2` jobs of 100,000 SHA-512 iterations that restart as they end, so each digest waits behind them.
 `vitest run -c <that config> tests/transcript-ui.test.ts -t "form replies"`:
