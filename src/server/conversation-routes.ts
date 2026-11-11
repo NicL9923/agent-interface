@@ -19,6 +19,7 @@ import { routePattern } from "./route-path.js";
 import { SendTimings, sendTimingHeader, type SendPhases } from "./send-timing.js";
 import { fileRef, id } from "./schemas.js";
 import type { Store } from "./store.js";
+import { withAdmission } from "./store-submissions.js";
 import { nameRequesters } from "./vault.js";
 import { shownMessages } from "./conversation-view.js";
 
@@ -461,7 +462,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       phases.admitted = performance.now();
       if (receipt.status === "accepted")
         timings.admitted(timing, voice ? "talk" : explicitSteering ? "steer" : "messages",
-          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted }, receipt.runId);
+          receipt.steered ?? steering, { arrival: phases.arrival, hermesStart: phases.hermesStart, admitted: phases.admitted }, receipt.runId, receipt.turn);
       else timings.discard(timing);
       store.receipt(receipt, undefined, retryInterruption);
       if (receipt.runId) for (const userId of new Set([input.senderId, requesterId])) store.participate(receipt.runId, userId);
@@ -502,7 +503,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         const receipt = await runtime.lookupSubmission(requestId);
         if (receipt) {
           if (previous) store.receipt(receipt);
-          return told(receipt);
+          // A client whose answer was lost learns the turn here.
+          return told(withAdmission(receipt, previous?.receipt));
         }
         if (!previous)
           return {

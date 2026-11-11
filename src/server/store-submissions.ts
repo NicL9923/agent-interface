@@ -15,6 +15,14 @@ const legacyReason = (receipt: SubmissionReceipt): RejectionReason | undefined =
 
 type Intent = { created: boolean; receipt: SubmissionReceipt; input: Submission };
 
+/**
+ * A looked-up receipt with what Hermes's admission answer said about the turn. A lookup never carries it, so it
+ * comes from the recorded receipt, while both say the message was accepted.
+ */
+export const withAdmission = (looked: SubmissionReceipt, recorded?: SubmissionReceipt): SubmissionReceipt =>
+  looked.status !== "accepted" || recorded?.status !== "accepted" ? looked
+    : { ...looked, ...recorded.turn ? { turn: recorded.turn } : {}, ...recorded.admittedVersion ? { admittedVersion: recorded.admittedVersion } : {} };
+
 /** Message admission receipts, run participants and approval attribution. */
 export class SubmissionRepository {
   constructor(private readonly database: StoreDatabase, private readonly drafts: DraftRepository) {}
@@ -115,8 +123,9 @@ export class SubmissionRepository {
         .prepare("UPDATE submissions SET receipt=? WHERE request_id=?")
         .run(JSON.stringify(stored), receipt.requestId);
       const row = this.submission(receipt.requestId);
-      // A retry resends an earlier message, never the draft, which stays the person's own.
-      if (row && receipt.status === "accepted" && previous?.receipt.status !== "accepted" && row.input.retryOf === undefined)
+      // A retry resends an earlier message, never the draft, which stays the person's own. A typed stop phrase that
+      // ended Hermes's voice chat (`turn: "none"`) sent nothing to the assistant, so its words and files stay too.
+      if (row && receipt.status === "accepted" && receipt.turn !== "none" && previous?.receipt.status !== "accepted" && row.input.retryOf === undefined)
         this.drafts.clearSubmittedDraft(row.input.senderId, row.input.botId, {
           text: row.input.text, attachments: row.input.attachments ?? [],
         }, row.input.draftBaseRevision);

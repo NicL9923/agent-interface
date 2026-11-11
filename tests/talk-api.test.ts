@@ -177,6 +177,22 @@ describe("talk ask", () => {
     expect((await ask(s, randomUUID(), "Hello")).json()).toEqual({ state: "refused", text: "Images cannot be added." });
   });
 
+  // Hermes saved nothing, so no read will ever show the request; the person hears why at once.
+  it("answers a typed stop that ended Hermes's voice chat with its message at once, also when asked again", async () => {
+    const requestId = randomUUID(), message = "Hermes ended its voice chat. Nothing was sent to the assistant.";
+    // Hermes's lookup of the settled request carries no turn.
+    const s = await setup({ receipt: input => ({ requestId: input.requestId, status: "accepted", runId: "run-talk", turn: "none", message }),
+      lookup: id => ({ requestId: id, status: "accepted", runId: "run-talk" }), conversation: anchored([]) });
+    const pass = await fakeTime();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let answer: unknown;
+      void ask(s, requestId, "Stop voice").then(response => { answer = response.json(); });
+      await pass(500);
+      expect(answer).toEqual({ state: "refused", text: message });
+    }
+    expect(s.submit).toHaveBeenCalledTimes(1);
+  });
+
   it("finds an old request after later turns, and gives up on one that is gone", async () => {
     const requestId = randomUUID();
     const later = [1, 2, 3].flatMap(turn => [asked(`later-${turn}`, `run-${turn}`), said(`answer-${turn}`, `Later answer ${turn}.`, `run-${turn}`)]);
@@ -425,6 +441,10 @@ describe("talk answer states", () => {
     expect(talkAnswer({ ...accepted, status: "interrupted" }, run([]))).toEqual({ state: "interrupted" });
     // Hermes can report an interruption without naming its run: the request's own turn is the latest.
     expect(talkAnswer(accepted, run([asked(), said("partial", "Checking the gat")], { state: "interrupted" }))).toEqual({ state: "interrupted" });
+  });
+  it("answers a typed stop's receipt with its message, never as a missing request", () => {
+    expect(talkAnswer({ ...accepted, turn: "none", message: "Hermes ended its voice chat." }, run([]))).toEqual({ state: "refused", text: "Hermes ended its voice chat." });
+    expect(talkAnswer({ ...accepted, turn: "none" }, run([]))).toEqual({ state: "refused", text: "Hermes ended its voice chat. Nothing was sent to the assistant." });
   });
   it("keeps waiting while the run is unseen or running, and ignores other runs and unfinished text", () => {
     expect(talkAnswer(accepted, run([]))).toBe("missing");
