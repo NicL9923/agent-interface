@@ -233,3 +233,73 @@ Per file: `deploy_common_test` 65 tests (61 before this round), `hermes_upgrade_
 No real Hermes or add-on and no deployed release tool. The FIFO order is read from source, not measured; the 100 s watch costs
 that long on every exit 75 that follows a deadline. Review of this commit is owed from a provider other than Claude: the implementer
 is Claude Sonnet 5.5 and the previous head was reviewed by Claude Opus 5.5, so it is `independent-review-owed`.
+
+## Review round 2: the ordering claim, a foreign lease in the watch, and the grace
+
+Claude Opus 5.5 re-reviewed `9859f80` and found it ready with three P3s. This round merges `origin/main` at `5051253` as its own commit
+(`03e2c99`, clean) and fixes them in `cfbf61e`. Same machine and runtimes as round 1 (Python 3.14.10, Node 24.22.2).
+`.agents/tools/mutate-py.py` is not on `main`, so the breaks below ran from a scratch runner with `python3 -B`,
+`PYTHONDONTWRITEBYTECODE=1` and every `__pycache__` cleared before each run.
+
+### Defects fixed
+
+- **P3, the ordering guarantee was stated too strongly.** The comments said a request goes to `to_thread(server.dispatch)` on arrival
+  and concluded the acquire "started no later than the release's". In `/home/nic/scratch/wildbots-review/hermes-agent` at `ed1afb0`
+  each connection makes earlier trips through the same default executor before its frame is read:
+  `to_thread(start_deferred_mcp_discovery_now)` (`hermes_cli/web_routers/chat_ws.py:659`) and `to_thread(server.resolve_skin)`
+  (`tui_gateway/ws.py:639`); behind the session authority a request goes through `AuthorityConnection.dispatch`, which under profile
+  multiplexing first sends the owner scope's reads to the executor (`gateway/session_authorities.py` `async_owner_scope`, `:316`) and then
+  `to_thread(dispatch_legacy)` (`tui_gateway/ws.py:396`). Each trip is first in, first out and a chain of them is not, so a release can
+  overtake the acquire if the pool is blocked over 120 s and then again over 10 s at the wrong moment. The 10 s grace covers it in
+  practice and is not a proof. The comments (`deploy_common.py:76-96`, `hermes-upgrade-linux.py:173-193`) and the runbook (the quiescence
+  hook's dispatch paragraph and "A lease that appears after exit `75`") now say what the watch rests on, what remains, and that the
+  runbook's recovery can be needed on today's Hermes, not only after a Hermes change.
+- **P3, exit 75 for a lease that was not ours.** `late_lease` returned `False` for "nothing appeared" and "something not ours appeared",
+  and the deadline branch then saved `rejected` and exited 75, which the app shows as Hermes open. The deadline branch now takes
+  `elif os.path.lexists(maintenanceFile)` (`hermes-upgrade-linux.py:680`): it prints "Quiescence held for review, a maintenance lease that
+  is not this operation's appeared", leaves the file and the `acquire_unanswered` phase as they are, and exits 76. A lease that appears
+  between the watch's last look and this one is held too, which is the safe side. The runbook's exit table has the new row. The guarded
+  tool already held this case: its second release answers 409 and the run is held for review (tested, `deploy_common_test.py`).
+- **P3, nothing tested the guarded tool's grace.** Both tools' tests now assert the watch's sleeps total at least
+  `deploy_common.DEADLINE_WATCH_SECONDS` (`deploy_common_test.py:556`, `deploy_guarded_release_test.py:380`), not `ACQUIRE_DEADLINE` or 90.
+  A new test writes the lease during the watch's last sleep and requires the second release (`deploy_common_test.py:586`).
+
+### Tests
+
+- `hermes_upgrade_linux_test.py:1360`, replacing `test_another_operations_lease_in_the_watch_is_left_alone_and_is_not_released`:
+  two subtests, another operation's lease and one that is not JSON. Each expects exit 76, the log line, one release only, phase
+  `acquire_unanswered`, the file's bytes unchanged and no drain request. The fake late writer takes an optional raw body for it.
+- `deploy_common_test.py:586` the last-second lease, and the strengthened sum at `:556`; `deploy_guarded_release_test.py:380` the same sum.
+
+### Red proof
+
+| Broken | Result | Red tests |
+| --- | --- | --- |
+| Tool: `range(DEADLINE_WATCH_SECONDS)` becomes `range(ACQUIRE_DEADLINE)` | red, 2 in `deploy_common_test`, 1 in `deploy_guarded_release_test` | the last-second lease, the watch after the release sees no lease, the guarded tool's refusal |
+| Tool: the last look after the loop returns `False` | red, 1 | the last-second lease |
+| Worker: `elif os.path.lexists(...)` becomes `elif False` | red, 2 subtests | a lease that is not this operation's, and one that cannot be read |
+
+Each file was restored after its run; the tree then passed. Before the sums were strengthened, the first break stayed green, as the review said.
+
+### Checks
+
+`.agents/tools/check-all --py always --keep-going` on `cfbf61e`: all 7 passed in 7m56s, 53 s of it queued for heavy slots.
+
+| Check | Result |
+| --- | --- |
+| typecheck, lint, `ruff check .` | passed |
+| `npm test` | 208 files, 3,742 tests passed |
+| `npm run build` | 894 modules |
+| `npm run test:e2e` | 55 tests passed |
+| `npm run test:py` | 46 files passed in 4m43s |
+
+### Follow-up, not done here
+
+The stronger fix the reviewer proposed: the add-on remembers each operation it released, under `maintenance_lock`, and refuses a later
+acquire for it, advertised with a new capability. That makes the watch, the grace and the recovery section unnecessary, and it closes
+the gap above instead of bounding it. It changes the add-on and the capability matrix, so it is its own change.
+
+### Not exercised
+
+No real Hermes or add-on. The chain of trips is read from source at `ed1afb0`, not measured. Review of `cfbf61e` is owed from a provider
+other than Claude: the implementer is Claude Sonnet 5.5 and both reviews so far were Claude Opus 5.5, so it stays `independent-review-owed`.
