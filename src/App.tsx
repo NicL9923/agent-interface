@@ -465,7 +465,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     help: () => { if (!boot) return false; setOverlay("shortcuts"); },
     undo: () => toast.undo(),
   });
-  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
+  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
   const connected = !!boot?.connection.connected;
   useEffect(() => {

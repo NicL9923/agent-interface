@@ -11,6 +11,9 @@ const violations = async () => await (await fetch(controlUrl)).json() as unknown
  */
 export const deployNextRelease = ({ installs = true } = {}) =>
   fetch(`http://127.0.0.1:${controlPort}/next-release${installs ? "" : "?install=fail"}`, { method: "POST" });
+/** Gives an assistant this roster activity from the next bootstrap on, such as "waiting", which counts on the app badge, until the next test starts. */
+export const setActivity = (botId: string, state: string) =>
+  fetch(`http://127.0.0.1:${controlPort}/activity?bot=${encodeURIComponent(botId)}&state=${encodeURIComponent(state)}`, { method: "POST" });
 /** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */
 export const slowAdmission = (ms: number) => fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
 

@@ -111,6 +111,12 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
   if (event.data?.type === 'ACCOUNT') event.waitUntil(setAccount(event.data.user));
+  // The page's app badge, ordered with its account words and the pushes (see setPageBadge). It answers on the
+  // port the page sent once the step ended, so a page can tell this worker from one before this message existed.
+  if (event.data?.type === 'BADGE') {
+    const answer = event.ports?.[0];
+    event.waitUntil(setPageBadge(event.data.user, event.data.count).then(() => answer?.postMessage({ badge: true })));
+  }
 });
 
 // Which account this browser may show notifications for, as its pages last said (src/app/account-epoch.ts):
@@ -130,11 +136,12 @@ self.addEventListener('message', (event) => {
 // - No notification of another account is listed: the latest word's step closed what was listed, and
 //   a push whose notification was still on its way checks again on the chain once it is listed.
 // - No notification of its account was closed after it arrived: a step for an older word stops first.
-// - The badge is unset or was set by a push for that account. A push sets it only on the chain while
-//   its account is the latest, and a step for a new word clears a badge a push of another account
-//   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
-//   latest account's. The worker changes the badge only for a push: a badge the page set is the
-//   page's (src/app/badge.ts).
+// - The badge is unset or was set for that account, by a push or by one of its pages (a BADGE message,
+//   below). Nothing sets it except on the chain while its account is the latest, and a step for a new
+//   word clears a badge another account set, as Cache Storage records, so no write for a departed
+//   account can set the badge, and none clears the latest account's. A page's own write is made here
+//   and not by the page whenever a worker controls it, so one writer orders every badge call
+//   (src/app/badge.ts keeps a direct write for a page no worker controls).
 // When the browser refuses a write of the saved account, Cache Storage keeps the older word until a
 // later step's write succeeds; the step still closes the departed account's notifications, and the page
 // repeats its word at the next account change or start, which writes it.
@@ -258,6 +265,38 @@ function settlePush(named, count) {
     // No await between the check above and the call.
     void self.navigator.setAppBadge(count).catch(() => {});
     return keepBadgeFor({ named });
+  });
+}
+
+// The app badge a page asks for, for the account that page shows: `user` is its ID, or null for a page that
+// shows none, and `count` what its screens count. It runs on the chain, in the order the page said it
+// relative to its account words, so an old account's clear can never land after the new account's count.
+// A count is set only for the latest account. A clear is made unless it comes from another account than the
+// one the badge on screen is for, which a page of that account never set and the latest account's count
+// must survive; a badge the latest word does not allow is cleared by whoever says so, as at a sign-out.
+// A write that a newer word overtook, before or after it reached the front of the chain, does nothing: the
+// word's own step clears what it must, and the page of its account says its count again.
+function setPageBadge(user, count) {
+  const wanted = typeof user === 'string' && user ? user : null;
+  if (!Number.isInteger(count) || count < 0 || !wanted && count) return Promise.resolve();
+  if (!self.navigator?.setAppBadge && !self.navigator?.clearAppBadge) return Promise.resolve();
+  // Judged by the word that was latest when it arrived: a page that said this before a newer word is a
+  // generation that word ended, and its write is not the latest account's, even for the same account.
+  const at = generation;
+  return serially(async () => {
+    const named = wanted ? await accountMarker(wanted).catch(() => undefined) : null;
+    const state = await loadAccount();
+    const owner = await readBadge();
+    if (at !== generation) return;
+    if (count) {
+      // A browser that cannot hash keeps today's rule: no word names an account to refuse it for.
+      if (!self.navigator?.setAppBadge || state && (typeof named !== 'string' || !mayShow(state, named))) return;
+      // No await between the check above and the call.
+      void self.navigator.setAppBadge(count).catch(() => {});
+      return keepBadgeFor({ named });
+    }
+    if (owner && mayShow(state, owner.named) && owner.named !== named) return;
+    return clearBadge();
   });
 }
 
