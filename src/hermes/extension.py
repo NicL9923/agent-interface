@@ -631,6 +631,8 @@ class RowCache:
             del table[next(iter(table))]
 
 # Methods a held maintenance lease still admits: status, history and discovery reads.
+# Session marks that count as work to maintenance, besides app sends that hold a lane.
+BUSY_MARKS = ("running", "queued_prompt", "queued_prompts", "pending_steer", "_auto_continue_scheduled")
 MAINTENANCE_READS = {"agent-interface.maintenance", "agent-interface.capabilities", "agent-interface.receipt", "agent-interface.discover",
                      "client.capabilities", "profiles.list", "profiles.describe", "session.list", "session.history", "session.info", "session.events.since",
                      "groups.capabilities", "groups.list", "groups.state", "groups.log"}
@@ -660,6 +662,8 @@ class Bridge:
         # Maintenance status lists them as active work, as acquire already counts their reservations.
         self.sends_in_flight = {}
         self.sends_in_flight_lock = threading.Lock()
+        # The clock a maintenance deadline runs on; a test pins it.
+        self.monotonic = time.monotonic
         # The (profile, session, actor) a submit on this thread just admitted as steering.
         self.steered = threading.local()
         # Each prompt.submit the add-on sends carries a request ID of its own. Hermes passes that ID
@@ -724,12 +728,16 @@ class Bridge:
             raise RuntimeError("Maintenance lease is not private.")
         return json.loads(path.read_text())
 
-    def busy_sessions(self):
+    def busy_sessions(self, ignoring_compaction=False):
         """Active work for maintenance: busy sessions, then app sends that wait for or hold a lane.
 
         A send staging images or inside Hermes's admission call has not marked its session running,
         and one waiting on its lane has not reached Hermes at all. Each holds an admission
         reservation, so acquire refuses; status lists them so its callers refuse first.
+
+        A background compaction holds its session running, but only acquire's preempt stops it, so
+        acquire's first look passes ``ignoring_compaction``: a session whose only mark is that
+        compaction's own running flag is no work yet. Queued input beside it is work.
         """
         # Native workers can reserve admission while holding _sessions_lock.
         # Snapshot the dictionary without taking that lock in the reverse order;
@@ -737,13 +745,15 @@ class Bridge:
         sessions = self.server._sessions.copy()
         with self.sends_in_flight_lock:
             sends = [tuple(send) for send in self.sends_in_flight.values()]
+        def working(sid, session):
+            marks = [key for key in BUSY_MARKS if session.get(key)]
+            return bool(marks) and not (ignoring_compaction and marks == ["running"] and self.compaction.owns(sid))
         return [{"sessionId": sid, "profile": self.profile_for(sid), "state": "running"}
-                for sid, session in sessions.items()
-                if session.get("running") or session.get("queued_prompt") or session.get("queued_prompts")
-                or session.get("pending_steer") or session.get("_auto_continue_scheduled")] + [
+                for sid, session in sessions.items() if working(sid, session)] + [
             {"sessionId": self.canonical.get(profile), "profile": profile, "state": state} for profile, state in sends]
 
     def maintenance(self, rid, params):
+        arrived = self.monotonic()
         server = self.server
         secret = os.environ.get("HERMES_AGENT_INTERFACE_TOKEN", "")
         supplied = params.get("service_key", "")
@@ -751,35 +761,71 @@ class Bridge:
             return server._err(rid, 403, "Private maintenance authentication required")
         if not self.maintenance_file:
             return server._err(rid, 409, "Host maintenance lease is not configured")
-        if params.get("action") == "acquire":
-            # A background compaction is no work to wait for, so stop it first. Never under
-            # maintenance_lock: Hermes's release of the session takes it.
-            for sid in list(self.canonical.copy().values()):
-                self.compaction.preempt(sid)
+        action = params.get("action", "status")
+        operation = params.get("operation_id")
+        if action not in ("status", "acquire", "release"):
+            return server._err(rid, 400, "Unknown maintenance action")
+        if action != "status" and (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation)):
+            return server._err(rid, 400, "Invalid maintenance operation")
+        if action == "acquire":
+            # How long the caller will wait, in seconds, counted from this request's arrival. Unknown to an
+            # add-on older than the maintenance_deadline capability, which ignores it and acquires regardless.
+            seconds = params.get("deadline")
+            if seconds is not None and (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds < math.inf):
+                return server._err(rid, 400, "Invalid maintenance deadline")
+            return self.acquire_lease(rid, operation, None if seconds is None else arrived + seconds)
         with self.maintenance_lock:
             lease = self.maintenance_state()
-            action = params.get("action", "status")
-            operation = params.get("operation_id")
-            if action not in ("status", "acquire", "release"):
-                return server._err(rid, 400, "Unknown maintenance action")
-            if action != "status" and (not isinstance(operation, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", operation)):
-                return server._err(rid, 400, "Invalid maintenance operation")
             if lease and lease.get("operationId") != operation and action != "status":
                 return server._err(rid, 409, "Another maintenance operation owns this lease")
             busy = self.busy_sessions()
-            if action == "acquire":
-                # This request holds one native reservation. Queued RPCs and
-                # deferred work reserve before execution and must also be idle.
-                if busy or self.retirement.active_count() > 1:
-                    return server._err(rid, 409, "Hermes still has active work; no maintenance lease acquired")
-                path = Path(self.maintenance_file)
-                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                private_fs.atomic_json(path, {"operationId": operation})
-                lease = {"operationId": operation}
-            elif action == "release" and lease:
+            if action == "release" and lease:
                 Path(self.maintenance_file).unlink()
                 lease = None
             return server._ok(rid, {"active": lease is not None, "operationId": (lease or {}).get("operationId"), "busy": busy})
+
+    def acquire_lease(self, rid, operation, deadline):
+        """Write the maintenance lease unless refused, or unless the caller's ``deadline`` (this clock) has passed.
+
+        The first look, under maintenance_lock, refuses what would be refused anyway, so a refused
+        acquire stops no compaction. Only an acquire that would otherwise succeed stops them, outside
+        the lock: Hermes's release of a compacting session takes it. The look is repeated under the lock
+        immediately before the write, because the preempts took time: another acquire or input may have
+        come in, and the caller may have given up. A caller that gave up cannot know whether a lease will
+        appear, so none is written after its deadline.
+        """
+        def refused(message="Hermes still has active work; no maintenance lease acquired"):
+            return self.server._err(rid, 409, message)
+        def look(first):
+            lease = self.maintenance_state()
+            if lease and lease.get("operationId") != operation:
+                return refused("Another maintenance operation owns this lease")
+            # This request holds one native reservation. Queued RPCs and deferred work reserve before
+            # execution and must also be idle. At the first look each running compaction holds one too,
+            # and a compaction ending between the two reads only makes this count low: the second look is exact.
+            compacting = self.compaction.running() if first else 0
+            if self.busy_sessions(ignoring_compaction=first) or self.retirement.active_count() - compacting > 1:
+                return refused()
+            return None
+        with self.maintenance_lock:
+            refusal = look(True)
+        if refusal:
+            return refusal
+        for sid in list(self.canonical.copy().values()):
+            remaining = None if deadline is None else deadline - self.monotonic()
+            if remaining is not None and remaining <= 0:
+                return refused()
+            self.compaction.preempt(sid, wait=None if remaining is None else min(remaining, sibling_module("compaction").PREEMPT_WAIT))
+        with self.maintenance_lock:
+            refusal = look(False)
+            if refusal:
+                return refusal
+            if deadline is not None and self.monotonic() >= deadline:
+                return refused()
+            path = Path(self.maintenance_file)
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            private_fs.atomic_json(path, {"operationId": operation})
+            return self.server._ok(rid, {"active": True, "operationId": operation, "busy": []})
 
     def guarded_acquire(self):
         with self.maintenance_lock:
@@ -2149,7 +2195,7 @@ def install(path=None):
     # A Hermes without message_agent gets no roster or gate, and says so.
     delegation = bridge.delegation.install()
     from agent.skill_utils import ESSENTIAL_SKILLS
-    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "idle_compaction_seconds": bridge.compaction.delay}))
+    server.register_method("agent-interface.capabilities", lambda rid, _: server._ok(rid, {"revision": actual_revision, "tracked_patch_sha256": patch_hash, "executor_epoch": journal.epoch, "durable_admission": True, "durable_events": True, "canonical_open": True, "explicit_credentials": True, "canonical_submit": True, "incremental_discovery": True, "delegation": delegation, "delegation_version": sibling_module("delegation").PROTOCOL if delegation else 0, "essential_skills": sorted(ESSENTIAL_SKILLS), "steering_decision": True, "admission_turn": True, "approval_settings": True, "maintenance_deadline": True, "idle_compaction_seconds": bridge.compaction.delay}))
     for name, handler in bridge.rpc_methods().items():
         server.register_method(name, handler)
     bridge.install_delivery()
