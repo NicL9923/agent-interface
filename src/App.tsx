@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ActivityState, Bot, FileRef, Preferences } from "./shared/types";
 import { MAX_ATTACHMENTS } from "./shared/uploads";
-import { api, write } from "./client-api";
+import { api } from "./client-api";
 import type { GroupCatalog, GroupRoom } from "./shared/collaboration";
 import { AvatarTrio, SignIn } from "./components/SignIn";
 import { useDeviceNotifications } from "./components/use-device-notifications";
@@ -45,8 +45,80 @@ import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPan
 import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
+import { rememberTheme, savedTheme } from "./app/saved-theme";
+import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/saved-roster";
+import { prefetchLinkedChat } from "./app/linked-chat";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
+import { accountGeneration, accountStart, checkHintExpiry, drawingAccount, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
+import { signOutHere, signOutOf } from "./app/account-change";
+
+/**
+ * The app for one account generation at a time (see account-epoch.ts). A sign-in, sign-out, refused
+ * session, another account or a lapsed sign-in hint, in this tab or another, unmounts everything the
+ * previous generation held, its streams, timers and reads included, before anything draws again.
+ * While another tab's sign-in or sign-out is on its way this shows the connecting screen and asks
+ * nothing; then the new generation starts from bootstrap, or from sign-in after a sign-out.
+ */
 export function App() {
+  const [changes, setChanges] = useState(0);
+  const [shown, setShown] = useState(() => ({ changes: 0, start: accountStart(), generation: accountGeneration() }));
+  useEffect(() => watchAccount(() => setChanges(value => value + 1)), []);
+  // A change first unmounts the generation shown, in a commit of its own, so the cleanups it runs
+  // still act under the old record and every request they make is refused. Only then does this
+  // tab take the stored record as its own and draw the next generation.
+  const pending = changes !== shown.changes;
+  useEffect(() => {
+    if (!pending) return;
+    const start = accountStart();
+    // An address that named the last account's chat, panel, room or message opens nothing of it for the next.
+    if ("start" in start && start.leftAccount && (location.search || location.hash || location.pathname !== "/")) history.replaceState(null, "", "/");
+    setShown({ changes, start, generation: accountGeneration() });
+  }, [pending, changes]);
+  // Each generation's first draw, before it paints, shows the theme this device saved only while the
+  // sign-in hint still names that theme's account and no other tab's sign-in or sign-out is under way,
+  // which may bring another account; otherwise the system's. public/boot.js applied it by the same rule,
+  // but a change can finish after boot.js ran and before this first draw, as after it in another tab.
+  // Bootstrap's own answer replaces it in AccountApp.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = "wait" in shown.start ? "system" : savedTheme() ?? "system";
+  }, [shown]);
+  // A page covered for the back-forward cache shows again once nothing of an ended generation is drawn.
+  useLayoutEffect(uncoverEnded, [pending, shown]);
+  const { start, generation } = shown;
+  const wait = "wait" in start ? start.wait : undefined;
+  useEffect(() => {
+    if (wait === undefined) return;
+    // A tab that closed mid-request never settles its mark; once it is stale, bootstrap decides.
+    const timer = setTimeout(() => setChanges(value => value + 1), Math.max(0, wait - Date.now()));
+    return () => clearTimeout(timer);
+  }, [wait]);
+  useEffect(() => {
+    const until = hintUntil();
+    if (until === undefined) return;
+    const timer = setTimeout(checkHintExpiry, Math.max(0, until - Date.now()));
+    return () => clearTimeout(timer);
+  }, [generation]);
+  if (pending || "wait" in start) return <Connecting />;
+  return <AccountApp key={generation} start={start.start} />;
+}
+
+function Connecting({ unavailable = false, retry }: { unavailable?: boolean; retry?: () => void }) {
+  return (
+    <main className="welcome">
+      <p className="eyebrow">WildBots</p>
+      <AvatarTrio />
+      <h1>
+        Your assistants,
+        <br />
+        in one familiar place.
+      </h1>
+      <p role="status">{unavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+      {unavailable && retry && <button onClick={retry}>Try again</button>}
+    </main>
+  );
+}
+
+function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const [view, setView] = useState<View>(initialView);
   // The group chat open in the main pane when the view is "group".
   const [roomId, setRoomId] = useState(initialRoom);
@@ -58,6 +130,14 @@ export function App() {
   // Phones open on the home list unless a link names a destination.
   const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
   const mobile = useMobile();
+  // The home this device last showed, drawn until bootstrap answers. Read once per account generation:
+  // whatever ends it, a change of account in any tab, a sign-out, a refused session, cleared storage
+  // or the sign-in hint's lapse, ends the generation and this copy with it (see App).
+  const [saved] = useState(readSavedRoster);
+  // The saved home draws its account, so the address may name its chats, and the next account clears it.
+  useLayoutEffect(() => { if (saved) drawingAccount(saved.user); }, [saved]);
+  /** Set once the person picks a chat or view on the saved home, so the start page does not replace it. */
+  const chosenEarly = useRef(false);
   // An assistant this person just deleted leaves quietly; any other one explains itself.
   const deleted = useRef("");
   const gone = (id: string) => {
@@ -67,15 +147,11 @@ export function App() {
     setRailOpen(mobile);
   };
   const session = useSession({
-    onIdentityChange: () => {
-      reset(); clearUploads(); toast.dismiss();
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage", "computer"); setError("");
-      setRoomId(""); setCreatingGroup(false); setView(current => current === "group" ? "conversation" : current);
-    },
-    onFirstBootstrap: next => { if (startsOnToday(next.preferences)) setView("today"); },
+    // A place chosen on the saved home before bootstrap answered stays chosen.
+    onFirstBootstrap: next => { if (!chosenEarly.current && startsOnToday(next.preferences)) setView("today"); },
     onError: setError,
     onBotGone: gone,
-  });
+  }, start);
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
@@ -100,7 +176,11 @@ export function App() {
   });
   // Another account's rooms never show while this one's load.
   const catalog = userId && groupLoad.data?.userId === userId ? groupLoad.data.catalog : null;
-  const rooms = useMemo(() => orderRooms(catalog?.rooms ?? []), [catalog]);
+  // Until the catalog answers, home keeps this account's saved rooms in place (see saved-roster.ts).
+  const roomsSaved = !catalog && !groupLoad.error && !!saved && (!userId || saved.user === userId);
+  // Once bootstrap has reached Hermes, a saved room with an assistant no longer in the roster goes at once.
+  const verifiedBots = boot?.connection.connected ? boot.bots : undefined;
+  const rooms = useMemo(() => roomsSaved && saved ? savedRooms(saved, verifiedBots) : orderRooms(catalog?.rooms ?? []), [catalog, roomsSaved, saved, verifiedBots]);
   const reloadGroups = useStableCallback(() => void groupLoad.reload());
   useEffect(() => {
     if (!userId) return;
@@ -113,8 +193,8 @@ export function App() {
   }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads } = useDraft({ botId, userId, identityEpoch, setError });
-  const { conversation, setConversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
+  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload } = useDraft({ botId, userId, identityEpoch, setError });
+  const { conversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
     void session.refresh();
@@ -129,7 +209,7 @@ export function App() {
   // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
   const connectionLost = session.disconnected || conversationReadFailed || offline;
   const connectionShown = session.disconnected || conversationDisconnected || offline;
-  const { pending, receipt, sending, send, retry, discard, reset } = useSubmission({
+  const { pending, receipt, sending, send, retry, discard } = useSubmission({
     botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError,
   });
   useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending });
@@ -151,10 +231,15 @@ export function App() {
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find(echo => echo.status !== "accepted") ?? null;
+  const theme = boot?.preferences.theme || "system";
   useEffect(() => {
-    const theme = boot?.preferences.theme || "system";
-    document.documentElement.dataset.theme = theme;
-  }, [boot?.preferences.theme]);
+    // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
+    if (!userId && !session.auth) return;
+    document.documentElement.dataset.theme = userId ? theme : "system";
+    if (userId) rememberTheme(userId, theme);
+  }, [theme, userId, session.auth]);
+  // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
+  useEffect(() => () => { document.documentElement.dataset.theme = "system"; }, []);
   const { update, installEvent, notice, setNotice } = useAppInstall();
   // These keep their state while closed (a running update, a terminal), so once opened they stay mounted.
   const computerLoaded = useOnceActive(panel?.kind === "computer");
@@ -192,17 +277,12 @@ export function App() {
     setRailOpen(false);
     setError("");
   });
+  // A sign-out that the server takes starts the app again at sign-in, in every tab.
   const signOut = async () => {
+    if (!userId) return;
     try {
       await notifications.disable();
-      await write("/auth/logout", {});
-      session.signedOut();
-      setConversation(null);
-      setDraft({ text: "", attachments: [] });
-      // The signed-out account's in-flight work can never clear these once the identity changes.
-      reset(); clearUploads(); toast.dismiss();
-      setRailOpen(mobile);
-      closePanels("settings", "details", "preferences", "upgrade", "integrations", "usage");
+      await signOutOf(userId);
     } catch (e) {
       setNotice((e as Error).message);
     }
@@ -271,12 +351,12 @@ export function App() {
     // Making a group needs Hermes to host them and two assistants to put in one.
     const choosable = boot?.bots.filter(bot => !["all", "everyone"].includes(bot.id.toLowerCase())).length ?? 0;
     return {
-      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup,
+      rooms, roomId, pending: pendingCreate, onSelect: selectRoom, onCreate: newGroup, saved: roomsSaved,
       canCreate: !!pendingCreate || catalog?.supported === true && choosable >= 2,
       hint: pendingCreate ? undefined : !catalog?.canSend ? catalog?.reason ?? "The Hermes group coordinator must be running to make a group chat."
         : boot && !boot.connection.connected ? "Reconnect to Hermes to make a group chat." : undefined,
     };
-  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot]);
+  }, [rooms, roomId, pendingCreate, selectRoom, newGroup, catalog, boot, roomsSaved]);
   const [overlay, setOverlay] = useState<"palette" | "shortcuts" | "stop" | null>(null);
   const closeOverlay = useCallback(() => setOverlay(null), []);
   // Search from the palette opens Search & saved with the words already searched.
@@ -386,21 +466,54 @@ export function App() {
     undo: () => toast.undo(),
   });
   useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
-  if (session.auth) return <SignIn onSuccess={session.signedIn} />;
-  if (!boot)
+  // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
+  const connected = !!boot?.connection.connected;
+  useEffect(() => {
+    if (boot && connected) rememberRoster(boot, catalog ? rooms : null);
+  }, [boot, connected, catalog, rooms]);
+  // Read for the account the sign-in hint names (see readSavedRoster), once per account generation:
+  // every change of account, in this tab or another, mounts a new one (see App).
+  const early = !boot && saved ? saved : null;
+  const earlyHome = useMemo(() => early && savedHome(early), [early]);
+  const chooseEarly = useStableCallback((id: string) => {
+    chosenEarly.current = true;
+    // The chat starts reading now, as a linked chat does, and opens once bootstrap names this account.
+    prefetchLinkedChat(id);
+    selectFromHome(id);
+  });
+  const showEarly = useStableCallback((next: View) => { chosenEarly.current = true; showView(next); });
+  const pickRoomEarly = useStableCallback((id: string) => { chosenEarly.current = true; selectRoom(id); });
+  const earlyGroups = useMemo(() => ({ ...homeGroups, onSelect: pickRoomEarly }), [homeGroups, pickRoomEarly]);
+  // An offline sign-out that storage would not keep leaves the person signed in here, and says so.
+  const [signOutUnkept, setSignOutUnkept] = useState(false);
+  const signOutEarly = useStableCallback(() => {
+    if (!earlyHome) return;
+    setSignOutUnkept(false);
+    // A tab that has not yet seen another tab's change is refused; that change draws this tab again.
+    void signOutHere(earlyHome.user.id).then(done => { if (!done) setSignOutUnkept(true); }, () => {});
+  });
+  if (session.auth) return <SignIn />;
+  // The same tree as the full app below, so bootstrap's answer redraws home in place: rows, scroll and focus stay.
+  if (!boot && earlyHome)
     return (
-      <main className="welcome">
-        <p className="eyebrow">WildBots</p>
-        <AvatarTrio />
-        <h1>
-          Your assistants,
-          <br />
-          in one familiar place.
-        </h1>
-        <p role="status">{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
-        {appUnavailable && <button onClick={() => void session.refresh()}>Try again</button>}
-      </main>
+      <div className="app-shell">
+        {/* The app's one connection live region, in the same place as below, so the swap keeps the tree. */}
+        <ConnectionAnnouncer shown={appUnavailable || offline} connection={{ connected: false }} offline={offline} appUnavailable={appUnavailable} />
+        <Sidebar boot={earlyHome} saved botId={botId} readThrough={readThrough} groups={earlyGroups} view={view} state="idle"
+          connectionLost={appUnavailable || offline} offline={offline} mobile={mobile} open={railOpen} update={null}
+          onSelectBot={chooseEarly} onView={showEarly} onNewBot={newBot} onSettings={openPreferences} onUsage={openUsage} onSignOut={confirmSignOut} onPin={togglePin}
+          onBotSettings={botSettings} onMoveToSection={moveToSection} onNewSection={newSection}
+          onChooseMain={chooseMainFromHome} onDismissMainSuggestion={dismissMainSuggestion} />
+        <main className="conversation-panel saved-home-wait" inert={mobile && railOpen}>
+          <p>{appUnavailable ? "Can't reach the app right now. We'll keep trying." : "Connecting to your household…"}</p>
+          {appUnavailable && <button onClick={refreshSession}>Try again</button>}
+          {/* Account is disabled until the app answers, so this is the way out for someone else at this browser. */}
+          {appUnavailable && <button onClick={signOutEarly}>Sign out of this device</button>}
+          {signOutUnkept && <p role="alert">Couldn't sign out of this device. This browser didn't save the change, so you're still signed in here.</p>}
+        </main>
+      </div>
     );
+  if (!boot) return <Connecting unavailable={appUnavailable} retry={refreshSession} />;
   const selected = boot.bots.find((bot) => bot.id === botId);
   const reported: ActivityState = connectionShown
     ? "disconnected"

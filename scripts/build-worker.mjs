@@ -30,6 +30,8 @@ const names = files.map((file) => relative(output, file).split('\\').join('/'));
 const manifest = JSON.parse(await readFile(join(output, '.vite/manifest.json'), 'utf8'));
 assertPopupLibraryIsLazy(manifest, (file) => readFileSync(join(output, file), 'utf8'));
 const plan = precachePlan(manifest, names);
+// The cached shell runs boot.js before anything else, so the worker must install the two together.
+if (!plan.install.includes('boot.js')) throw new Error('boot.js is not in the files the worker installs with the shell.');
 // Nothing serves or needs it after this, so it does not ship.
 await rm(join(output, '.vite'), { recursive: true });
 const slash = (list) => JSON.stringify(list.map((name) => '/' + name));

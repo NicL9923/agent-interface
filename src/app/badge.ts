@@ -50,8 +50,24 @@ function drawDottedIcon(source: string) {
   });
 }
 
-/** Keeps the tab title, favicon dot and installed app badge in step with the count. */
+/** The plain title, no app badge and the plain icon, as a page that shows no account has. */
+function clearBadge() {
+  document.title = APP_NAME;
+  void (navigator as BadgingNavigator).clearAppBadge?.().catch(() => {});
+  dotWanted = false;
+  const icons = Array.from(document.querySelectorAll<HTMLLinkElement>("link[rel='icon']"));
+  const png = icons.find(link => link.type === "image/png");
+  if (!png || plainIcon === undefined) return;
+  png.href = plainIcon;
+  for (const link of icons) if (link !== png) link.removeAttribute("media");
+}
+
+/**
+ * Keeps the tab title, favicon dot and installed app badge in step with the count, and clears them
+ * when the account's screens unmount, so the next account's connecting screen never shows its count.
+ */
 export function useAppBadge(count: number) {
+  useEffect(() => clearBadge, []);
   useEffect(() => {
     document.title = badgeTitle(count);
     const badging = navigator as BadgingNavigator;

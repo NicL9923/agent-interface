@@ -14,13 +14,13 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-async function client() {
+async function client({ boot = true } = {}) {
   const root = mkdtempSync(join(tmpdir(), "agent-static-"));
   directories.push(root);
   mkdirSync(join(root, "assets"));
   for (const file of [
     "index.html", "native-computer.html", "sw.js", "manifest.webmanifest", "icon-192.png", "index-AbC12345.js",
-    "assets/index-AbC12345.js", "assets/xterm-Zx_9-Q01.css", "assets/logo.png",
+    "assets/index-AbC12345.js", "assets/xterm-Zx_9-Q01.css", "assets/logo.png", ...boot ? ["boot.js"] : [],
   ]) writeFileSync(join(root, file), "x");
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   const { app } = await createApp(config, fakeRuntime({ close: async () => {} }), { background: false, clientRoot: root });
@@ -37,7 +37,8 @@ describe("client cache headers", () => {
 
   it("keeps the shell, worker, manifest and unhashed files revalidating", async () => {
     const app = await client();
-    for (const url of ["/index.html", "/sw.js"])
+    // boot.js must be the copy of the shell that loads it, so it is never kept for an hour.
+    for (const url of ["/index.html", "/sw.js", "/boot.js"])
       expect((await app.inject(url)).headers["cache-control"]).toBe("no-cache");
     // A hash-shaped name outside assets/ and an unhashed name inside it are not content-addressed.
     for (const url of ["/manifest.webmanifest", "/icon-192.png", "/index-AbC12345.js", "/assets/logo.png"])
@@ -60,6 +61,23 @@ describe("client cache headers", () => {
       expect([url, response.statusCode, response.headers["cache-control"], response.headers["content-type"], response.body])
         .toEqual([url, 404, "no-store", "text/plain; charset=utf-8", "Not found"]);
     }
+  });
+
+  it("answers a missing boot.js with an uncached 404, never the shell as a script", async () => {
+    const app = await client({ boot: false });
+    for (const url of ["/boot.js", "/boot.js?v=1"]) {
+      const response = await app.inject(url);
+      expect([url, response.statusCode, response.headers["cache-control"], response.body]).toEqual([url, 404, "no-store", "Not found"]);
+    }
+  });
+
+  it("serves boot.js as a script the app's policy lets the shell run", async () => {
+    const app = await client();
+    const response = await app.inject("/boot.js");
+    expect(response.headers["content-type"]).toMatch(/^(text|application)\/javascript/);
+    // An external same-origin script: 'self' allows it, and no inline script is allowed for it.
+    const scripts = String(response.headers["content-security-policy"]).split("; ").find(directive => directive.startsWith("script-src "));
+    expect(scripts).toBe("script-src 'self' https://accounts.google.com/gsi/client");
   });
 
   it("recognizes hashed assets only inside the assets directory", () => {
