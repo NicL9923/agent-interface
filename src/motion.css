@@ -7,7 +7,8 @@
 
 :root {
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* Springs fall back to the app's ease-out where linear() easing is unsupported. */
+  /* Without linear() easing the soft spring is the app's ease-out and the livelier one is a cubic-bezier with
+     about 5% overshoot; the sampled springs below replace both. */
   --ease-spring-soft: var(--ease-out);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --depth-glow: none;
@@ -207,7 +208,7 @@
 /* Seasonal chrome on home: a slight accent shift and a few faint shapes drifting behind the list. */
 /* The rail isolates its layers, so the shapes paint over its background and under everything in it. */
 .bot-rail { isolation: isolate; }
-@media (min-width: 621px) { .bot-rail { position: relative; } }
+@media (width > 620px) { .bot-rail { position: relative; } }
 .bot-rail[data-season="winter"] { --season-color: #7aa9cc; }
 .bot-rail[data-season="clover"] { --season-color: #3f9b58; }
 .bot-rail[data-season="spring"] { --season-color: #d98bb0; }
@@ -239,14 +240,16 @@
 
 @media (prefers-reduced-motion: no-preference) {
   /* Springs on the small pops that do not touch a screen edge. Sheets from the bottom keep ease-out. */
-  @media (min-width: 621px) {
+  /* `width > 620px`, not `min-width: 621px`: the phone rules end at `max-width: 620px`, and between 620 and 621 px
+     at a fractional width neither side would match. */
+  @media (width > 620px) {
     .command-palette[open] { animation: palette-in 320ms var(--ease-spring-soft); }
     .settings-sheet[open] { animation: settings-in 380ms var(--ease-spring-soft); }
   }
   dialog[open] { animation-duration: 340ms; animation-timing-function: var(--ease-spring-soft); }
   .bot-menu { animation: bot-menu-in 260ms var(--ease-spring-soft); }
   .home-new-menu { transform-origin: top right; animation: bot-menu-in 280ms var(--ease-spring-soft); }
-  .dock-item { animation: dock-in 380ms var(--ease-spring); }
+  .dock-item { animation: dock-in 380ms var(--ease-spring-soft); }
   .toast { animation: toast-in 420ms var(--ease-spring); }
   .jump-latest { animation: jump-latest-in 420ms var(--ease-spring); }
   .message-outgoing { animation: message-send 460ms var(--ease-spring) both; }

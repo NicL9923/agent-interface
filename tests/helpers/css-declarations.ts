@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Every stylesheet the web client ships, read as declarations that know their file, line, selector and the at-rules
-// around them. Enough structure for the cascade checks in tests/css-keyframes.test.ts and tests/motion-layer.test.ts.
+// around them. Enough structure for the cascade checks in tests/css-keyframes.test.ts and tests/motion-css-order.test.ts.
 const sheets = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
   entry.isDirectory() ? sheets(join(dir, entry.name)) : entry.name.endsWith(".css") ? [join(dir, entry.name)] : []);
 
@@ -95,7 +95,18 @@ export const conditionsOf = ({ blocks }: Declaration): string => blocks.slice(0,
   .filter(Boolean).join(" > ");
 
 /**
- * Whether two rules can apply to the same screen. A rule with no condition applies everywhere, so it meets every
- * other. Two different conditions are taken as different screens, such as a phone variant beside a desktop one.
+ * Pairs of conditions that never hold at the same viewport width, in the form `conditionsOf` returns them. Only an
+ * entry here keeps two different conditions apart. The phone layout's `(max-width: 620px)` and the motion layer's
+ * `(width > 620px)` meet at the same pixel and split everywhere else.
  */
-export const conditionsMeet = (first: string, second: string) => !first || !second || first === second;
+const complementary: [string, string][] = [
+  ["@media (max-width: 620px)", "@media (width > 620px)"],
+];
+
+/**
+ * Whether two rules can apply to the same screen. A rule with no condition applies everywhere, so it meets every
+ * other. Two different conditions are taken as overlapping too, because a width, pointer or container range in one
+ * file can cover a screen another file's range covers, unless the pair is listed as complementary above.
+ */
+export const conditionsMeet = (first: string, second: string) => first === second || !first || !second
+  || !complementary.some(([left, right]) => (first === left && second === right) || (first === right && second === left));

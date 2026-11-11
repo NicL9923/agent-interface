@@ -67,11 +67,13 @@ shorthand family, overlapping motion setting and screen condition:
 - `tests/helpers/css-declarations.ts`: the block scanner from `tests/css-keyframes.test.ts`, moved so two files
   share it, plus `conditionsOf` and `conditionsMeet`.
 - `tests/css-keyframes.test.ts`: the known list is gone. A rule with no media, container or supports condition
-  now meets every conditioned rule for the same selector, except a conditioned rule later in the same file, which
-  is an override such as a phone variant.
+  meets every conditioned rule for the same selector, and so do two different conditions unless the helper lists
+  them as complementary, except a conditioned rule later in the same file, which is an override such as a phone
+  variant. The list holds one pair, `(max-width: 620px)` and `(width > 620px)`.
 - `tests/motion-css-order.test.ts`: no stylesheet other than the ones `main.tsx` imports before `motion.css` sets a
   property, by shorthand family, that the motion layer sets on the same selector under an overlapping motion
-  setting and condition. The five dark-mode depth entries are the expected list, so the follow-up empties it.
+  setting and condition. The five dark-mode depth entries are the expected list, so the follow-up empties it. Each
+  entry carries the count of the other sheet's declarations, so a second one on a listed selector fails.
 
 ### Red proof
 
@@ -103,3 +105,91 @@ Each break made by hand with a script that restores the files after; the two tes
 `npm ci` once. `npm run typecheck`, `npm run lint` passed. `ruff check .` (ruff 0.17.3): all checks passed.
 `npm test`: 196 files, 3,273 tests passed. `npm run build` passed. `npm run test:e2e`: 24 passed in Chromium.
 Safari, Firefox and a real phone: not run.
+
+## Review fixes
+
+A cross-provider review of `4f420e1` found seven things. Each is below with its change and its proof.
+
+1. **The reduced-motion gate had no test.** Moving `.toast`'s spring out of the `no-preference` block left both CSS
+   tests green. `tests/css-keyframes.test.ts` now requires every `animation` or `animation-name` in `src/motion.css`
+   to apply only under `no-preference`, with two named exceptions, each asserted to still be in use:
+   `.chat-header-identity` (`header-lift` follows the transcript's scroll offset, not time, and only fades a border,
+   color and shadow in; nothing translates or scales) and the phone navigation's `::view-transition-old/new(root)`
+   (`data-navigation` is set only while a view transition runs, and `canMorph` in `navigation-morph.ts` starts none
+   under reduced motion). The `.message-outgoing` test stays, since it also looks at every other sheet.
+2. **Two different conditions were taken as different screens.** `conditionsMeet` now treats any two different
+   conditions as overlapping unless the pair is in `complementary` in `tests/helpers/css-declarations.ts`. With
+   the list empty the guard also reports `.bot-rail position` and the palette and sheet pairs, so the width pair
+   is the only entry and no expected entry was added.
+3. **The 620 to 621 px gap.** `src/motion.css` now uses `(width > 620px)` for the desktop palette and Settings
+   springs and for `.bot-rail { position: relative }`, which had the same `min-width: 621px` gap. The built CSS
+   already carries range syntax: Vite 8's minifier turns the app's `(max-width: 620px)` into `(width<=620px)`, and
+   Tailwind v4 needs Safari 16.4 or newer, which is also where range syntax arrives (Chrome 104, Firefox 63).
+   Chromium and Firefox round a viewport's width to whole pixels for media queries, so 620.3 and 620.6 px cannot
+   be reached in either. An iframe 620.3 px wide reports 620 and the phone rules; 620.6 px reports 621 and the
+   desktop ones. A container 620.297 and 620.594 px wide does compare fractionally in Chromium, and shows the gap:
+   `max-width: 620px` and `min-width: 621px` both miss both widths, while `max-width: 620px` and `width > 620px`
+   cover them. A browser with fractional viewports, such as Safari under page zoom, is where the gap could show.
+   Not run there. `src/components/artifacts.css:77` keeps its `(max-height: 520px) and (min-width: 621px)`, a layout
+   rule outside this change.
+4. **A new collision on a listed selector hid in the expected list.** Each entry now ends in `xN`, the count of
+   the other sheet's declarations. `.bot-rail background` is `x2`: the base `background: var(--rail)` and the phone
+   layout's `background: var(--surface)`.
+5. **The dock item's top border was clipped at peak overshoot.** `.composer-area > .status-dock` has
+   `overflow-y: auto`, and the livelier spring passed rest by 0.74 px at 114 ms. `.dock-item` takes the soft spring.
+   A `.dock-item` holding a `.notice` with a 1 px `#c00` border, in a real `.status-dock` in the open chat, paused:
+
+   | Frame | Item top vs the dock's top edge | Top border row, in pixels |
+   | --- | --- | --- |
+   | Livelier spring, 114 ms (before) | -0.744 px | `#f2bfbf`, about a quarter of the red |
+   | Soft spring, 114 ms | +0.845 px | whole, below the edge |
+   | Soft spring, its peak near 200 ms | -0.103 px | `#d11b1b`, within a few percent of `#cc0000` |
+
+   The clip is not zero, but a tenth of a pixel is not visible.
+6. `tests/helpers/css-declarations.ts` names `tests/motion-css-order.test.ts`.
+7. **Fallback wording.** Without `linear()` support the soft spring is the app's `cubic-bezier(0.2, 0.8, 0.2, 1)`
+   ease-out, and the livelier one is `cubic-bezier(0.34, 1.4, 0.64, 1)`, about 5% overshoot. The comment in
+   `src/motion.css` said both fell back to ease-out; it now says what each does, and README's "Motion and ambience"
+   says it too. No other file made the claim.
+
+### Red proof for the review fixes
+
+Same method as above, by script, the two test files run each time and the file restored after.
+
+| # | Break | Result |
+| --- | --- | --- |
+| 19 | `.toast`'s spring moved outside the no-preference block | red: `src/motion.css:342 animation: toast-in 420ms var(--ease-spring)` |
+| 20 | A `prefers-reduced-motion: reduce` `.toast` animation added to the layer | red, same test |
+| 21 | The `header-lift` animation removed | red: the `.chat-header-identity` exception is unused |
+| 22 | `@media (min-width: 1000px) { .settings-sheet[open] { animation: settings-in 220ms ease-out; } }` in `home.css` | red in both: the pair against `src/motion.css:247 [@media (width > 620px)]`, and `.settings-sheet[open] animation: src/app/home.css x1` |
+| 23 | The complementary list emptied | red in both: the palette and sheet pairs against `(max-width: 620px)`, and `.bot-rail position: src/app/home.css` |
+| 24 | The palette and sheet back to `(min-width: 621px)` | red in both, so the gap form cannot return unnoticed |
+| 25 | A second `box-shadow` on `.bot-menu` in `home.css` | red: `.bot-menu box-shadow: src/app/home.css x1` became `x2` |
+
+Break 22 on the reviewer's exact rule was green before the change. Finding 5 has no test: a test pinning
+`--ease-spring-soft` on `.dock-item` would assert a constant, and the paused-frame table above is the evidence.
+
+### After the fixes
+
+`node .agents/tools/sample-entrance-animations.mjs` on the production build, Chromium 900 x 700, motion allowed.
+Production and `MODE=dev` JSON are equal value for value. Samples are the paused animation's transform.
+
+| Selector | Animation | Curve | 0 ms | 80 ms | 140 ms | 200 ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| `.bot-menu` | `bot-menu-in` 0.26s | soft spring | scale 0.96 | 0.9948 | 1.0007 | 1.0003 |
+| `.dock-item` | `dock-in` 0.38s | soft spring (was livelier) | y 6 | 2.11 | 0.31 | -0.10 |
+| `.toast` | `toast-in` 0.42s | livelier spring | y 10 | 0.62 | -1.13 | -0.18 |
+| `.jump-latest` | `jump-latest-in` 0.42s | livelier spring | y 8 | 0.50 | -0.90 | -0.15 |
+| `.command-palette[open]` | `palette-in` 0.32s | soft spring | y -8, scale 0.98 | -1.96, 0.9951 | -0.03, 0.9999 | 0.13, 1.0003 |
+| `.settings-sheet[open]` | `settings-in` 0.38s | soft spring | y 16, scale 0.98 | 5.62, 0.9930 | 0.83, 0.9990 | -0.27, 1.0003 |
+| All six, reduced motion | `none` | | | | | |
+
+At 390 px the palette and settings sheet still run `palette-up` 0.22s and `settings-up` 0.26s ease-out, and `none`
+under reduced motion; the other four match the table.
+
+### Checks after the fixes
+
+`npm ci` (real), then `npm run typecheck`, `npm run lint` passed. `ruff check .` (ruff 0.17.3): all checks passed.
+`npm test`: 197 files, 3,299 tests passed. `npm run build` passed. `npm run test:e2e`: 24 passed in Chromium. Merged
+`origin/main` at `785f4f2` first. Safari, Firefox and a real phone: not run for the app; Firefox only for the
+integer rounding of an iframe's width.

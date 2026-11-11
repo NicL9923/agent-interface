@@ -35,7 +35,8 @@ describe("CSS keyframes", () => {
     // while the dev server ran the springs. `animation: none` under reduced motion removes an animation rather than
     // giving one. Media, container and supports conditions other than the motion setting are part of the context: a
     // rule with none meets every other, as the unconditional palette rule met the desktop spring, and two different
-    // conditions are taken as different screens. A conditioned rule later in the same file as an unconditioned one is
+    // conditions meet too unless the helper lists them as complementary, as a desktop-only 1000px rule against the
+    // motion layer's `(width > 620px)` one. A conditioned rule later in the same file as an unconditioned one is
     // an override, such as a phone variant, and both stay live. A rule is its file and the line its selector starts on.
     type Owner = { path: string; line: number; conditions: string };
     const rules = new Map<string, Owner[]>();
@@ -65,5 +66,28 @@ describe("CSS keyframes", () => {
     expect(outgoing.map(declaration => ({ motions: motionsOf(declaration), value: declaration.value }))).toEqual([
       { motions: ["no-preference"], value: expect.stringMatching(/^message-send\b/) },
     ]);
+  });
+
+  it("runs every animation in the motion layer only when motion is allowed, bar the two listed", () => {
+    // The layer is the only animation rule for its selectors, so nothing else turns a time-based animation off under
+    // reduced motion: this gate is the whole protection. Moving `.toast`'s spring out of the no-preference block
+    // would otherwise run `toast-in` for someone who asked for none.
+    const exceptions: [RegExp, string][] = [
+      // Driven by the transcript's scroll offset, not by time, and it only fades a border, a color and a shadow in;
+      // nothing translates or scales, and it is already inside an @supports for scroll timelines.
+      [/^\.chat-header-identity$/, "scroll-driven header lift"],
+      // Set only while a view transition runs, and navigation-morph.ts starts none when reduced motion is asked for,
+      // so `data-navigation` never appears under it.
+      [/^:root\[data-navigation="(forward|back)"\]::view-transition-(old|new)\(root\)$/, "phone navigation slide"],
+    ];
+    const layer = animating.filter(declaration => declaration.path === "src/motion.css");
+    const allowed = (declaration: Declaration) => selectorsOf(declaration)
+      .every(selector => exceptions.some(([pattern]) => pattern.test(selector)));
+    const ungated = layer.filter(declaration => motionsOf(declaration).join() !== "no-preference" && !allowed(declaration));
+    expect(ungated.map(declaration => `${at(declaration)} ${declaration.property}: ${declaration.value}`)).toEqual([]);
+    // An exception nothing uses any more is a hole waiting to be refilled.
+    for (const [pattern] of exceptions) {
+      expect(layer.some(declaration => selectorsOf(declaration).some(selector => pattern.test(selector))), String(pattern)).toBe(true);
+    }
   });
 });

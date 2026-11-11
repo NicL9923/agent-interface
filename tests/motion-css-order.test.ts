@@ -33,18 +33,26 @@ describe("the motion layer's stylesheet order", () => {
     const layer = all.filter(declaration => declaration.path === "src/motion.css" && !inKeyframes(declaration));
     const others = all.filter(declaration => declaration.path !== "src/motion.css" && !before.includes(declaration.path)
       && !inKeyframes(declaration));
-    const shared = new Set(layer.flatMap(motion => selectorsOf(motion).flatMap(selector => others
-      .filter(other => selectorsOf(other).includes(selector) && overlap(motion, other))
-      .map(other => `${selector} ${family(motion.property)}: ${other.path}`))));
+    // Each entry counts the other stylesheet's declarations that meet the layer's on that selector and property family,
+    // so a second box-shadow added to a listed selector in a listed file shows up as a new count.
+    const shared = new Map<string, Set<Declaration>>();
+    for (const motion of layer) {
+      for (const selector of selectorsOf(motion)) {
+        for (const other of others.filter(other => selectorsOf(other).includes(selector) && overlap(motion, other))) {
+          const key = `${selector} ${family(motion.property)}: ${other.path}`;
+          shared.set(key, (shared.get(key) ?? new Set()).add(other));
+        }
+      }
+    }
     // Dark mode's lit top edge on raised panels and the rail's grain, which the built app drops today. Their base
     // rules in home.css and shell.css set the same box-shadow and background. That is its own change; when it lands,
-    // this list empties.
-    expect([...shared].sort()).toEqual([
-      ".bot-menu box-shadow: src/app/home.css",
-      ".bot-rail background: src/app/home.css",
-      ".command-palette box-shadow: src/app/shell.css",
-      ".home-new-menu box-shadow: src/app/home.css",
-      ".settings-sheet box-shadow: src/app/home.css",
+    // this list empties. The rail's two are its base background and the phone layout's.
+    expect([...shared].map(([key, found]) => `${key} x${found.size}`).sort()).toEqual([
+      ".bot-menu box-shadow: src/app/home.css x1",
+      ".bot-rail background: src/app/home.css x2",
+      ".command-palette box-shadow: src/app/shell.css x1",
+      ".home-new-menu box-shadow: src/app/home.css x1",
+      ".settings-sheet box-shadow: src/app/home.css x1",
     ]);
   });
 });
