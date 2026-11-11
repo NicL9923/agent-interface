@@ -7,11 +7,6 @@ import { defaultPreferences, type Bootstrap, type Preferences } from "../src/sha
 import type { ComponentProps } from "react";
 import { button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
-vi.mock("../src/components/DeviceNotifications", () => ({ NotificationSettings: () => null }));
 
 let root: Root;
 let container: HTMLDivElement;

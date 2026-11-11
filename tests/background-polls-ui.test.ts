@@ -14,7 +14,6 @@ import { advance, mountRoot } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
 // Avatar drawing is covered by its own suite; these tests exercise group interactions.
-vi.mock('../src/components/Avatar',()=>({Avatar:({botId}:{botId?:string})=>createElement('span',{'data-avatar':botId})}));
 let root: Root, visibility: DocumentVisibilityState;
 const bootstrap = { user: { id: "one", name: "One" }, preferences: defaultPreferences, connection: { connected: true },
   bots: [{ id: "ranch", name: "Ranch", activity: "idle" }] } as Bootstrap;

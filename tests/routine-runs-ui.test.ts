@@ -16,12 +16,7 @@ vi.mock("../src/client-api", async original => (await import("./helpers/request-
   write: vi.fn(),
   uploadFile: vi.fn(),
   clearResponseCache: vi.fn(),
-}))(original)));
-vi.mock("../src/app/use-chat-presence", () => ({ useChatPresence: vi.fn() }));
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => createElement("span"),
-}));
+}))(original), { heartbeats: false }));
 
 let preferences: Preferences;
 const boot = (): Bootstrap => ({

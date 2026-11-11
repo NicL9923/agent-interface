@@ -101,6 +101,19 @@ export function stubMatchMedia(matches: boolean | ((query: string) => boolean) =
   })));
 }
 /**
+ * Runs every animation frame request at once. A request made from inside a frame is dropped, so the
+ * real Avatar's loop, which asks for its next frame each time, runs once and ends instead of recursing.
+ */
+export function stubImmediateFrames() {
+  let inside = false;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    if (inside) return 0;
+    inside = true;
+    try { callback(0); } finally { inside = false; }
+    return 0;
+  });
+}
+/**
  * The props React last rendered onto an element. React replaces this object whenever the element's
  * component renders again, and keeps it when a memoized component above it skips rendering.
  */

@@ -8,10 +8,6 @@ import { mountRoot, waitForUi } from "./ui-harness";
 
 // The menu code is held back to play a slow network, so these are gestures that beat it.
 const gate = { hold: undefined as Promise<void> | undefined };
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
 
 type SidebarProps = ComponentProps<typeof import("../src/app/Sidebar").Sidebar>;
 let root: Root;

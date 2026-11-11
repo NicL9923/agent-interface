@@ -12,7 +12,6 @@ import { DRAFT_POLL_MS } from '../src/app/use-draft';
 import { LIVE_POLL_MS } from '../src/app/stream-health';
 
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async original=>({...await original<typeof import('../src/client-api')>(),api:vi.fn(),cachedResponse:vi.fn(),write:vi.fn(),clearResponseCache:vi.fn()}))(original)));
-vi.mock('../src/components/Avatar',async original=>({...await original<typeof import('../src/components/Avatar')>(),Avatar:()=>null}));
 
 // The app server's draft rules, for one person: the phone acts on it directly.
 const drafts=new Map<string,SavedDraft>();

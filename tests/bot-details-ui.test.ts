@@ -7,10 +7,6 @@ import { defaultPreferences, type Bootstrap, type Preferences } from "../src/sha
 import type { ComponentProps } from "react";
 import { mountRoot, typeInto } from "./ui-harness";
 
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: (props: { reducedMotion?: boolean; size?: number }) => createElement("span", { "data-avatar-size": props.size, "data-still": props.reducedMotion ? "" : undefined }),
-}));
 
 let root: Root;
 let container: HTMLDivElement;
@@ -45,7 +41,7 @@ const pick = (value: string) => act(async () => {
 
 it("shows a live avatar, who it is, and the per-assistant choices", async () => {
   await render();
-  expect(container.querySelector("[data-avatar-size='88']")?.hasAttribute("data-still")).toBe(false);
+  expect(container.querySelector(".avatar-wrap[style*='--avatar-size: 88px']")?.getAttribute("data-reduced-motion")).toBe("false");
   expect(container.querySelector("h2")?.textContent).toBe("Ranch hand");
   expect(container.querySelector(".bot-details-hero")?.textContent).toContain("Shared with your household");
   expect(facts()).toEqual({ Model: "p / m", Now: "Working", "Last message": "No messages yet" });
