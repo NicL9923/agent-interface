@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useSavedMessages } from "./use-saved-messages";
 import { request } from "../client-api";
 import { routeUrl } from "../shared/api";
 import type { Message } from "../shared/types";
@@ -21,7 +22,9 @@ export function useRoutineRuns({ botId, messages, complete, enabled, hiddenRouti
   /** IDs of this assistant's routines whose runs this person hid. */
   hiddenRoutines: readonly string[];
 }): RoutineRun[] {
-  const lastSaved = messages?.findLast(message => !message.id.endsWith("-inflight"))?.id;
+  // The saved rows only: a streamed delta replaces the list but not them, so the scan below waits for a saved message.
+  const saved = useSavedMessages(messages);
+  const lastSaved = saved?.at(-1)?.id;
   const [running, setRunning] = useState(false);
   const page = useResource(enabled ? routeUrl("GET /bots/:botId/routine-runs", { botId }) : null, {
     load: (_, signal) => request("GET /bots/:botId/routine-runs", { params: { botId }, signal }),
@@ -30,13 +33,13 @@ export function useRoutineRuns({ botId, messages, complete, enabled, hiddenRouti
     // While a run is going, a quicker reread shows it finish.
     pollMs: running ? RUNS_RUNNING_POLL_MS : RUNS_POLL_MS,
   });
-  const oldest = messages?.find(message => message.createdAt)?.createdAt;
+  const oldest = saved?.find(message => message.createdAt)?.createdAt;
   const hidden = hiddenRoutines.join("\n");
   return useMemo(() => {
-    if (!messages || !page.data) return [];
+    if (!saved || !page.data) return [];
     const skip = new Set(hidden.split("\n"));
     const shown = runsInWindow(page.data.runs, { oldest, complete, hidden: routineId => skip.has(routineId) });
-    const delivered = deliveredRuns(shown, messages);
+    const delivered = deliveredRuns(shown, saved);
     return shown.filter(run => !delivered.has(run.id));
-  }, [messages, page.data, oldest, complete, hidden]);
+  }, [saved, page.data, oldest, complete, hidden]);
 }

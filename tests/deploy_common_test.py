@@ -108,6 +108,59 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.host.ops.iterdir()), ["commands.log", "phase.json"])
         self.assertEqual(sorted(path.name for path in self.host.base.iterdir()), ["current", "releases", "shared"])
 
+    def release(self, name, assets=True):
+        """A release directory the way the build leaves it: dist/client with a hashed asset, unless ``assets`` is false."""
+        release = self.host.base / "releases" / name
+        (release / "dist").mkdir(parents=True, exist_ok=True)
+        if assets: (release / "dist/client/assets").mkdir(parents=True, exist_ok=True)
+        return release
+
+    def named(self, release):
+        file = release / deploy_common.PREVIOUS_RELEASE_FILE
+        return json.loads(file.read_text()) if file.exists() else None
+
+    def test_the_release_going_live_is_told_which_release_it_replaces(self):
+        old, new = self.release("old"), self.release("new")
+        self.d.switch(new)
+        self.assertEqual(self.named(new), {"assets": str(old / "dist/client/assets")})
+        # The old release is untouched, and the file was written whole, leaving no temporary one.
+        self.assertIsNone(self.named(old))
+        self.assertEqual(sorted(path.name for path in (new / "dist").iterdir()), ["client", "previous-release.json"])
+        # A rollback names the release it came from, so pages opened under it still load.
+        self.d.switch(old)
+        self.assertEqual(self.named(old), {"assets": str(new / "dist/client/assets")})
+        self.assertEqual(self.named(new), {"assets": str(old / "dist/client/assets")})
+
+    def test_a_stale_name_is_replaced_or_removed_when_there_is_nothing_to_name(self):
+        old, new = self.release("old"), self.release("new")
+        (new / deploy_common.PREVIOUS_RELEASE_FILE).write_text('{"assets": "/gone/release/dist/client/assets"}')
+        self.d.switch(new)
+        self.assertEqual(self.named(new), {"assets": str(old / "dist/client/assets")})
+        # Switching to the release already live names nothing: it would be its own previous release.
+        self.d.switch(new)
+        self.assertIsNone(self.named(new))
+        # A previous release without assets has nothing to serve.
+        (self.host.base / "current").unlink(); (self.host.base / "current").symlink_to(self.release("bare", assets=False))
+        (new / deploy_common.PREVIOUS_RELEASE_FILE).write_text('{"assets": "/stale"}')
+        self.d.switch(new)
+        self.assertIsNone(self.named(new))
+
+    def test_a_first_release_with_no_current_link_names_nothing(self):
+        new = self.release("new")
+        (self.host.base / "current").unlink()
+        self.d.switch(new)
+        self.assertIsNone(self.named(new))
+        self.assertEqual((self.host.base / "current").resolve(), new.resolve())
+
+    def test_a_name_that_cannot_be_written_is_logged_and_never_stops_the_cutover(self):
+        old = self.release("old")
+        new = self.host.base / "releases/new"  # no dist directory to write into
+        self.d.switch(new)
+        self.assertEqual((self.host.base / "current").resolve(), new.resolve())
+        self.assertIn("The previous release was not named to the app: ", (self.host.ops / "commands.log").read_text())
+        self.assertFalse((new / "dist").exists())
+        self.assertTrue(old.exists())
+
     def test_voice_plugin_link_follows_current_and_never_replaces_another_path(self):
         link = self.host.home / "plugins/wildbots-voice"
         self.assertTrue(self.d.voice_plugin_ready())
