@@ -62,9 +62,39 @@ export const routineTrialKey = (user: string, routine: string) => `agent-interfa
 export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;
 /** A form card's answers on their way to the assistant, or sent, so a reload neither loses nor resends them. */
 export const formReplyKey = (user: string, bot: string, message: string, card: string) => `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
-/** When this browser's sign-in lapses and which chats it could open. See linked-chat.ts. */
+/** When this browser's sign-in lapses and which chats it could open. See account-epoch.ts. */
 export const signInHintKey = "agent-interface:sign-in-hint";
+/** The theme this device last showed the account the sign-in hint names, for public/boot.js. */
+export const savedThemeKey = "agent-interface:theme";
+/** The home this device last showed that account, to draw before bootstrap answers. See saved-roster.ts. */
+export const savedRosterKey = "agent-interface:roster";
+/**
+ * Copies that belong to the account the sign-in hint names. They go with the hint, at sign-out, at a
+ * refused session and at a new sign-in, and are shown only while the hint names their account.
+ */
+export const accountKeys = [savedThemeKey, savedRosterKey];
+/** Which account every tab of this browser acts for, and whether a sign-in or sign-out is under way. See account-epoch.ts. */
+export const authEpochKey = "agent-interface:auth-epoch";
 export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
+/**
+ * The localStorage records that hold what a member wrote or chose to send: drafts, a message whose
+ * outcome is uncertain, a group chat's draft and send, a group being made, and a form's answers.
+ * Sign-out removes them. Records that hold only request IDs, choices or a prompt flag stay, so an
+ * uncertain request can still be checked instead of repeated after the member signs in again.
+ */
+const contentPrefixes = (user: string) => [
+  `agent-interface:draft:${user}:`, `agent-interface:submission:${user}:`, `agent-interface:group-send:${user}:`,
+  `agent-interface:form-reply:${user}:`,
+];
+/** Removes the records of `user` that hold their content. Every name includes the account, so no other member's go. */
+export function forgetAccountContent(user: string) {
+  const prefixes = contentPrefixes(user), exact = groupCreateKey(user);
+  try {
+    const names = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    for (const name of names)
+      if (name !== null && (name === exact || prefixes.some(prefix => name.startsWith(prefix)))) localStorage.removeItem(name);
+  } catch { /* Storage that cannot be listed holds nothing this app could read either. */ }
+}
 export function localRead<T>(key: string): T | null {
   try {
     return JSON.parse(localStorage.getItem(key) || "null");

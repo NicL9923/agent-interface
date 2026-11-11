@@ -20,6 +20,10 @@ from hermes_extension_journal_test import PooledHermes, Replies, extension, save
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents/tools"))
 import deploy_common  # noqa: E402
+from support import load_source  # noqa: E402
+
+# The update worker's platform helper keeps its own copy of the busy answer.
+upgrade_helper = load_source("scripts/hermes-upgrade-linux.py", "send_lanes_upgrade_helper")
 
 ADMISSION = ("image.attach", "prompt.submit", "session.steer")
 # Every native method these tests let the add-on call: admission, and the roster and activation an open makes.
@@ -405,8 +409,10 @@ class SendLaneTests(unittest.TestCase):
                 # The waiting send holds its own reservation before any thread runs it.
                 self.assertEqual(hermes.active[0], before + 1)
                 refused = maintenance("acquire")
-                # The guarded release retries only this exact answer; any other error is held for review.
+                # The guarded release and the update worker refuse harmlessly only on this exact answer;
+                # any other error is held for review.
                 self.assertEqual((refused["error"], lease.exists()), (deploy_common.BUSY_REFUSAL, False))
+                self.assertEqual(refused["error"], upgrade_helper.BUSY_REFUSAL)
                 admitting.set()
                 self.assertTrue(replies.wait("running", "waiting"))
                 self.assertEqual(hermes.settled(), 0)

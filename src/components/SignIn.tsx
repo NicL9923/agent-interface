@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { write } from "../client-api";
+import { signInWith } from "../app/account-change";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { Avatar } from "./Avatar";
@@ -24,21 +24,17 @@ export function AvatarTrio() {
   </div>;
 }
 
-export function SignIn({ onSuccess }: { onSuccess: () => void }) {
+/** A sign-in that succeeds starts the app again for the account, in this tab and every other (see account-change.ts). */
+export function SignIn() {
   const [member, setMember] = useState("one");
   const [attempt, setAttempt] = useState(0);
   const google = useRef<HTMLDivElement>(null);
-  const success = useRef(onSuccess);
-  success.current = onSuccess;
   // Checked again while the page is shown, so finishing setup elsewhere shows up here.
   const auth = useResource<AuthConfig>("/auth/config", { deps: [attempt], pollMs: 8000, wake: true });
   const { data: config, error: configError } = auth;
   const signing = useAction();
   const { busy } = signing;
-  const signIn = (path: string, body: unknown) => signing.run(async ({ current }) => {
-    await write(path, body);
-    if (current()) success.current();
-  });
+  const signIn = (path: string, body: unknown) => signing.run(() => signInWith(path, body));
   const button = useGoogleButton(google, config?.googleClientId, attempt, credential => void signIn("/auth/google", { credential }));
   const googleLoading = button.loading;
   const error = signing.error || button.error;
