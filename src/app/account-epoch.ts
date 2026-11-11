@@ -94,7 +94,7 @@ const changingNow = (record: AuthEpoch | null) => !!record?.changing && Date.now
  * reaching it: the settled sign-out, or a sign-in begun over it whose tab closed mid-request, so its
  * mark went stale. Neither reads anything until the server's session ends.
  */
-const owesLogout = (record: AuthEpoch | null): record is AuthEpoch => !!record?.logout && (!!record.signedOut || !!record.changing && !changingNow(record));
+const owesLogout = (record: AuthEpoch | null) => !!record?.logout && (!!record.signedOut || !!record.changing && !changingNow(record));
 
 // Never equal to stored text: a tab that loads during another tab's transition acts under nothing until it settles.
 const WAITING = "\u0000waiting";
@@ -445,12 +445,12 @@ export function drawingAccount(user: string) {
 /** The account this browser signed out of while the server could not be reached, until the server's session ends. */
 export function pendingSignOut() {
   const record = current();
-  return owesLogout(record) ? record.user ?? "" : null;
+  return record && owesLogout(record) ? record.user ?? "" : null;
 }
 /** The server's session ended. Only the mark goes: every tab already shows sign-in. */
 export function signOutFinished() {
   const record = current();
-  if (!owesLogout(record)) return;
+  if (!record || !owesLogout(record)) return;
   const mine = stored() === held;
   const now = store(settled({ signedOut: true, user: record.user }));
   if (mine) held = seen = now;
