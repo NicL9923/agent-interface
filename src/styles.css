@@ -516,7 +516,6 @@ a {
   color: var(--ink);
   font-size: 0.8125rem;
   font-weight: 600;
-  box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
   transform: translateX(-50%);
 }
 .jump-latest:hover:enabled {

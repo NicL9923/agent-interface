@@ -1,4 +1,5 @@
 import type { GroupEvent, GroupLatest, GroupPage, GroupRoom } from "../shared/collaboration.js";
+import { cutText } from "../shared/cut-text.js";
 import { scheduledPost } from "../shared/group-activity.js";
 import { markdownPlain } from "../shared/plain-text.js";
 
@@ -35,7 +36,7 @@ export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, 
     const member = room.members.find(item => item.member_id === id || item.member_id === event.payload?.member_id);
     author = member?.display_name || member?.profile || "Assistant";
   }
-  return { text: text.length > LATEST_TEXT_CHARS ? `${text.slice(0, LATEST_TEXT_CHARS - 1).trimEnd()}…` : text, at: new Date(event.created_at * 1000).toISOString(), author };
+  return { text: text.length > LATEST_TEXT_CHARS ? `${cutText(text, LATEST_TEXT_CHARS - 1).trimEnd()}…` : text, at: new Date(event.created_at * 1000).toISOString(), author };
 }
 
 type Read = (roomId: string, since: number) => Promise<GroupPage>;

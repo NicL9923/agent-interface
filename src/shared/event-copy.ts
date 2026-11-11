@@ -1,3 +1,4 @@
+import { safeCut } from "./cut-text.js";
 import type { RuntimeEvent } from "./types.js";
 
 // The add-on titles task events generically; the assistant's name and its own words say more.
@@ -11,7 +12,8 @@ export function excerpt(text: string | undefined, limit = 180) {
   const plain = (text ?? "").replace(/\s+/g, " ").trim();
   if (plain.length <= limit) return plain;
   const cut = plain.slice(0, limit);
-  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), limit * 0.6)).replace(/[\s,;:.–·-]+$/, "")}…`;
+  const space = cut.lastIndexOf(" ");
+  return `${cut.slice(0, space >= limit * 0.6 ? space : safeCut(cut, limit * 0.6)).replace(/[\s,;:.–·-]+$/, "")}…`;
 }
 
 /** A routine's name as people know it, without the "[bot:<id>] " owner tag Hermes keeps on it. */

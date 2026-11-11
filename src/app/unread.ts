@@ -1,5 +1,7 @@
-import { useEffect, useState } from "react";
-import type { ReadThrough } from "../shared/unread";
+import { useEffect, useMemo, useState } from "react";
+import type { Bot, Message } from "../shared/types";
+import { latestMessageAt, type ReadThrough } from "../shared/unread";
+import { useSavedMessages } from "./use-saved-messages";
 
 // The unread rule is shared with the server, which counts the app badge with it.
 export { badgeCount, decisionStates, isUnread, latestMessageAt, type ReadThrough } from "../shared/unread";
@@ -20,4 +22,13 @@ export function useReadThrough(userId: string | undefined, shownBotId: string | 
       ? previous : { ...previous, [shownBotId]: latest });
   }, [shownBotId, latest]);
   return readThrough;
+}
+
+/**
+ * The newest message time of a chat on screen: its roster preview and its saved messages. It is worked out when a
+ * saved message arrives or the roster changes, not on every keystroke in the composer or delta of a streaming reply.
+ */
+export function useLatestMessageAt(bot: Bot | undefined, messages: Message[] | undefined) {
+  const saved = useSavedMessages(messages);
+  return useMemo(() => bot ? latestMessageAt(bot, saved) : undefined, [bot, saved]);
 }

@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import type { ActivityState, Bootstrap, Bot } from "../shared/types";
 import type { GroupRoom } from "../shared/collaboration";
 import { memberNames } from "./home-rooms";
@@ -26,7 +26,7 @@ function ModelChipPlaceholder({ bot, failed = false }: { bot: Bot; failed?: bool
  * Like a messaging app: a lone back button on phones, and the assistant itself as the
  * one control that opens its details, where pinning, artifacts and settings live.
  */
-export function ChatHeader({ view, boot, selected, room, avatarState, offline = false, modelLocked = false, railOpen, onOpenRail, onDetails, onModelSaved }: {
+export const ChatHeader = memo(function ChatHeader({ view, boot, selected, room, avatarState, offline = false, modelLocked = false, railOpen, onOpenRail, onDetails, onModelSaved }: {
   view: View;
   boot: Bootstrap;
   selected?: Bot;
@@ -89,4 +89,4 @@ export function ChatHeader({ view, boot, selected, room, avatarState, offline = 
       )}
     </header>
   );
-}
+});

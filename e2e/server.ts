@@ -26,8 +26,8 @@ const seedMessages = () => new Map<string, Message[]>([
 ]);
 // Replaced between tests, so no test sees what another sent. A reply still pending from before holds its old thread.
 let messages = seedMessages();
-const watchers = new Map<string, Set<(kind?: "inflight") => void>>();
-const notify = (botId: string, kind?: "inflight") => { for (const changed of watchers.get(botId) ?? []) changed(kind); };
+const watchers = new Map<string, Set<(kind?: "inflight", turnVersion?: string) => void>>();
+const notify = (botId: string, kind?: "inflight", turnVersion?: string) => { for (const changed of watchers.get(botId) ?? []) changed(kind, turnVersion); };
 
 /**
  * The Trail Cook streams its reply through a tool call, as Hermes does: words arrive as live growth, the reply so
@@ -41,9 +41,10 @@ let running: Running | undefined, generation = 0, readAt = -1;
 const followers = new Set<() => void>();
 const activityOf = (turn: Running): Activity => ({ runId: turn.runId,
   state: turn.done ? "done" : turn.tools.some(tool => tool.status === "running") ? "working" : "thinking" });
-function structural(botId: string) {
+/** `covered`: the change is one a turn event carries whole, as a tool finishing is, so its notice names the version that event reaches. */
+function structural(botId: string, covered = false) {
   const asked = ++generation;
-  notify(botId);
+  notify(botId, undefined, covered ? `e2e:0:${asked}` : undefined);
   if (followers.size) setTimeout(() => {
     if (generation !== asked) return;
     readAt = asked;
@@ -65,7 +66,7 @@ function streamReply(thread: Message[], runId: string, prompt: string) {
     // one-a-second throttle, and the chat reads again only after several more words. Only a turn read brings
     // the first of them.
     steps.push(() => { save(); turn.tools = [{ id: "t1", name: "terminal", status: "running" }]; structural(STREAMING); });
-    steps.push(() => { turn.tools = [{ id: "t1", name: "terminal", status: "completed" }]; structural(STREAMING); });
+    steps.push(() => { turn.tools = [{ id: "t1", name: "terminal", status: "completed" }]; structural(STREAMING, true); });
     words("Post two is loose, so I tightened the wire and checked the gate.");
     steps.push(() => { save(); turn.done = true; structural(STREAMING); });
   }

@@ -295,15 +295,56 @@ handler first refuses at once, without stopping anything, if the request would b
 anyway. Otherwise it stops each running idle compaction, one at a time for up to 30 s
 each, so the hook waits up to 120 s for its answer. The add-on also accepts a `deadline`
 on acquire, the seconds the caller will wait, and writes no lease after it passes; it
-reports that as `maintenance_deadline` in its capabilities. The deadline starts when the
-handler starts, after the request crossed the socket, so a caller sends less than its own
-read timeout, with a margin of a few seconds, or a lease can still land just after it gave up. The hook does not send one yet, so
-everything below still applies to an acquire the hook gave up on. A request fails in one of three
-ways, and the hook reads each differently. The add-on answered with an error: its
-handler returned. The service ticket or the socket failed before the request was
-sent: the add-on never saw it. Or no answer came back after the request may have
-reached it: the handler can still be running, and an acquire handler can still
-write the lease. Each way the acquire ends:
+reports that as `maintenance_deadline: true` in `agent-interface.capabilities`. An older
+add-on ignores the parameter. So the hook asks for the capabilities first, before it saves
+phase `acquiring`, and sends a deadline only when it reads exactly `true`. A read that fails
+in any way counts as no capability: the acquire then runs as it did before the deadline.
+The deadline starts when the handler starts, after the request crossed the socket, so it is
+shorter than the 120 s wait by a margin. The hook sends 90 s, three full 30 s preempt waits,
+which is what the 120 s wait was sized for, and leaves 30 s. The add-on's own overrun past a
+deadline is one 50 ms lock attempt and a 20 ms poll. The margin covers what it does not bound,
+the handler starting late behind a busy thread in Hermes's dispatch, and a longer chain of
+preempts now ends in a refusal instead of a held review. A socket that drops after the send
+gets the same wait, because `NATIVE` waits out the rest of the 120 s before it says the
+deadline passed.
+
+No answer for the whole 120 s does not prove by itself that no lease is coming. Hermes
+runs each request's handler on the event loop's default executor, a thread pool shared by
+every connection, and nothing caps how long a request waits for a thread. A handler that
+starts more than 30 s late runs its deadline past the hook's wait and can write its lease
+after a release that found none. The pool's queue is first in, first out, and that is what the
+watch rests on, but only for one trip through it. A request is `asyncio.to_thread(server.dispatch)`
+(`tui_gateway/ws.py:387`) or, behind the session authority, `asyncio.to_thread(dispatch_legacy)`
+(`:396`) after `AuthorityConnection.dispatch`, which under profile multiplexing first sends the
+owner scope's reads to the same executor (`gateway/session_authorities.py`, `async_owner_scope`).
+Each connection also makes trips before its first frame is read:
+`to_thread(start_deferred_mcp_discovery_now)` (`hermes_cli/web_routers/chat_ws.py:659`) and
+`to_thread(server.resolve_skin)` (`tui_gateway/ws.py:639`), all at `ed1afb0`. The acquire was
+sent over its own socket at least 120 s before the release, so its handler ordinarily starts first
+and writes a lease no later than 90 s plus its own overrun after that. A chain of FIFO trips is
+not FIFO, though: the release's handler can start first if the pool was blocked for over 120 s
+and then again, at the wrong moment, for over 10 s. So after a release that confirms, the hook
+watches for this operation's lease for 100 s (the deadline plus a 10 s grace, which covers a
+handler that starts up to 10 s after the release's, and threads taking the add-on's short
+maintenance lock in another order), journals `acquire_unanswered` for the watch, and releases
+again if the lease shows, confirming that too. Only then does it exit `75`. A watch that sees
+nothing is strong evidence and not a proof: a gap over the grace takes two long blockages of the
+pool in a row, and a lease it misses surfaces as "A lease that appears after exit `75`". A Hermes
+change that runs maintenance outside that pool widens the gap.
+
+The hook also reads the capabilities again once the deadline passes and requires the same
+`executor_epoch`, a value the add-on makes once per process. A restart between the first read
+and the acquire can put an add-on there that ignores the deadline, and its silence proves
+nothing; a different epoch, a read that fails, or an add-on that reports no epoch is treated as
+no deadline, held for review as an older add-on's lost acquire is.
+A request fails in one of four ways, and the hook reads each differently. The add-on answered
+with an error: its handler returned. The service ticket or the socket failed before the request
+was sent: the add-on never saw it. The request carried a deadline and no answer came for the
+whole wait: no lease existed at the release, and one a late handler writes shows in the watch
+after it. Or no answer came back from a request without a deadline, or from an add-on that was
+restarted since the capability read: the handler can still be running, and an acquire handler
+can still write the lease. Each way the
+acquire ends:
 
 | Acquire ends with | Hook | `platform.json` phase | Lease | The app shows |
 | --- | --- | --- | --- | --- |
@@ -312,8 +353,12 @@ write the lease. Each way the acquire ends:
 | A success answer that fails the hook's checks | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
 | The service ticket or the socket failed before the request was sent | Releases, proves nothing changed, exits `75`; a release that also fails exits `1` | `rejected`, or `acquiring` after the `1` | None | Stopped before installation, Hermes open; or failed, held for review |
 | Any other error answer | Exits `1` without a release; the log names the error code | `acquiring` | None from this operation | Failed, held for review |
-| No answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| No answer, and by then no lease, or a lease that names another operation or cannot be read | Exits `76` without a release, and never touches that lease | `acquire_unanswered` | None yet, or another operation's | Failed, held: "Hermes did not answer the request to pause…" |
+| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch` and no lease in the 100 s after a confirmed release | Releases, watches, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| The same, and this operation's lease shows in that watch | Releases again, confirms, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| The same, and a lease that is not this operation's, or cannot be read, appears in that watch | Releases once, leaves the file alone, exits `76` | `acquire_unanswered` | Another operation's, or unreadable | Failed, held: "Hermes did not answer the request to pause…" |
+| The same, and the epoch differs or the second capability read fails | Treated as no deadline: watches five minutes for a lease as below, exits `76` without a release when none shows | `acquire_unanswered` | None yet | Failed, held: "Hermes did not answer the request to pause…" |
+| No deadline sent (an add-on without the capability, or a capability read that failed), no answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| No deadline sent, no answer, and by then no lease, or a lease that names another operation or cannot be read | Exits `76` without a release, and never touches that lease | `acquire_unanswered` | None yet, or another operation's | Failed, held: "Hermes did not answer the request to pause…" |
 
 A failed ticket or connection that fails the same way for the release (a wrong
 service key, a dashboard that is down) exits `1` at once, with no five-minute
@@ -467,6 +512,15 @@ archived a 6.3 GB object store at full compression, which took 29 of the 31 minu
 
 ### Unanswered maintenance acquire
 
+This is for an acquire the hook sent without a deadline: an add-on that does not report
+`maintenance_deadline`, such as the one running when the first release with the deadline is
+installed, or a capability read that failed. With the capability the hook cannot end here by
+a slow acquire. It sends a deadline, treats no answer for the whole wait as proof that no lease
+can appear once a watch after the release agrees, releases and exits `75`, so no step below, and
+in particular no lease written by hand, is needed. Only the failures of a capable add-on that
+prove nothing, such as the hook's own child timing out or an add-on restarted since the
+capability read, still end here.
+
 The update shows as failed with "Hermes did not answer the request to pause for
 this update and may still pause itself." Hermes changes stay paused in the app.
 The quiescence hook already watched five minutes for a late lease before it
@@ -524,6 +578,26 @@ and compare it with this update's OPERATION from step 2. If they differ, stop: a
 the installer to check whether that operation is still running, and leave the file
 alone. Only a lease that names this OPERATION is this update's.
 
+### A lease that appears after exit `75`
+
+Exit `75` after a deadline passed says the tool released, then watched 100 s and saw no lease. That
+rests on Hermes starting the acquire's handler no more than 10 s after the release's (the quiescence
+hook above). A request goes through a chain of first-in, first-out trips, and a chain is not first in,
+first out, so this can happen on today's Hermes if its pool was blocked for over 120 s and then again
+for over 10 s at the wrong moment. If the app shows "Hermes is being upgraded. Your current work and
+drafts are preserved." after such an exit, a handler that started later wrote its lease after the
+watch. No manual lease step is needed beforehand, but this one is, and it is worth a report with the
+pool's blockage in the Hermes log.
+
+1. Find OPERATION: the `operationId` in the tool's private log, or in `status.json` for a guarded
+   app release, or `platform.json` for an update.
+2. Read `maintenanceFile`. Continue only if it holds exactly `{"operationId": "OPERATION"}`. The
+   handler writes the lease last, so it has returned and nothing can write another. Stop and
+   investigate a lease that names another operation or does not parse, and a `.drain_request.json`
+   in the Hermes home.
+3. Delete the file. Hermes admits chats again at once. The tool had already restored the app's saved
+   status and the stage, so nothing else is needed; the operation can run again.
+
 ## App release tooling
 
 App releases and native recovery run from `.agents/tools`. The bootstrap, guarded deploy
@@ -547,10 +621,13 @@ fails with exit `1` (the table below), and `prepare-when-idle.py` does not retry
 
 1. Writes the blocked update status. From here the app refuses sends, update checks and
    installs with "Hermes is being upgraded. Your draft is saved; send it after the update finishes."
-2. Journals `maintenance-acquiring` and takes Hermes's maintenance lease while the app still
-   runs. A send admitted since the check, or any other active work, makes this refuse. The
-   add-on's busy answer is asked again, up to three attempts two seconds apart, because the
-   app's own five-second poll holds a reservation and can make an idle app look busy once.
+2. Asks the add-on for its capabilities, journals `maintenance-acquiring` and takes Hermes's
+   maintenance lease while the app still runs. A send admitted since the check, or any other
+   active work, makes this refuse. The add-on's busy answer is asked again, up to three attempts
+   two seconds apart, because the app's own five-second poll holds a reservation and can make
+   an idle app look busy once. An add-on that reports `maintenance_deadline: true` is sent a
+   90 s deadline with each attempt (the margin is explained under the quiescence hook above);
+   an older one, or a capability read that fails, is sent none.
 3. Reads the gateway's published record with the lease held. A Discord turn runs in the
    gateway, not in the add-on's sessions, so the add-on's busy list never names it; the
    lease admits no new turn, so a count above zero, listed active work or an unreadable record
@@ -566,8 +643,14 @@ returned. Or the request was never sent: the tool's last stdout line from `NATIV
 `{"unsent": true}` because the service ticket or the connection failed, so the add-on never saw
 it and no lease can appear. The tool then releases, which removes this operation's lease if
 acquire took one, and requires no lease to remain, the blocked status to be its own and no update
-request to be pending. It then restores the saved status, journals `maintenance-refused` and
-exits 75. Nothing stopped, so the household keeps the app and the work that refused the lease
+request to be pending. The same holds when an acquire that carried a deadline gets no answer for
+the whole 120 s (the last stdout line from `NATIVE` is `{"deadlinePassed": true}`) and the add-on
+is still the process whose `executor_epoch` was read before the acquire: the add-on writes no
+lease after its deadline, a handler that started late is outwaited, and the tool is not asked
+again. After the release it keeps the blocked status for 100 s and watches for the lease, and
+releases again if one shows (the quiescence hook above says what that rests on). A different epoch
+or a failed second read is held for review like any lost answer. It then restores the saved
+status, journals `maintenance-refused` and exits 75. Nothing stopped, so the household keeps the app and the work that refused the lease
 finishes as usual; `release-app.py activate` leaves the stage prepared to run again. An unsent
 acquire whose release is unsent too cannot prove that, and exits 2 like a failed release.
 
@@ -579,7 +662,9 @@ acquire whose release is unsent too cannot prove that, and exits 2 like a failed
 | A success answer that fails the tool's checks | `75` after a release | The same |
 | The gateway counts an agent or lists work after the lease | `75` after a release | The same |
 | The acquire request was never sent | `75` after a release | The same; if the release is unsent too, exit `2` |
-| An acquire with no answer | `2`, after one release attempt | Blocked status kept, held for review; see below |
+| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch`, and no lease in 100 s after the release | `75` after a release and a watch | The same; a lease in the watch is released again first, and if a release cannot prove it, exit `2` |
+| The same with a different `executor_epoch`, or a second capability read that fails | `2`, after one release attempt | Blocked status kept, held for review; see below |
+| An acquire with no deadline sent and no answer | `2`, after one release attempt | Blocked status kept, held for review; see below |
 | Any other error answer, a failed release or fence | `2` | Blocked status kept, held for review |
 | Activation finished | `0` | Stage `activated` |
 
@@ -590,11 +675,14 @@ changed status file as it found it: those bytes are the app's, so leave them in 
 write the blocked status back over them.
 
 Acquire waits up to 120 s for its answer, because the add-on first stops any running idle
-compaction, one at a time and for up to 30 s each. With no answer by then, the handler may still
-be running and can write the lease after any release, so the tool never reports this as nothing
-changed. It tries one release, then exits 2 with `Stopped at fence: Hermes answered maintenance
-acquire.` The app, dashboard and gateway keep running, and the app refuses sends with the
-draft-saved message. On the host:
+compaction, one at a time and for up to 30 s each. With a deadline, no answer by then and no lease in
+the watch after the release means none can appear (the table above), and the steps below are not needed. Without one, which
+is an add-on that does not report `maintenance_deadline` (the first release after this change
+meets one) or a capability read that failed, the handler may still be running and can write the
+lease after any release, so the tool never reports this as nothing changed. It tries one release,
+then exits 2 with `Stopped at fence: Hermes answered maintenance acquire.` The app, dashboard and
+gateway keep running, and the app refuses sends with the draft-saved message. On the host,
+only in that case:
 
 1. Wait five minutes after the tool exited, so any acquire still running has ended. Do not skip
    this: a status restored while the acquire is still running lets the app accept sends under a

@@ -13,6 +13,7 @@ import { apiRoute, type ApiRequest } from "./api-route.js";
 import { signedIn, stillSignedIn } from "./auth.js";
 import { redactAgents, visibleTo, type Roster } from "./bot-access.js";
 import type { Config } from "./config.js";
+import { compareVersions } from "../shared/inflight.js";
 import { eventStreamConnection, type EventStream } from "./event-stream.js";
 import { httpError } from "./http-error.js";
 import { routePattern } from "./route-path.js";
@@ -42,6 +43,12 @@ export const LIVE_TICK_MS = 250;
  * of CPU and 12 KB a second, against 3.4 ms and 5.5 KB at 250. Measured as for LIVE_TICK_MS.
  */
 export const TURN_TICK_MS = 100;
+/**
+ * How long a `?inflight=3` stream holds its change notice for a change its turn event will carry, such as a tool
+ * finishing, before sending it anyway. The server's turn read after the change takes tens of milliseconds, so
+ * this only bounds a read that fails or a Hermes that is slow, and the client then rereads as it always did.
+ */
+export const TURN_HOLD_MS = 1500;
 
 /** Server-Timing for a conversation read. Headers stay out of the body, so its ETag still matches. */
 export function readTimingHeader(timing: ReadTiming, runtime: number, total: number): string {
@@ -256,11 +263,27 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         stream?.send("data: change\n\n");
       }, Math.max(0, last + 1000 - Date.now()));
     };
-    const notice = (kind?: "inflight") => {
+    // A turn stream's notice for a change its turn event carries whole waits here for that event: the newest such change,
+    // and the notice sent after TURN_HOLD_MS if no turn event has reached it. The event makes a reread for the
+    // same messages, tools and activity needless; approvals and requests come in frames that are never held.
+    let held: { version: string; timer: ReturnType<typeof setTimeout> } | undefined;
+    const sendHeld = () => { clearTimeout(held?.timer); held = undefined; changed(); };
+    const hold = (version: string) => {
+      if (!held) held = { version, timer: setTimeout(sendHeld, TURN_HOLD_MS) };
+      else if ((compareVersions(version, held.version) ?? 0) > 0) held.version = version;
+    };
+    /** A turn event at `version` went out: it covers the held change when it reaches it. */
+    const covered = (version: string) => { if (held && (compareVersions(version, held.version) ?? -1) >= 0) { clearTimeout(held.timer); held = undefined; } };
+    const holds = turns && !!runtime.turn && !!runtime.followTurns;
+    // The server's own turn read has landed, and the next tick answers it.
+    let restoredRead = false;
+    const notice = (kind?: "inflight", turnVersion?: string) => {
       if (!optedIn || kind !== "inflight") {
         clearTimeout(livePending); livePending = undefined;
         if (optedIn) { redact = undefined; seen = -1; }
-        changed(); return;
+        if (holds && turnVersion) hold(turnVersion);
+        else changed();
+        return;
       }
       livePending ??= setTimeout(() => {
         livePending = undefined;
@@ -271,13 +294,16 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         // On a turn stream, a tick that finds no reply to send leaves the window open, so the reply restored next goes at once.
         const previous = liveLast;
         liveLast = Date.now();
+        const afterRead = restoredRead;
+        restoredRead = false;
+        let delivered = false;
         void (async () => {
           // Privacy can change through another assistant's settings while this stream stays open.
           if (store.privacyVersion !== seen) {
             const version = store.privacyVersion;
             redact = await redactAgents(store, roster, signedIn(req).id);
             // Changed again while rebuilding: leave it stale for the next tick and have the client refetch.
-            if (store.privacyVersion !== version) { changed(); return; }
+            if (store.privacyVersion !== version) { sendHeld(); return; }
             seen = version;
           }
           // A turn stream's reply carries the read it is built on, so a runtime without turns sends it nothing live.
@@ -311,11 +337,15 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
           if (turn) {
             const event: TurnEvent = { botId: turn.botId, version: turn.version, messages: shownMessages(store, botId, redact, turn.turn.messages),
               ...(turn.turn.after !== undefined ? { after: turn.turn.after } : {}), message, activity: turn.activity, toolCalls };
-            if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) timings.written(botId, turn.activity.runId);
+            if (stream?.send(`event: turn\ndata: ${JSON.stringify(event)}\n\n`)) { timings.written(botId, turn.activity.runId); delivered = true; covered(turn.version); }
             return;
           }
           if (stream?.send(`event: inflight\ndata: ${JSON.stringify({ ...value, message, toolCalls })}\n\n`)) timings.written(botId, value.activity.runId);
-        })().catch(() => changed());
+        })().catch(() => changed()).finally(() => {
+          // The read landed and no turn event went out for it, as when the turn just ended: nothing carries the change, so
+          // the client's own read does.
+          if (afterRead && !delivered && held) sendHeld();
+        });
       }, Math.max(0, liveLast + tick - Date.now()));
     };
     const listeners = watchers.get(botId) ?? new Set();
@@ -332,6 +362,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       if (!drafts.size && draftStreams.get(ownDraft) === drafts) draftStreams.delete(ownDraft);
       clearTimeout(pending);
       clearTimeout(livePending);
+      clearTimeout(held?.timer);
     };
     stream = connection.open(streams, {
       reserve: () => {
@@ -343,6 +374,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         // saved reply of a turn that just ended, and comes at most once per server read.
         if (turns) unfollow = runtime.followTurns?.(botId, () => {
           clearTimeout(livePending); livePending = undefined; liveLast = 0;
+          restoredRead = true;
           notice("inflight");
         });
       },

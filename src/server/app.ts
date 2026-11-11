@@ -4,7 +4,7 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { CapabilityKey, Runtime } from "../shared/types.js";
 import type { Config } from "./config.js";
 import { Store } from "./store.js";
@@ -44,7 +44,7 @@ import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type Metadata
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { installInlineUi } from "./inline-ui.js";
-import { immutableCacheControl, isHashedAsset, mustRevalidate } from "./static-cache.js";
+import { immutableCacheControl, isHashedAsset, isPreviousAsset, mustRevalidate, previousAssetFile, readPreviousAssets } from "./static-cache.js";
 import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
 import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
@@ -67,6 +67,8 @@ export async function createApp(
     upgrades?: HermesUpgrades;
     logStream?: { write(line: string): void };
     clientRoot?: string;
+    /** The file the deploy tooling writes to name the previous release's assets; tests name theirs. Without a clientRoot it is dist/previous-release.json. */
+    previousRelease?: string;
     metadataProbe?: MetadataProbe;
     /** Replaces interface discovery for direct routes, so tests choose the addresses. */
     directAddresses?: () => DirectAddress[];
@@ -157,6 +159,9 @@ export async function createApp(
   });
   const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
+    // Beside the client root, so the default cannot name a different dist/ than the one the client is served from.
+    const previousFile = options.previousRelease ?? (options.clientRoot ? undefined : join(dirname(clientRoot), "previous-release.json"));
+    const previous = previousFile ? readPreviousAssets(previousFile, message => app.log.warn(message)) : undefined;
     await app.register(staticFiles, {
       root: clientRoot,
       cacheControl: true,
@@ -164,7 +169,7 @@ export async function createApp(
       setHeaders: (reply, path) => {
         if (mustRevalidate(clientRoot, path))
           reply.header("Cache-Control", "no-cache");
-        else if (isHashedAsset(clientRoot, path))
+        else if (isHashedAsset(clientRoot, path) || isPreviousAsset(previous, path))
           reply.header("Cache-Control", immutableCacheControl);
       },
     });
@@ -180,7 +185,13 @@ export async function createApp(
       // place would reach the page as a script it cannot run; a 404 says plainly that the file is
       // gone, and the screen offers Reload. Not kept, since a rollback can bring the file back. A missing
       // boot.js is the same: index.html loads it as a script, and without it the app reads for itself.
-      else if (req.url.startsWith("/assets/") || req.url.split("?")[0] === "/boot.js") reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
+      // A page that opened under the release this one replaced still asks for that release's files, so a
+      // hashed one the previous release holds is sent from there, as long as the tooling names that directory.
+      else if (req.url.startsWith("/assets/") || req.url.split("?")[0] === "/boot.js") {
+        const retired = req.method === "GET" || req.method === "HEAD" ? previousAssetFile(previous, req.url.split("?")[0]) : undefined;
+        if (retired) { req.log.info({ file: retired.name }, "Served a retired asset from the previous release"); reply.sendFile(retired.name, retired.root); }
+        else reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
+      }
       else reply.type("text/html").sendFile("index.html");
     });
   }
