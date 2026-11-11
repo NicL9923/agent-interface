@@ -38,13 +38,18 @@ if not __debug__:
 
 
 class Refused(Exception):
-    """Hermes refused maintenance while the app still ran. Nothing was stopped, no lease is
-    held and the saved update status is back, so the operation can simply run again."""
+    """Hermes refused maintenance while the app still ran, because it was busy or could not be asked.
+    Nothing was stopped, no lease is held and the saved update status is back, so the operation can
+    simply run again. The message says which, and ends with what to do."""
 
 
 # The add-on's answer to an acquire while it sees active work. Its handler returns this before it
 # writes any lease (src/hermes/extension.py, maintenance), so it is the one finished refusal.
 BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+# The app's own 5 s poll holds an add-on reservation (src/hermes/extension.py, active_count() > 1), so an
+# idle app can draw the busy answer once. A busy answer writes no lease, so asking again is safe.
+ACQUIRE_ATTEMPTS = 3
+ACQUIRE_RETRY_SECONDS = 2
 # How long the maintenance RPC waits for each WebSocket message. Before it decides, acquire
 # preempts each canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py
 # PREEMPT_WAIT). One compaction runs at a time, so the usual wait is one preempt; another can
@@ -62,6 +67,11 @@ class Answered(RuntimeError):
     def __init__(self, error):
         super().__init__("Hermes answered maintenance with an error: " + json.dumps(error))
         self.error = error
+
+
+class NotSent(RuntimeError):
+    """A maintenance RPC failed before its request was sent, in the service ticket or the socket
+    connection. The add-on never saw it, so no handler can still be running there."""
 
 
 def tripped(error):
@@ -112,8 +122,9 @@ class Deployment:
     def maintenance_rpc(self, argv, request):
         """Run the release helper's NATIVE maintenance RPC (scripts/hermes-upgrade-linux.py).
 
-        Returns the add-on's result. Raises Answered when the add-on answered with an error, which
-        NATIVE prints as its last stdout line before it fails. Any other failure, such as a timeout or
+        Returns the add-on's result. Raises Answered when the add-on answered with an error, and
+        NotSent when the service ticket or the connection failed before the request was sent; NATIVE
+        prints each as its last stdout line before it fails. Any other failure, such as a timeout or
         a dropped socket, raises as before: no answer arrived, so the handler may still be running.
         """
         wait = MAINTENANCE_WAIT.get(request["method"], DEFAULT_MAINTENANCE_WAIT)
@@ -127,6 +138,8 @@ class Deployment:
             answer = None
         if isinstance(answer, dict) and list(answer) == ["answeredError"] and isinstance(answer["answeredError"], dict):
             raise Answered(answer["answeredError"])
+        if isinstance(answer, dict) and list(answer) == ["unsent"] and answer["unsent"] is True:
+            raise NotSent("Hermes was not asked for maintenance " + request["method"])
         raise RuntimeError("A deployment command failed; private log retained")
 
     def system(self, action, *names):
@@ -161,6 +174,14 @@ class Deployment:
         return all(json.loads(path.read_text()).get("status") == "complete"
                    for path in (Path(self.c["upgradeStateDir"]) / "requests").glob("*.json"))
 
+    def gateway_reports_idle(self):
+        """Whether the gateway's last published record counts no active agent and lists no active work.
+
+        A Discord turn runs in the gateway runner, not in the add-on's sessions, so the add-on's busy
+        list omits it. The gateway rewrites this count at every turn boundary."""
+        record = self.gateway_state()
+        return type(record.get("active_agents")) is int and record["active_agents"] == 0 and "active_work" in record and record["active_work"] in (None, [])
+
     def acquire_then_stop_app(self, rpc, blocked, previous):
         """Close the app's gate, take the maintenance lease while the app still runs, then stop it.
 
@@ -168,42 +189,58 @@ class Deployment:
         operation's blocked update status and ``previous`` the status it replaces. The app refuses
         sends, update checks and installs once the blocked status is written, telling the sender the
         draft is saved, so no one meets Hermes's own refusal. Work that arrived since the caller's
-        status check makes acquire refuse here, before anything stops.
+        status check makes acquire refuse here, before anything stops. The busy answer is asked
+        again up to ACQUIRE_ATTEMPTS times, since the app's own poll can hold a reservation.
 
-        Raises Refused only after the add-on's acquire handler returned: its busy refusal, or an
-        answer that fails the checks below. A release then proves no lease remains, the saved status
-        is restored and the app never stopped. With no answer the handler may still be running and
-        write the lease later, so that fails at a fence with the blocked status kept for review. Any
-        other failure propagates the same way.
+        Raises Refused when nothing changed and nothing can still change: the add-on's busy refusal,
+        an answer that fails the checks below, a gateway that counts active work (the add-on does not
+        see Discord turns), or a request that was never sent. A release then proves no lease remains,
+        the saved status is restored and the app never stopped. With no answer the handler may still
+        be running and write the lease later, so that fails at a fence with the blocked status kept
+        for review. Any other failure propagates the same way.
         """
         status = Path(self.c["upgradeStateDir"]) / "status.json"
         self.atomic(status, blocked)
         self.journal("maintenance-acquiring")
-        try:
-            gate = rpc("acquire")
-        except Answered as answer:
-            # Any other error answer is a configuration or ownership problem, not busy work.
-            if answer.error != BUSY_REFUSAL: raise
-            self.refuse(rpc, status, blocked, previous, answer)
-        except Exception as lost:
-            # An acquire that would succeed preempts compactions before it writes, so a lost answer can mean the
-            # handler is still running. Release removes a lease it already wrote, never one it
-            # writes afterwards, so this is never reported as nothing changed.
-            with contextlib.suppress(Exception): rpc("release")
-            raise Fence("Hermes answered maintenance acquire") from lost
+        for attempt in range(1, ACQUIRE_ATTEMPTS + 1):
+            try:
+                gate = rpc("acquire")
+            except Answered as answer:
+                # Any other error answer is a configuration or ownership problem, not busy work.
+                if answer.error != BUSY_REFUSAL: raise
+                if attempt < ACQUIRE_ATTEMPTS:
+                    time.sleep(ACQUIRE_RETRY_SECONDS)
+                    continue
+                self.refuse(rpc, status, blocked, previous, answer, "Hermes has active work.")
+            except NotSent as unsent:
+                # The add-on never saw the request, so no lease can appear. The release proves it.
+                self.refuse(rpc, status, blocked, previous, unsent,
+                            "Hermes could not be reached: the service ticket or the connection failed before the request was sent.")
+            except Exception as lost:
+                # An acquire that would succeed preempts compactions before it writes, so a lost answer can mean the
+                # handler is still running. Release removes a lease it already wrote, never one it
+                # writes afterwards, so this is never reported as nothing changed.
+                with contextlib.suppress(Exception): rpc("release")
+                raise Fence("Hermes answered maintenance acquire") from lost
+            break
         try:
             fence(gate["active"] is True and gate["operationId"] == self.operation and gate["busy"] == [], "maintenance acquired by this operation with no busy work")
             fence(json.loads(self.lease.read_text()) == {"operationId": self.operation}, "maintenance lease names this operation")
         except Exception as unexpected:
             # The handler answered, so it has returned; release clears whatever lease it wrote.
-            self.refuse(rpc, status, blocked, previous, unexpected)
+            self.refuse(rpc, status, blocked, previous, unexpected, "Hermes's maintenance answer was not this operation's lease.")
+        try:
+            # The lease admits nothing new, so a Discord turn counted now is the last one to wait for.
+            fence(self.gateway_reports_idle(), "gateway reports no active agents or work after maintenance was acquired")
+        except Exception as active:
+            self.refuse(rpc, status, blocked, previous, active, "The gateway has an active agent or its state is unreadable.")
         self.journal("owned-maintenance-acquired")
         self.system("stop", "agent-interface.service")
         fence(self.requests_complete(), "pending update requests complete after the app stopped")
         # Eliminate an already awaited API request racing the private status write.
         self.atomic(status, blocked)
 
-    def refuse(self, rpc, status, blocked, previous, refusal):
+    def refuse(self, rpc, status, blocked, previous, refusal, reason):
         """Undo a finished acquire that took no usable lease, then raise Refused."""
         # Release clears this operation's lease, if any, and reports what was busy.
         released = rpc("release")
@@ -215,7 +252,7 @@ class Deployment:
         fence(self.requests_complete(), "refused: pending update requests are complete")
         self.atomic(status, previous)
         self.journal("maintenance-refused")
-        raise Refused("Maintenance was not acquired. Busy work at release: " + json.dumps(released.get("busy"))) from refusal
+        raise Refused(reason + " Busy work at release: " + json.dumps(released.get("busy")) + ". Activate again when Hermes is idle and answers.") from refusal
 
     def native(self, code):
         # Set the native root before bootstrap can latch process identity, so native

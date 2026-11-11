@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { withoutDraftClause } from "../shared/errors.js";
 import { isConversationReply, isProgressLine } from "../shared/message-origin.js";
 import { markdownPlain } from "../shared/plain-text.js";
 import type { Bot, CapabilityKey, Conversation, Message, RealtimeSessionInput, Runtime, SubmissionReceipt } from "../shared/types.js";
@@ -136,7 +137,7 @@ export type RunOutcome = "completed" | "failed" | "interrupted";
  */
 export function talkAnswer(receipt: SubmissionReceipt, conversation: Conversation, reply: (message: Message) => Message = message => message,
   outcome?: RunOutcome): TalkAnswer | "missing" | "settling" | undefined {
-  if (receipt.status === "rejected") return { state: "refused", text: receipt.message };
+  if (receipt.status === "rejected") return { state: "refused", text: withoutDraftClause(receipt.message ?? "") || undefined };
   if (receipt.status === "interrupted") return { state: "interrupted" };
   if (receipt.status !== "accepted") return undefined;
   // A typed stop phrase ended Hermes's voice chat and sent nothing to the assistant, so no turn will ever show.

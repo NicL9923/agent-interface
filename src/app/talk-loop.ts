@@ -1,3 +1,4 @@
+import { withoutDraftClause } from "../shared/errors";
 import { finalTalkStates, MAX_HEARD_LINES, TALK_TOOL, type TalkAnswer } from "../shared/voice";
 
 /** What the person sees: who is talking, or what the assistant is doing. */
@@ -178,7 +179,7 @@ export class TalkLoop {
       }
     } catch (error) {
       if (this.disposed) return;
-      const message = error instanceof Error ? error.message : "The request could not be sent.";
+      const message = error instanceof Error ? withoutDraftClause(error.message) : "The request could not be sent.";
       const text = `The request could not reach ${this.name}: ${message} Tell the person, and suggest typing it in the chat.`;
       // A call is answered once; a failure while following up is said as a new message.
       if (answered) this.say(text); else this.output(callId, text);

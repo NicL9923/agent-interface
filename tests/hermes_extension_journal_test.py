@@ -598,6 +598,32 @@ class OpenTests(unittest.TestCase):
                     self.assertEqual(submit("conflict", {**params, **changes})["error"]["code"], 4093)
             self.assertEqual(hermes.native_calls, [])
 
+    def test_every_error_a_send_answers_before_admission_leaves_no_receipt_and_calls_nothing_in_hermes(self):
+        """src/server/hermes.ts reports these as a message that was not sent (BEFORE_ADMISSION). A new error code,
+        or a new place one of these is answered after the receipt is written, must not be added to that set."""
+        with FakeGateway([]) as hermes:
+            hermes.open()
+            submit = hermes.methods["agent-interface.submit"]
+            first = {"profile": "default", "request_id": "one", "sender_id": "member", "text": "Hello"}
+            self.assertEqual(submit("send", first)["result"]["status"], "accepted")
+            receipts = lambda: hermes.journal.db.execute("SELECT request_id, digest, status FROM receipts ORDER BY request_id").fetchall()
+            before = receipts()
+            hermes.native_calls.clear()
+            cases = (
+                ("no request ID", {**first, "request_id": ""}, -32602, "request_id, sender_id and non-empty text required"),
+                ("no sender", {**first, "request_id": "two", "sender_id": ""}, -32602, "request_id, sender_id and non-empty text required"),
+                ("blank text and no attachments", {**first, "request_id": "three", "text": "  "}, -32602, "request_id, sender_id and non-empty text required"),
+                ("another conversation than the profile's canonical one", {**first, "request_id": "four", "session_id": "not-canonical"},
+                 -32602, "Open this profile's canonical conversation before admission"),
+                ("a request ID that already names different text", {**first, "text": "Changed"}, 4093, "Request ID already belongs to a different input"),
+            )
+            for name, params, code, message in cases:
+                with self.subTest(name):
+                    error = submit("refused", params)["error"]
+                    self.assertEqual((error["code"], error["message"]), (code, message))
+                    self.assertEqual(receipts(), before)
+                    self.assertEqual(hermes.native_calls, [])
+
     def test_submit_requires_review_after_stopped_terminal_or_inflight(self):
         for mode in ("terminal", "inflight", "cold"):
             with self.subTest(mode=mode), FakeGateway([]) as hermes:
