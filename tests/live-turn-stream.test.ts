@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { createApp } from "../src/server/app.js";
+import { TURN_HOLD_MS } from "../src/server/conversation-routes.js";
 import { loadConfig } from "../src/server/config.js";
 import { createHermesRuntime } from "../src/server/hermes.js";
 import { compareVersions, placeTurn } from "../src/shared/inflight.js";
@@ -160,11 +161,72 @@ describe("?inflight=3 turn streams", () => {
     expect(second.messages.map(message => message.text)).toEqual(["Check the barn", "Looking. One sec."]);
     expect(second.message.text).toBe("Found it.");
     expect(compareVersions(second.version, first.version)).toBeGreaterThan(0);
-    // The change notice still goes, for approvals, files and everything else the read carries.
-    await events.until(() => events.events().some(([name]) => name === "change"));
+    // The turn event carries the saved segment, the tool and the activity, so the tool's finish sends no change notice and the
+    // client does not read the conversation again for it.
+    await vi.advanceTimersByTimeAsync(TURN_HOLD_MS + 500);
+    expect(events.events().some(([name]) => name === "change")).toBe(false);
     // One read by the client and one by the server for the tool; nothing for the growth.
     expect(opens(s)).toEqual([{ turns: 20 }, { start: "req-2" }]);
     await events.close();
+  });
+
+  describe("the change notice beside a turn event", () => {
+    const changes = (events: Awaited<ReturnType<typeof stream>>) => events.events().filter(([name]) => name === "change").length;
+    async function toolFinished(s: Setup, events: Awaited<ReturnType<typeof stream>>) {
+      s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }));
+      s.hermes.inflight.assistant = "Looking.";
+      s.hermes.frame("message.delta", { text: "Looking." });
+      await events.until(() => events.turns().length === 1);
+    }
+
+    it("goes only to the streams that get no turn events, for a change a turn event carries", async () => {
+      const s = await setup();
+      midTurn(s);
+      const turns = await stream(s, s.one, "3"), whole = await stream(s, s.two, "1"), growth = await stream(s, s.two, "2");
+      await s.get(s.one);
+      await toolFinished(s, turns);
+      s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+      s.hermes.frame("message.delta", { text: " Found it." });
+      await turns.until(() => turns.turns().length === 2);
+      await whole.until(() => changes(whole) === 1);
+      await growth.until(() => changes(growth) === 1);
+      await vi.advanceTimersByTimeAsync(TURN_HOLD_MS + 500);
+      expect(changes(turns)).toBe(0);
+    });
+
+    // Each of these changes something only a read carries, or has no turn event to carry it, so it sends its notice at once.
+    it.each<[string, (s: Setup) => void]>([
+      ["an approval asked", s => s.hermes.request("approval", "ap-1", { command: "ls" })],
+      ["a request cancelled", s => s.hermes.frame("request.cancel", { id: "ap-1" })],
+      ["an error", s => s.hermes.frame("error", { message: "boom" })],
+      ["a turn starting, which a native turn may save the prompt of later", s => s.hermes.frame("message.start", {})],
+      ["a frame the runtime does not know", s => s.hermes.frame("session.info", {})],
+    ])("goes at once for %s", async (_, send) => {
+      const s = await setup();
+      midTurn(s);
+      const events = await stream(s, s.one, "3");
+      await s.get(s.one);
+      await toolFinished(s, events);
+      send(s);
+      // Well inside TURN_HOLD_MS: a held notice would not have gone yet.
+      await events.until(() => changes(events) === 1, TURN_HOLD_MS - 500);
+      await events.close();
+    });
+
+    it("goes after TURN_HOLD_MS when the server's read does not land", async () => {
+      const s = await setup();
+      midTurn(s);
+      const events = await stream(s, s.one, "3");
+      await s.get(s.one);
+      await toolFinished(s, events);
+      s.hermes.holdOpens = true;
+      s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+      await events.until(() => s.hermes.held.length === 1);
+      await vi.advanceTimersByTimeAsync(TURN_HOLD_MS - 100);
+      expect(changes(events)).toBe(0);
+      await events.until(() => changes(events) === 1, 500);
+      await events.close();
+    });
   });
 
   it("keeps growth as deltas across a write's change notice, and stops reading turns once the stream closes", async () => {
@@ -364,7 +426,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     /** Hermes streams text, which its snapshot of the native turn accumulates too. `shown` false: it shows nothing yet. */
     say(text: string, shown?: boolean): Promise<void>;
     /** A change to the turn's structure, then the client's read on its change notice, as the app does. */
-    structural(change: () => void): Promise<void>;
+    /** `covered`: the change is one a `?inflight=3` turn event carries whole, which sends no change notice there. */
+    structural(change: () => void, covered?: boolean): Promise<void>;
     /** Hermes starts a native turn with this prompt: a person's message, or guidance it queued instead of steering in. */
     begin(prompt: string): Promise<void>;
     /** Saves the reply so far as a segment before a tool, as Hermes does before each tool call. */
@@ -400,9 +463,11 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         if (shown) await events.until(() => live(events.events()).endsWith(text.trim()));
         else await vi.advanceTimersByTimeAsync(500);
       },
-      async structural(change) {
-        const before = changes();
+      async structural(change, covered = false) {
+        const before = changes(), sentTurns = events.turns().length;
         change();
+        // A `?inflight=3` stream gets a turn event in place of the change notice for a change that event carries whole.
+        if (covered && mode === "3") { await events.until(() => events.turns().length > sentTurns); return; }
         await events.until(() => changes() > before);
         await s.get(s.one);
       },
@@ -415,7 +480,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         s.hermes.frame("tool.start", { tool_id: `t${id}`, name: "terminal" });
         during?.();
         s.hermes.frame("tool.complete", { tool_id: `t${id}`, name: "terminal" });
-      }),
+      }, true),
       end: () => turn.structural(() => {
         s.hermes.inflight = {};
         s.hermes.frame("message.complete", { text: "" });
@@ -490,7 +555,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.structural(() => {
           turn.s.hermes.history.push({ row_id: 4, role: "tool", name: "terminal", content: "ok", app_run_id: "run-2" });
           turn.s.hermes.frame("tool.complete", { tool_id: "t4", name: "terminal" });
-        });
+        }, true);
         await turn.end();
         turn.guidance(5, "steer-two", "Check the loft");
         await turn.begin("Check the loft");

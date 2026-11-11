@@ -581,8 +581,13 @@ export interface Runtime {
   /** A Realtime client secret on Hermes's ChatGPT sign-in, for a session the add-on completes. */
   realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
   conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
-  /** An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function. */
-  watch?(botId: string, changed: (kind?: "inflight") => void): () => void;
+  /**
+   * An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function.
+   * A refetch notice for a change that a turn event carries whole, such as a tool finishing, names the structural
+   * version the turn read after it reaches in `turnVersion`. A stream that sends turn events may hold its notice
+   * until that event goes, and send it only if none does; any other caller ignores the version.
+   */
+  watch?(botId: string, changed: (kind?: "inflight", turnVersion?: string) => void): () => void;
   /** The live reply, built only on what a client's conversation read stored, for `?inflight=1` and `?inflight=2`. */
   inflight?(botId: string): Inflight | undefined;
   /**

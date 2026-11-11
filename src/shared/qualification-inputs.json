@@ -123,6 +123,7 @@
   "src/shared/group-activity.ts",
   "src/shared/hermes-job-fields.json",
   "src/shared/history.ts",
+  "src/shared/inflight.ts",
   "src/shared/inline-ui-instructions.json",
   "src/shared/inline-ui.ts",
   "src/shared/integrations.ts",

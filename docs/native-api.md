@@ -277,6 +277,15 @@ window, from the turn's first message. Only `?inflight=3` streams see that read:
 only once a client's own read has rebuilt it, and the server's read never delays
 or repeats a client's read.
 
+A `?inflight=3` stream does not send the change notice for a change its turn event carries whole: a tool
+finishing or a progress line saved. It holds the notice until the turn event that reaches that change goes, and
+drops it then, so the client does not read the conversation again for what the event already holds. If the read
+does not land, or lands with no live reply to send, the notice goes at once or after 1.5 seconds, as it did before.
+Every other change still sends its notice at once, whatever else it carries: a turn starting or ending, an
+approval or any other request, an error. A turn event's `messages` carry the files of the saved rows, and the
+web client adds them to its file list, which a read otherwise builds. `?inflight=1` and `?inflight=2` streams
+get every notice as before.
+
 Each whole live reply then arrives as `event: turn` with JSON `{botId, version,
 messages, after?, message, activity, toolCalls}`:
 

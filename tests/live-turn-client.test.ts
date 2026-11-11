@@ -57,6 +57,23 @@ describe("withTurn", () => {
   it("reports a turn it cannot place", () => {
     expect(withTurn(conversation, turn("b:1:6", [message("u9", "user")]))).toBeUndefined();
   });
+
+  // A read builds the file list from the saved rows, and the turn event stands in for the read after a tool finishes.
+  describe("the file list", () => {
+    const file = (id: string) => ({ id, name: `${id}.png`, mime: "image/png" });
+    const withFiles = (files: ReturnType<typeof file>[]) => ({ ...conversation, files });
+    const made = (id: string, files: ReturnType<typeof file>[]) => ({ ...message(id), files });
+    it("gains the files a turn's rows carry, once, after the ones it holds", () => {
+      const held = withFiles([file("old")]);
+      const placed = withTurn(held, turn("b:1:6", [message("u2", "user"), made("a2", [file("new"), file("old")]), made("a3", [file("new")])]));
+      expect(placed!.files).toEqual([file("old"), file("new")]);
+    });
+    it("stays the same list when the turn brings no new file, and is not made up for a conversation without one", () => {
+      const held = withFiles([file("old")]);
+      expect(withTurn(held, turn("b:1:6", [message("u2", "user"), made("a2", [file("old")])]))!.files).toBe(held.files);
+      expect(withTurn(conversation, turn("b:1:6", [message("u2", "user"), made("a2", [file("new")])]))).not.toHaveProperty("files");
+    });
+  });
 });
 
 describe("a turn event and the sent echo", () => {
