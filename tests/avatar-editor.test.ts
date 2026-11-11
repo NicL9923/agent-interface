@@ -1,18 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AvatarEditor } from "../src/components/AvatarEditor";
 import { mountRoot } from "./ui-harness";
 import type { Avatar } from "../src/shared/types";
 import { seasonalChoices } from "../src/components/character-avatars";
 import { everydayFamilies } from "../src/shared/types";
-
-// jsdom has no SVG geometry, so the rig itself is covered by avatar-motion tests.
-vi.mock("../src/components/Avatar", async (original) => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => null,
-}));
 
 let container: HTMLDivElement;
 let root: Root;

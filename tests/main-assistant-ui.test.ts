@@ -15,7 +15,6 @@ import { defaultPreferences, type Bootstrap, type Bot, type Message, type Prefer
 import { mountRoot, typeInto } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
-vi.mock("../src/components/Avatar", async original => ({ ...await original<typeof import("../src/components/Avatar")>(), Avatar: () => null }));
 
 let root: Root, container: HTMLDivElement, boot: Bootstrap;
 const sage: Bot = { id: "sage", name: "Sage", model: "m", shared: false, ownerId: "mom", activity: "idle", lastMessage: { text: "Dentist moved to 4 PM" } };

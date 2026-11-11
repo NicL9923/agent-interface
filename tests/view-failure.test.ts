@@ -10,14 +10,9 @@ import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { quietConsoleErrors } from "./act-guard";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn().mockResolvedValue({}), clearResponseCache: vi.fn() }))(original)));
-// SVG geometry is a browser concern, not part of this regression.
-vi.mock("../src/components/Avatar", async original => ({
-  ...await original<typeof import("../src/components/Avatar")>(),
-  Avatar: () => createElement("span"),
-}));
-// Find cannot load, as when its file was retired by a release; Groups is healthy.
+// Find and the model picker cannot load, as when a release retired their files. The test runs from disk, where no file goes missing, so the
+// import itself fails here. Groups is the real module.
 vi.mock("../src/components/DiscoveryPanel", () => ({ get DiscoveryPanel() { throw new TypeError("Failed to fetch dynamically imported module: /assets/DiscoveryPanel-OLD12345.js"); } }));
-vi.mock("../src/components/GroupChats", () => ({ GroupRoomView: () => createElement("p", { id: "groups-screen" }, "Group chats") }));
 vi.mock("../src/components/ChatModelPicker", () => ({ get ChatModelPicker() { throw new TypeError("Failed to fetch dynamically imported module: /assets/ChatModelPicker-OLD12345.js"); } }));
 
 const bootstrap: Bootstrap = {
@@ -40,7 +35,9 @@ beforeEach(() => {
   quietConsoleErrors();
   history.replaceState(null, "", "/");
   vi.mocked(api).mockImplementation(async <T>(path: string) => (path === "/bootstrap?roster=lean" ? bootstrap
-    : path === "/groups" ? { supported: true, canSend: true, rooms: [{ room_id: "room", name: "Supper planning", members: [] }] } : null) as T);
+    : path === "/groups" ? { supported: true, canSend: true, rooms: [{ room_id: "room", name: "Supper planning", members: [] }] }
+    : path === "/groups/room" ? { room: { room_id: "room", name: "Supper planning", members: [], latest_seq: 0 } }
+    : path.startsWith("/groups/room/log?") ? { events: [], cursor: 0, latest_seq: 0, has_more: false } : null) as T);
   ({ container, root } = mountRoot());
 });
 const loaded = () => act(async () => { await vi.dynamicImportSettled(); });
@@ -67,7 +64,7 @@ describe("screens that fail to load", () => {
     const groups = [...container.querySelectorAll<HTMLButtonElement>(".room-row")].find(button => button.textContent?.includes("Supper planning"))!;
     await act(async () => groups.click());
     await loaded();
-    expect(container.querySelector("#groups-screen")?.textContent).toBe("Group chats");
+    expect(container.querySelector(".group-panel")).not.toBeNull();
     expect(container.querySelector("[role=alert]")).toBeNull();
   });
 });

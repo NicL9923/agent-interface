@@ -6,7 +6,6 @@ import { VoiceControls } from "../src/components/VoiceControls.js";
 import { STOP_SPEECH } from "../src/shared/voice.js";
 import type { VoiceState } from "../src/shared/voice.js";
 import { mountRoot } from "./ui-harness";
-vi.mock("../src/components/Avatar", () => ({ Avatar: () => null }));
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api.js", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
 let container: HTMLDivElement, root: Root;
