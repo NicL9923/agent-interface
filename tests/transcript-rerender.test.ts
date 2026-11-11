@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement, createRef } from "react";
+import { Profiler, createElement, createRef } from "react";
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Bootstrap, Message, ToolCall } from "../src/shared/types";
@@ -43,7 +43,8 @@ const page = (messages: Message[], extra: Partial<SavedConversation> = {}) => ({
 const tick = (text: string) => page([...base.slice(0, -1), { ...base.at(-1)!, text }]);
 
 // Counts how often each message's pieces render, from the real components. React keeps the props it last rendered onto each element,
-// and that object is new whenever the element's component renders again, so every view() compares them to the last view's. A turn that
+// and that object is new whenever the element's component renders again, so every commit compares them to the last commit's. A Profiler
+// takes the sample after each commit, not after each view(), so a turn that renders twice for one update counts twice. A turn that
 // bails out renders none of its pieces. A message's row is the element its turn renders for it, so it counts the turn's renders even
 // where the memoized Markdown inside it would skip. The ReplyActions this file once replaced no longer exists, so its counts were
 // always 0; `.message-meta` is the row that holds a message's time and actions.
@@ -74,14 +75,13 @@ beforeEach(() => {
 });
 const refs = { scroll: createRef<HTMLDivElement>(), endSpace: createRef<HTMLDivElement>() };
 async function view(conversation: SavedConversation, props: Partial<Props> = {}) {
-  await mount.render(createElement(Conversation, {
+  await mount.render(createElement(Profiler, { id: "transcript", onRender: observe }, createElement(Conversation, {
     boot, selected: bot, botId: "bot", conversation, canonical: conversation, ownRows: new Set<string>(), echo: null, state: "working", showActivity: true, avatarState: "working",
     connectionLost: false, offline: false, appUnavailable: false, checkingConnection: false, reconnect: async () => {}, error: "", setError: () => {},
     notifications: { prompt: false } as Props["notifications"], scroll: refs.scroll, endSpace: refs.endSpace,
     content: () => {}, history: { earlier: false, complete: false, atLatest: true } as Props["history"],
     reply: null, onScroll: () => {}, onCreate: () => {}, onDraft: () => 0, ...props,
-  } as Props));
-  observe();
+  } as Props)));
 }
 const snapshot = () => ({ rows: new Map(renders.rows), actions: new Map(renders.actions), when: new Map(renders.when) });
 type Counts = ReturnType<typeof snapshot>;
