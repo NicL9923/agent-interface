@@ -1,5 +1,5 @@
 import { SESSION_MAX_AGE_MS } from "../shared/session";
-import { authEpochKey, localRead, localRemove, localSave, signInHintKey } from "./storage";
+import { accountKeys, authEpochKey, localRead, localRemove, localSave, signInHintKey } from "./storage";
 
 /**
  * Which account this browser acts for, shared by every tab through one record in localStorage.
@@ -125,7 +125,11 @@ export function checkAccount() {
   const now = stored();
   if (now === seen) return;
   seen = now;
-  if (now !== held) end();
+  // Before an app draws, as while the page loads, there is nothing to drop: the first draw takes the record.
+  if (now !== held) {
+    if (guarding) end();
+    else held = now;
+  }
   notify();
 }
 /** Whether this tab waits on another tab's sign-in or sign-out, whose mark has since gone stale. */
@@ -144,6 +148,14 @@ export function accountMark(): AccountMark {
     if (stored() !== held) throw new AccountChanged();
   }
   return { generation, era };
+}
+/**
+ * Whether the stored record is `text` and this tab acts under it, as for a read public/boot.js made
+ * before the app loaded. With no app drawing, only the stored record is compared.
+ */
+export function accountRecordIs(text: string) {
+  checkAccount();
+  return stored() === text && (!guarding || held === text);
 }
 /** Whether an answer to a request marked `mark` may still be used. */
 export function accountStill(mark: AccountMark) {
@@ -434,6 +446,10 @@ function parseHint(value: unknown, at = Date.now()): SignInHint | null {
 }
 /** The hint while it is still good. */
 export const readHint = () => parseHint(localRead(signInHintKey));
+/** The account this browser's sign-in names, once a bootstrap has said who it is. */
+export const hintedUser = () => readHint()?.user ?? null;
+// Copies that belong to the account the hint names go with it, and at every sign-in.
+const forgetAccount = () => accountKeys.forEach(localRemove);
 /** When the stored hint lapses, if one is stored. */
 export function hintUntil() {
   const value = localRead<Partial<SignInHint>>(signInHintKey);
@@ -442,6 +458,7 @@ export function hintUntil() {
 
 /** This browser just signed in; its session cookie lasts the server's session lifetime from now. */
 export function rememberSignIn() {
+  forgetAccount();
   localSave(signInHintKey, { until: Date.now() + SESSION_MAX_AGE_MS - MARGIN_MS, bots: [] } satisfies SignInHint);
 }
 
@@ -456,6 +473,7 @@ export function rememberChats(user: string, ids: string[]) {
 
 export function forgetSignIn() {
   localRemove(signInHintKey);
+  forgetAccount();
 }
 
 /**

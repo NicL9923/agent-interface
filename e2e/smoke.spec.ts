@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, conversation, deployNextRelease, expect, signIn, slowAdmission, test } from "./fixtures.js";
+import { assistants, chooseDark, conversation, deployNextRelease, expect, signIn, slowAdmission, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -80,6 +80,78 @@ test("a link to a chat shows sign-in when signed out, then reads the chat beside
   await page.goto("/?bot=ranch");
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   expect(heldUntil[0]).toBe(true);
+});
+
+test.describe("a returning member's load", () => {
+  // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
+  test.use({ serviceWorkers: "block" });
+
+  test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page }) => {
+    await signIn(page);
+    await chooseDark(page);
+    // The theme as the app's first frame paints: a MutationObserver runs before the browser paints, after
+    // React's layout effects and before its other effects.
+    await page.addInitScript(() => {
+      new MutationObserver((_changes, observer) => {
+        if (!document.getElementById("root")?.firstElementChild) return;
+        (window as unknown as { themeAtFirstDraw?: string }).themeAtFirstDraw = document.documentElement.dataset.theme;
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    let themeAtBoot: string | undefined;
+    // While the bundle is on its way, another tab of this browser signs the member out and leaves what its sign-out leaves.
+    await page.route(/\/assets\/index-[^/]+\.js$/, async route => {
+      themeAtBoot = await page.evaluate(async () => {
+        const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string };
+        await fetch("/api/auth/logout", { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken }, body: "{}" });
+        localStorage.removeItem("agent-interface:theme");
+        localStorage.removeItem("agent-interface:sign-in-hint");
+        localStorage.setItem("agent-interface:auth-epoch", JSON.stringify({ id: "elsewhere", at: Date.now(), signedOut: true }));
+        return document.documentElement.dataset.theme;
+      });
+      await route.continue();
+    });
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+    // boot.js applied the dark theme, rightly at that moment; nothing of it reaches the app's first frame.
+    expect(themeAtBoot).toBe("dark");
+    expect(await page.evaluate(() => (window as unknown as { themeAtFirstDraw?: string }).themeAtFirstDraw)).toBe("system");
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("system");
+  });
+
+  test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page }) => {
+    await signIn(page);
+    // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
+    await chooseDark(page);
+
+    // The bundle is held back, so a bootstrap that waits for the app's code comes after it.
+    const order: string[] = [];
+    let reloaded = false;
+    page.on("request", request => {
+      const path = new URL(request.url()).pathname;
+      if (reloaded && (path === "/api/bootstrap" || path === "/api/events")) order.push(path);
+    });
+    await page.route(/\/assets\/index-[^/]+\.js$/, async route => {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      order.push("bundle");
+      await route.continue();
+    });
+    await page.addInitScript(() => {
+      new MutationObserver((_changes, observer) => {
+        if (!document.body) return;
+        (window as unknown as { themeAtBody?: string }).themeAtBody = document.documentElement.dataset.theme;
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    // Counted from the new document only: the page before it may still be reading bootstrap after its own stream connected.
+    page.once("framenavigated", () => { reloaded = true; });
+    await page.reload();
+    await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
+    await expect.poll(() => order.includes("/api/events")).toBe(true);
+    // Before the event stream connects (which reads bootstrap again by design), one read, sent before the bundle arrived.
+    expect(order.slice(0, order.indexOf("/api/events"))).toEqual(["/api/bootstrap", "bundle"]);
+    expect(await page.evaluate(() => (window as unknown as { themeAtBody?: string }).themeAtBody)).toBe("dark");
+  });
 });
 
 test("a sign-out or sign-in in one tab changes the account every other tab shows, without a reload", async ({ context, page }) => {

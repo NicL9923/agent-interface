@@ -45,6 +45,7 @@ import { ConnectionAnnouncer, ConnectionPanel } from "./components/ConnectionPan
 import { DecisionsNotice, reviewFirstDecision, StatusDock, type DockItem } from "./app/StatusDock";
 import { useWorkerOpens, type Destination } from "./app/worker-opens";
 import { waitingOnClose, type SheetClose } from "./app/close-request";
+import { rememberTheme, savedTheme } from "./app/saved-theme";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 import { accountGeneration, accountStart, checkHintExpiry, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
 import { signOutOf } from "./app/account-change";
@@ -71,6 +72,14 @@ export function App() {
     if ("start" in start && start.leftAccount && (location.search || location.hash || location.pathname !== "/")) history.replaceState(null, "", "/");
     setShown({ changes, start, generation: accountGeneration() });
   }, [pending, changes]);
+  // Each generation's first draw, before it paints, shows the theme this device saved only while the
+  // sign-in hint still names that theme's account and no other tab's sign-in or sign-out is under way,
+  // which may bring another account; otherwise the system's. public/boot.js applied it by the same rule,
+  // but a change can finish after boot.js ran and before this first draw, as after it in another tab.
+  // Bootstrap's own answer replaces it in AccountApp.
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = "wait" in shown.start ? "system" : savedTheme() ?? "system";
+  }, [shown]);
   // A page covered for the back-forward cache shows again once nothing of an ended generation is drawn.
   useLayoutEffect(uncoverEnded, [pending, shown]);
   const { start, generation } = shown;
@@ -207,10 +216,13 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find(echo => echo.status !== "accepted") ?? null;
+  const theme = boot?.preferences.theme || "system";
   useEffect(() => {
-    const theme = boot?.preferences.theme || "system";
-    document.documentElement.dataset.theme = theme;
-  }, [boot?.preferences.theme]);
+    // Until bootstrap answers, the theme public/boot.js applied from this device stays. Signed out, the system's.
+    if (!userId && !session.auth) return;
+    document.documentElement.dataset.theme = userId ? theme : "system";
+    if (userId) rememberTheme(userId, theme);
+  }, [theme, userId, session.auth]);
   // The connecting and sign-in screens that follow this account show the theme a signed-out page has.
   useEffect(() => () => { document.documentElement.dataset.theme = "system"; }, []);
   const { update, installEvent, notice, setNotice } = useAppInstall();

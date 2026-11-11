@@ -1,6 +1,7 @@
 import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type ApiResponse, type ApiRoute } from "./shared/api";
 import type { ErrorCode } from "./shared/errors";
 import type { Inflight, InflightDelta } from "./shared/types";
+import { dropStartupRead, takeStartupRead } from "./startup-read";
 import { AccountChanged, accountMark, accountStill, onAccountEnd, type AccountMark } from "./app/account-epoch";
 export { AccountChanged };
 let csrf = "";
@@ -30,6 +31,8 @@ export function clearResponseCache() {
   responses.clear();
   cachedChars = 0;
   generation++;
+  // boot.js's read carried the cookie from before the account changed.
+  dropStartupRead();
 }
 // Nothing read or signed for one account answers for the next.
 onAccountEnd(() => {
@@ -105,7 +108,9 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
     cache: "no-store",
   });
   try {
-    let response = await request();
+    // The page's first bootstrap may already be on its way, started by boot.js before this code loaded.
+    const early = get && !cached ? takeStartupRead(path, controller.signal, request) : undefined;
+    let response = await (early ?? request());
     if (get && response.status === 304) {
       if (cached?.etag) {
         if (scope === generation) remember(path, { ...cached, started });

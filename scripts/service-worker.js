@@ -301,6 +301,17 @@ async function openShell(event) {
   return cached;
 }
 
+const BOOT = '/boot.js';
+// public/boot.js blocks the page's <head>, before any of the app's code or deadlines exist, so a
+// stalled download would leave a blank page until the browser gave up. This release's copy always
+// answers, at once, even after the shell is noted as out of date and opens from the network: a
+// boot.js of another release is safe, since the app takes its read only when it is the read the app
+// would make, so the worst case is one extra bootstrap read. Only a worker with no copy asks the network.
+async function openBoot(request) {
+  const cached = await (await caches.open(CACHE)).match(BOOT);
+  return cached || fetch(request);
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -309,6 +320,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
     event.respondWith(openShell(event));
+    return;
+  }
+  if (url.pathname === BOOT) {
+    event.respondWith(openBoot(request));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {
