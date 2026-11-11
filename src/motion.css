@@ -1,7 +1,8 @@
 /* Motion and ambience: spring timing, the scroll-lifted chat header, per-assistant tints, dark-mode
    depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css,
-   but the built app links component stylesheets such as home.css and shell.css after it, so an animation
-   this layer gives a selector is the only one: a second at the same specificity would win in the build.
+   but the built app links component stylesheets such as home.css and shell.css after it, so a property this
+   layer sets on a selector, an animation or a depth style, is set by no other sheet on that selector: a second
+   at the same specificity would win in the build and lose on the dev server.
    Everything that moves here is gated on prefers-reduced-motion: no-preference, so the existing
    reduced-motion rules keep winning. */
 
@@ -37,10 +38,15 @@
   }
 }
 .app-shell { background-color: var(--surface); background-image: var(--depth-glow); }
+/* home.css sets the rail's color, not the `background` shorthand, which would reset this image in the built app. */
 .bot-rail { background-image: var(--depth-grain); }
-.composer, .approval-card, .settings-sheet, .command-palette, .today-attention-list, .bot-menu, .home-new-menu, .jump-latest {
+/* The lit edge. A selector listed here has no other shadow, and one that does gets its own rule below with the edge
+   first: the built app links home.css and shell.css after this file, so their box-shadow on these selectors would win
+   in it and not on the dev server. tests/motion-css-order.test.ts checks both. */
+.approval-card, .today-attention-list {
   box-shadow: inset 0 1px 0 var(--depth-edge);
 }
+.jump-latest { box-shadow: inset 0 1px 0 var(--depth-edge), 0 6px 22px rgb(0 0 0 / 14%); }
 .composer { box-shadow: inset 0 1px 0 var(--depth-edge), 0 5px 18px #1b251a05; }
 .composer:focus-within {
   box-shadow: inset 0 1px 0 var(--depth-edge), 0 0 0 3px color-mix(in srgb, var(--focus-glow, var(--accent)) 16%, transparent), 0 5px 18px #1b251a08;
