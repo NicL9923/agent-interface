@@ -29,6 +29,8 @@ The global Testing rules apply in full. The ones this repo has tripped on, resta
   One smoke case plus specific assertions beats fifty "the SVG changed" cases.
 - A test written to protect a specific line is broken by hand once to prove it
   goes red before it is committed. Record the run in `docs/ledger/`.
+- Python red runs go through `python3 .agents/tools/mutate-py.py`. It clears the stale
+  bytecode that a hand edit and `git checkout` leave behind, and restores the file byte for byte.
 
 # Production host
 
