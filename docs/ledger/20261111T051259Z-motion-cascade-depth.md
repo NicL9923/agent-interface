@@ -53,11 +53,33 @@ transitions off. Differences per run, at 900 px and at 390 px (identical both ti
 - `tests/motion-css-order.test.ts`: the expected list is empty. The family check now treats `background-color` and
   `background-image` as independent longhands, so the `background` shorthand collides and the pair does not. New: the
   lit-edge rule may list only selectors no other sheet gives a shadow; no stylesheet uses `min-width: 621px`.
-- `e2e/stylesheet-order.spec.ts` (new, about 40 s): each screen above is read as built, in the dev server's order (every
-  component sheet before `index.css`) and with the component sheets reversed, light and dark, and every computed value
-  must match. The reversed order is the one that sees Settings' two differing selectors. Values that differ between two reads
-  of the same order (content still arriving) are ignored, and a generated SVG ID is normalized. A second test keeps the jump
-  button's drop shadow under the dark edge.
+- `e2e/stylesheet-order.spec.ts` (new, 45 s for 15 tests, none over 6 s): one test per screen and scheme. Each reads
+  its screen as built and with `index.css` last and the component sheets in the reverse of the build's order, and every
+  computed value must match. The reversed order is the one that sees Settings' differing selectors, and it stands in for
+  the dev server's: for a property whose tied sheets include `index.css`, both put it last, and otherwise dev keeps the
+  build's order. Values that differ between two reads of the same order (content still arriving) are ignored, and a
+  generated SVG ID is normalized. A second test keeps the jump button's drop shadow under the dark lit edge.
+
+## Review fixes (Claude Opus 5.5 on `3cbd843`)
+
+- P2, `home.css`: `.settings-notifications .notification-settings .notification-toggle` (0,3,0) tied with the card's
+  `.notification-settings.is-blocked .notification-toggle` (0,3,0), and the build links `DeviceNotifications.css` before
+  `home.css`, so a blocked toggle read `--muted` (`rgb(105,114,104)`) instead of `--attention` (`rgb(155,103,51)`).
+  `.settings-notifications .notification-settings.is-blocked .notification-toggle { color: var(--attention); }` follows it.
+- Found by the spec's new blocked screen, not in the review: `.settings-sheet input[role="switch"]:disabled` (0,3,1) tied
+  with the card's `.notification-settings.is-blocked input:disabled` (0,3,1) on `opacity`, so the blocked switch was 0.45
+  in the build and 1 in the reversed order. The card's border on the same selector already won in both orders by
+  specificity, so the card's `opacity: 1` is kept the same way, in a rule under `.settings-notifications`. **This changes
+  the built app:** a blocked, disabled notification switch in Settings goes from 0.45 to full opacity. If 0.45 is wanted,
+  delete that rule and the card's `opacity: 1` instead.
+- `e2e/stylesheet-order.spec.ts`: a "Settings with notifications blocked" screen. The e2e server has no push key, so the
+  card cannot reach its blocked state; the screen sets the card's `is-blocked` class, as the chat screen adds a bare jump
+  button.
+- P3, `styles.css`: `.jump-latest`'s `box-shadow` is deleted, since `motion.css` always wins it. The jump-button test
+  (the drop shadow under the dark edge) is unchanged and passes.
+- P3, timing: the review's 58 s was the file's total; each of the two tests took about 30 s of its 60 s. The file is now one
+  test per screen and scheme (default 30 s timeout, slowest 6 s), reads two orders where it read three, and reads the
+  built order a second time only after a difference shows. 59 s became 45 s.
 
 ## Red runs
 
@@ -74,6 +96,8 @@ Each protecting line broken by hand, the guard run, the line restored.
 | `(min-width: 621px)` back in `artifacts.css` | "pairs the phone layout's width with a range that has no gap" red |
 | all of main's four CSS files restored | stylesheet-order e2e red, light and dark: palette, menus and Settings `box-shadow`, rail `background-image` |
 | Settings' three rules back to their short selectors | stylesheet-order e2e red, light and dark: `p.muted` font-size 12px -> 13px, the toggle's gap and the sizes they move |
+| the new blocked-toggle color rule removed from `home.css` (built) | stylesheet-order e2e, "Settings with notifications blocked", light and dark red: `color rgb(105, 114, 104) -> rgb(155, 103, 51)` (dark `rgb(166, 180, 167) -> rgb(235, 193, 136)`) and the colors that follow it |
+| the new blocked-switch opacity rule removed from `home.css` (built) | the same two tests red: `input opacity 0.45 -> 1` |
 | `.jump-latest`'s own rule removed, then cut to the edge alone | jump-button e2e red: `rgba(0,0,0,0.14) 0px 6px 22px` without an inset, then the inset without the drop |
 
 ## Checks

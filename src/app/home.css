@@ -503,6 +503,10 @@ button.settings-row:hover:enabled { background: color-mix(in srgb, var(--accent-
    linked before this one in some builds and after it in others, so each rule here names the card too: it outranks
    the card's whatever the order. */
 .settings-notifications .notification-settings .notification-toggle { flex-direction: row; align-items: center; gap: 10px; margin: 0; color: var(--muted); font-size: 0.8125rem; }
+/* The card's blocked rules tie with this sheet's on specificity: the toggle's color with the rule above, the switch's
+   opacity with the sheet's disabled switch. The card's value is kept in both, as its attention border already is. */
+.settings-notifications .notification-settings.is-blocked .notification-toggle { color: var(--attention); }
+.settings-notifications .notification-settings.is-blocked input:disabled { opacity: 1; }
 .settings-notifications .notification-settings p { margin: 6px 0 0; font-size: 0.75rem; }
 /* A row that is also its own card keeps the card's surface. */
 .settings-group.settings-row { margin-bottom: 22px; background: var(--raised); }
