@@ -437,7 +437,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const viewDock = useMemo(() => inChat && liveBot ? [] : dock.filter(item => item.kind === "connection" && !(inChat && connectionShown)),
     [inChat, liveBot, dock, connectionShown]);
   const liveState = conversation?.botId === botId ? conversation.activity.state : liveBot?.activity;
-  const canStop = !!liveBot && view === "conversation" && !connectionLost && !!boot?.capabilities.stop.supported
+  // Stop is its own request, so a failed read that may be a blip does not hold it back. The button goes when the
+  // chat shows the connection down (`reported`), and the shortcut follows it. A stop sent before then that finds the
+  // connection gone fails and says so, like any other write.
+  const canStop = !!liveBot && view === "conversation" && !connectionShown && !!boot?.capabilities.stop.supported
     && ["thinking", "working", "waiting", "blocked"].includes(liveState ?? "idle");
   useShortcuts({
     palette: () => { if (!boot) return false; setOverlay(current => current === "palette" ? null : "palette"); },

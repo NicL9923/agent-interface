@@ -271,8 +271,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     const timer = setTimeout(() => setStatus(""), 8000);
     return () => clearTimeout(timer);
   }, [status]);
-  // Why Send and Stop are refused for the connection: their tooltip and, beside their label, their
-  // accessible description. During the grace period nothing else says it.
+  // Why Send is refused for the connection: its tooltip and, beside its label, its accessible description.
+  // During the grace period nothing else says it. Stop is not held back then; the chat stops offering it once it shows the connection down.
   const connectionReason = connectionLost ? connectionShown ? WAITING_FOR_CONNECTION : CHECKING_CONNECTION : undefined;
   // A send refused during the grace period says so where the person is looking. Once the chat shows it
   // is disconnected, the dock's connection notice explains, so the line steps aside for it.
@@ -459,8 +459,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
               onStateChange={setVoiceState} onTranscript={(text) => setDraft(previous => ({ ...previous, dirty: true,
                 text: previous.text.trim() ? `${previous.text}\n${text}` : text }))} />
           {stopVisible ? <button type="button" className="send-button" aria-label="Stop response" onMouseDown={keepFocus}
-            disabled={stopping || connectionLost || !boot.capabilities.stop.supported}
-            title={boot.capabilities.stop.reason || connectionReason || "Stop response"}
+            disabled={stopping || !boot.capabilities.stop.supported}
+            title={boot.capabilities.stop.reason || "Stop response"}
             onClick={onStop}>
             <Icon name={stopping ? "spinner" : "stop"} className={stopping ? "spin" : undefined} size={19} />
           </button> : <button

@@ -159,17 +159,14 @@ describe('a failed conversation read', () => {
     expect(shown()).toBe(atOnce);
   });
 
-  it('refuses a send and a stop during the grace period, says why, and allows them once a read succeeds', async () => {
+  it('refuses a send during the grace period, says why, and allows it once a read succeeds', async () => {
     conversation = { ...conversation, activity: { state: 'working', runId: 'run-1' } };
     await opened();
     failure = blip(); await read();
     expect(shown()).toBe(false);
     const field = container.querySelector('textarea')!;
-    // With an empty draft a running reply offers Stop; with words, Send guidance. A disabled button's
-    // title is its tooltip and, beside its label, what a screen reader reads as its description.
-    await typeInto(field, '');
-    expect(stopButton().disabled).toBe(true);
-    expect(stopButton().title).toBe(CHECKING_CONNECTION);
+    // With words, a running reply offers Send guidance. A disabled button's title is its tooltip and,
+    // beside its label, what a screen reader reads as its description.
     await typeInto(field, 'Check the gate');
     expect(sendButton().disabled).toBe(true);
     expect(sendButton().title).toBe(CHECKING_CONNECTION);
@@ -184,10 +181,57 @@ describe('a failed conversation read', () => {
     failure = undefined; await read();
     expect(sendButton().disabled).toBe(false);
     expect(sendButton().hasAttribute('title')).toBe(false);
-    await typeInto(field, '');
-    expect(status().textContent).toBe('');
-    expect(stopButton().disabled).toBe(false);
-    expect(stopButton().title).toBe('Stop response');
+  });
+
+  // Stop is its own request. A failed read that may be a blip leaves it alone; the chat showing the connection
+  // down, which says why, is what turns it off.
+  describe('Stop', () => {
+    const stops = () => vi.mocked(write).mock.calls.filter(([path]) => path === '/bots/shared/stop');
+    const press = (init: KeyboardEventInit) => act(async () => { document.body.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })); });
+    const question = () => document.querySelector('[role="alertdialog"]');
+    beforeEach(() => {
+      // jsdom has no modal dialogs.
+      Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
+      Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value: function (this: HTMLDialogElement) { this.open = false; } });
+      conversation = { ...conversation, activity: { state: 'working', runId: 'run-1' } };
+      const refused = vi.mocked(write).getMockImplementation()!;
+      vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown, method?: string) => path === '/bots/shared/stop' ? {} as T : refused(path, body, method) as Promise<T>);
+    });
+
+    it('works by button and by Ctrl+. during the grace period, and is gone once the chat shows it is disconnected', async () => {
+      await opened();
+      failure = blip(); await read();
+      expect(shown()).toBe(false);
+      await typeInto(container.querySelector('textarea')!, '');
+      expect(stopButton().disabled).toBe(false);
+      expect(stopButton().title).toBe('Stop response');
+      await act(async () => stopButton().click());
+      expect(stops()).toHaveLength(1);
+      await press({ key: '.', ctrlKey: true });
+      expect(question()?.textContent).toContain("Stop Shared's work?");
+      await act(async () => [...question()!.querySelectorAll('button')].find(button => button.textContent === 'Stop work')!.click());
+      expect(stops()).toHaveLength(2);
+      await advance(DISCONNECT_GRACE_MS);
+      expect(shown()).toBe(true);
+      // The chat no longer claims work is running, so there is nothing to stop and no shortcut for it.
+      expect(stopButton()).toBeNull();
+      await press({ key: '.', ctrlKey: true });
+      expect(question()).toBeNull();
+      expect(stops()).toHaveLength(2);
+    });
+
+    it('tells the person when a stop sent during the grace period finds the connection gone, and sends it once', async () => {
+      await opened();
+      failure = blip(); await read();
+      vi.mocked(write).mockRejectedValueOnce(blip());
+      await typeInto(container.querySelector('textarea')!, '');
+      await act(async () => stopButton().click());
+      expect(stops()).toHaveLength(1);
+      expect(container.textContent).toContain("Can't reach the app");
+      // Nothing retries it behind the person's back.
+      await advance(DISCONNECT_GRACE_MS * 2);
+      expect(stops()).toHaveLength(1);
+    });
   });
 
   it('hands the explanation to the connection notice once the chat shows it is down', async () => {
