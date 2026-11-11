@@ -16,7 +16,7 @@ import { useConversation } from "./app/use-conversation";
 import { useChatPresence } from "./app/use-chat-presence";
 import { useDeviceActivity } from "./app/use-device-activity";
 import { useSubmission } from "./app/use-submission";
-import { awaitingTurn, sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
+import { awaitingTurn, ownSentRows, sendingDraft, useSentEchoes, withEchoes } from "./app/sent-echo";
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
 import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
@@ -227,7 +227,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     return () => window.removeEventListener("wildbots:computer", opened);
   }, []);
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
-  const echoes = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
+  const { echoes, sends } = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
+  const ownRows = useMemo(() => ownSentRows(sends, conversation), [sends, conversation]);
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
   // At most one message is on its way; accepted ones read as ordinary messages.
   const outgoing = echoes.find(echo => echo.status !== "accepted") ?? null;
@@ -465,7 +466,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     help: () => { if (!boot) return false; setOverlay("shortcuts"); },
     undo: () => toast.undo(),
   });
-  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
+  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
   const connected = !!boot?.connection.connected;
   useEffect(() => {
@@ -544,7 +545,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} echo={outgoing} state={state}
+          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} ownRows={ownRows} echo={outgoing} state={state}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost} connectionShown={connectionShown}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}

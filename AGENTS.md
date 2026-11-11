@@ -9,6 +9,7 @@
 - Keep all optional tsrs macOS arm64 and Linux x64/arm64 GNU/musl packages in
   `package-lock.json`; macOS-only lockfile regeneration must not drop Linux binaries.
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
+- Before calling work done, run `.agents/tools/check-all`. Use `npm ci` per worktree, never a symlinked `node_modules`.
 
 # Tests
 

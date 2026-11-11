@@ -26,6 +26,8 @@ interface DeliveryTarget {
   /** The installation behind it, when its client named one. Only such targets can be in use. */
   deviceId?: string;
   deliver(): Promise<void>;
+  /** Whether the recipient still holds this endpoint. A browser's moves to another member who signs in there. */
+  held?(): boolean;
   /** Whether the push service says this endpoint is gone for good. */
   dead(error: unknown): boolean;
   drop(): void;
@@ -303,6 +305,7 @@ export class BackgroundWorker {
         const targets: DeliveryTarget[] = [
           ...subscriptions.map((subscription): DeliveryTarget => ({
             endpoint: subscription.endpoint, deviceId: webDevices.get(subscription.endpoint),
+            held: () => this.store.hasSubscription(item.user_id, subscription.endpoint),
             deliver: async () => { await this.send!(subscription, webPayload); },
             dead: webPushDead,
             drop: () => this.store.unsubscribe(item.user_id, subscription.endpoint),
@@ -326,6 +329,11 @@ export class BackgroundWorker {
           if (marked(target.endpoint)) return "sent";
           if (marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint))) return "done";
           if (!stillVisible()) { revoked = true; return "revoked"; }
+          // Another member took this browser's endpoint since the subscriptions were read: nothing of this one goes there.
+          if (target.held && !target.held()) {
+            for (const row of item.items) this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
+            return "dead";
+          }
           try {
             await target.deliver();
             for (const row of item.items) this.store.markDelivered(row.id, target.endpoint);

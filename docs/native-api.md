@@ -1129,6 +1129,13 @@ tabs, and attaches it to its Web Push subscription with `deviceId` on
 accepts upper case and stores lower case. A registration without `deviceId` clears any
 earlier one for that endpoint.
 
+A Web Push endpoint names one browser profile, which has one session. When a member's session
+lapses there, the browser still holds that member's subscription and nothing can remove it. The
+next member to sign in and `POST /api/push/subscriptions` with the same endpoint and the same
+`keys` takes it over: the server moves the row and its device label to them, and the earlier
+member is sent nothing through it. A request with another member's endpoint and different keys
+answers 409, so knowing an endpoint is not enough to silence its holder.
+
 | Route | Body |
 | --- | --- |
 | `PUT /api/devices/activity` | `{ "deviceId": "UUID", "state": "active", "idleMs": 1200 }` or `{ "deviceId": "UUID", "state": "inactive" }`; returns `{ "ok": true }` |

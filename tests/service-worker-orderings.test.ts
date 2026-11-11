@@ -11,6 +11,12 @@ import { expect, it } from 'vitest';
 // request), and releases them in an order a seeded random walk picks. Then it checks the invariants
 // written at the top of the worker's account code. The worker is the real script; only Cache Storage,
 // notifications, windows, the network, the badge and the hash are fakes.
+//
+// The page writes the app badge through the worker too (a BADGE message). After each word the page
+// says, in its own order, a clear for the account it left and the count of the account it shows, as the
+// app does when a generation ends and the next draws. Other tabs that have not heard the latest word say
+// a count or a clear for an account of their own at random places, which can land anywhere among the
+// rest. Once the worker is idle the badge is the latest account's count, or none.
 
 type Member = 'one' | 'two';
 type Word = Member | null;
@@ -121,6 +127,8 @@ function startWorker(browser: Browser) {
   const dispatch = (type: string, event: object) => handlers[type]!({ ...event, waitUntil: (value: Promise<unknown>) => { browser.waits.push(value); } });
   return {
     account: (word: Word) => dispatch('message', { data: { type: 'ACCOUNT', user: word } }),
+    /** The page's app badge: `user` is the account its screens show, or null for none. */
+    badge: (user: Word, count: number) => dispatch('message', { data: { type: 'BADGE', user, count } }),
     push: (member: Member) => dispatch('push', { data: { json: () => ({ title: `For ${member}`, badge: COUNT[member], account: marker(member) }) } }),
     /** A tap on a notification of `member`, or on its Decline when `action` says so. The browser closed it as it was tapped. */
     click: (member: Member, action = '') => dispatch('notificationclick', {
@@ -173,7 +181,23 @@ async function walk(seed: number) {
   }
   const words = pick(next, SEQUENCES);
   browser.latest = words.at(-1)!;
-  const events: Event[] = words.map((word, index) => ({ label: `ACCOUNT#${index + 1}`, run: worker => { browser.said = word; worker.account(word); } }));
+  // The page's order: each word, then the clear its previous generation's screens make as they unmount, then
+  // the count of the account that draws next (none for a sign-out).
+  let writes = 0;
+  const page = (user: Word, count: number): Event => ({ label: `BADGE#${++writes}`, run: worker => worker.badge(user, count) });
+  const events: Event[] = words.flatMap((word, index): Event[] => [
+    { label: `ACCOUNT#${index + 1}`, run: worker => { browser.said = word; worker.account(word); } },
+    ...index ? [page(words[index - 1]!, 0)] : [],
+    page(word, word ? COUNT[word] : 0),
+  ]);
+  // Tabs that did not hear the latest word: a count, or a clear, for an account other than the latest.
+  const strangers = (browser.latest ? MEMBERS.filter(member => member !== browser.latest) : MEMBERS);
+  const stranger = pick(next, strangers);
+  const stale: Event[] = [
+    { label: `BADGE#stale-set:${stranger}`, run: worker => worker.badge(stranger, COUNT[stranger]) },
+    { label: `BADGE#stale-clear:${pick(next, strangers)}`, run: worker => worker.badge(pick(next, strangers), 0) },
+    ...browser.latest ? [{ label: 'BADGE#stale-clear:none', run: (worker: ReturnType<typeof startWorker>) => worker.badge(null, 0) }] : [],
+  ];
   const tapped = pick(next, MEMBERS), declined = pick(next, MEMBERS);
   for (const other of [
     { label: 'push:one', run: (worker: ReturnType<typeof startWorker>) => worker.push('one') },
@@ -181,6 +205,7 @@ async function walk(seed: number) {
     { label: `tap:${tapped}`, run: (worker: ReturnType<typeof startWorker>) => worker.click(tapped) },
     { label: `decline:${declined}`, run: (worker: ReturnType<typeof startWorker>) => worker.click(declined, 'decline') },
     { label: 'restart' as const },
+    ...stale,
   ]) events.splice(Math.floor(next() * (events.length + 1)), 0, other);
   let worker = startWorker(browser);
   const settled = new WeakSet<Promise<unknown>>();
@@ -232,12 +257,14 @@ async function walk(seed: number) {
   if (others.length) broke.push(['screen', `lists ${others.map(each => each.title).join(', ')} under ${String(latest)}`]);
   // A step for an older word, still running when the latest arrived, closes nothing the latest allows.
   if (browser.closedUnderLatest.length) broke.push(['closed under the latest', `${browser.closedUnderLatest.join(', ')} closed after ${String(latest)} was said`]);
-  // The badge ends unset or at the latest account's count, and once the latest message arrived no push
-  // of another account set it even for a moment.
-  if (!(browser.badge === undefined || browser.badge === 0 || latest && browser.badge === COUNT[latest])) broke.push(['badge set by a departed push', `${browser.badge} under ${String(latest)}`]);
-  if (browser.otherBadgeUnderLatest.length) broke.push(['badge set by a departed push', `set ${browser.otherBadgeUnderLatest.join(', ')} after ${String(latest)} was said`]);
-  // Once the latest message arrived, nothing clears the latest account's count: not a push of another
-  // account, and not a step for an older word that the latest overtook.
+  // The page of the latest account says its count after the latest word, so the badge ends at that count,
+  // or unset after a sign-out. Once the latest message arrived no push or page of another account set it
+  // even for a moment.
+  const counts = latest ? COUNT[latest] : 0;
+  if ((browser.badge ?? 0) !== counts) broke.push(['badge is the latest account\'s count', `${browser.badge} under ${String(latest)}, which counts ${counts}`]);
+  if (browser.otherBadgeUnderLatest.length) broke.push(['badge set by a departed account', `set ${browser.otherBadgeUnderLatest.join(', ')} after ${String(latest)} was said`]);
+  // Once the latest message arrived, nothing clears the latest account's count: not a push or a page of
+  // another account, and not a step for an older word that the latest overtook.
   if (browser.latestBadgeCleared) broke.push(['badge cleared under the latest', `${String(latest)}'s count ${COUNT[latest!]} was cleared after it was said`]);
   if (rejected.length) broke.push(['waitUntil', rejected.join('; ')]);
   // The fakes throw on a call the walk did not script, and the worker's chain swallows a throw.

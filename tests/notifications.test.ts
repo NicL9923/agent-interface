@@ -559,3 +559,48 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
     }
   } finally { store.close(); }
 });
+
+// A browser whose member's session lapsed still holds that member's subscription. When the next
+// member signs in there and subscribes, the endpoint moves, and no push for the first reaches it.
+const sharedKeys = { p256dh: "shared-key", auth: "shared-auth" };
+it("sends nothing of one member to an endpoint another member has taken over, and everything of the other", async () => {
+  const store = storeWithUsers();
+  const shared = "https://push.example.test/shared", elsewhere = "https://push.example.test/elsewhere";
+  store.subscribe("one", { endpoint: shared, keys: sharedKeys });
+  store.subscribe("one", { endpoint: elsewhere, keys: { p256dh: "other-key", auth: "other-auth" } });
+  store.subscribe("two", { endpoint: shared, keys: sharedKeys });
+  queue(store, "for-one", Date.now(), "pending", "one");
+  queue(store, "for-two", Date.now(), "pending", "two");
+  const sent: [string, string][] = [];
+  const sender = vi.fn(async (subscription: { endpoint: string }, payload: string) => { sent.push([subscription.endpoint, JSON.parse(payload).tag]); });
+  try {
+    await new BackgroundWorker(store, offline, household(), sender).tick();
+    expect(sent.sort()).toEqual([[elsewhere, "for-one"], [shared, "for-two"]]);
+    expect(outboxRow(store, "for-one")?.state).toBe("delivered");
+    expect(outboxRow(store, "for-two")?.state).toBe("delivered");
+  } finally { store.close(); }
+});
+
+it("stops a push already being delivered to a member's endpoints when another member takes one of them meanwhile", async () => {
+  const store = storeWithUsers();
+  const first = "https://push.example.test/first", shared = "https://push.example.test/shared";
+  store.subscribe("one", { endpoint: first, keys: { p256dh: "first-key", auth: "first-auth" } });
+  store.subscribe("one", { endpoint: shared, keys: sharedKeys });
+  queue(store, "for-one", Date.now(), "pending", "one");
+  const sent: string[] = [];
+  // Member two signs in on the shared browser while member one's push is on its way to the first.
+  const sender = vi.fn(async (subscription: { endpoint: string }) => {
+    sent.push(subscription.endpoint);
+    if (subscription.endpoint === first) store.subscribe("two", { endpoint: shared, keys: sharedKeys });
+  });
+  try {
+    await new BackgroundWorker(store, offline, household(), sender).tick();
+    expect(sent).toEqual([first]);
+    expect(store.subscriptions("two").map(item => item.endpoint)).toEqual([shared]);
+    // Nothing is left to retry: the push reached member one's other browser, and the taken one is recorded apart.
+    expect(outboxRow(store, "for-one")?.state).toBe("delivered");
+    expect(store.delivered("for-one", shared)).toBe(false);
+    expect(store.delivered("for-one", `dead:${shared}`)).toBe(true);
+    expect(store.delivered("for-one", first)).toBe(true);
+  } finally { store.close(); }
+});
