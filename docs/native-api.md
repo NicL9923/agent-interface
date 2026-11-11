@@ -195,7 +195,12 @@ saved since the start of the Hermes turn that is running. The add-on reports whe
 that turn started as `inflight.started_at` (epoch seconds, Hermes's own clock, the
 `started_at` Hermes keeps on the session's turn and leaves out of its snapshot),
 and the turn's saved messages are those Hermes saved at or after it, whose first is
-the turn's prompt when it has saved one. Wording plays no part, so a prompt worded
+the turn's prompt when it has saved one. Hermes saves a queued prompt's row at the
+end of the transcript before it starts that prompt's turn, so its own `started_at`
+is later than the prompt. For such a turn the add-on reports the earlier time, that
+of the row it staged for the turn's prompt, which keeps the prompt in the turn. A
+prompt sent while Hermes was idle starts the turn first and is saved after, and
+keeps Hermes's own start. Wording plays no part, so a prompt worded
 like an earlier one, guidance steered into the turn and worded like its prompt, a
 prompt Hermes changed (bracketed-paste markers, another client's image lines) and a
 hidden prompt such as a goal continuation each start the turn where it started. A

@@ -1130,11 +1130,35 @@ class Bridge:
             # Set even when None: a drain or continuation runs on the thread of the turn that just
             # finished, and must never pass that turn's receipt to its own.
             token = self.turn_claim.set(claim)
+            self.note_submit_row_time(session, kwargs.get("text", args[0] if args else None))
             try:
                 return original(rid, sid, session, *args, **kwargs)
             finally:
                 self.turn_claim.reset(token)
         server._run_prompt_submit = run
+
+    @staticmethod
+    def usable_time(value):
+        return type(value) in (int, float) and math.isfinite(value) and value > 0
+
+    @classmethod
+    def note_submit_row_time(cls, session, text):
+        """Keep when the row this turn's prompt was saved under was stamped, as ``app_turn_row``, before Hermes admits the turn.
+
+        A queued prompt that runs has its row written at the end of the transcript first (``_drain_queued_prompt`` ->
+        ``_replace_queued_user_row_for_turn``, ``session_auto_continue.py:493``) and only then reaches ``_admit_prompt_turn``,
+        which starts the turn (``_start_inflight_turn``). The turn's own prompt row is earlier than its ``started_at``, and
+        ``mark_turn_start`` has to report that row's time or the prompt falls outside the turn. An ordinary prompt.submit starts the
+        turn before it writes the row, so its row is later and changes nothing. Hermes staged the row as the session's
+        ``_submit_user_row``; ``_adopt_submit_user_row`` pops it later, so it is read now. A row staged for another prompt is not
+        this turn's. Set on every turn, even to nothing, so a turn never carries the last one's row.
+        """
+        staged = session.get("_submit_user_row")
+        at = staged.get("timestamp") if isinstance(staged, dict) and isinstance(text, str) and staged.get("content") == text else None
+        if cls.usable_time(at):
+            session["app_turn_row"] = {"user": text.strip(), "at": at}
+        else:
+            session.pop("app_turn_row", None)
 
     def bind_turn_row(self, sid, payload):
         """Bind the receipt this thread's turn claimed to the prompt row its completion reports.
@@ -1446,18 +1470,23 @@ class Bridge:
 
         Hermes sets ``started_at`` on the session's turn when it starts (``_start_inflight_turn``) but leaves it out of
         the ``inflight`` snapshot it reports. The server places the turn's saved rows by it, since a prompt's words cannot
-        tell a new native turn from guidance steered into the running one. Only a turn that is still the one the snapshot
+        tell a new native turn from guidance steered into the running one. The turn starts at its prompt's row when that was saved
+        before Hermes started the turn, as a queued prompt's is. Only a turn that is still the one the snapshot
         describes is stamped: another turn may have started since the snapshot was taken, and its start would put the
         snapshot's rows before the turn.
         """
         inflight, turn = value.get("inflight"), session.get("inflight_turn")
         if not isinstance(inflight, dict) or not isinstance(turn, dict):
             return
-        started = turn.get("started_at")
-        if type(started) not in (int, float) or not math.isfinite(started) or started <= 0:
+        started, user = turn.get("started_at"), str(turn.get("user") or "").strip()
+        if not Bridge.usable_time(started):
             return
-        if str(turn.get("user") or "").strip() != inflight.get("user") or not str(turn.get("assistant") or "").startswith(inflight.get("assistant") or ""):
+        if user != inflight.get("user") or not str(turn.get("assistant") or "").startswith(inflight.get("assistant") or ""):
             return
+        # A queued prompt's row was saved before Hermes started its turn (``note_submit_row_time``): the turn starts at the prompt.
+        row = session.get("app_turn_row")
+        if isinstance(row, dict) and row.get("user") == user and row["at"] < started:
+            started = row["at"]
         inflight["started_at"] = started
 
     def describe_task(self, profile, sid, session, value):

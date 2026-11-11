@@ -429,11 +429,18 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     /** `covered`: the change is one a `?inflight=3` turn event carries whole, which sends no change notice there. */
     structural(change: () => void, covered?: boolean): Promise<void>;
     /**
-     * Hermes starts a native turn with this prompt: a person's message, or guidance it queued instead of steering in. A marked
+     * Hermes starts a native turn with this prompt, before it saves the prompt's row: a person's message sent while Hermes was
+     * idle (`prompt.submit` starts the turn, then writes the row), or a prompt it resumes with no row of its own. A marked
      * run (`nativeTurns`' last argument) has the add-on report when it started, `inflight.started_at`, and stamps every row
      * Hermes saves afterwards with a later time, as Hermes does. `startedAt` is the time to report, for the first turn.
      */
     begin(prompt: string, startedAt?: number, snapshot?: Record<string, unknown>): Promise<void>;
+    /**
+     * Hermes runs a queued prompt: `save` writes the prompt's row at the end of the transcript first, and only then does Hermes
+     * start the turn (`_drain_queued_prompt`, then `_admit_prompt_turn`), so its own start is later than its prompt's row. The
+     * add-on reports the earlier time, the row's. Only the turns of a marked run report a start.
+     */
+    drain(prompt: string, save: () => void, snapshot?: Record<string, unknown>): Promise<void>;
     /** Saves the reply so far as a segment before a tool, as Hermes does before each tool call. */
     segment(id: number, text: string, during?: () => void): Promise<void>;
     /** The native turn ends: its reply is saved and Hermes's snapshot of it is cleared. */
@@ -456,9 +463,12 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     const s = await setup();
     midTurn(s);
     if (prompt) s.hermes.history[2] = prompt[0];
-    // Seconds on Hermes's clock. Rows saved from here on are stamped in order, and a turn begun reports a start just after
-    // the last stamp, so every row it saves is at or after its start and every row saved before it is earlier.
+    // Seconds on Hermes's clock. Rows saved from here on are stamped in order. A turn begun reports a start just after the last
+    // stamp, so every row it saves is at or after its start and every row saved before it is earlier. A queued prompt's row was
+    // saved before its turn started, so a drained turn reports that row's stamp, the last one.
     let now = 0;
+    // The start the add-on reported for the turn running now, which it still reports on the snapshot Hermes keeps of a stopped turn.
+    let reported: number | undefined;
     if (marked) {
       const history = s.hermes.history;
       s.hermes.history = history.map(saved => ({ ...saved, timestamp: ++now }));
@@ -487,7 +497,14 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await s.get(s.one);
       },
       begin: (prompt, startedAt = now + 0.5, snapshot = {}) => turn.structural(() => {
+        reported = startedAt;
         s.hermes.inflight = { user: prompt, assistant: "", ...(marked ? { started_at: startedAt } : {}), ...snapshot };
+        s.hermes.frame("message.start", {});
+      }),
+      drain: (prompt, save, snapshot = {}) => turn.structural(() => {
+        save();
+        reported = now;
+        s.hermes.inflight = { user: prompt, assistant: "", ...(marked ? { started_at: now } : {}), ...snapshot };
         s.hermes.frame("message.start", {});
       }),
       segment: (id, text, during) => turn.structural(() => {
@@ -508,7 +525,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         s.hermes.runId = typeof extra.app_run_id === "string" ? extra.app_run_id : undefined;
       },
       stop: snapshot => turn.structural(() => {
-        Object.assign(s.hermes, { running: false, runId: undefined, inflight: snapshot });
+        Object.assign(s.hermes, { running: false, runId: undefined, inflight: marked ? { ...snapshot, started_at: reported } : snapshot });
         s.hermes.frame("message.complete", { text: "" });
       }),
     };
@@ -847,8 +864,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn is dry.");
         turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
         await turn.end();
-        await turn.begin("Check the loft");
-        turn.guidance(5, "steer-two", "Check the loft");
+        await turn.drain("Check the loft", () => turn.guidance(5, "steer-two", "Check the loft"));
         await turn.say("Loft checked.");
         await turn.segment(6, "Loft checked.");
         await turn.say(" Dry.");
@@ -892,8 +908,7 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn checked.");
         turn.s.hermes.history.push(row(4, "assistant", "Barn checked.", { app_run_id: "run-2" }));
         await turn.end();
-        await turn.begin("Check the loft");
-        turn.guidance(5, "steer-two", "Check the loft");
+        await turn.drain("Check the loft", () => turn.guidance(5, "steer-two", "Check the loft"));
         await turn.say("Loft checked.");
         turn.s.hermes.history.push(row(6, "assistant", "Loft checked.", { app_run_id: "run-2" }));
         await turn.end();
@@ -937,6 +952,57 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       },
       live: "Checked. Loft dry.", turn: [],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Checked. Loft dry."],
+    },
+    {
+      // The order an Opus review found. A drained prompt's row is saved before Hermes starts its turn, so a start taken from
+      // Hermes's own clock falls between the prompt and its first segment and the live reply shows that segment twice.
+      name: "marked: a person's prompt Hermes queued, its row saved before its turn started, then a segment",
+      marked: true,
+      async script(turn) {
+        await turn.say("Barn is dry.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
+        await turn.end();
+        await turn.drain("Check the loft", () => turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }));
+        await turn.say("Loft checked.");
+        await turn.segment(6, "Loft checked.");
+        await turn.say(" Dry.");
+      },
+      live: "Dry.", turn: ["req-3", "6"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "Dry."],
+    },
+    {
+      // The same order for another client's queued prompt, which has no app run, and a turn that failed after its first segment.
+      // Hermes keeps its snapshot, and the read's live text is what the snapshot holds beyond the saved segment, not the segment
+      // again.
+      name: "marked: another client's queued prompt, its row saved before it started, failed after a segment",
+      marked: true,
+      settled: true,
+      async script(turn) {
+        await turn.say("Barn is dry.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
+        await turn.end();
+        await turn.drain("Check the loft", () => turn.prompt(5, "Check the loft"));
+        await turn.say("Loft checked.");
+        turn.s.hermes.history.push(row(6, "assistant", "Loft checked."));
+        await turn.say(" And more.");
+        await turn.stop({ user: "Check the loft", assistant: "Loft checked. And more.", error: "boom" });
+      },
+      live: "And more.", turn: ["5", "6"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "And more."],
+    },
+    {
+      // Queued, saved nothing yet: its row is the turn's only saved message and its live text is all its own.
+      name: "marked: a queued prompt whose turn saved nothing yet after its row",
+      marked: true,
+      async script(turn) {
+        await turn.say("Barn is dry.");
+        turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
+        await turn.end();
+        await turn.drain("Check the loft", () => turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }));
+        await turn.say("Loft checked.");
+      },
+      live: "Loft checked.", turn: ["req-3"],
+      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked."],
     },
   );
   describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts, prompt, settled, marked, origin }) => {
