@@ -25,7 +25,20 @@ import XCTest
       #"{"id":"7","role":"user","text":"   "}"#,
       #"{"id":"8","role":"user","text":"Personal chat note"}"#,
     ].map(message)
-    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me"), ["Personal chat note", "Water the garden", "Check the hay"])
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: false, ownRows: []),
+      ["Personal chat note", "Water the garden", "Check the hay"], "In a private chat a no-sender row is the person's own")
+  }
+  func testRecallInASharedChatSkipsANoSenderRowUnlessItIsThisPersonsOwnSend() throws {
+    let messages = try [
+      #"{"id":"1","role":"user","text":"Check the hay","sender":{"id":"me","name":"Me"}}"#,
+      #"{"id":"2","role":"user","text":"From a native Hermes client"}"#,
+      #"{"id":"3","role":"user","text":"My queued send"}"#,
+      #"{"id":"4","role":"user","text":"From my spouse","sender":{"id":"spouse","name":"Spouse"}}"#,
+    ].map(message)
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: true, ownRows: []), ["Check the hay"],
+      "Another member's no-sender message is never recalled as this person's, as on the web")
+    XCTAssertEqual(PromptRecall.ownMessages(messages, userId: "me", othersCanWrite: true, ownRows: ["3"]), ["My queued send", "Check the hay"],
+      "A no-sender row recorded as this person's own send is recalled")
   }
   func testUpStepsBackFromAnEmptyComposerAndDownReturnsToTheEmptyDraft() {
     var recall = PromptRecall()

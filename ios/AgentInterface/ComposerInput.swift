@@ -36,16 +36,23 @@ struct PromptRecall: Equatable {
   mutating func reset() { self = PromptRecall() }
 
   /// This person's own messages, newest first, without repeats in a row. Messages from other
-  /// household members in a shared chat, scheduled or agent handoffs and activity are left out.
-  static func ownMessages(_ messages: [Message], userId: String?) -> [String] {
+  /// household members in a shared chat, scheduled or agent handoffs and activity are left out. A row
+  /// with no sender is this person's in a private chat, or in a shared one when it is one of their own
+  /// sends (`ownRows`); there it could be any member's, as the transcript label says, and the web's
+  /// recall takes only a row whose sender is the person.
+  static func ownMessages(_ messages: [Message], userId: String?, othersCanWrite: Bool, ownRows: Set<String>) -> [String] {
     var result: [String] = []
-    for message in messages.reversed() where message.isHumanMessage && (message.sender == nil || message.sender?.id == userId)
+    for message in messages.reversed() where message.isHumanMessage && isOwn(message, userId: userId, othersCanWrite: othersCanWrite, ownRows: ownRows)
     {
       let text = message.text
       guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, result.last != text else { continue }
       result.append(text)
     }
     return result
+  }
+  private static func isOwn(_ message: Message, userId: String?, othersCanWrite: Bool, ownRows: Set<String>) -> Bool {
+    guard let sender = message.sender else { return !othersCanWrite || ownRows.contains(message.id) }
+    return sender.id == userId
   }
 }
 

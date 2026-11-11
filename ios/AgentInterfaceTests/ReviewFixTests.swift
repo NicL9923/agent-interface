@@ -95,7 +95,7 @@ import XCTest
       "An unsaved live row is never retried, nor does an older message stand in for it")
     let scheduled = Message(id: "s", role: "user", text: "Report", origin: MessageOrigin(kind: "scheduled", visibility: "conversation"))
     XCTAssertFalse(scheduled.isHumanMessage)
-    XCTAssertEqual(PromptRecall.ownMessages([older, explicit, scheduled], userId: "me"), ["Is the gate closed?", "Older prompt"],
+    XCTAssertEqual(PromptRecall.ownMessages([older, explicit, scheduled], userId: "me", othersCanWrite: false, ownRows: []), ["Is the gate closed?", "Older prompt"],
       "Recall uses the same rule")
   }
 

@@ -1069,23 +1069,11 @@ struct SentEcho: Equatable {
   /// Accepted, it reads as any other message until Hermes's own copy takes its place.
   var delivery: Delivery? { status == .accepted ? nil : Delivery(id: request.requestId, status: status) }
 
-  /// Whether Hermes's own copy of the message is in the conversation.
+  /// Whether Hermes's own copy of the message is in the conversation. Only a message Hermes accepted is
+  /// matched by its words; see `copyIndex`.
   func shown(in conversation: Conversation) -> Bool {
-    let messages = conversation.messages
-    if messages.contains(where: { $0.id == request.requestId || $0.id == messageId }) { return true }
-    // Hermes names a staged prompt by its request ID. Other rows, such as image-only prompts, are
-    // matched by their words once it accepted them, after the message that was last when it was sent.
-    let text = Self.trimmed(request.text)
-    guard status == .accepted, !text.isEmpty else { return false }
-    var start = 0
-    if let after {
-      // Without its anchor, an older message with the same words could pass for this one.
-      guard let anchor = messages.firstIndex(where: { $0.id == after }) else { return false }
-      start = anchor + 1
-    }
-    return messages[start...].contains {
-      $0.role == "user" && Self.trimmed($0.text) == text && ($0.sender == nil || $0.sender?.id == sender.id)
-    }
+    Self.copyIndex(requestId: request.requestId, messageId: messageId, text: status == .accepted ? request.text : "", after: after,
+      senderId: sender.id, in: conversation.messages) != nil
   }
   /// The echo after the submission, its receipt or the conversation changed. Nil removes it.
   static func next(_ echo: SentEcho?, pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
@@ -1161,7 +1149,7 @@ struct SentEcho: Equatable {
     guard sending, let pending, draft.isSentCopy else { return false }
     return draft.text == pending.text && draft.attachments == pending.attachments
   }
-  private static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  static func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
   private static func timestamp(_ date: Date) -> String { ServerDate.string(date) }
 }
 struct AuthConfig: Codable {

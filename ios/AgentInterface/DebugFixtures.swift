@@ -166,6 +166,15 @@
             ["id": "recall-2-reply", "role": "assistant", "text": "Garden watered."],
           ]
         }
+        if environment["AGENT_INTERFACE_UI_UNKNOWN_SENDER"] == "1" {
+          // A message a native Hermes client wrote carries no sender; this person's own sends name them.
+          FixtureProtocol.messages = [
+            ["id": "unknown-native", "role": "user", "text": "Fixture note from a native client"],
+            ["id": "unknown-native-reply", "role": "assistant", "text": "Noted the native note."],
+            ["id": "unknown-own", "role": "user", "text": "Fixture note from me", "sender": ["id": "native-test", "name": "Local test member"]],
+            ["id": "unknown-own-reply", "role": "assistant", "text": "Noted your note."],
+          ]
+        }
         if environment["AGENT_INTERFACE_UI_GROUP"] == "1" {
           FixtureProtocol.groupRooms = [["room_id": "fixture-room", "name": "Supper planning", "members": [
             ["member_id": "ranch", "profile": "ranch", "handle": "ranch", "display_name": "Ranch hand"],
