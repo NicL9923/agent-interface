@@ -71,7 +71,7 @@ beforeEach(() => {
 const refs = { scroll: createRef<HTMLDivElement>(), endSpace: createRef<HTMLDivElement>() };
 function view(conversation: SavedConversation, props: Partial<Props> = {}) {
   return mount.render(createElement(Conversation, {
-    boot, selected: bot, botId: "bot", conversation, canonical: conversation, echo: null, state: "working", showActivity: true, avatarState: "working",
+    boot, selected: bot, botId: "bot", conversation, canonical: conversation, ownRows: new Set<string>(), echo: null, state: "working", showActivity: true, avatarState: "working",
     connectionLost: false, offline: false, appUnavailable: false, checkingConnection: false, reconnect: async () => {}, error: "", setError: () => {},
     notifications: { prompt: false } as Props["notifications"], scroll: refs.scroll, endSpace: refs.endSpace,
     content: () => {}, history: { earlier: false, complete: false, atLatest: true } as Props["history"],

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, uploadFile, write } from "../src/client-api";
@@ -786,6 +786,100 @@ describe("conversation state", () => {
       expect(rows.map(row => row.getAttribute("data-message-id"))).toEqual(["mine", "native", "theirs"]);
       expect(rows.map(row => row.querySelector(".message-attribution")?.textContent ?? "")).toEqual(["", label, "Two"]);
     } finally { bootstrap.bots[0] = original; }
+  });
+
+  // Hermes saves a steer and a queued send without their sender, so once the sent echo leaves, the row must still read as the viewer's own.
+  describe("the viewer's own sends in a shared chat", () => {
+    const words = "My saved server draft";
+    // A running chat offers guidance, which Hermes steers into the work or queues.
+    const guidanceButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send guidance"]')!;
+    const labels = () => [...container.querySelectorAll(".message-user")].map(row =>
+      `${row.getAttribute("data-message-id")}:${row.querySelector(".message-attribution")?.textContent ?? ""}`);
+    /** Sends the draft while the chat works, and answers its receipt. */
+    const sendWith = async (receipt: Record<string, unknown>) => {
+      let finish!: (answer: unknown) => void;
+      vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+        ? await new Promise<T>(resolve => { finish = answer => resolve(answer as T); }) : {} as T);
+      await render();
+      await act(async () => guidanceButton().click());
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      await act(async () => finish({ requestId, status: "accepted", ...receipt }));
+      return requestId;
+    };
+    const working = (...messages: Conversation["messages"]) => {
+      conversation = { ...conversation, activity: { state: "working", runId: "run" }, messages: [{ id: "earlier", role: "assistant", text: "On it" }, ...messages] };
+    };
+    afterEach(() => { vi.mocked(write).mockReset().mockResolvedValue({}); });
+
+    it("keeps a steer unlabeled when Hermes's copy replaces its echo, and labels another member's same words", async () => {
+      working();
+      const requestId = await sendWith({ steered: true });
+      expect(labels()).toEqual([`${requestId}:`]);
+      expect(container.querySelector(".message-steered")?.textContent).toBe("Added to the current task");
+      // Hermes saves the steer, with no sender, at its next tool batch; the echo gives way to this row.
+      working({ id: "steer-row", role: "user", text: words });
+      await changed();
+      expect(labels()).toEqual(["steer-row:"]);
+      // Another member's identical words are a second row, and no send of the viewer's stands behind it.
+      working({ id: "steer-row", role: "user", text: words }, { id: "kim-row", role: "user", text: words });
+      await changed();
+      expect(labels()).toEqual(["steer-row:", "kim-row:Household member"]);
+    });
+
+    it("keeps a queued send unlabeled in the row Hermes saved when its turn starts", async () => {
+      working();
+      const requestId = await sendWith({ turn: "queued" });
+      expect(labels()).toEqual([`${requestId}:`]);
+      conversation = { ...conversation, activity: { state: "done" }, messages: [
+        { id: "earlier", role: "assistant", text: "Done" },
+        { id: "queued-row", role: "user", text: words },
+        { id: "reply", role: "assistant", text: "Next" },
+      ] };
+      await changed();
+      expect(labels()).toEqual(["queued-row:"]);
+    });
+
+    it("labels a row with the same words that was saved before the viewer sent theirs", async () => {
+      working({ id: "older-row", role: "user", text: words });
+      await sendWith({ steered: true });
+      working({ id: "older-row", role: "user", text: words }, { id: "steer-row", role: "user", text: words });
+      await changed();
+      expect(labels()).toEqual(["older-row:Household member", "steer-row:"]);
+    });
+
+    it("reads a copy that arrived before Hermes answered as the viewer's once it accepts the send", async () => {
+      let finish!: (answer: unknown) => void;
+      vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+        ? await new Promise<T>(resolve => { finish = answer => resolve(answer as T); }) : {} as T);
+      working();
+      await render();
+      await act(async () => guidanceButton().click());
+      const requestId = (vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string }).requestId;
+      // The reply after it keeps the row's own turn unchanged when the claim arrives.
+      working({ id: "steer-row", role: "user", text: words }, { id: "reply", role: "assistant", text: "Understood" });
+      conversation = { ...conversation, activity: { state: "done" } };
+      await changed();
+      expect(labels()).toEqual(["steer-row:Household member", `${requestId}:`]);
+      await act(async () => finish({ requestId, status: "accepted", steered: true }));
+      expect(labels()).toEqual(["steer-row:"]);
+    });
+
+    it("follows an assistant that becomes the viewer's personal one while its chat is open", async () => {
+      conversation = { ...conversation, activity: { state: "done" }, messages: [{ id: "native", role: "user", text: "From a Hermes desktop" }] };
+      let sharing = true;
+      vi.mocked(api).mockImplementation(async <T>(path: string) => path === "/bootstrap?roster=lean"
+        ? { ...bootstrap, bots: [sharing ? bootstrap.bots[0] : { ...bootstrap.bots[0], shared: false, ownerId: "one" }] } as T
+        : path.startsWith("/bots/shared/conversation?") ? conversation as T : path === "/bots/shared/draft" ? savedDraft as T : null as T);
+      const refreshed = async () => { await act(async () => { window.dispatchEvent(new Event("online")); }); await advance(1500); };
+      await render();
+      expect(labels()).toEqual(["native:Household member"]);
+      sharing = false;
+      await refreshed();
+      expect(labels()).toEqual(["native:"]);
+      sharing = true;
+      await refreshed();
+      expect(labels()).toEqual(["native:Household member"]);
+    });
   });
 
   it("loads transcript images lazily and reserves the space of one that has been seen", async () => {

@@ -60,7 +60,7 @@ const noChips = new Map<string, Artifact[]>();
  * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
  * does not re-render the transcript, its decisions, or its activity avatar.
  */
-export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, echo, state, showActivity, avatarState, connectionLost, connectionShown, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
+export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, ownRows, echo, state, showActivity, avatarState, connectionLost, connectionShown, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -68,6 +68,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   conversation: SavedConversation | null;
   /** The conversation as Hermes has it, without messages still drawn from this device. */
   canonical: SavedConversation | null;
+  /** The saved messages with no sender that are this person's own sends; see ownSentRows. */
+  ownRows: ReadonlySet<string>;
   echo: SentEcho | null;
   state: ActivityState;
   showActivity: boolean;
@@ -282,7 +284,7 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
         ) : blocks.length || runs.length ? (
           <>
             <HistoryEdge history={history} scroll={scroll} name={selected.name} disabled={connectionLost} />
-            <Turns blocks={blocks} advanced={advanced} unavailable={connectionLost} disconnected={connectionShown} name={selected.name} botId={botId} userId={boot.user.id} sharedChat={!isPrivateAssistant(selected)}
+            <Turns blocks={blocks} advanced={advanced} unavailable={connectionLost} disconnected={connectionShown} name={selected.name} botId={botId} userId={boot.user.id} sharedChat={!isPrivateAssistant(selected)} ownRows={ownRows}
               running={running} outgoingId={echo?.request.requestId} outgoing={echo?.status} runSlots={runSlots} runActions={runActions}
               replyFiles={replyFiles} onOpenFile={openFile} />
           </>
@@ -418,6 +420,8 @@ type TurnProps = {
   block: Turn; advanced: boolean; name: string; botId: string; userId: string;
   /** Other members may have written in this chat, so a message with no sender is not assumed to be the viewer's own. */
   sharedChat: boolean;
+  /** The messages with no sender that this person sent from here, which read as theirs even in a shared chat. */
+  ownRows: ReadonlySet<string>;
   /** Actions that need the connection are refused. Only a turn whose replies hold reply cards gets it. */
   unavailable: boolean;
   /** The chat shows it is disconnected. Only a turn with a running call, which then reads "Last seen running", gets it. */
@@ -489,11 +493,11 @@ function sameTurn(a: Turn, b: Turn) {
   return left.every(([id, message], index) => id === right[index][0] && sameMessage(message, right[index][1]));
 }
 const sameTurnProps = (a: TurnProps, b: TurnProps) => a.advanced === b.advanced && a.unavailable === b.unavailable && a.disconnected === b.disconnected && a.name === b.name
-  && a.botId === b.botId && a.userId === b.userId && a.sharedChat === b.sharedChat && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
+  && a.botId === b.botId && a.userId === b.userId && a.sharedChat === b.sharedChat && a.block.messages.every(message => a.ownRows.has(message.id) === b.ownRows.has(message.id)) && a.live === b.live && a.outgoingId === b.outgoingId && a.outgoing === b.outgoing
   && a.onOpenFile === b.onOpenFile && sameFiles(a.files, b.files) && sameTurn(a.block, b.block);
 const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) => a === b || !!a && !!b && a.replyId === b.replyId
   && a.artifacts.length === b.artifacts.length && a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file));
-const TurnView = memo(function TurnView({ block, advanced, unavailable, disconnected, name, botId, userId, sharedChat, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
+const TurnView = memo(function TurnView({ block, advanced, unavailable, disconnected, name, botId, userId, sharedChat, ownRows, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
   const work = [...block.tools.values()];
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
   // first reply when there is only reasoning, or at the end.
@@ -528,8 +532,9 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
     // another member of the household. The person's own words and the assistant's replies need none.
     // A person's message with no sender, such as one a native Hermes client wrote, is theirs in a
     // private chat, where they are the only member. In a shared one it could be anyone's, so it is
-    // labeled rather than passed off as theirs.
-    const label = scheduled ? "Scheduled" : own ? message.sender ? message.sender.id !== userId ? message.sender.name : "" : sharedChat ? UNKNOWN_SENDER : ""
+    // labeled rather than passed off as theirs, unless it is a send of this person's own that Hermes
+    // saved without saying so, as it does a steer or a queued send (see ownSentRows).
+    const label = scheduled ? "Scheduled" : own ? message.sender ? message.sender.id !== userId ? message.sender.name : "" : sharedChat && !ownRows.has(message.id) ? UNKNOWN_SENDER : ""
       : reply ? "" : message.toolName || message.role;
     // Accepted, it reads as any other message until Hermes's own copy takes its place.
     const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
