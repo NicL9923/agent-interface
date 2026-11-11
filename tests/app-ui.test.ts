@@ -768,6 +768,27 @@ describe("conversation state", () => {
     expect(container.querySelector(".tool-count")?.textContent).toBe("1");
   });
 
+  // A native Hermes client writes user rows that carry no sender. Only a chat nobody else can write in may call them the viewer's.
+  it.each([
+    ["a shared assistant", { shared: true }, "Household member"],
+    ["a personal assistant with no recorded owner, which the household can use", { shared: false }, "Household member"],
+    ["the viewer's own personal assistant", { shared: false, ownerId: "one" }, ""],
+  ])("labels a message with no sender in %s as %j", async (_chat, presentation, label) => {
+    const original = bootstrap.bots[0];
+    bootstrap.bots[0] = { ...original, ...presentation };
+    conversation = { ...conversation, activity: { state: "done" }, messages: [
+      { id: "mine", role: "user", text: "Sent from this app", sender: { id: "one", name: "One" } },
+      { id: "native", role: "user", text: "Sent from a Hermes desktop", createdAt: "2026-10-07T12:01:00Z" },
+      { id: "theirs", role: "user", text: "Sent by Two", sender: { id: "two", name: "Two" } },
+    ] };
+    try {
+      await render();
+      const rows = [...container.querySelectorAll(".message-user")];
+      expect(rows.map(row => row.getAttribute("data-message-id"))).toEqual(["mine", "native", "theirs"]);
+      expect(rows.map(row => row.querySelector(".message-attribution")?.textContent ?? "")).toEqual(["", label, "Two"]);
+    } finally { bootstrap.bots[0] = original; }
+  });
+
   it("loads transcript images lazily and reserves the space of one that has been seen", async () => {
     conversation = { ...conversation, activity: { state: "done" }, messages: [
       { id: "chart-message", role: "assistant", text: "Here is the chart.", files: [{ id: "chart-file", name: "chart.png", mime: "image/png" }] },
