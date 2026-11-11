@@ -102,17 +102,18 @@ Each protecting line broken by hand, the guard run, the line restored.
 
 ## Checks
 
-`.agents/tools/check-all` at the commit, 6m41s total (py ran because the diff touches a file the Python tests read):
+`.agents/tools/check-all` at the review-fix commit `2045188`, 6m50s total (py ran because the diff touches a file the
+Python tests read). The first commit's run was 6m41s with 43 e2e tests; the spec split makes it 55.
 
 ```
 check      result  queued  run    counts
-typecheck  pass    -       0.5s   -
+typecheck  pass    -       0.6s   -
 lint       pass    -       0.2s   -
 ruff       pass    -       0.0s   -
-test       pass    -       14.4s  205 files, 3647 tests
-build      pass    -       1.3s   891 modules
-e2e        pass    -       2m06s  43 tests
-py         pass    -       4m17s  45 files
+test       pass    -       16.3s  205 files, 3670 tests
+build      pass    -       1.4s   892 modules
+e2e        pass    -       1m59s  55 tests
+py         pass    -       4m32s  46 files
 ```
 
 ## Not exercised
