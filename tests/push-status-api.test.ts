@@ -71,6 +71,9 @@ it.each([
   ["a different auth secret", { p256dh: keys.p256dh, auth: "other-auth" }],
   ["an auth secret of the same length", { p256dh: keys.p256dh, auth: keys.auth.slice(0, -1) + "X" }],
   ["a prefix of the stored auth secret", { p256dh: keys.p256dh, auth: keys.auth.slice(0, -1) }],
+  // Same character count, more bytes: comparing character counts alone let this reach timingSafeEqual, which throws.
+  ["an auth secret of the same character count with a multibyte character", { p256dh: keys.p256dh, auth: keys.auth.slice(0, -1) + "é" }],
+  ["a p256dh of the same character count with a multibyte character", { p256dh: keys.p256dh.slice(0, -1) + "é", auth: keys.auth }],
 ])("refuses to move another member's subscription for %s, and leaves it with its holder", async (_name, offered) => {
   const s = await setup();
   const laptop = "6c1f0e3a-2b4d-4c5e-8f60-7a8b9c0d1e2f";

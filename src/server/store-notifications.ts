@@ -17,7 +17,13 @@ export type PushAction = { userId: string; botId: string; approvalId: string; de
 function sameKeys(stored: string, keys: { p256dh: string; auth: string }) {
   let held: { keys?: { p256dh?: unknown; auth?: unknown } };
   try { held = JSON.parse(stored); } catch { return false; }
-  const same = (a: unknown, b: string) => typeof a === "string" && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  // Lengths are compared in bytes: timingSafeEqual throws on buffers of unequal byte length, and a
+  // string of the same character count can differ in bytes when it holds a multibyte character.
+  const same = (a: unknown, b: string) => {
+    if (typeof a !== "string") return false;
+    const left = Buffer.from(a), right = Buffer.from(b);
+    return left.length === right.length && timingSafeEqual(left, right);
+  };
   return same(held.keys?.p256dh, keys.p256dh) && same(held.keys?.auth, keys.auth);
 }
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
