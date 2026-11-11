@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 // Vite writes bundles to assets/<name>-<hash>.<ext>, hashed from their content, so one URL is
 // one body forever. Nothing else qualifies: public/ has no assets directory, and index.html,
@@ -49,9 +49,14 @@ function previousRoot(previous: PreviousAssets) {
   try { return realpathSync(previous.directory); } catch { return undefined; }
 }
 
-/** Whether `file`, as @fastify/static found it, was sent from the previous release's directory by previousAssetFile, so is as immutable as a live asset. */
+/**
+ * Whether `file`, as @fastify/static found it, was sent from the previous release's directory by previousAssetFile, so is as immutable as a live asset.
+ * The name is tested first: previousAssetFile only ever sends a hashed name, so any other file in that directory is not immutable, and a
+ * response for an unhashed live file costs no realpath.
+ */
 export function isPreviousAsset(previous: PreviousAssets | undefined, file: string) {
-  const root = previous && previousRoot(previous);
+  if (!previous || !hashedName.test(basename(file))) return false;
+  const root = previousRoot(previous);
   return root !== undefined && dirname(file) === root;
 }
 

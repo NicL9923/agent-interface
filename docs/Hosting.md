@@ -187,7 +187,8 @@ A page that opened under one release keeps asking for that release's hashed `/as
 deploy replaces it, and a lazy screen whose file is gone shows "This screen could not load". So the
 guarded activation names the release it replaces: `Deployment.switch` in `.agents/tools/deploy_common.py`
 writes `dist/previous-release.json` into the release going live, `{"assets": "<previous release>/dist/client/assets"}`,
-before it moves `current`. The app reads that file when it starts. A request for a hashed name
+before it moves `current`. The app reads that file when it starts, from beside the `dist/client` it
+serves (the same base, so the two cannot name different `dist` directories). A request for a hashed name
 (`assets/<name>-<8 characters>.<ext>`) that the live release lacks is answered from that directory, with
 the same `immutable` cache headers as a live asset. Anything else still gets the uncached 404.
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
-import { isHashedAsset, previousAssetFile, readPreviousAssets } from "../src/server/static-cache.js";
+import { isHashedAsset, isPreviousAsset, previousAssetFile, readPreviousAssets } from "../src/server/static-cache.js";
 import { fakeRuntime } from "./helpers/server.js";
 
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -212,7 +212,8 @@ describe("a page from the previous release after a deploy", () => {
     // beside dist/client. If the two drift apart the grace silently stops, so the names are compared.
     const tooling = readFileSync(".agents/tools/deploy_common.py", "utf8");
     expect(tooling).toContain('PREVIOUS_RELEASE_FILE = "dist/previous-release.json"');
-    expect(readFileSync("src/server/app.ts", "utf8")).toContain('resolve("dist/previous-release.json")');
+    // The server derives it from the client root it serves, so the two cannot name different dist directories.
+    expect(readFileSync("src/server/app.ts", "utf8")).toContain('join(dirname(clientRoot), "previous-release.json")');
   });
 
   it("uses the file beside dist/client when the app is started without a client root", async () => {
@@ -225,6 +226,27 @@ describe("a page from the previous release after a deploy", () => {
       apps.push(app);
       expect((await app.inject("/assets/old-AbC12345.js")).body).toBe("old body");
     } finally { process.chdir(here); }
+  });
+});
+
+describe("which files in the previous release's directory are immutable", () => {
+  it("counts a hashed name there and nothing else, though the directory is the right one", () => {
+    const layout = releases();
+    const previous = { directory: join(layout.previous, "assets") };
+    const assets = join(layout.previous, "assets");
+    expect(isPreviousAsset(previous, join(assets, "old-AbC12345.js"))).toBe(true);
+    // previousAssetFile never sends these, but a file that lives in the directory and is served another way,
+    // such as an unhashed name beside the hashed ones, must not be told to cache for a year.
+    for (const name of ["logo.png", "old-short.js", "index.html"])
+      expect([name, isPreviousAsset(previous, join(assets, name))]).toEqual([name, false]);
+  });
+
+  it("is false for a file outside the directory, an unnamed release and a directory that is gone", () => {
+    const layout = releases();
+    const previous = { directory: join(layout.previous, "assets") };
+    expect(isPreviousAsset(previous, join(layout.live, "client/assets/live-AbC12345.js"))).toBe(false);
+    expect(isPreviousAsset(undefined, join(layout.previous, "assets/old-AbC12345.js"))).toBe(false);
+    expect(isPreviousAsset({ directory: join(layout.root, "pruned") }, join(layout.root, "pruned/old-AbC12345.js"))).toBe(false);
   });
 });
 

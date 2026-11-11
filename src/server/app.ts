@@ -4,7 +4,7 @@ import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { CapabilityKey, Runtime } from "../shared/types.js";
 import type { Config } from "./config.js";
 import { Store } from "./store.js";
@@ -159,7 +159,8 @@ export async function createApp(
   });
   const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
-    const previousFile = options.previousRelease ?? (options.clientRoot ? undefined : resolve("dist/previous-release.json"));
+    // Beside the client root, so the default cannot name a different dist/ than the one the client is served from.
+    const previousFile = options.previousRelease ?? (options.clientRoot ? undefined : join(dirname(clientRoot), "previous-release.json"));
     const previous = previousFile ? readPreviousAssets(previousFile, message => app.log.warn(message)) : undefined;
     await app.register(staticFiles, {
       root: clientRoot,
