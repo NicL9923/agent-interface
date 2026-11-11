@@ -24,6 +24,13 @@
   --user: #e7eee4;
   color-scheme: light;
 }
+/* A page leaving for the back-forward cache shows nothing of its account if it is shown again before
+   its script runs. Visibility keeps layout and scroll; `*` reaches dialogs and anything set visible.
+   See the cover in src/app/account-epoch.ts. */
+:root[data-account-covered],
+:root[data-account-covered] * {
+  visibility: hidden !important;
+}
 :root[data-theme="dark"] {
   --surface: #1b211e;
   --rail: #151c18;
@@ -511,7 +518,6 @@ a {
   font-weight: 600;
   box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
   transform: translateX(-50%);
-  animation: jump-latest-in 180ms ease-out;
 }
 .jump-latest:hover:enabled {
   background: var(--accent-soft);
@@ -524,9 +530,6 @@ a {
 }
 .jump-latest:active:enabled {
   transform: translate(-50%, 1px);
-}
-@keyframes jump-latest-in {
-  from { opacity: 0; transform: translate(-50%, 8px); }
 }
 .history-skeleton {
   display: grid;
@@ -559,7 +562,6 @@ a {
   to { background-position: 0 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .jump-latest { animation: none; }
   .skeleton-message span { animation: none; }
 }
 .empty-state {
@@ -1211,6 +1213,18 @@ a {
 }
 .welcome form {
   margin-top: 25px;
+}
+/* Beside the saved home, until bootstrap answers: the welcome screen's note, in the chat's place. */
+.conversation-panel.saved-home-wait {
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  padding: 35px;
+  text-align: center;
+}
+.conversation-panel.saved-home-wait p {
+  color: var(--muted);
+  font-size: 0.9375rem;
 }
 .mobile-only {
   display: none;

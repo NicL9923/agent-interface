@@ -110,7 +110,156 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
   if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
+  if (event.data?.type === 'ACCOUNT') event.waitUntil(setAccount(event.data.user));
 });
+
+// Which account this browser may show notifications for, as its pages last said (src/app/account-epoch.ts):
+// { marker } for a signed-in account, { signedOut: true } for none, or null before any page has said.
+// The server names each push's account with the same marker as its APNs payloads (src/server/apns.ts),
+// a hash of the account ID. It is kept in a cache of its own, which survives the worker being stopped
+// and a release replacing it; its name does not start with 'agent-interface-', so activation keeps it.
+//
+// The order of the account's steps. Each ACCOUNT message takes a new generation as it arrives, and
+// `account` becomes its word at once, so a push that reads the account from then on reads that word.
+// Every step that writes the saved account, closes a notification or sets or clears the badge runs
+// on one chain (`serially`), one step at a time in the order they were queued, and after each await
+// it stops without acting if a newer message has arrived: that message's own step is queued behind
+// it and does the work for the newer word. A badge call is made with no await between it and the
+// check that allows it. So, once the chain is idle, relative to the latest ACCOUNT message:
+// - Cache Storage holds its word, so a worker started again judges pushes by it.
+// - No notification of another account is listed: the latest word's step closed what was listed, and
+//   a push whose notification was still on its way checks again on the chain once it is listed.
+// - No notification of its account was closed after it arrived: a step for an older word stops first.
+// - The badge is unset or was set by a push for that account. A push sets it only on the chain while
+//   its account is the latest, and a step for a new word clears a badge a push of another account
+//   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
+//   latest account's. The worker changes the badge only for a push: a badge the page set is the
+//   page's (src/app/badge.ts).
+// When the browser refuses a write of the saved account, Cache Storage keeps the older word until a
+// later step's write succeeds; the step still closes the departed account's notifications, and the page
+// repeats its word at the next account change or start, which writes it.
+// Known limit: all of this holds for one worker instance. While a release updates, the old worker
+// can still be running steps it held across the new worker's activation, and the two share the saved
+// account and the badge's owner but not this chain, generation or memory. An old instance's step
+// can write a word the new one already overtook, or close a notification the new one allows, until
+// the browser stops it. The page tells its word again whenever its account generation starts
+// (src/app/account-epoch.ts), which puts the newest word back in the cache.
+const ACCOUNT_CACHE = 'wildbots-account';
+const ACCOUNT_KEY = '/account';
+let generation = 0;
+// What the cache holds, as this worker last read or wrote it.
+let saved;
+const readSaved = () => saved ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
+  .then((found) => found ? found.json() : null).catch(() => null);
+// The latest word: the saved one until a page says.
+let account;
+const loadAccount = () => account ??= readSaved();
+// The latest word, for a read that a page's ACCOUNT message overtakes while it waits.
+async function readAccount() {
+  for (;;) {
+    const reading = loadAccount();
+    const state = await reading;
+    if (reading === account) return state;
+  }
+}
+
+let chain = Promise.resolve();
+// Runs `step` after every step queued before it. Resolves with its result, or undefined if it threw.
+function serially(step) {
+  const run = chain.then(step).catch(() => undefined);
+  chain = run;
+  return run;
+}
+
+async function accountMarker(user) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('wildbots-account:' + user));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
+// A push or notification is for the account signed in here: before any page said, as before; signed
+// out, none; otherwise one that names this account, or names none, as a push from an older server.
+function mayShow(state, named) {
+  if (!state) return true;
+  if (state.signedOut) return false;
+  return typeof named !== 'string' || named === state.marker;
+}
+
+// The account whose push set the badge, as { named }, or null when no push set one that is still up.
+// It is kept beside the account, so a worker started again clears only a badge a push of its set, and
+// a page's own badge is the page's to change.
+const BADGE_KEY = '/badge';
+let badgeFor;
+const readBadge = () => badgeFor ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(BADGE_KEY))
+  .then((found) => found ? found.json() : null).catch(() => null);
+// Recorded once the badge changed, in the same step, so the next step reads the owner of the badge
+// on screen. The browser keeps the worker running until the step ends.
+async function keepBadgeFor(owner) {
+  badgeFor = Promise.resolve(owner);
+  const cache = await caches.open(ACCOUNT_CACHE);
+  await cache.put(BADGE_KEY, new Response(JSON.stringify(owner)));
+}
+function clearBadge() {
+  void self.navigator?.clearAppBadge?.().catch(() => {});
+  return keepBadgeFor(null);
+}
+
+function setAccount(user) {
+  const at = ++generation;
+  account = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
+    // A browser that cannot hash keeps today's rule rather than dropping every notification.
+    .catch(() => null);
+  return serially(() => settleAccount(at));
+}
+
+// Brings the cache, the screen and the badge to the word of generation `at`. It stops at a newer word,
+// whose own step, queued behind this one, finishes the work. A write or a badge clear the browser
+// refuses does not stop it from closing what the departed account has on screen: the saved account
+// stays as it was, so the next step writes it again.
+async function settleAccount(at) {
+  const state = await loadAccount();
+  const previous = await readSaved();
+  const owner = await readBadge();
+  // Not redundant: a word that arrives during the reads leaves `state` the older word, which the
+  // badge clear below would judge the badge by. A step for an older word that the newest overtook
+  // would clear the newest account's badge (service-worker.test.ts, "words two, one, two, one").
+  if (at !== generation) return;
+  if (JSON.stringify(previous) !== JSON.stringify(state)) {
+    try {
+      const cache = await caches.open(ACCOUNT_CACHE);
+      if (at !== generation) return;
+      await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
+      saved = Promise.resolve(state);
+    } catch { /* Storage refused: close what must close, and let the next step write again. */ }
+    if (at !== generation) return;
+  }
+  if (owner && !mayShow(state, owner.named)) {
+    try { await clearBadge(); } catch { /* The badge is clear; only its record was refused. */ }
+    if (at !== generation) return;
+  }
+  const shown = await self.registration.getNotifications();
+  if (at !== generation) return;
+  // Notifications on screen for another account, or any once signed out, close.
+  for (const notification of shown) if (!mayShow(state, notification.data?.account)) notification.close();
+}
+
+// A push whose notification is on screen, or failed to show, once every step queued before it has
+// run. Its account may have changed meanwhile: then what it showed closes, and its badge is never set.
+// A word that arrives during this step queues its own step behind it, which closes the notification
+// if that word does not allow it.
+function settlePush(named, count) {
+  return serially(async () => {
+    const at = generation;
+    const state = await loadAccount();
+    if (at !== generation) return;
+    if (!mayShow(state, named)) return settleAccount(at);
+    // The server counts the badge with the push; a payload without one leaves the badge alone.
+    if (!Number.isInteger(count) || count < 0 || !self.navigator?.setAppBadge) return;
+    if (!count) return clearBadge();
+    // No await between the check above and the call.
+    void self.navigator.setAppBadge(count).catch(() => {});
+    return keepBadgeFor({ named });
+  });
+}
 
 // A note in this release's cache that the server now has another shell. It lives and dies with the
 // cache, so a stopped and restarted worker still sees it, and the next release starts without one.
@@ -152,6 +301,17 @@ async function openShell(event) {
   return cached;
 }
 
+const BOOT = '/boot.js';
+// public/boot.js blocks the page's <head>, before any of the app's code or deadlines exist, so a
+// stalled download would leave a blank page until the browser gave up. This release's copy always
+// answers, at once, even after the shell is noted as out of date and opens from the network: a
+// boot.js of another release is safe, since the app takes its read only when it is the read the app
+// would make, so the worst case is one extra bootstrap read. Only a worker with no copy asks the network.
+async function openBoot(request) {
+  const cached = await (await caches.open(CACHE)).match(BOOT);
+  return cached || fetch(request);
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -160,6 +320,10 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
   if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
     event.respondWith(openShell(event));
+    return;
+  }
+  if (url.pathname === BOOT) {
+    event.respondWith(openBoot(request));
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {
@@ -194,35 +358,34 @@ function conversationUrl(value) {
   }
 }
 
-// The server counts the badge with the push; a payload without one leaves the badge alone.
-function showBadge(count) {
-  const badges = self.navigator;
-  if (!Number.isInteger(count) || count < 0 || !badges?.setAppBadge) return Promise.resolve();
-  return (count ? badges.setAppBadge(count) : badges.clearAppBadge()).catch(() => {});
-}
-
 // An approval can be declined from the notification. Its push carries a single-use token, since
 // a service worker has no session or CSRF token; Review opens the chat like a tap does.
 function canAct() {
   return (self.Notification?.maxActions ?? 0) >= 2;
 }
 
+// A push for an account that is not signed in here, which the server can send until it learns the
+// subscription is gone, shows nothing and leaves the badge alone.
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data?.json() || {}; } catch { /* A malformed payload still opens the app. */ }
   const url = conversationUrl(data.url);
   const declineToken = data.kind === 'approval' && typeof data.declineToken === 'string' && canAct() ? data.declineToken : undefined;
-  event.waitUntil(Promise.all([
-    self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
-      body: String(data.body || 'Your assistant has an update.').slice(0, 240),
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: typeof data.tag === 'string' ? data.tag : undefined,
-      data: { url, ...(declineToken ? { declineToken } : {}) },
-      ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
-    }),
-    showBadge(data.badge),
-  ]));
+  const named = typeof data.account === 'string' ? data.account : undefined;
+  event.waitUntil((async () => {
+    if (!mayShow(await readAccount(), named)) return;
+    try {
+      await self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
+        body: String(data.body || 'Your assistant has an update.').slice(0, 240),
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+        tag: typeof data.tag === 'string' ? data.tag : undefined,
+        data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
+        ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
+      });
+    } catch { /* Nothing on screen, but the count still stands for the account it is for. */ }
+    await settlePush(named, data.badge);
+  })());
 });
 
 // How long an open window has to say it switched to the chat. A live page answers within a few
@@ -300,11 +463,18 @@ function openChat(notification) {
 const RESTORE_MS = 10_000;
 
 // Chromium rejects showNotification when it cannot store the notification, so it is tried once more.
+// The account is checked again before each display, so a notification of an account that left never
+// flashes, and on the chain once it is on screen, which closes it if the account left while it was on
+// its way. A notification of one account may not come back under another's.
 async function restore(notification, url, attempt) {
   attempt.restoring = true;
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, RESTORE_MS); });
-  const shown = showAgain(notification, url).catch(() => showAgain(notification, url)).catch(() => {});
+  const account = notification.data?.account;
+  const again = async () => {
+    if (mayShow(await readAccount(), account)) await showAgain(notification, url);
+  };
+  const shown = again().catch(again).catch(() => {}).then(() => settlePush(account));
   await Promise.race([shown, deadline]);
   clearTimeout(timer);
 }
@@ -341,13 +511,20 @@ async function decline(notification) {
     declined = response.ok;
   } catch { /* Offline: say so below. */ }
   if (declined) return;
-  await self.registration.showNotification("Couldn't decline", {
-    body: 'Open the chat to review the request.',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: (notification.tag || 'approval') + ':decline',
-    data: { url },
-  });
+  // The notice is for the account whose approval this was, which may have left during the request.
+  const account = notification.data?.account;
+  if (!mayShow(await readAccount(), account)) return;
+  try {
+    await self.registration.showNotification("Couldn't decline", {
+      body: 'Open the chat to review the request.',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: (notification.tag || 'approval') + ':decline',
+      data: { url, ...(account ? { account } : {}) },
+    });
+  } catch { /* The browser refused to store it, as it can for any notification: nothing more to show. */ }
+  // The notice may have reached the screen after its account left.
+  await settlePush(account);
 }
 
 // No window known to be in front shows the chat. The notification is already closed, so it comes
@@ -367,11 +544,19 @@ async function showAgain(notification, url) {
   });
 }
 
+// A notification for an account no longer signed in here acts for nobody: Decline sends nothing,
+// and a tap brings the app forward without opening that account's chat.
+async function openApp() {
+  const [existing] = await self.clients.matchAll({ type: 'window' });
+  if (existing) await existing.focus().catch(() => {});
+  else await self.clients.openWindow(self.location.origin + '/').catch(() => {});
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  if (event.action === 'decline' && event.notification.data?.declineToken) {
-    event.waitUntil(decline(event.notification));
-    return;
-  }
-  event.waitUntil(openChat(event.notification));
+  event.waitUntil(readAccount().then((state) => {
+    if (!mayShow(state, event.notification.data?.account)) return event.action === 'decline' ? undefined : openApp();
+    if (event.action === 'decline' && event.notification.data?.declineToken) return decline(event.notification);
+    return openChat(event.notification);
+  }));
 });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { accountMarker } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { pushActionTtl, Store } from "../src/server/store.js";
 import { approvalFixture, botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
@@ -85,6 +86,25 @@ describe("web push Decline", () => {
       expect(done).not.toHaveProperty("declineToken");
       expect(native).toHaveLength(2);
       for (const payload of native) expect(payload).not.toContain(approval.declineToken);
+    } finally { await worker.stop(); store.close(); }
+  });
+
+  it("names whose account each web push is for, as APNs payloads do, so a browser signed in as someone else since drops it", async () => {
+    const store = new Store(":memory:");
+    for (const id of ["one", "two"]) {
+      store.user({ id, name: id, email: `${id}@example.test` });
+      store.subscribe(id, { endpoint: `https://push.test/${id}`, keys: { p256dh: "key", auth: "auth" } });
+    }
+    const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+    const web: { endpoint: string; payload: Record<string, unknown> }[] = [];
+    const worker = new BackgroundWorker(store, fakeRuntime({ listBots: async () => [botFixture({ shared: true })], capabilities: async () => capabilitiesFixture() }), config,
+      async (subscription, payload) => { web.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) }); });
+    try {
+      store.queueNotification("one-event", "one", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "one-event", kind: "completed", botId: "shared" });
+      store.queueNotification("two-event", "two", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "two-event", kind: "completed", botId: "shared" });
+      await worker.tick();
+      expect(web.map(({ endpoint, payload }) => [endpoint, payload.account]).sort()).toEqual([
+        ["https://push.test/one", accountMarker("one")], ["https://push.test/two", accountMarker("two")]]);
     } finally { await worker.stop(); store.close(); }
   });
 });

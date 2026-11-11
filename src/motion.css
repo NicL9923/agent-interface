@@ -1,11 +1,14 @@
 /* Motion and ambience: spring timing, the scroll-lifted chat header, per-assistant tints, dark-mode
-   depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css.
+   depth, the phone navigation morph, live work, reactions and seasonal chrome. Loads after styles.css,
+   but the built app links component stylesheets such as home.css and shell.css after it, so an animation
+   this layer gives a selector is the only one: a second at the same specificity would win in the build.
    Everything that moves here is gated on prefers-reduced-motion: no-preference, so the existing
    reduced-motion rules keep winning. */
 
 :root {
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
-  /* Springs fall back to the app's ease-out where linear() easing is unsupported. */
+  /* Without linear() easing the soft spring is the app's ease-out and the livelier one is a cubic-bezier with
+     about 5% overshoot; the sampled springs below replace both. */
   --ease-spring-soft: var(--ease-out);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
   --depth-glow: none;
@@ -205,7 +208,7 @@
 /* Seasonal chrome on home: a slight accent shift and a few faint shapes drifting behind the list. */
 /* The rail isolates its layers, so the shapes paint over its background and under everything in it. */
 .bot-rail { isolation: isolate; }
-@media (min-width: 621px) { .bot-rail { position: relative; } }
+@media (width > 620px) { .bot-rail { position: relative; } }
 .bot-rail[data-season="winter"] { --season-color: #7aa9cc; }
 .bot-rail[data-season="clover"] { --season-color: #3f9b58; }
 .bot-rail[data-season="spring"] { --season-color: #d98bb0; }
@@ -237,14 +240,16 @@
 
 @media (prefers-reduced-motion: no-preference) {
   /* Springs on the small pops that do not touch a screen edge. Sheets from the bottom keep ease-out. */
-  @media (min-width: 621px) {
+  /* `width > 620px`, not `min-width: 621px`: the phone rules end at `max-width: 620px`, and between 620 and 621 px
+     at a fractional width neither side would match. */
+  @media (width > 620px) {
     .command-palette[open] { animation: palette-in 320ms var(--ease-spring-soft); }
     .settings-sheet[open] { animation: settings-in 380ms var(--ease-spring-soft); }
   }
   dialog[open] { animation-duration: 340ms; animation-timing-function: var(--ease-spring-soft); }
   .bot-menu { animation: bot-menu-in 260ms var(--ease-spring-soft); }
   .home-new-menu { transform-origin: top right; animation: bot-menu-in 280ms var(--ease-spring-soft); }
-  .dock-item { animation: dock-in 380ms var(--ease-spring); }
+  .dock-item { animation: dock-in 380ms var(--ease-spring-soft); }
   .toast { animation: toast-in 420ms var(--ease-spring); }
   .jump-latest { animation: jump-latest-in 420ms var(--ease-spring); }
   .message-outgoing { animation: message-send 460ms var(--ease-spring) both; }
@@ -282,6 +287,12 @@
   .season-ambience { display: none; }
 }
 
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } }
+@keyframes settings-in { from { opacity: 0; transform: translateY(16px) scale(0.98); } }
+@keyframes bot-menu-in { from { opacity: 0; transform: scale(0.96); } }
+@keyframes dock-in { from { opacity: 0; transform: translateY(6px); } }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } }
+@keyframes jump-latest-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 @keyframes message-send { from { opacity: 0; transform: translateY(14px) scale(0.96); } }
 @keyframes caret-pulse { 50% { opacity: 0.2; } }
 @keyframes tape-in { from { opacity: 0; transform: scale(0.4); } }

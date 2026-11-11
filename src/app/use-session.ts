@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { ApiError, changeStream, clearResponseCache, request as apiRequest, setCsrf } from "../client-api";
+import { AccountChanged, ApiError, changeStream, request as apiRequest, setCsrf } from "../client-api";
 import { preferenceQueue } from "./preference-queue";
-import { forgetSignIn, prefetchLinkedChat, rememberChats, rememberSignIn, settleLinkedChat } from "./linked-chat";
+import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
+import { accountEpoch, accountNamed, accountRefused, pendingSignOut, rememberChats } from "./account-epoch";
+import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
 type SessionEvents = {
-  onIdentityChange(): void;
   onFirstBootstrap(next: Bootstrap): void;
   onError(message: string): void;
   /** The open assistant left this person's roster, as when another member made it personal. */
@@ -26,12 +27,17 @@ const groupsChanged = () => window.dispatchEvent(new Event(GROUPS_EVENT));
 const FRESH_MS = 5_000;
 /** How often bootstrap is read while the household stream is live, for changes it does not announce. */
 export const BOOTSTRAP_FALLBACK_MS = 5 * 60_000;
-export function useSession(events: SessionEvents) {
+/**
+ * One account generation's session (see account-epoch.ts): the app mounts it again for every
+ * transition, so it holds only one account. `start` is "signed-out" after a sign-out this browser
+ * saw, which shows sign-in without asking the server.
+ */
+export function useSession(events: SessionEvents, start: "bootstrap" | "signed-out" = "bootstrap") {
   const handlers = useRef(events);
   handlers.current = events;
   const initialDestination = useRef(false);
   const [boot, setBoot] = useState<Bootstrap | null>(null);
-  const [auth, setAuth] = useState(false);
+  const [auth, setAuth] = useState(start === "signed-out");
   /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
   const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
   const [botId, setBotId] = useState(
@@ -43,14 +49,9 @@ export function useSession(events: SessionEvents) {
   const [checkingConnection, setCheckingConnection] = useState(false);
   const bootstrapRequest = useRef<Promise<Bootstrap | null> | null>(null);
   const lastBootstrap = useRef<Bootstrap | null>(null);
-  const identityEpoch = useRef(0);
+  /** The account this generation drew, set as an answer is applied, before it renders. */
+  const drawn = useRef<string | undefined>(undefined);
   const lastSuccess = useRef(0);
-  // Responses cached for one account must never answer for the next.
-  const nextIdentity = () => {
-    identityEpoch.current++;
-    lastSuccess.current = 0;
-    clearResponseCache();
-  };
   const bootRef = useRef(boot);
   bootRef.current = boot;
   const botIdRef = useRef(botId);
@@ -59,20 +60,24 @@ export function useSession(events: SessionEvents) {
   authRef.current = auth;
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
-    const epoch = identityEpoch.current;
+    // A sign-out made without the server reads nothing as that account; the server's session ends first.
+    if (pendingSignOut() !== null) {
+      void finishSignOut();
+      return Promise.resolve(null);
+    }
+    const epoch = accountEpoch.current;
     const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
       try {
         const next = await apiRequest("GET /bootstrap", { query: { roster: "lean" } });
-        if (epoch !== identityEpoch.current) return null;
+        if (epoch !== accountEpoch.current) return null;
+        // Another account than this generation drew ends it, and the app starts again for the new one.
+        if (!accountNamed(next.user.id, drawn.current)) return null;
+        drawn.current = next.user.id;
         // A chat read beside this bootstrap counts only if it was made for the account signed in now.
         settleLinkedChat(next.user.id);
         // A bootstrap that found Hermes down, like a failed one, is no reason to hold back the next look.
         lastSuccess.current = next.connection.connected ? Date.now() : 0;
-        if (bootRef.current && bootRef.current.user.id !== next.user.id) {
-          nextIdentity();
-          handlers.current.onIdentityChange();
-        }
         if (!initialDestination.current) {
           initialDestination.current = true;
           handlers.current.onFirstBootstrap(next);
@@ -102,11 +107,10 @@ export function useSession(events: SessionEvents) {
         });
         return next;
       } catch (e) {
-        if (epoch !== identityEpoch.current) return null;
+        if (epoch !== accountEpoch.current || e instanceof AccountChanged) return null;
         if (e instanceof ApiError && e.status === 401) {
-          nextIdentity();
-          forgetSignIn();
-          handlers.current.onIdentityChange();
+          // A generation that drew an account ends, in every tab; one that drew none shows sign-in here.
+          if (accountRefused(drawn.current !== undefined)) return null;
           setAuth(true); setBoot(null); setCsrf("");
         } else {
           lastSuccess.current = 0;
@@ -137,8 +141,10 @@ export function useSession(events: SessionEvents) {
   }, [checkingConnection, refresh]);
   useEffect(() => {
     // A link that names a chat reads it while bootstrap runs, not after.
-    prefetchLinkedChat();
-    void refresh();
+    if (start === "bootstrap") {
+      prefetchLinkedChat();
+      void refresh();
+    } else void finishSignOut();
     // Every 45 seconds while the household stream is down. While it is live it announces roster changes,
     // Hermes outages included, so only changes it never announces, such as preferences saved on another
     // device, wait for this, at most about 5 minutes. Focus and showing the page still read at once.
@@ -167,7 +173,7 @@ export function useSession(events: SessionEvents) {
       window.removeEventListener("focus", returned);
       document.removeEventListener("visibilitychange", returned);
     };
-  }, [refresh]);
+  }, [refresh, start]);
   useEffect(() => {
     if (!boot?.user.id || auth) return;
     const userId = boot.user.id;
@@ -204,7 +210,7 @@ export function useSession(events: SessionEvents) {
     send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
     apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
     failed: error => handlers.current.onError(error.message),
-    account: () => identityEpoch.current,
+    account: () => accountEpoch.current,
   });
   const savePreferences = (value: Preferences) => preferences.current!.save(value);
   /** Puts preferences a server route answered with on screen, such as a new main assistant. */
@@ -212,23 +218,9 @@ export function useSession(events: SessionEvents) {
   /** Applies an edit to the newest preferences, including a save still on its way. */
   const editPreferences = (edit: (value: Preferences) => Preferences) =>
     preferences.current!.edit(edit, bootRef.current?.preferences);
-  const signedIn = () => {
-    rememberSignIn();
-    nextIdentity();
-    bootstrapRequest.current = null;
-    void refresh();
-  };
-  const signedOut = () => {
-    forgetSignIn();
-    nextIdentity();
-    bootstrapRequest.current = null;
-    setCsrf("");
-    setBoot(null);
-    setAuth(true);
-  };
   return {
     boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch, refresh, reconnect, savePreferences, editPreferences, applyPreferences, signedIn, signedOut,
+    identityEpoch: accountEpoch, refresh, reconnect, savePreferences, editPreferences, applyPreferences,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */
     // Per account, so another account starts unproven in the same render that switches to it.
     groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,
