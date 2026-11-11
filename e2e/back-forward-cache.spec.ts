@@ -35,7 +35,7 @@ test("a page restored after a sign-out in another tab shows sign-in, and was cov
   await other.goto("/");
   await other.getByRole("button", { name: "Account" }).click();
   await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
-  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).dispatchEvent("click");
+  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click();
   await expect(other.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
   await other.close();
   // A restore fires no load event.

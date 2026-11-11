@@ -127,8 +127,9 @@ export function useTalk(botId: string, name: string): Talk {
   }, [botId, name, end, fail]);
 
   useEffect(() => {
-    const leave = () => end();
-    const hidden = () => { if (document.visibilityState === "hidden" && phone()) end("Talk ended when the app went to the background."); };
+    // Only a live Talk has anything to end. Ending an idle one would report "Talk ended" for a call that never ran.
+    const leave = () => { if (parts.current.live) end(); };
+    const hidden = () => { if (document.visibilityState === "hidden" && phone() && parts.current.live) end("Talk ended when the app went to the background."); };
     window.addEventListener("pagehide", leave);
     document.addEventListener("visibilitychange", hidden);
     return () => { window.removeEventListener("pagehide", leave); document.removeEventListener("visibilitychange", hidden); };
