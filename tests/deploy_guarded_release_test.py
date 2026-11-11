@@ -213,8 +213,6 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
             return lambda: self.script(status=[{"result": result}])
         yield ("the add-on lists busy work", add_on({"active": False, "operationId": None, "busy": [{"profile": "nic"}]}),
                "maintenance gate inactive with no busy work", '"profile": "nic"')
-        yield ("another operation holds the gate", add_on({"active": True, "operationId": "other", "busy": []}),
-               "maintenance gate inactive with no busy work", None)
         yield ("the gateway counts an agent", lambda: self.gateway(active_agents=1),
                "gateway reports no active agents or work", None)
         yield ("the gateway names active work", lambda: self.gateway(active_work=[{"kind": "chat", "profile": "kim"}]),
@@ -277,6 +275,11 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         cases = (
             ("status fails with no marker", lambda: self.script(status=[{"fail": True}]), RuntimeError, "private log retained"),
             ("status answers an error", lambda: self.script(status=[{"answeredError": BUSY}]), deploy_common.Answered, "active work"),
+            # No lease was at the configured path a moment earlier, so a held gate is a concurrent or misconfigured operation.
+            ("another operation holds the gate", lambda: self.script(status=[{"result": {"active": True, "operationId": "other", "busy": []}}]),
+             deploy_common.Fence, "^no other operation holds the maintenance gate$"),
+            ("another operation holds the gate and lists work", lambda: self.script(status=[{"result": {"active": True, "operationId": "other", "busy": [{"profile": "nic"}]}}]),
+             deploy_common.Fence, "^no other operation holds the maintenance gate$"),
             ("gateway heartbeat is stale", lambda: self.gateway(updated_at="2020-01-01T00:00:00+00:00"), deploy_common.Fence,
              "gateway heartbeat under two minutes old"),
             ("gateway is not running", lambda: self.gateway(gateway_state="draining"), deploy_common.Fence, "gateway running, guarded and connected"),

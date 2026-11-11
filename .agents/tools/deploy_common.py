@@ -180,7 +180,7 @@ class Deployment:
         A Discord turn runs in the gateway runner, not in the add-on's sessions, so the add-on's busy
         list omits it. The gateway rewrites this count at every turn boundary."""
         record = self.gateway_state()
-        return type(record.get("active_agents")) is int and record["active_agents"] == 0 and record.get("active_work") in (None, [])
+        return type(record.get("active_agents")) is int and record["active_agents"] == 0 and "active_work" in record and record["active_work"] in (None, [])
 
     def acquire_then_stop_app(self, rpc, blocked, previous):
         """Close the app's gate, take the maintenance lease while the app still runs, then stop it.

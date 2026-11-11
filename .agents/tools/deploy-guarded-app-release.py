@@ -80,7 +80,9 @@ with claim:
  except NotSent as unsent:
   if args.check:raise
   not_started("Hermes could not be reached ("+str(unsent)+").")
- idle(gate["active"] is False and gate["busy"]==[], "maintenance gate inactive with no busy work",gate.get("busy"))
+ # A lease at the configured path was not there a moment ago (see the fence above): another operation, or a path that is not this host's, needs a person.
+ fence(gate["active"] is False, "no other operation holds the maintenance gate")
+ idle(gate["busy"]==[], "maintenance gate inactive with no busy work",gate.get("busy"))
  fence(ready_gateway("running"), "gateway running, guarded and connected")
  record=gateway_state();idle(type(record.get("active_agents")) is int and record["active_agents"]==0 and "active_work" in record and record["active_work"] in (None,[]), "gateway reports no active agents or work",record.get("active_work"))
  fence(0<=time.time()-datetime.datetime.fromisoformat(record["updated_at"]).timestamp()<=120, "gateway heartbeat under two minutes old")

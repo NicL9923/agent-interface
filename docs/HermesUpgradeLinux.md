@@ -535,7 +535,9 @@ Hermes busy (the add-on's busy list, the gateway's agents or work, the dashboard
 sessions) or cannot reach it (the status request fails before it is sent), activation exits `75`
 with nothing changed, so `release-app.py activate` leaves the stage prepared to run again.
 `--check` keeps failing with exit `1` at the same checks, which `prepare-when-idle.py` reads
-by the fence's name. Activation then:
+by the fence's name. A gate held by another operation is not busy work, since the tool found no
+lease at the configured path a moment earlier: that is a concurrent or misconfigured operation, it
+fails with exit `1` (the table below), and `prepare-when-idle.py` does not retry it. Activation then:
 
 1. Writes the blocked update status. From here the app refuses sends, update checks and
    installs with "Hermes is being upgraded. Your draft is saved; send it after the update finishes."
@@ -566,6 +568,7 @@ acquire whose release is unsent too cannot prove that, and exits 2 like a failed
 | The tool ends with | Exit | The app and the stage |
 | --- | --- | --- |
 | Preflight finds Hermes busy, or the status request is never sent | `75` (`1` under `--check`) | Nothing changed; stage stays `prepared` |
+| Any other preflight failure: a lease held by another operation, a stale gateway heartbeat, the gateway not running, a git or repair mismatch, a status request that failed with no marker or answered an error | `1` | Nothing changed; `release-app.py` marks the stage `needs-review` |
 | The add-on's exact busy answer on three attempts | `75` after a release | Saved status back, app running; stage stays `prepared` |
 | A success answer that fails the tool's checks | `75` after a release | The same |
 | The gateway counts an agent or lists work after the lease | `75` after a release | The same |

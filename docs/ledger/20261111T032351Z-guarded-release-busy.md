@@ -105,3 +105,55 @@ Python and the HTTP answers. Whether the gateway's `active_agents` already count
 `_persist_active_agents` running at the turn's claim (`gateway/run_inbound.py`, read at `ed1afb0`), not on a measured Discord turn. The 2 s
 retry pause is sized from the app's 5 s poll, not measured. A `--check` is unchanged in exit code and output text, but its traceback now names
 the same `Fence` from `idle` rather than from `fence`, a line `prepare-when-idle.py` does not read.
+
+## Review round 1: four P3s
+
+Claude Opus 5.5 reviewed `61f176a` as ready with four P3s. All four are fixed on top of it, as Claude Sonnet 5.5 (same provider as the author;
+`independent-review-owed`), after merging `origin/main` (`acec071`) into the branch. Source fingerprint
+`sha256:95b0283be43bd6f7bc2ddbe3acbfda7c83e6e95e767bf0f8286fb04256ebf584` (1767 source files) with this round's change set. None of the
+changed files is in `src/shared/qualification-inputs.json`. Line numbers are this branch's.
+
+1. **A gate another operation holds is a fence again.** The preflight had made `gate["active"] is True` busy work (exit 75). Line 29 had
+   already found no lease at the configured path, so a held gate is a concurrent or misconfigured operation that needs a person.
+   `.agents/tools/deploy-guarded-app-release.py:84-85`: `fence(gate["active"] is False, "no other operation holds the maintenance gate")`,
+   then `idle(gate["busy"]==[], "maintenance gate inactive with no busy work", ...)`, whose name `prepare-when-idle.py` matches, unchanged.
+   The new fence's name does not match that pattern, so the idle wait never retries it. The check runs first, so a held gate that also lists
+   work is still a fence. `tests/deploy_guarded_release_test.py:279-282`: the case left the busy table and joined "other preflight failures are
+   not a refusal", twice (no work listed, work listed), each with and without `--check`, expecting the fence and nothing changed.
+   `tests/deploy_common_test.py` `test_idle_wait_recognizes_the_guarded_preflights_busy_fence` now finds the busy `idle` by `gate['busy'] == []`
+   and requires exactly one fence on `gate['active'] is False` that the idle wait's pattern does not match.
+2. **The unsent marker must be the last line.** `tests/deploy_common_test.py:617`: a child that prints the marker and then another line fails
+   with the plain error, not `NotSent`.
+3. **`docs/HermesUpgradeLinux.md`**: a row in the exit table for the preflight failures that are not busy work (a lease held by another
+   operation, a stale heartbeat, the gateway not running, a git or repair mismatch, a status request that failed with no marker or answered
+   an error): exit `1`, nothing changed, and `release-app.py` marks the stage `needs-review`, which is what `guarded()` returning `None` does.
+   A sentence before the table says a held gate is not busy work and is not retried.
+4. **`gateway_reports_idle` requires `active_work`.** `.agents/tools/deploy_common.py:183`, as the preflight does. `tests/deploy_common_test.py:341`:
+   a gateway record that never lists its work refuses after the acquire and before the app stops (`ABSENT` leaves a key out of the fake
+   record).
+
+### Red proof
+
+Each break was made by a scratch runner that applied the replacement, ran the named file with `python3 -B -m unittest`, and restored the file.
+The restored tree passed all three files.
+
+| Broken | File run | Red |
+| --- | --- | --- |
+| The held gate is `idle(gate["active"] is False and gate["busy"]==[], ...)` again | `deploy_guarded_release_test` | the other-failures test, for both held-gate cases, with and without `--check` (4 failures) |
+| Same | `deploy_common_test` | the idle-wait wiring test |
+| The unsent marker found on any line | `deploy_common_test` | the last-line test (and an unrelated answered-error test, since the break was crude) |
+| `gateway_reports_idle` without the `active_work` key requirement | `deploy_common_test` | the gateway test, case "no work list" |
+
+### Checks
+
+`.agents/tools/check-all --keep-going --py always`: all 7 passed in 18m16s, 12m06s of it queued for the machine's heavy slot.
+
+| Check | Result |
+| --- | --- |
+| typecheck, lint, `ruff check .` | passed |
+| `npm test` | 205 files, 3,645 tests passed |
+| `npm run build` | 891 modules |
+| `npm run test:e2e` | 40 tests passed |
+| `npm run test:py` | 46 files passed in 4m29s |
+
+Not exercised: no host ran the guarded tool; every test drives it against fakes, as before this round.

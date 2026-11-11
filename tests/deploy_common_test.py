@@ -16,6 +16,7 @@ from support import load_source
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = ROOT / ".agents/tools"
+ABSENT = object()  # A change that leaves a key out of a fake record, which None cannot say.
 sys.path.insert(0, str(TOOLS))
 import deploy_common  # noqa: E402
 
@@ -234,9 +235,10 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         self.gateway()
 
     def gateway(self, **changes):
-        """The gateway's published record. Each Discord turn changes its count at the turn's boundaries."""
+        """The gateway's published record. Each Discord turn changes its count at the turn's boundaries.
+        A change of ABSENT leaves that key out of the record."""
         record = {"pid": 4242, "gateway_state": "running", "active_agents": 0, "active_work": None, **changes}
-        (self.host.home / "gateway_state.json").write_text(json.dumps(record))
+        (self.host.home / "gateway_state.json").write_text(json.dumps({key: value for key, value in record.items() if value is not ABSENT}))
 
     def in_turn(self, *answers):
         """An RPC action answering with each of these in turn, then failing on any further call."""
@@ -335,6 +337,8 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
             ("a count that is not a number", {"active_agents": "0"}),
             ("a boolean count", {"active_agents": False}),
             ("no count", {"active_agents": None}),
+            # The guarded preflight requires the key, so this check cannot take a record that never lists its work.
+            ("no work list", {"active_work": ABSENT}),
         )
         for name, record in cases:
             with self.subTest(name):
@@ -609,6 +613,11 @@ def connect(url, *, open_timeout, close_timeout):
         child = executable(self.host.root / "child", "import sys; print('noise'); print('{\"unsent\": true}'); sys.exit(1)")
         with self.assertRaises(deploy_common.NotSent):
             self.d.maintenance_rpc([str(child)], dict(self.request, method="release"))
+        # A marker anything follows may be a handler's own output before it failed, so it proves nothing was sent.
+        child = executable(self.host.root / "child", "import sys; print('{\"unsent\": true}'); print('later output'); sys.exit(1)")
+        with self.assertRaises(RuntimeError) as caught:
+            self.d.maintenance_rpc([str(child)], dict(self.request, method="release"))
+        self.assertNotIsInstance(caught.exception, deploy_common.NotSent)
 
     def test_a_failed_child_is_answered_only_when_its_last_line_is_the_answered_error(self):
         for stdout in ('{"active": false}', '{"answeredError": "409"}', 'answeredError'):
@@ -679,8 +688,12 @@ class ToolWiringTests(unittest.TestCase):
         calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)]
         named = lambda name: [node for node in calls if getattr(node.func, "id", None) == name]
         # The preflight's busy guards are idle() calls, which exit 75 on activation and raise a Fence under --check.
-        busy = [node.args[1].value for node in named("idle") if ast.unparse(node.args[0]) == "gate['active'] is False and gate['busy'] == []"]
+        busy = [node.args[1].value for node in named("idle") if ast.unparse(node.args[0]) == "gate['busy'] == []"]
         self.assertEqual(len(busy), 1)
+        # A gate another operation holds is a fence the wait never retries: someone must look at it.
+        held = [node.args[1].value for node in named("fence") if ast.unparse(node.args[0]) == "gate['active'] is False"]
+        self.assertEqual(len(held), 1)
+        self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + held[0]))
         # Only the fence's own line, as a traceback without source would print it.
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + busy[0]))
         gateway = [node for node in named("idle") if "record['active_agents'] == 0" in ast.unparse(node.args[0])]
