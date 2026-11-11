@@ -20,7 +20,7 @@ import { awaitingTurn, ownSentRows, sendingDraft, useSentEchoes, withEchoes } fr
 import { moveSectionEdit, togglePinEdit, type UndoableEdit } from "./app/home-undo";
 import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
-import { latestMessageAt, useReadThrough } from "./app/unread";
+import { useLatestMessageAt, useReadThrough } from "./app/unread";
 import { useStableCallback } from "./app/use-stable-callback";
 import { useResource } from "./app/use-resource";
 import { orderRooms, pendingGroup } from "./app/home-rooms";
@@ -203,8 +203,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const shownBotId = view === "conversation" && !panel && !(mobile && railOpen) && boot?.bots.some(bot => bot.id === botId) ? botId : undefined;
   useChatPresence(shownBotId, userId);
   useDeviceActivity(userId);
-  const readThrough = useReadThrough(userId, shownBotId, shownBotId
-    ? latestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation?.botId === shownBotId ? conversation.messages : undefined) : undefined);
+  const shownLatest = useLatestMessageAt(boot?.bots.find(bot => bot.id === shownBotId), conversation && conversation.botId === shownBotId ? conversation.messages : undefined);
+  const readThrough = useReadThrough(userId, shownBotId, shownBotId ? shownLatest : undefined);
   // A failed conversation read refuses anything that needs the connection at once (`connectionLost`),
   // but the chat shows it is disconnected (`connectionShown`) only once the connection is really down.
   const connectionLost = session.disconnected || conversationReadFailed || offline;
@@ -312,6 +312,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     toast.show(change.message, () => void session.editPreferences(change.undo));
   };
   const togglePin = useStableCallback((bot: Bot) => { if (boot) undoable(togglePinEdit(boot.preferences, bot.id, bot.name)); });
+  const showDetails = useStableCallback((bot: Bot) => openPanel({ kind: "details", botId: bot.id }));
   const botSettings = useStableCallback((bot: Bot) => setPanel({ kind: "settings", bot }));
   // --- Main assistant ---
   const [choosingMain, setChoosingMain] = useState(false);
@@ -551,7 +552,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       <main className="conversation-panel" inert={mobile && railOpen} {...(view === "conversation" ? tintProps(selected) : {})}>
         <ChatHeader offline={offline} view={view} boot={boot} selected={selected} room={rooms.find(room => room.room_id === roomId)} modelLocked={connectionLost || sending} onModelSaved={refreshSession} avatarState={avatarState} railOpen={railOpen}
           onOpenRail={backToHome}
-          onDetails={bot => open({ kind: "details", botId: bot.id })} />
+          onDetails={showDetails} />
         {viewDock.length > 0 && <div className="view-dock"><StatusDock items={viewDock} /></div>}
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
