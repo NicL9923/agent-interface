@@ -12,7 +12,7 @@ store did not change.
 
 ## Change
 
-`sameKeys` builds both buffers and compares their byte lengths before `timingSafeEqual` (lines 20 to 25). The refusal table in
+`sameKeys` builds both buffers and compares their byte lengths before `timingSafeEqual` (lines 20 to 26). The refusal table in
 `tests/push-status-api.test.ts` gained two rows: an `auth` and a `p256dh` of the stored value's character count whose last character
 is `é`. Each asserts 409 with the endpoint, keys and device label still the holder's.
 
