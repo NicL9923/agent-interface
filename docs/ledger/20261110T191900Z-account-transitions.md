@@ -575,6 +575,10 @@ The first draft of `decline` kept a refused notice's rejection, and the new Decl
 
 ### Checks on the final head
 
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 199 files, 3373
+tests. `npm run build`: pass. `npm run test:e2e`: 27 passed. Ran on NicolasLaptop (Fedora, Node
+24.22.2) after a real `npm ci`.
+
 Orderings on the final worker, no order broke an invariant: three words, 20,000 orders each from seeds
 1, 100001 and 200001; four words, 40,000 orders each from the same seeds. The default 4,000 orders run
 in 0.6 s.
