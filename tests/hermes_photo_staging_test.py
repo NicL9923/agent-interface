@@ -209,6 +209,36 @@ class PromptAnsweredWhileATurnRunsTests(unittest.TestCase):
             hermes.finish("Book the dentist")
             self.assertEqual(hermes.finish("Look").images, [PHOTO["path"]])
 
+    def test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own(self):
+        with TurnHermes(busy="queued") as hermes:
+            # After Alice's photo is attached and her pre-check passed, a turn starts and another client's prompt is handled
+            # as busy: Hermes moves the staged photo into that client's queue entry. Alice's prompt then queues without it.
+            def another_client_takes_it():
+                hermes.other_client("Book the dentist")
+                hermes.snapshotted("Book the dentist")
+                hermes.session["attached_images"].append(PHOTO["path"])
+                hermes.other_client("Check this too", rid=9)
+            hermes.submit_races.append(another_client_takes_it)
+            answer = hermes.send("alice-1", "Look", attachments=[PHOTO])
+            self.assertEqual((answer["turn"], answer["imagesMissing"]), ("queued", 1))
+            self.assertEqual(hermes.session["queued_prompt"]["image_paths"], [PHOTO["path"]])
+            self.assertNotIn("image_paths", hermes.session["queued_prompts"][-1])
+            self.assertEqual(lookup(hermes, "alice-1")["imagesMissing"], 1)
+
+    def test_a_queued_prompt_that_is_not_the_last_queue_entry_says_nothing(self):
+        with TurnHermes() as hermes:
+            # The send's own entry drained, with its photo, in the instant after Hermes answered, and another sender's
+            # entry is still queued. That entry is not the send's: nothing can be said of the send.
+            hermes.reply_as, hermes.hold_admission = {"status": "queued"}, threading.Event()
+            admission = hermes.hold_admission
+            hermes.session["queued_prompt"] = {"text": "Check this too", "transport": None}
+            hermes.submit_races.append(hermes.session["attached_images"].clear)
+            answer = hermes.send("alice-1", "Look", attachments=[PHOTO])
+            self.assertEqual(answer["turn"], "queued")
+            self.assertNotIn("imagesMissing", answer)
+            admission.set()
+            hermes.finish("Look")
+
     def test_a_prompt_hermes_put_into_the_running_turn_leaves_its_photo_behind_and_takes_it_back(self):
         with TurnHermes(busy="redirected") as hermes:
             self.take_the_photo_during_submit(hermes)
@@ -244,7 +274,7 @@ class PromptAnsweredWhileATurnRunsTests(unittest.TestCase):
         with TurnHermes() as hermes:
             hermes.reply_as, hermes.hold_admission = {"status": "queued"}, threading.Event()
             admission = hermes.hold_admission
-            hermes.session["queued_prompt"] = {"text": "Earlier", "transport": None}
+            hermes.session["queued_prompt"] = {"text": "Look", "transport": None}
             answer = hermes.send("alice-1", "Look", attachments=[PHOTO])
             self.assertEqual(answer["turn"], "queued")
             self.assertNotIn("imagesMissing", answer)

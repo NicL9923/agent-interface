@@ -132,3 +132,41 @@ this started, so the red runs used `python -B`, `PYTHONDONTWRITEBYTECODE=1` and 
 - A photo taken after the check and before Hermes marks the session running still goes with that turn; the receipt says so
   for a `queued` or `joined` answer. A photo left staged by an answer the add-on does not know, or by an answer lost in
   transit, still runs in the next turn. Only Hermes can close these.
+
+## Review fixes (Opus review of `30e9ba0`)
+
+Merged `origin/main` (`fe4026f0`) first. Upstream read from the local clone at `ed1afb0`: `_enqueue_prompt` appends a new
+entry, or merges a text-only prompt into the head only when the head is text-only and nothing else is queued, so the entry
+a prompt lands in is always the last one, and `queued_prompt` alone is the last when `queued_prompts` is empty.
+
+1. A `queued` answer counted our photo as sent when it sat in another sender's queue entry (that sender's prompt was handled
+   as busy after our pre-check: `_handle_busy_submit` moves every staged photo into its own entry). `photos_not_sent` now
+   looks only in the last entry, and only when its text ends with ours; the session's list still counts. New test
+   `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own`: the photo is in another entry and ours has none, and
+   the receipt says `imagesMissing` 1.
+2. Our entry draining between Hermes's answer and the check, with another entry still queued: the last entry is then not
+   ours, so nothing is said. This is closed by the fix for item 1, not just commented. New test
+   `test_a_queued_prompt_that_is_not_the_last_queue_entry_says_nothing`. What stays open is another entry that ends with
+   the very same text; the docstring and the matrix say so.
+3. The user still never sees `imagesMissing`: the composer shows `message` for a rejected send or a typed stop only
+   (`src/app/Composer.tsx:305-309`). **Follow-up, not built here.** The matrix says so and the PR notes must.
+4. `self.admitting.discard` on the gate's refusal path is kept, with a comment: it runs in the same transaction as the
+   refusal, so a reader never sees the receipt settled and still admitting; `admit`'s `finally` discards it again later,
+   outside the lock. No test.
+
+An existing test, a queued prompt whose photo is still in the list, put "Earlier" in the entry; it now holds the send's text,
+so the test still reaches the list check.
+
+### Red runs
+
+`python3 .agents/tools/mutate-py.py --batch ... --baseline`, `tests/hermes_photo_staging_test.py` (24 tests). The first
+run left one survivor, the text check, because the second test's entry held the photo and passed without it; the entry now
+holds none, and the rerun killed all four.
+
+| Broken line | Result |
+| --- | --- |
+| the lookup reads every entry's photos (the old behavior) | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
+| the lookup reads the first entry, not the last | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
+| the entry's text is not checked against the send's (before the test fix) | survived |
+| the entry's text is not checked against the send's (after) | failed (the test that is not the last entry) |
+| no entry still said missing | failed |

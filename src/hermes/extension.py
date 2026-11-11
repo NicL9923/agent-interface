@@ -1185,14 +1185,19 @@ class Bridge:
         except Exception:
             logging.getLogger(__name__).exception("Checking a send's photos at its turn's start failed")
 
-    def photos_not_sent(self, sid, staged, turn):
+    def photos_not_sent(self, sid, staged, turn, text):
         """The photos of a send whose prompt found a turn running that did not go with it.
 
         Hermes puts a prompt into a running turn as text only, so every photo of a ``joined`` send stayed behind, and
         is taken back here: it would otherwise run in the next turn, whoever's it is. A ``queued`` prompt keeps the
-        photos staged when it arrived with it, in its queue entry (``_handle_busy_submit``, ``session_auto_continue.py:
-        418-439`` at ``ed1afb0``), so one found in neither the session's list nor an entry went to the turn that took the
-        session first. With no entry to look in, nothing can be said.
+        photos staged when it arrived with it, in its own queue entry (``_handle_busy_submit``, ``session_auto_continue.py:
+        418-439`` at ``ed1afb0``), so one found in neither the session's list nor that entry went to the turn that
+        took the session first.
+
+        Another client's prompt that was handled as busy first moved every staged photo into its own entry, so only
+        our entry counts: the last one added, the one whose text ends with ours (``_enqueue_prompt`` appends a new
+        entry, or merges text-only into the head). When the last entry is not ours, ours was never queued or has
+        drained already, and nothing is said. The one window left is another entry that ends with the very same text.
         """
         session = self.server._sessions.get(sid)
         if session is None:
@@ -1202,9 +1207,12 @@ class Bridge:
             return list(staged)
         with session["history_lock"]:
             entries = [entry for entry in (session.get("queued_prompt"), *(session.get("queued_prompts") or [])) if isinstance(entry, dict)]
-            kept = [*session.get("attached_images", []), *(image for entry in entries for image in entry.get("image_paths") or [])]
+            ours = entries[-1] if entries else None
+            if ours is None or not isinstance(ours.get("text"), str) or not ours["text"].rstrip().endswith(text.rstrip()):
+                return []
+            kept = [*session.get("attached_images", []), *(ours.get("image_paths") or [])]
         gone = []
-        for image in staged if entries else ():
+        for image in staged:
             if image in kept:
                 kept.remove(image)
             else:
@@ -2126,6 +2134,8 @@ class Bridge:
             with journal.lock, journal.db:
                 journal.db.execute("UPDATE receipts SET status='rejected',terminal=1 WHERE request_id=?", (request_id,))
                 response = self.admitted(rid, request_id, "Another task took your photo before this message was sent. Nothing was sent. Keep this draft and send it again.")
+                # In the same transaction as the refusal, so a reader never sees it settled and still admitting;
+                # admit's finally discards it too, later and outside the lock.
                 self.admitting.discard(request_id)
             timed("journal", mark)
             return response
@@ -2171,7 +2181,7 @@ class Bridge:
             # next turn would take them (methods_prompt.py:835-836 at ed1afb0, :580 at b9cb268 and d23cc6b). An
             # unknown answer keeps them: a turn Hermes started takes them on its own thread after it answers.
             self.unstage_images(sid, staged)
-        if staged and turn in ("queued", "joined") and (unsent := self.photos_not_sent(sid, staged, turn)):
+        if staged and turn in ("queued", "joined") and (unsent := self.photos_not_sent(sid, staged, turn, text)):
             # A turn that was running when the prompt arrived: the photos did not go with it. Said in the receipt below.
             logging.getLogger(__name__).warning("A send Hermes answered %s went without %d of its %d photos", result.get("status"), len(unsent), len(staged))
             journal.note_images_missing(request_id, len(unsent))
