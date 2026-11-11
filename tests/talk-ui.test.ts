@@ -131,6 +131,42 @@ describe("live talk", () => {
       expect(message(mount)).toBe(ends ? "Talk ended when the app went to the background." : "");
     });
 
+    it("keeps going on a phone when the page becomes visible again", async () => {
+      stubMatchMedia(query => query === "(pointer: coarse)");
+      const mount = await live();
+      await act(async () => talk.start());
+      await act(async () => {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(talkLive()).toBe(true);
+      expect(message(mount)).toBe("");
+      expect(peers[0]!.close).not.toHaveBeenCalled();
+    });
+
+    it("ends Talk on a phone when the tab is switched while the microphone is still being asked for", async () => {
+      stubMatchMedia(query => query === "(pointer: coarse)");
+      const track = { stop: stopTrack, enabled: true };
+      let grant!: (stream: unknown) => void;
+      getUserMedia.mockImplementation(() => new Promise(resolve => { grant = resolve; }));
+      const mount = await live();
+      await act(async () => talk.start());
+      expect(talk.status).toBe("connecting");
+      expect(talkLive()).toBe(true);
+      await hide();
+      expect(talkLive()).toBe(false);
+      expect(talk.status).toBe("idle");
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+      // The person answers the permission prompt afterward: the microphone is let go and nothing connects.
+      await act(async () => grant({ getTracks: () => [track], getAudioTracks: () => [track] }));
+      expect(stopTrack).toHaveBeenCalledOnce();
+      expect(peers).toHaveLength(0);
+      expect(write).not.toHaveBeenCalled();
+      expect(talkLive()).toBe(false);
+      expect(talk.status).toBe("idle");
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+    });
+
     it("leaves an earlier notice alone when a tab switch or page exit finds Talk idle", async () => {
       stubMatchMedia(query => query === "(pointer: coarse)");
       const mount = await live();

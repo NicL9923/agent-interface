@@ -31,3 +31,33 @@ A real phone browser backgrounding a tab; jsdom dispatches the events.
 
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 201 files, 3433 tests
 passed. `npm run test:e2e` (`E2E_PORT=4580`): 29 passed.
+
+## Review fixes: two guards without a test
+
+Merged `origin/main` at `2f1670e` first, as its own commit. Review found two lines of `src/app/use-talk.ts` that no test
+protected. No production code changed.
+
+- `current.live = true` could move after `getUserMedia` and every test still passed, though a tab switch while the
+  microphone prompt is open would then find Talk idle and leave it connecting.
+- The `visibilityState === "hidden"` check could go, since no test sent a visible event.
+
+### Tests and red proof
+
+`tests/talk-ui.test.ts`, "when the page leaves": "ends Talk on a phone when the tab is switched while the microphone is
+still being asked for" (hides the page while `getUserMedia` is pending; Talk ended, the notice showed, then the permission
+is granted: the track stopped, no peer connection, no session request, notice and idle status kept) and "keeps going on
+a phone when the page becomes visible again" (a `visibilitychange` that reports visible while Talk is live changes
+nothing). Each line broken by hand, `npx vitest run tests/talk-ui.test.ts`, then restored:
+
+- `current.live = true` moved to after `getUserMedia` resolves: the connecting test fails.
+- `document.visibilityState === "hidden" &&` removed from the handler: the visible test fails.
+- the stale branch that stops the late stream's tracks reduced to `if (stale()) return;`, and removed: the connecting
+  test fails both times (the track stays live).
+
+A first draft of the visible test also sent `"prerender"`, which is not a `DocumentVisibilityState`; `npm run typecheck`
+refused it, and it was dropped.
+
+### Checks
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3), `npm run build` passed. `npm test`: 202 files, 3524 tests
+passed. `npm run test:e2e` (`E2E_PORT=4580`): 38 passed.
