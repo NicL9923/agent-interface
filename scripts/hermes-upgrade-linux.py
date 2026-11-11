@@ -119,9 +119,54 @@ elif v['action']=='rpc':
         else: raise RuntimeError('Native maintenance result unavailable')
 '''
 
+# The add-on's answer to an acquire while it sees active work. Its handler returns this before it
+# writes any lease (src/hermes/extension.py, maintenance), so it is the one finished refusal a later
+# check can outwait. The guarded release tool keeps the same value (.agents/tools/deploy_common.py);
+# tests/hermes_send_lanes_test.py pins both against the add-on's real answer.
+BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+# How long NATIVE waits for each WebSocket message. Before it decides, acquire preempts each
+# canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py PREEMPT_WAIT), one
+# at a time, and nothing caps the chain. 120 s covers three full waits, as in the release tool.
+MAINTENANCE_WAIT = {"acquire": 120}
+DEFAULT_MAINTENANCE_WAIT = 15
+# Beyond the wait: 10 s for the service ticket, 10 s to open the socket, 5 s to close it, and 5 s to
+# start the interpreter. Status and release keep the 45 s they always had.
+MAINTENANCE_OVERHEAD = 30
+# After an unanswered acquire, how long to watch for the lease its handler may still write.
+LATE_LEASE_SECONDS = 300
+
 
 class ActiveWork(RuntimeError):
     """A known active or unreadable aggregate must abort, never wait it away."""
+
+
+class Answered(RuntimeError):
+    """The add-on answered a maintenance RPC with this JSON-RPC error, so its handler returned."""
+
+    def __init__(self, error):
+        # Only the code: the log never records text a command printed.
+        super().__init__("Hermes answered maintenance with error code " + str(error.get("code")))
+        self.error = error
+
+
+class Unanswered(RuntimeError):
+    """A maintenance RPC may have reached the add-on, but no answer came back. Its handler can
+    still be running, and an acquire handler can still write the lease."""
+
+    def __init__(self, method, failure):
+        super().__init__("Hermes did not answer maintenance " + method + ": " + describe(failure))
+
+
+def answered_error(stdout):
+    """The add-on's error when NATIVE's last stdout line is exactly its answered-error line."""
+    lines = (stdout or "").splitlines()
+    try:
+        answer = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        return None
+    if isinstance(answer, dict) and list(answer) == ["answeredError"] and isinstance(answer["answeredError"], dict):
+        return answer["answeredError"]
+    return None
 
 
 class Platform:
@@ -252,9 +297,9 @@ class Platform:
             raise RuntimeError("The updated managed interpreter escaped the native tool store")
         return python
 
-    def native(self, action, **values):
+    def native(self, action, python=None, timeout=45, **values):
         payload = dict(values, action=action, source=str(self.source), home=str(self.home))
-        return json.loads(self.run([self.store_python(), "-I", "-c", NATIVE], input=json.dumps(payload), capture=True, timeout=45))
+        return json.loads(self.run([python or self.store_python(), "-I", "-c", NATIVE], input=json.dumps(payload), capture=True, timeout=timeout))
 
     def key(self):
         text = private(self.config["serviceEnvFile"]).read_text()
@@ -265,7 +310,20 @@ class Platform:
         return matches[0]
 
     def rpc(self, method):
-        return self.native("rpc", origin=self.config["dashboardOrigin"], key=self.key(), method=method, operation=self.operation)
+        """The add-on's maintenance RPC. Raises Answered when the add-on answered with an error, and
+        Unanswered when the request may have reached it but no answer came back. A failure before
+        the request is sent, such as a missing key, raises as itself."""
+        wait = MAINTENANCE_WAIT.get(method, DEFAULT_MAINTENANCE_WAIT)
+        values = dict(origin=self.config["dashboardOrigin"], key=self.key(), method=method, operation=self.operation, wait=wait)
+        python = self.store_python()
+        try:
+            return self.native("rpc", python=python, timeout=wait + MAINTENANCE_OVERHEAD, **values)
+        except subprocess.CalledProcessError as failed:
+            error = answered_error(failed.stdout)
+            if error is not None: raise Answered(error) from None
+            raise Unanswered(method, failed) from None
+        except subprocess.TimeoutExpired as failed:
+            raise Unanswered(method, failed) from None
 
     def gateway(self, draining=False, after=None):
         record = json.loads((self.home / "gateway_state.json").read_text())
@@ -465,23 +523,55 @@ print(json.dumps({'ok':True,'state':'synced'}))
         self.save({"baseline": baseline, "phase": "acquiring"})
         marker = self.home / ".drain_request.json"
         if marker.exists(): raise RuntimeError("An existing native drain requires installer review")
+        # 75 is a proven harmless rejection: the add-on's acquire handler returned, and a release then
+        # left no lease, drain or changed host state. The handler preempts compactions before it
+        # writes the lease, so an acquire with no answer may still take it after any release; that
+        # is never 75. Every other failure, including any cleanup uncertainty, fails closed.
         try:
             gate = self.rpc("acquire")
-            if gate.get("active") is not True or gate.get("operationId") != self.operation or gate.get("busy") != []: raise RuntimeError("The native dashboard gate was not acquired without active work")
-            drain = self.native("drain", principal="agent-interface:" + self.operation)
-            self.wait_gateway(draining=True, after=timestamp(drain["requested_at"]))
-            if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"]: raise RuntimeError("Host inputs changed while acquiring maintenance")
-            self.save({"baseline": baseline, "phase": "quiescent"})
-        except Exception as refusal:
-            # 75 is a proven harmless rejection; all cleanup uncertainty fails closed.
-            self.clear_drain()
-            release = self.rpc("release")
-            if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed") from refusal
-            self.wait_gateway()
-            if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
-            self.save({"baseline": baseline, "phase": "rejected"})
-            print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
-            raise SystemExit(75) from None
+        except Answered as answer:
+            # Every error answer comes before the handler writes a lease, but only the busy one is
+            # work a later check can outwait. Any other is a configuration or ownership problem.
+            if answer.error != BUSY_REFUSAL: raise RuntimeError("Hermes refused maintenance for a reason other than active work, error code " + str(answer.error.get("code"))) from None
+            refusal = answer
+        except Unanswered as lost:
+            self.save({"baseline": baseline, "phase": "acquire_unanswered"})
+            if not self.late_lease():
+                print("Quiescence held for review, maintenance may still be taken: " + describe(lost), file=sys.stderr)
+                raise SystemExit(upgrade_worker().MAINTENANCE_UNANSWERED) from None
+            # The handler wrote this operation's lease, so it has returned and a release is final.
+            refusal = lost
+        else:
+            try:
+                if gate.get("active") is not True or gate.get("operationId") != self.operation or gate.get("busy") != []: raise RuntimeError("The native dashboard gate was not acquired without active work")
+                drain = self.native("drain", principal="agent-interface:" + self.operation)
+                self.wait_gateway(draining=True, after=timestamp(drain["requested_at"]))
+                if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"]: raise RuntimeError("Host inputs changed while acquiring maintenance")
+                self.save({"baseline": baseline, "phase": "quiescent"})
+                return
+            except Exception as error:
+                refusal = error
+        self.clear_drain()
+        release = self.rpc("release")
+        if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed") from refusal
+        self.wait_gateway()
+        if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
+        self.save({"baseline": baseline, "phase": "rejected"})
+        print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
+        raise SystemExit(75) from None
+
+    def late_lease(self):
+        """Whether this operation's lease appears within lateLeaseSeconds of an unanswered acquire.
+        The handler writes it last, so its lease means the handler returned. Anything else in the
+        file ends the watch: it is not this operation's to release."""
+        path = Path(self.config["maintenanceFile"])
+        deadline = time.monotonic() + self.config.get("lateLeaseSeconds", LATE_LEASE_SECONDS)
+        while True:
+            if os.path.lexists(path):
+                try: return json.loads(private(path).read_text()) == {"operationId": self.operation}
+                except (OSError, ValueError, RuntimeError): return False
+            if time.monotonic() >= deadline: return False
+            time.sleep(.25)
 
     def control(self, verb):
         # The app unit is deliberately never stopped: it owns the detached worker

@@ -2,6 +2,7 @@
 import contextlib
 import datetime as dt
 import hashlib
+import http.server
 import io
 import json
 import os
@@ -74,7 +75,10 @@ class FixturePlatform(linux.Platform):
     def sync(self): return {"ok": True, "state": "synced"}
 
 
-class PlatformTests(unittest.TestCase):
+class HostFixture(unittest.TestCase):
+    """A temporary Hermes host: source, home, stage, fake systemctl and store interpreters."""
+    platform_type = FixturePlatform
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.directory = Path(self.temp.name)
@@ -135,7 +139,7 @@ class PlatformTests(unittest.TestCase):
             HERMES_UPGRADE_CANDIDATE=self.candidate, HERMES_UPGRADE_STAGE_HOME=str(self.stage), HERMES_UPGRADE_STAGE_SOURCE=str(self.target),
             HERMES_UPGRADE_BACKUP_DIR=str(self.stage / "backup"), HERMES_UPGRADE_RECEIPT=str(self.stage / "qualification.json"), HERMES_UPGRADE_QUALIFICATION_PYTHON=os.sys.executable, HERMES_UPGRADE_RUNTIME_FINGERPRINT=json.dumps({"interpreterSha256": "fixed-python", "dependenciesSha256": "fixed-generation"}))
         self.environment["HERMES_UPGRADE_INTEGRATION_DIGEST"] = "a" * 64
-        self.platform = FixturePlatform(self.config, self.environment)
+        self.platform = self.platform_type(self.config, self.environment)
         self.platform.states = self.states; self.platform.rpc_calls = []; self.platform.gate = False; self.platform.active_work = 0; self.platform.pending_ingress = 0
         self.platform.write_gateway("running")
         linux.atomic(self.stage / "qualification.json", {"revision": self.candidate, "trackedPatchSha256": self.platform.source_state(self.target)[1]})
@@ -153,6 +157,8 @@ class PlatformTests(unittest.TestCase):
         self.platform.env["HERMES_UPGRADE_PREVIOUS_RECEIPT"] = str(previous)
         return receipt
 
+
+class PlatformTests(HostFixture):
     def test_recovery_restores_crashed_cutover_from_saved_baseline_and_preserves_tokens(self):
         receipt = self.baseline_receipt()
         self.platform.quiescence(); self.platform.backup(); self.platform.install()
@@ -901,5 +907,230 @@ def sync_venv(extras=None, **kwargs):
             self.platform.write_gateway("draining")
             with self.assertRaises(RuntimeError): self.platform.gateway(draining=True)
 
+
+
+class AddonPlatform(FixturePlatform):
+    """FixturePlatform with the real maintenance RPC: NATIVE runs in the store interpreter against
+    a fake add-on. The drain and the gateway stay the fixture's."""
+    rpc = linux.Platform.rpc
+
+    def native(self, action, **values):
+        return linux.Platform.native(self, action, **values) if action == "rpc" else super().native(action, **values)
+
+
+# The fake add-on is the WebSocket client module, which NATIVE imports from the Hermes source. It
+# answers each maintenance request with the next step a test scripted for that action and fails on
+# any request the test did not script. Lease writes are private, as the real handler's are.
+FAKE_ADDON = r"""
+import json, os, subprocess, sys
+from pathlib import Path
+SCRIPT, CALLS, LEASE = Path(__SCRIPT__), Path(__CALLS__), Path(__LEASE__)
+BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+# Written by a separate process once this one has exited: the handler finishing after the caller gave up.
+LATE = '''
+import json, os, sys, time
+from pathlib import Path
+parent, lease, operation = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+while True:
+    try: os.kill(parent, 0)
+    except ProcessLookupError: break
+    time.sleep(.02)
+time.sleep(.3)
+temporary = lease.with_name(lease.name + ".late")
+with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(json.dumps({"operationId": operation}))
+temporary.replace(lease)
+'''
+def record(*event):
+    with CALLS.open("a") as calls: calls.write(json.dumps(event) + "\n")
+def held():
+    return json.loads(LEASE.read_text()) if LEASE.exists() else None
+def write_lease(operation):
+    temporary = LEASE.with_name(LEASE.name + ".writing")
+    with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(json.dumps({"operationId": operation}))
+    temporary.replace(LEASE)
+def result(value): return json.dumps({"id": 1, "result": value})
+class Socket:
+    def __enter__(self): return self
+    def __exit__(self, *_): return False
+    def send(self, message): self.params = json.loads(message)["params"]
+    def recv(self, timeout):
+        action, operation = self.params["action"], self.params["operation_id"]
+        record("recv", action, timeout)
+        script = json.loads(SCRIPT.read_text())
+        if not script.get(action): raise AssertionError("unscripted maintenance " + action)
+        step = script[action].pop(0)
+        SCRIPT.write_text(json.dumps(script))
+        if step == "silence": raise TimeoutError("timed out while waiting for a message")
+        if step == "busy": return json.dumps({"id": 1, "error": BUSY})
+        if step == "grant":
+            write_lease(operation)
+            return result({"active": True, "operationId": operation, "busy": []})
+        if step == "release":
+            if held() == {"operationId": operation}: LEASE.unlink()
+            return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
+        if step == "status": return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
+        if "lateLease" in step:
+            subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["lateLease"]],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            raise TimeoutError("timed out while waiting for a message")
+        if "print" in step:
+            print(step["print"], flush=True)
+            raise TimeoutError("timed out while waiting for a message")
+        if "change" in step:
+            Path(step["change"]).write_text("changed while acquiring")
+            write_lease(operation)
+            return result({"active": True, "operationId": operation, "busy": []})
+        return json.dumps(dict(step, id=1))
+def connect(url, *, open_timeout, close_timeout):
+    record("connect", url)
+    return Socket()
+"""
+
+
+class MaintenanceRpcTests(HostFixture):
+    """What quiescence concludes from each way the add-on can end an acquire, through the real RPC."""
+    platform_type = AddonPlatform
+
+    def setUp(self):
+        super().setUp()
+        self.script, self.calls, self.lease = self.directory / "addon-script.json", self.directory / "addon-calls.jsonl", self.home / "maintenance.json"
+        (self.source / "hermes_bootstrap.py").write_text("")
+        client = self.source / "websockets/sync/client.py"; client.parent.mkdir(parents=True)
+        (self.source / "websockets/__init__.py").write_text(""); (client.parent / "__init__.py").write_text("")
+        client.write_text(FAKE_ADDON.replace("__SCRIPT__", repr(str(self.script))).replace("__CALLS__", repr(str(self.calls))).replace("__LEASE__", repr(str(self.lease))))
+        key = "a" * 43
+        class Tickets(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                ok = self.path == "/api/agent-interface/service-ticket" and self.headers["Authorization"] == "Bearer " + key
+                body = json.dumps({"ticket": "ticket-1"}).encode() if ok else b"{}"
+                self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body)
+            def log_message(self, *_): pass
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Tickets)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(server.server_address[1]), lateLeaseSeconds=10)
+
+    def scripted(self, **steps): self.script.write_text(json.dumps(steps))
+
+    def requests(self):
+        """Each maintenance request the add-on received, with how long NATIVE waited for its answer."""
+        if not self.calls.exists(): return []
+        return [event[1:] for event in map(json.loads, self.calls.read_text().splitlines()) if event[0] == "recv"]
+
+    def quiescence(self):
+        """Run quiescence; return its exit code, or None when it returned, and what it logged."""
+        errors = io.StringIO()
+        with contextlib.redirect_stderr(errors):
+            try: self.platform.quiescence()
+            except SystemExit as exit: return exit.code, errors.getvalue()
+        return None, errors.getvalue()
+
+    def phase(self): return json.loads(self.platform.record.read_text())["phase"]
+
+    def assert_unchanged(self, states):
+        self.assertEqual(self.states.read_bytes(), states)
+        self.assertFalse((self.home / ".drain_request.json").exists())
+
+    def test_busy_answer_is_a_finished_refusal(self):
+        self.scripted(acquire=["busy"], release=["release"])
+        states = self.states.read_bytes()
+        code, log = self.quiescence()
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes answered maintenance with error code 409", log)
+        # Acquire waits out the add-on's compaction preempts; release answers at once.
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
+
+    def test_unanswered_acquire_whose_lease_appears_later_is_released_and_refused(self):
+        self.scripted(acquire=[{"lateLease": self.platform.operation}], release=["release"])
+        states = self.states.read_bytes()
+        code, log = self.quiescence()
+        # The lease proves the handler returned, so the release that removed it is final.
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes did not answer maintenance acquire", log)
+        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
+
+    def test_unanswered_acquire_without_a_lease_is_held_and_cancel_recovers_a_later_lease(self):
+        self.platform.config.update(lateLeaseSeconds=0.5)
+        self.scripted(acquire=["silence"])
+        states = self.states.read_bytes()
+        code, log = self.quiescence()
+        self.assertNotEqual(code, 75)
+        self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+        self.assertIn("Quiescence held for review, maintenance may still be taken: Hermes did not answer maintenance acquire: "
+                      "CalledProcessError (exit 1, TimeoutError)", log)
+        # No release: it could not stop a lease the handler writes afterwards.
+        self.assertEqual(self.requests(), [["acquire", 120]])
+        self.assertEqual(self.phase(), "acquire_unanswered")
+        self.assert_unchanged(states)
+        # Without the lease, the app offers no recovery, and recovery stops at the lease before
+        # touching Hermes. Once it exists, the app's Cancel runs recovery from this held phase.
+        with self.assertRaises(FileNotFoundError) as missing: self.platform.recovery_guard()
+        self.assertEqual(missing.exception.filename, str(self.lease))
+        self.assert_unchanged(states)
+        linux.atomic(self.lease, {"operationId": self.platform.operation})
+        self.scripted(status=["status"])
+        self.assertEqual(self.platform.recovery_guard()["phase"], "acquire_unanswered")
+
+    def test_another_operations_lease_ends_the_watch_and_is_left_alone(self):
+        self.scripted(acquire=[{"lateLease": "another-operation"}])
+        code, log = self.quiescence()
+        self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+        self.assertIn("Quiescence held for review", log)
+        self.assertEqual(self.requests(), [["acquire", 120]])
+        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "another-operation"})
+
+    def test_another_error_answer_is_held_for_review_without_a_release(self):
+        self.scripted(acquire=[{"error": {"code": 409, "message": "Another maintenance operation owns this lease"}}])
+        with self.assertRaisesRegex(RuntimeError, "^Hermes refused maintenance for a reason other than active work, error code 409$"):
+            self.platform.quiescence()
+        self.assertEqual(self.requests(), [["acquire", 120]])
+        self.assertEqual(self.phase(), "acquiring")
+
+    def test_an_unanswered_release_after_a_refusal_fails_closed(self):
+        self.scripted(acquire=["busy"], release=["silence"])
+        with self.assertRaisesRegex(linux.Unanswered, "^Hermes did not answer maintenance release"):
+            self.platform.quiescence()
+        self.assertEqual(self.phase(), "acquiring")
+
+    def test_a_failed_child_is_answered_only_when_its_last_line_is_the_answered_error(self):
+        for line in ('{"answeredError": "409"}', "answeredError", '{"answeredError": {"code": 409}, "id": 1}'):
+            with self.subTest(line=line):
+                self.scripted(status=[{"print": line}])
+                with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
+
+    def test_after_an_acquire_failures_release_and_success_keeps_the_lease(self):
+        cases = [("active work in the drain", 1, ["grant"], "Gateway has active or unknown chat"),
+            ("an answer that is not this operation's lease", 0, [{"result": {"active": True, "operationId": "another-operation", "busy": []}}],
+             "The native dashboard gate was not acquired")]
+        for name, active, acquire, reason in cases:
+            with self.subTest(name):
+                self.platform.active_work = active
+                self.platform.write_gateway("running"); self.calls.unlink(missing_ok=True)
+                self.scripted(acquire=acquire, release=["release"])
+                code, log = self.quiescence()
+                self.assertEqual(code, 75)
+                self.assertIn("Quiescence refused and released maintenance: " + reason, log)
+                self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+                self.assertEqual(self.phase(), "rejected")
+                self.assertFalse(self.lease.exists())
+                self.assertFalse((self.home / ".drain_request.json").exists())
+        self.platform.active_work = 0; self.platform.write_gateway("running"); self.calls.unlink()
+        # A setting changed while acquiring is released too, but live state changed, so it is held.
+        self.scripted(acquire=[{"change": str(self.home / "config.yaml")}], release=["release"])
+        with self.assertRaisesRegex(RuntimeError, "^Quiescence refusal changed live host state$") as held: self.platform.quiescence()
+        self.assertEqual(str(held.exception.__cause__), "Host inputs changed while acquiring maintenance")
+        self.assertEqual((self.requests(), self.lease.exists(), self.phase()), ([["acquire", 120], ["release", 15]], False, "acquiring"))
+        self.calls.unlink()
+        self.scripted(acquire=["grant"])
+        self.assertEqual(self.quiescence()[0], None)
+        self.assertEqual(self.requests(), [["acquire", 120]])
+        self.assertEqual((self.phase(), json.loads(self.lease.read_text())), ("quiescent", {"operationId": self.platform.operation}))
+        self.assertTrue((self.home / ".drain_request.json").exists())
 
 if __name__ == "__main__": unittest.main()
