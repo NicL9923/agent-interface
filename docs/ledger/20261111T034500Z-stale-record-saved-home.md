@@ -5,7 +5,7 @@ Node 24.22.2 after a real `npm ci`, ruff 0.17.3. Client and tests only. Line num
 
 ## Defect
 
-`readSavedRoster` (`src/app/saved-roster.ts:100`) read the saved home for the account the sign-in hint names. `AccountApp` then
+`readSavedRoster` (`src/app/saved-roster.ts:99`) read the saved home for the account the sign-in hint names. `AccountApp` then
 called `drawingAccount(saved.user)` at mount (`src/App.tsx:138`), which set the address's account to the saved copy's. When the settled
 record named another member than the hint, as when storage refused one of the two writes of a sign-in, the page opened under the
 record's account and drew the hint's home, and the address was marked as the hint's member's. The reviewer's probe: the record names
@@ -14,7 +14,7 @@ bootstrap the address was still `?bot=home#home-1`, though it had been opened un
 
 ## Change
 
-`recordedUser` (`src/app/account-epoch.ts:134`) returns the account the stored record names for this browser now, through the
+`recordedUser` (`src/app/account-epoch.ts:133`) returns the account the stored record names for this browser now, through the
 `accountOf` that `accountStart` uses, so a sign-out and a record that names none give nothing. `readSavedRoster` returns null when
 the record names an account other than the hint's. With no saved home drawn, the address stays the record's, so the first bootstrap
 naming member one ends the generation (the previous commit's check), the address is reset to `/`, and the app starts again at member
