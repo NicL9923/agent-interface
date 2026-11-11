@@ -587,3 +587,26 @@ in 0.6 s.
 
 - Two worker instances across an update, above. No test can show an old instance's step: it needs two
   scripts sharing one Cache Storage, and the browser does not say when it stops the old one.
+
+## Sixth review: Claude Opus 5.5 on `6695309`
+
+Same-provider review: the cross-provider reviewers were unavailable, so this branch's pull request carries the
+`independent-review-owed` label. Ready after fixes, no P1. The orchestrator, Claude Opus 5.5, made the fixes.
+
+- P2. Two lines in the account step had no test that went red. Removing the `try` around `clearBadge()` let a
+  refused write of the badge's owner record stop the step before it closed the departed member's notifications.
+  Moving `saved = Promise.resolve(state)` above `cache.put` made a repeated word skip a write the browser had
+  refused, so the cache kept naming the member who left. Two tests in `tests/service-worker.test.ts` cover them:
+  "closes the notification of the member who left even when the browser refuses to record the badge's owner" and
+  "writes a refused sign-out when the page says the same word again". Each passed on the code and failed on its
+  mutant, one failure each, and each mutant was restored.
+- P3. The orderings test's `refuse` fake was an arrow function, so `new MessageChannel()` threw "is not a
+  constructor" before the call was logged. It is now a plain function. No current order opens a window, so no
+  result changed.
+- P3. The invariants comment said Cache Storage holds the latest word once the chain is idle. After a refused write
+  it holds the older word until a later step's write succeeds. The comment now says so.
+
+The reviewer cleared `owesLogout` for every record shape, the merge resolution on `t3/saved-roster`, the signed-out
+word against a sign-in in another tab, the wrapped write, and the tap and decline paths. Its own seeds, 424243 and
+777001, at 3 words with 20,000 orders and 4 words with 40,000, found no failure. Of its 19 mutations, 16 went red;
+the 3 survivors are the two P2 lines above and one on `t3/saved-roster`.
