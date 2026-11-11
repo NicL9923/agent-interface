@@ -668,8 +668,7 @@ FAKE_NPM = """
     if step.get("server"):
         # Like Playwright: start the web server detached, and on SIGINT shut it down (after a delay that makes an
         # early release of the locks visible) before exiting. SIGKILL gives it no chance, and leaks the server.
-        server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True,
-                                  close_fds=not step.get("server_inherits_descriptors"))
+        server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True)
         def shut_down(signum, frame):
             time.sleep(step.get("shutdown_delay", 0))
             server.terminate()
@@ -1026,11 +1025,11 @@ class CommandTest(TempCase):
         port_lock, _ = check_all.pick_e2e_port(self.cache / "locks", str(self.root))
         port_lock.release()
 
-    def start_e2e_with_server(self, *argv, inherits=False, **step):
+    def start_e2e_with_server(self, *argv, **step):
         """Run the e2e check through a fake that starts a listening web server in its own session, as Playwright does.
         Returns (process, server pid, port, the lock files of the port pair and the heavy slot)."""
         pidfile = self.tmp / "server.pid"
-        self.set_plan({**PASSING, "run test:e2e": {"sleep": 60, "server": str(pidfile), "server_source": SERVER, "server_inherits_descriptors": inherits, **step}})
+        self.set_plan({**PASSING, "run test:e2e": {"sleep": 60, "server": str(pidfile), "server_source": SERVER, **step}})
         process = self.spawn("--only", "e2e", *argv)
         self.wait_for(lambda: pidfile.exists() and pidfile.read_text(), "the web server to listen")
         port = int(self.calls()[0]["port"])
@@ -1112,9 +1111,10 @@ class CommandTest(TempCase):
         self.wait_for(lambda: not self.alive(pid), "the suite to be killed")
 
     def test_killing_check_all_with_sigkill_leaves_its_suite_holding_the_slot_and_ports_until_the_suite_ends(self):
-        process, pid, port, locks = self.start_e2e_with_server(inherits=True)
-        server = pid
-        leader = int(self.calls()[0]["pid"])  # the fake npm, started in a session of its own
+        # Only the suite's own process (npm, here the fake) is handed the descriptors; Node does not pass them on to
+        # Playwright's runner or its web server. That is enough, since npm lives until the runner exits.
+        process, pid, port, locks = self.start_e2e_with_server()
+        suite = int(self.calls()[0]["pid"])  # the fake npm, started in a session of its own
         process.kill()
         process.communicate(timeout=5)
         locks_dir = self.cache / "locks"
@@ -1122,16 +1122,12 @@ class CommandTest(TempCase):
             check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 0.3)
         with self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
             check_all.pick_e2e_port(locks_dir, "w", requested=port)
-        # The suite ends but the web server it started (which inherited the descriptors, as Playwright's does) lives on.
-        os.kill(leader, signal.SIGKILL)
-        self.wait_for(lambda: not self.alive(leader), "the suite to die")
-        with self.assertRaises(check_all.LockTimeout):
-            check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 0.3)
-        os.kill(server, signal.SIGKILL)
-        self.wait_for(lambda: not self.alive(server), "the web server to die")
+        os.kill(suite, signal.SIGKILL)
+        self.wait_for(lambda: not self.alive(suite), "the suite to die")
         held, _ = check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 2)
         held.release()
-        lease, _ = check_all.pick_e2e_port(locks_dir, "w", requested=port)
+        lease = check_all.try_lock(locks[0])  # the port pair's lock; the orphaned web server still listens, as no flock can stop
+        self.assertIsNotNone(lease)
         lease.release()
 
     def test_a_stop_that_the_suite_ignores_kills_it_only_after_the_grace(self):

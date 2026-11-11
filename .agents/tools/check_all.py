@@ -10,12 +10,14 @@ the traps agents kept hitting by hand:
 - A node_modules that is missing, or older than package-lock.json: it refuses to run and prints the fix.
 - ruff: it needs the exact version in .github/requirements-ci.txt, from PATH or a cached venv, never another.
 
-Locks are flock(2) locks on small files in a per-user cache directory. Each check's process inherits the lock
-descriptors, so a lock lives as long as any process of that check does: check-all killed by SIGKILL leaves its
-suite running and its slot and ports still held, and they free when the suite ends. A stopped run (Ctrl-C,
-SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright can shut down the web
-server it started in a process group of its own, and kills what is left after ten seconds. Nothing here needs a
-package outside the standard library.
+Locks are flock(2) locks on small files in a per-user cache directory. The check's own process (the npm
+wrapper) inherits the lock descriptors and waits for the suite it started, so a lock lasts as long as the suite
+does: check-all killed by SIGKILL leaves its suite running with its slot and ports still held, and they free
+when the suite ends. Node does not pass the descriptors on, so the runner and Playwright's web server do not
+hold them; they do not need to, because npm waits for the runner and the runner stops the server when it exits.
+A stopped run (Ctrl-C, SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright
+can shut down the web server it started in a process group of its own, and kills what is left after ten
+seconds. Nothing here needs a package outside the standard library.
 """
 from __future__ import annotations
 
@@ -548,8 +550,8 @@ def stop_group(process, grace=None):
 def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=()):
     """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
 
-    The descriptors in `inherit` (the lock files) go to the child and to everything it starts, so the locks last
-    as long as any of those processes does, even if this one is killed."""
+    The descriptors in `inherit` (the lock files) go to the child, so the locks last as long as it does, even if
+    this process is killed. A child that is not a Node wrapper may pass them on to its own children."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                text=True, errors="replace", start_new_session=True, pass_fds=tuple(inherit))
