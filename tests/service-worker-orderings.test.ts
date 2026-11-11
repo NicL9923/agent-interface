@@ -4,11 +4,13 @@ import vm from 'node:vm';
 import { expect, it } from 'vitest';
 
 // Every order of the worker's account steps, not only the ones a review named. Each run takes a few
-// ACCOUNT messages, a push for each of two members and a worker restart, holds every asynchronous
-// step the worker takes for them open (each read and write of Cache Storage, the account's hash,
-// showNotification and getNotifications), and releases them in an order a seeded random walk picks.
-// Then it checks the invariants written at the top of the worker's account code. The worker is the
-// real script; only Cache Storage, notifications, the badge and the hash are fakes.
+// ACCOUNT messages, a push for each of two members, a tap on a notification of each (one of which
+// finds no window to open, so the notification comes back) and a Decline that fails, and a worker
+// restart, holds every asynchronous step the worker takes for them open (each read and write of Cache
+// Storage, the account's hash, showNotification, getNotifications, the windows and the Decline's
+// request), and releases them in an order a seeded random walk picks. Then it checks the invariants
+// written at the top of the worker's account code. The worker is the real script; only Cache Storage,
+// notifications, windows, the network, the badge and the hash are fakes.
 
 type Member = 'one' | 'two';
 type Word = Member | null;
@@ -32,11 +34,17 @@ class FakeResponse {
 type Held = { label: string; release(fail: boolean): void };
 type Notification = { account?: string; title: string };
 type Browser = {
+  /** Every call the worker made that this test does not fake. The fakes throw, and the worker's chain swallows a throw, so only this list shows it. */
+  refused: string[];
+  /** Each notification the worker asked the browser to show, and the latest word at that moment: undefined before any, or when no word has arrived and the saved account decides. */
+  shows: { title: string; account?: string; word: Word | undefined }[];
   saved: Map<string, FakeResponse>;
   listed: Notification[];
   badge: number | undefined;
   /** Whether the latest ACCOUNT message of the run has arrived. */
   latestSaid: boolean;
+  /** The word of the newest ACCOUNT message that has arrived, or undefined before the first. */
+  said: Word | undefined;
   /** Whether the badge showed the latest account's count and was then cleared, after the latest message arrived. */
   latestBadgeCleared: boolean;
   /** Counts of another account set after the latest message arrived, even if cleared again later. */
@@ -55,7 +63,10 @@ const hold = <T>(browser: Browser, kind: string, value: () => T, mayFail = false
     if (fail && mayFail) reject(new Error(`${kind} refused`)); else resolve(value());
   } });
 });
-const refuse = (name: string) => () => { throw new Error(`The worker used ${name}, which this test does not fake`); };
+const refuse = (browser: Browser, name: string) => () => {
+  browser.refused.push(name);
+  throw new Error(`The worker used ${name}, which this test does not fake`);
+};
 
 /** Starts the worker script over the browser's storage, screen and badge, as the browser does after stopping it. */
 function startWorker(browser: Browser) {
@@ -68,8 +79,11 @@ function startWorker(browser: Browser) {
     location: { origin: 'https://app.example' },
     addEventListener: (type: string, handler: (event: unknown) => void) => { handlers[type] = handler; },
     registration: {
-      showNotification: (title: string, options: { data?: { account?: string } }) =>
-        hold(browser, 'show', () => { browser.listed.push({ title, account: options.data?.account }); }, true),
+      showNotification: (title: string, options: { data?: { account?: string } }) => {
+        // Logged when the worker asks, which is when it decides: it must not ask for an account that has left.
+        browser.shows.push({ title, account: options.data?.account, word: browser.said });
+        return hold(browser, 'show', () => { browser.listed.push({ title, account: options.data?.account }); }, true);
+      },
       getNotifications: () => hold(browser, 'list', () => browser.listed.slice().map(each => ({
         data: { account: each.account }, close: () => {
           const at = browser.listed.indexOf(each);
@@ -89,18 +103,32 @@ function startWorker(browser: Browser) {
         browser.badge = 0;
       },
     },
-    get clients() { return refuse('clients')(); },
+    // No window is open, so a tap tries to open one, and a browser that will not leaves the notification to come back.
+    clients: {
+      matchAll: () => hold(browser, 'windows', () => [] as unknown[]),
+      openWindow: () => hold(browser, 'open', () => undefined, true),
+    },
   };
   const caches = {
     open: async (name: string) => { if (name !== 'wildbots-account') throw new Error(`Opened cache ${name}`); return cache; },
-    has: refuse('caches.has'), keys: refuse('caches.keys'), delete: refuse('caches.delete'),
+    has: refuse(browser, 'caches.has'), keys: refuse(browser, 'caches.keys'), delete: refuse(browser, 'caches.delete'),
   };
   const crypto = { subtle: { digest: (_algorithm: string, bytes: Uint8Array) => hold(browser, 'hash', () => new Uint8Array(createHash('sha256').update(bytes).digest()).buffer) } };
-  start(self, caches, crypto, TextEncoder, FakeResponse, URL, refuse('MessageChannel'), refuse('fetch'), setTimeout, clearTimeout);
+  // A Decline's request: answered as not accepted, or lost as when offline.
+  const fetch = () => hold(browser, 'fetch', () => ({ ok: false }), true);
+  start(self, caches, crypto, TextEncoder, FakeResponse, URL, refuse(browser, 'MessageChannel'), fetch, setTimeout, clearTimeout);
   const dispatch = (type: string, event: object) => handlers[type]!({ ...event, waitUntil: (value: Promise<unknown>) => { browser.waits.push(value); } });
   return {
     account: (word: Word) => dispatch('message', { data: { type: 'ACCOUNT', user: word } }),
     push: (member: Member) => dispatch('push', { data: { json: () => ({ title: `For ${member}`, badge: COUNT[member], account: marker(member) }) } }),
+    /** A tap on a notification of `member`, or on its Decline when `action` says so. The browser closed it as it was tapped. */
+    click: (member: Member, action = '') => dispatch('notificationclick', {
+      action,
+      notification: {
+        title: `Tapped ${member}`, body: 'News', icon: '/icon-192.png', badge: '/icon-192.png', tag: `event-${member}`, actions: [],
+        data: { url: '/?bot=ranch', account: marker(member), ...action ? { declineToken: 't'.repeat(43) } : {} }, close() {},
+      },
+    }),
   };
 }
 
@@ -119,8 +147,15 @@ const pick = <T>(next: () => number, items: readonly T[]) => items[Math.floor(ne
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
 const WORDS: Word[] = ['one', 'two', null];
-// Every page order of three words with no word twice in a row: a sign-in, a switch, a sign-out and its undo.
-const SEQUENCES = WORDS.flatMap(a => WORDS.flatMap(b => WORDS.filter(c => b !== a && c !== b).map(c => [a, b, c])));
+const MEMBERS: Member[] = ['one', 'two'];
+// Every page order of `WORD_COUNT` words with no word twice in a row: a sign-in, a switch, a sign-out
+// and its undo. Three is the default; SW_ORDER_WORDS=4 is a scratch run for orders that need a word
+// to arrive, be overtaken and arrive again.
+const WORD_COUNT = Number(process.env.SW_ORDER_WORDS ?? 3);
+const SEQUENCES = Array.from({ length: WORD_COUNT - 1 }).reduce<Word[][]>(
+  orders => orders.flatMap(order => WORDS.filter(word => word !== order.at(-1)).map(word => [...order, word])),
+  WORDS.map(word => [word]),
+);
 
 type Event = { label: string; run(worker: ReturnType<typeof startWorker>): void } | { label: 'restart' };
 
@@ -128,7 +163,7 @@ type Event = { label: string; run(worker: ReturnType<typeof startWorker>): void 
 async function walk(seed: number) {
   const next = random(seed);
   const initial = pick(next, [undefined, 'one', 'two', null] as const);
-  const browser: Browser = { saved: new Map(), listed: [], badge: undefined, latestSaid: false, latestBadgeCleared: false, otherBadgeUnderLatest: [], closedUnderLatest: [], latest: null, held: [], waits: [], counts: new Map() };
+  const browser: Browser = { refused: [], shows: [], said: initial, saved: new Map(), listed: [], badge: undefined, latestSaid: false, latestBadgeCleared: false, otherBadgeUnderLatest: [], closedUnderLatest: [], latest: null, held: [], waits: [], counts: new Map() };
   if (initial !== undefined) browser.saved.set('/account', new FakeResponse(JSON.stringify(stateOf(initial))));
   // A badge the saved account's push set before the browser stopped the worker, as the worker recorded it.
   if (initial) {
@@ -137,10 +172,13 @@ async function walk(seed: number) {
   }
   const words = pick(next, SEQUENCES);
   browser.latest = words.at(-1)!;
-  const events: Event[] = words.map((word, index) => ({ label: `ACCOUNT#${index + 1}`, run: worker => worker.account(word) }));
+  const events: Event[] = words.map((word, index) => ({ label: `ACCOUNT#${index + 1}`, run: worker => { browser.said = word; worker.account(word); } }));
+  const tapped = pick(next, MEMBERS), declined = pick(next, MEMBERS);
   for (const other of [
     { label: 'push:one', run: (worker: ReturnType<typeof startWorker>) => worker.push('one') },
     { label: 'push:two', run: (worker: ReturnType<typeof startWorker>) => worker.push('two') },
+    { label: `tap:${tapped}`, run: (worker: ReturnType<typeof startWorker>) => worker.click(tapped) },
+    { label: `decline:${declined}`, run: (worker: ReturnType<typeof startWorker>) => worker.click(declined, 'decline') },
     { label: 'restart' as const },
   ]) events.splice(Math.floor(next() * (events.length + 1)), 0, other);
   let worker = startWorker(browser);
@@ -165,7 +203,8 @@ async function walk(seed: number) {
     // for every order of the steps each run has, not for ever rarer runs with a fifth list.
     const key = (label: string) => label.replace(/#([3-9]|\d{2,})$/, '#3+');
     for (const other of ready) if (other !== chosen) pairs.push(`${key(chosen)} < ${key(other)}`);
-    const fail = chosen.startsWith('show') && next() < 0.25;
+    // A display or a request is lost one time in four; a window the worker tries to open is refused three times in four.
+    const fail = (chosen.startsWith('show') || chosen.startsWith('fetch')) && next() < 0.25 || chosen.startsWith('open') && next() < 0.75;
     trace.push(fail ? `${chosen}(refused)` : chosen);
     if (chosen === events[0]?.label) {
       const event = events.shift()!;
@@ -200,12 +239,18 @@ async function walk(seed: number) {
   // account, and not a step for an older word that the latest overtook.
   if (browser.latestBadgeCleared) broke.push(['badge cleared under the latest', `${String(latest)}'s count ${COUNT[latest!]} was cleared after it was said`]);
   if (rejected.length) broke.push(['waitUntil', rejected.join('; ')]);
+  // The fakes throw on a call the walk did not script, and the worker's chain swallows a throw.
+  if (browser.refused.length) broke.push(['unscripted call', browser.refused.join(', ')]);
+  // No notification was asked for after the word that made its account leave: whatever is listed at the end can hide a flash.
+  const flashed = browser.shows.filter(({ account, word }) => word !== undefined && (word === null || account !== marker(word)));
+  if (flashed.length) broke.push(['shown after its word', flashed.map(({ title, word }) => `${title} after ${String(word)}`).join(', ')]);
   // Started again on what this run left, the worker shows only the latest account's pushes.
-  const fresh: Browser = { ...browser, listed: [], held: [], waits: [], counts: new Map() };
+  const fresh: Browser = { ...browser, refused: [], shows: [], listed: [], held: [], waits: [], counts: new Map() };
   const restarted = startWorker(fresh);
   restarted.push('one'); restarted.push('two');
   for (await drain(); fresh.held.length; await drain()) fresh.held.shift()!.release(false);
   await Promise.allSettled(fresh.waits);
+  if (fresh.refused.length) broke.push(['unscripted call', `after the restart: ${fresh.refused.join(', ')}`]);
   const shownAfter = fresh.listed.map(each => each.title);
   const expected = latest ? [`For ${latest}`] : [];
   if (JSON.stringify(shownAfter) !== JSON.stringify(expected)) broke.push(['restart', `showed [${shownAfter.join(', ')}] after ${String(latest)}`]);

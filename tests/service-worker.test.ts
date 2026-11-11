@@ -43,7 +43,7 @@ type Stores = Map<string, Map<string, unknown>>;
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
  * run left, as when the browser stops an idle worker and starts it again for the next event.
  */
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number } } = {}) {
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number }; holdHashes?: number[] } = {}) {
   const options_ = options;
   const handlers: Record<string, (event: any) => void> = {};
   // The badge as the person sees it: the last call wins.
@@ -93,6 +93,17 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     expect(index, `a held account ${kind}`).toBeGreaterThanOrEqual(0);
     accountHeld.splice(index, 1)[0]!.release();
   };
+  // With `holdHashes`, the account's hash for each numbered ACCOUNT message waits for releaseHash(n).
+  const hashesHeld = new Map<number, () => void>();
+  let hashes = 0;
+  const releaseHash = (n: number) => {
+    const release = hashesHeld.get(n);
+    expect(release, `a held hash #${n}`).toBeDefined();
+    hashesHeld.delete(n);
+    release!();
+  };
+  // Keys of the account cache whose writes the browser refuses, as with a full disk.
+  const refusedPuts = new Set<string>();
   const open = async (name: string) => {
     if (!stores.has(name)) stores.set(name, new Map());
     const store = stores.get(name)!;
@@ -104,7 +115,12 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
         await holdingAccount(name, 'read');
         return value instanceof Response ? value.clone() : value;
       },
-      put: async (key: string, value: unknown) => { put(key, value); await holdingAccount(name, 'put'); store.set(key, value); },
+      put: async (key: string, value: unknown) => {
+        put(key, value);
+        await holdingAccount(name, 'put');
+        if (name === 'wildbots-account' && refusedPuts.has(key)) throw new Error('QuotaExceededError');
+        store.set(key, value);
+      },
     };
   };
   const context = {
@@ -117,7 +133,12 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       Notification: { maxActions: options.maxActions ?? 0 },
     },
     caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
-    URL, Response, fetch, MessageChannel: FakeMessageChannel, crypto: globalThis.crypto, TextEncoder,
+    URL, Response, fetch, MessageChannel: FakeMessageChannel, TextEncoder,
+    crypto: { subtle: { digest: async (algorithm: string, bytes: BufferSource) => {
+      const n = ++hashes;
+      if (options.holdHashes?.includes(n)) await new Promise<void>(release => hashesHeld.set(n, release));
+      return globalThis.crypto.subtle.digest(algorithm, bytes);
+    } } },
     // Read at call time, so a test's fake timers apply inside the worker too.
     setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
@@ -150,7 +171,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
-  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
+  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, releaseHash, refusedPuts, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
 }
 
 describe('service worker privacy and return path', () => {
@@ -1222,5 +1243,188 @@ describe('service worker pushes for the account signed in here', () => {
     // A tap brings the app up without the other account's chat in its address.
     await click(sw, notification);
     expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/');
+  });
+  // Fifth review, P3: the account step's checks and what a refused write may not stop.
+  it("does not clear member one's badge when words two, one, two, one overtake a step that read member two's word", async () => {
+    // Saved account one, and the badge member one's push set. The first word's step writes two and
+    // stops, the second word's step waits on the third word's hash, and the fourth word arrives
+    // meanwhile. That step then holds the third word, two, which is also what is saved, so it needs no
+    // write, and without the check after its reads it clears the badge by a word that is no longer the
+    // latest.
+    const first = worker();
+    await first.signedIn('one');
+    await push(first, forOne);
+    const sw = worker({ stores: first.stores, holdAccount: { puts: 1 }, holdHashes: [3] });
+    const one = sw.signedIn('two');
+    await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
+    const two = sw.signedIn('one');
+    const three = sw.signedIn('two');
+    sw.releaseAccount('put');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const four = sw.signedIn('one');
+    sw.releaseHash(3);
+    await Promise.all([one, two, three, four]);
+    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
+  });
+
+  it('keeps going after a step throws: a push whose badge record the browser refuses ends cleanly, and the next word still applies', async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    sw.refusedPuts.add('/badge');
+    // The badge is set, then recording its owner fails inside the chain.
+    await expect((async () => { await push(sw, forOne); })()).resolves.toBeUndefined();
+    expect(sw.setAppBadge).toHaveBeenCalledWith(1);
+    sw.refusedPuts.delete('/badge');
+    await sw.signedIn('two');
+    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    expect(sw.shown).toEqual([]);
+  });
+
+  it("clears the badge once for a sign-out and never again for the sign-ins after it, which leave a badge the page set alone", async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await push(sw, forOne);
+    await sw.signedIn(null);
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+    // From here the badge is the page's, whoever signs in.
+    await sw.signedIn('one');
+    await sw.signedIn('two');
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it("closes the notification of the member who left even when the browser refuses the write of the sign-out, and writes it with the next word", async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await push(sw, forOne);
+    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+    sw.refusedPuts.add('/account');
+    await sw.signedIn(null);
+    expect(sw.shown).toEqual([]);
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+    // The cache still names member one; the next word writes over it.
+    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
+    sw.refusedPuts.delete('/account');
+    await sw.signedIn('two');
+    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+  });
+
+  // Fifth review, P1: a notification that comes back after a tap, or a notice of a failed decline,
+  // belongs to its account like the push it came from.
+  describe('a tapped notification that comes back', () => {
+    const tapped = (account: string | undefined, extra: object = {}) => ({
+      title: 'Ranch Hand', body: 'Gate code is 4471', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'event-1', actions: [] as object[],
+      data: { url: '/?bot=ranch', ...(account ? { account } : {}) }, ...extra, close: vi.fn(),
+    });
+    const tap = (sw: ReturnType<typeof worker>, notification: object) => {
+      let done: Promise<unknown> | undefined;
+      sw.handlers.notificationclick({ action: '', notification, waitUntil: (value: Promise<unknown>) => { done = value; } });
+      return done!;
+    };
+    // No window comes to the front, so the notification comes back.
+    const noWindow = (sw: ReturnType<typeof worker>) => sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+
+    it('is closed when its account signs out while the display is on its way', async () => {
+      const sw = worker({ holdShows: true });
+      noWindow(sw);
+      await sw.signedIn('one');
+      const done = tap(sw, tapped(marker('one')));
+      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ tag: 'reshown:https://app.example/?bot=ranch' })));
+      await sw.signedIn(null);
+      sw.releaseShows();
+      await done;
+      expect(sw.shown).toEqual([]);
+    });
+
+    it("is closed, not listed under member two, when member two signs in while the display is on its way", async () => {
+      const sw = worker({ holdShows: true });
+      noWindow(sw);
+      await sw.signedIn('one');
+      const done = tap(sw, tapped(marker('one')));
+      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
+      await sw.signedIn('two');
+      sw.releaseShows();
+      await done;
+      expect(sw.shown).toEqual([]);
+    });
+
+    it('is never displayed when its account left before the worker came to bring it back', async () => {
+      const sw = worker();
+      noWindow(sw);
+      await sw.signedIn('one');
+      // The tap passed the account check; the browser is still listing windows when member two signs in.
+      let windows!: (value: []) => void;
+      sw.clients.matchAll = () => new Promise<[]>(resolve => { windows = resolve; });
+      const done = tap(sw, tapped(marker('one')));
+      await vi.waitFor(() => expect(windows).toBeTypeOf('function'));
+      await sw.signedIn('two');
+      windows([]);
+      await done;
+      expect(sw.showNotification).not.toHaveBeenCalled();
+    });
+
+    it("comes back as before for the account that stays signed in", async () => {
+      const sw = worker({ holdShows: true });
+      noWindow(sw);
+      await sw.signedIn('one');
+      const done = tap(sw, tapped(marker('one')));
+      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
+      await sw.signedIn('one');
+      sw.releaseShows();
+      await done;
+      expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', account: marker('one'), reshown: true }]);
+    });
+  });
+
+  describe('a failed Decline', () => {
+    const approval = (account: string | undefined) => ({
+      title: 'Ranch Hand', body: 'Allow command?', tag: 'approval-1', close: vi.fn(),
+      data: { url: '/?bot=ranch', declineToken: 't'.repeat(43), ...(account ? { account } : {}) },
+    });
+    const decline = (sw: ReturnType<typeof worker>, notification: object) => {
+      let done: Promise<unknown> | undefined;
+      sw.handlers.notificationclick({ action: 'decline', notification, waitUntil: (value: Promise<unknown>) => { done = value; } });
+      return done!;
+    };
+
+    it("names the account in its notice, so member two's sign-in closes it and a tap on it opens no chat of member one's", async () => {
+      const sw = worker();
+      await sw.signedIn('one');
+      await decline(sw, approval(marker('one')));
+      expect(sw.shown.map(each => each.data)).toEqual([{ url: 'https://app.example/?bot=ranch', account: marker('one') }]);
+      const notice = sw.shown[0]!;
+      await sw.signedIn('two');
+      expect(sw.shown).toEqual([]);
+      // A tap that was already on its way when the browser closed it.
+      await new Promise<void>(resolve => {
+        sw.handlers.notificationclick({ action: '', notification: { ...notice, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { void value.then(() => resolve()); } });
+      });
+      expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith('https://app.example/');
+    });
+
+    it('is not shown when its account left while the request was on its way', async () => {
+      const sw = worker();
+      await sw.signedIn('one');
+      let answer!: (response: Response) => void;
+      sw.fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }));
+      const done = decline(sw, approval(marker('one')));
+      await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
+      await sw.signedIn('two');
+      answer(new Response('{}', { status: 409 }));
+      await done;
+      expect(sw.showNotification).not.toHaveBeenCalled();
+    });
+
+    it('is closed when its account left while the notice was on its way', async () => {
+      const sw = worker({ holdShows: true });
+      await sw.signedIn('one');
+      sw.fetch.mockResolvedValueOnce(new Response('{}', { status: 409 }));
+      const done = decline(sw, approval(marker('one')));
+      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith("Couldn't decline", expect.anything()));
+      await sw.signedIn(null);
+      sw.releaseShows();
+      await done;
+      expect(sw.shown).toEqual([]);
+    });
   });
 });

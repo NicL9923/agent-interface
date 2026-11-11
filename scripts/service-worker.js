@@ -135,6 +135,12 @@ self.addEventListener('message', (event) => {
 //   set, as Cache Storage records, so no push of a departed account can set the badge or clear the
 //   latest account's. The worker changes the badge only for a push: a badge the page set is the
 //   page's (src/app/badge.ts).
+// Known limit: all of this holds for one worker instance. While a release updates, the old worker
+// can still be running steps it held across the new worker's activation, and the two share the saved
+// account and the badge's owner but not this chain, generation or memory. An old instance's step
+// can write a word the new one already overtook, or close a notification the new one allows, until
+// the browser stops it. The page tells its word again whenever its account generation starts
+// (src/app/account-epoch.ts), which puts the newest word back in the cache.
 const ACCOUNT_CACHE = 'wildbots-account';
 const ACCOUNT_KEY = '/account';
 let generation = 0;
@@ -203,21 +209,28 @@ function setAccount(user) {
 }
 
 // Brings the cache, the screen and the badge to the word of generation `at`. It stops at a newer word,
-// whose own step, queued behind this one, finishes the work.
+// whose own step, queued behind this one, finishes the work. A write or a badge clear the browser
+// refuses does not stop it from closing what the departed account has on screen: the saved account
+// stays as it was, so the next step writes it again.
 async function settleAccount(at) {
   const state = await loadAccount();
   const previous = await readSaved();
   const owner = await readBadge();
+  // Not redundant: a word that arrives during the reads leaves `state` the older word, which the
+  // badge clear below would judge the badge by. A step for an older word that the newest overtook
+  // would clear the newest account's badge (service-worker.test.ts, "words two, one, two, one").
   if (at !== generation) return;
   if (JSON.stringify(previous) !== JSON.stringify(state)) {
-    const cache = await caches.open(ACCOUNT_CACHE);
-    if (at !== generation) return;
-    await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
-    saved = Promise.resolve(state);
+    try {
+      const cache = await caches.open(ACCOUNT_CACHE);
+      if (at !== generation) return;
+      await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
+      saved = Promise.resolve(state);
+    } catch { /* Storage refused: close what must close, and let the next step write again. */ }
     if (at !== generation) return;
   }
   if (owner && !mayShow(state, owner.named)) {
-    await clearBadge();
+    try { await clearBadge(); } catch { /* The badge is clear; only its record was refused. */ }
     if (at !== generation) return;
   }
   const shown = await self.registration.getNotifications();
@@ -432,11 +445,18 @@ function openChat(notification) {
 const RESTORE_MS = 10_000;
 
 // Chromium rejects showNotification when it cannot store the notification, so it is tried once more.
+// The account is checked again before each display, so a notification of an account that left never
+// flashes, and on the chain once it is on screen, which closes it if the account left while it was on
+// its way. A notification of one account may not come back under another's.
 async function restore(notification, url, attempt) {
   attempt.restoring = true;
   let timer;
   const deadline = new Promise((resolve) => { timer = setTimeout(resolve, RESTORE_MS); });
-  const shown = showAgain(notification, url).catch(() => showAgain(notification, url)).catch(() => {});
+  const account = notification.data?.account;
+  const again = async () => {
+    if (mayShow(await readAccount(), account)) await showAgain(notification, url);
+  };
+  const shown = again().catch(again).catch(() => {}).then(() => settlePush(account));
   await Promise.race([shown, deadline]);
   clearTimeout(timer);
 }
@@ -473,13 +493,20 @@ async function decline(notification) {
     declined = response.ok;
   } catch { /* Offline: say so below. */ }
   if (declined) return;
-  await self.registration.showNotification("Couldn't decline", {
-    body: 'Open the chat to review the request.',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: (notification.tag || 'approval') + ':decline',
-    data: { url },
-  });
+  // The notice is for the account whose approval this was, which may have left during the request.
+  const account = notification.data?.account;
+  if (!mayShow(await readAccount(), account)) return;
+  try {
+    await self.registration.showNotification("Couldn't decline", {
+      body: 'Open the chat to review the request.',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: (notification.tag || 'approval') + ':decline',
+      data: { url, ...(account ? { account } : {}) },
+    });
+  } catch { /* The browser refused to store it, as it can for any notification: nothing more to show. */ }
+  // The notice may have reached the screen after its account left.
+  await settlePush(account);
 }
 
 // No window known to be in front shows the chat. The notification is already closed, so it comes
