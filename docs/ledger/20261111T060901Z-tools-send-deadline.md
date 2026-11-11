@@ -158,3 +158,78 @@ it answers no `maintenance_deadline`, so the acquire is sent no deadline and the
 release after it, and the in-app Hermes update worker once the release carrying #343 is live, ask a capable add-on and send one.
 Independent review is owed: the implementer is Claude Sonnet 5.5, so a reviewer from another provider (GPT-6.1 Sol or Grok) has to
 read the diff since `57e8742`.
+
+## Review round 1: a late handler, a restart, and the overhead
+
+Claude Opus 5.5 reviewed `a66f87c` and approved it after one P2 and two P3s. The commit after it is `ca41982`, on the same
+machine and runtimes, with `origin/main` still at `589f542` (the merge of it was already in, so no new merge commit).
+
+### Defects fixed
+
+- **P2, a handler that starts late.** The add-on counts a deadline from when its handler starts, and Hermes dispatches each
+  request with `asyncio.to_thread(server.dispatch)` (`tui_gateway/ws.py:387` in `/home/nic/scratch/wildbots-review/hermes-agent`,
+  revision `ed1afb0`), the loop's default executor, shared by every connection with no limit on the queue. A handler that
+  started more than 30 s late could write its lease after the tool said the deadline passed and a release found none. The tools now
+  watch `ACQUIRE_DEADLINE` plus 10 s (`DEADLINE_WATCH_SECONDS`, 100 s) after a confirmed release, release again and confirm if
+  this operation's lease shows, and only then exit 75. `deploy_common.py:84-85,245,334`; `hermes-upgrade-linux.py:185-186,670-673,711`.
+  The comment at both constants states what the proof rests on. I read the dispatch before relying on the reviewer's reasoning:
+  `_dispatch_request` hands the request to `to_thread`, `agent-interface.maintenance` is not in `_LONG_HANDLERS` (the separate
+  `tui-rpc` pool), and the executor's queue is first in, first out. The acquire was sent on its own socket at least 120 s before the
+  release, so it was queued first; its handler started no later than the release's, and wrote its lease no later than 90 s plus the
+  add-on's own overrun after the release's handler began. The remaining slack is the add-on's `maintenance_lock`, which is not FIFO
+  but is held only for a file read or write, never across a preempt; the 10 s grace covers it. Not measured against a running Hermes.
+- **P3, a restart between the capability read and the acquire.** `acquire_deadline` now returns the add-on's `executor_epoch` with
+  the deadline, and none for an add-on that reports no epoch. After `DeadlinePassed` the capabilities are read again; a different
+  epoch or a failed read is held for review as before (the tool releases once without proof and fences; the worker watches five
+  minutes and exits 76). `deploy_common.py:224,236,298`; `hermes-upgrade-linux.py:680,692,701,651`.
+- **P3, `MAINTENANCE_OVERHEAD`.** 25 became 30 in `deploy_common.py:88`, the worker's figure, which counts the interpreter start.
+
+The worker journals `acquire_unanswered` for the watch (`:667`), so a worker that dies in it leaves the phase the app's Cancel
+recovers from; it returns to `rejected` after the second release. The guarded tool keeps the blocked status until the watch ends.
+`docs/HermesUpgradeLinux.md` gains the dispatch-order reasoning and "A lease that appears after exit `75`", the recovery for exit 75
+followed by "Hermes is being upgraded" in the app, which the runbook's "no manual lease step" had left without one.
+
+### Break-by-hand runs
+
+Each line was broken in the file, its tests run with `python3 -B` (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared), watched go
+red, and restored. `tests/hermes_upgrade_linux_test.py` `MaintenanceRpcTests` and `tests/deploy_common_test.py`.
+
+| Broken line | Result | Red tests |
+| --- | --- | --- |
+| Worker: no watch after the release | red, 5 | late lease released again, phase held for review during the watch, another operation's lease left alone, second release fails closed (2) |
+| Worker: no second release | red, 3 | late lease released again, second release fails closed (2) |
+| Worker: epoch never compared | red, 3 | restarted add-on held for review, with and without a lease |
+| Worker: epoch not required | red, 3 | no epoch, empty epoch, numeric epoch each get no deadline |
+| Worker: phase not saved before the watch | red, 2 | phase holds while the watch runs, second release fails closed |
+| Worker: second release unchecked | red, 1 | second release reporting the lease still held fails closed |
+| Worker: `DEADLINE_WATCH_GRACE` 0 | red, 1 | both tools' deadline constants test |
+| Tool: no watch | red, 7 | late lease released again, second release cannot clear (4 subtests) and more |
+| Tool: no second release | red, 1 | late lease released again |
+| Tool: epoch never compared | red, 4 | restart held for review (4 subtests, `Refused` instead of `Fence`) |
+| Tool: epoch not required | red, 3 | no epoch, empty epoch, numeric epoch |
+| Tool: `MAINTENANCE_OVERHEAD` 25 | red, 1 | both tools' deadline constants test |
+| Tool: `DEADLINE_WATCH_GRACE` 0 | red, 1 | both tools' deadline constants test |
+| Tool: status restored before the watch | red, 20 | status stays blocked until the watch ends, and the late-lease tests |
+
+`tests/deploy_guarded_release_test.py` took the epoch in its fixture and gained one test of the real tool with a restarted add-on.
+`check-all` found its two stale tests (capabilities without an epoch) on the first run; fixed, not skipped.
+
+### Checks
+
+`.agents/tools/check-all --py always --keep-going` on `ca41982`: all 7 passed in 10m27s, 3m37s of it queued behind another session.
+
+| Check | Result |
+| --- | --- |
+| typecheck, lint, `ruff check .` (0.17.3) | passed |
+| `npm test` | 205 files, 3,668 tests passed |
+| `npm run build` | 892 modules |
+| `npm run test:e2e` | 40 tests passed (ports 24302, 24303) |
+| `npm run test:py` | 46 files passed in 5m17s |
+
+Per file: `deploy_common_test` 65 tests (61 before this round), `hermes_upgrade_linux_test` 81 (75), `deploy_guarded_release_test` 16 (15).
+
+### Not exercised
+
+No real Hermes or add-on and no deployed release tool. The FIFO order is read from source, not measured; the 100 s watch costs
+that long on every exit 75 that follows a deadline. Review of this commit is owed from a provider other than Claude: the implementer
+is Claude Sonnet 5.5 and the previous head was reviewed by Claude Opus 5.5, so it is `independent-review-owed`.
