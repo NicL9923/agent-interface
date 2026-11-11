@@ -31,7 +31,9 @@ extension AppStore {
         "/bots/\(APIClient.component(id))/messages", submission)
       guard currentGeneration == generation else { return }
       await handleReceipt(value, botId: id)
-      if value.status == "accepted" { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
+      // A typed stop phrase that ended Hermes's voice chat admitted nothing: no sent cue, no Live Activity
+      // for work that never starts, and no error tone, since the dock says what happened.
+      if value.admitted { buzz(.sent); Task { await LiveActivityController.shared.sent(to: id) } }
       else if value.status == "rejected" || value.status == "interrupted" { buzz(.failed) }
     } catch {
       guard currentGeneration == generation else { return }
@@ -106,8 +108,9 @@ extension AppStore {
     if receipts[botId] != value { receipts[botId] = value }
     guard let original = pendings[botId], value.requestId == original.requestId else { return }
     guard ["accepted", "rejected", "interrupted"].contains(value.status) else { return }
-    if value.status == "accepted" {
-      // The next message after a decline answers it, however its acceptance was learned.
+    if value.admitted {
+      // The next message after a decline answers it, however its acceptance was learned. One that
+      // admitted nothing answers nothing, so the decline still waits for the person's words.
       declinedApprovals[original.botId] = nil
       // The server clears its copy for this send, which a later save here must not mistake
       // for a send from another device.
@@ -123,7 +126,8 @@ extension AppStore {
         if let cached: Draft = read(draftKey) { save(cached.sent(original), draftKey) }
       }
     }
-    if value.status == "rejected" || value.status == "interrupted" { refused(original) }
+    // The server keeps the draft for a send that admitted nothing, so it goes back as for a refusal.
+    if value.status == "rejected" || value.status == "interrupted" || value.admittedNothing { refused(original) }
     clearPending(botId)
   }
   /// A refused message goes back into its draft, in front of anything that replaced it meanwhile,

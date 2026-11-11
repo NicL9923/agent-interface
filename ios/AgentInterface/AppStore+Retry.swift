@@ -92,11 +92,12 @@ extension AppStore {
       return
     }
     retryAttempt = RetryAttempt(turn: turn, state: .settled, requestId: value.requestId, receipt: value)
-    if value.status == "accepted" {
+    if value.admitted {
       buzz(.sent)
       if let botId = selectedBotId { Task { await LiveActivityController.shared.sent(to: botId) } }
-    } else {
-      // `retryRefusal` explains it for as long as the turn stays failed.
+    } else if !value.admittedNothing {
+      // `retryRefusal` explains it for as long as the turn stays failed. A stop phrase is explained the
+      // same way but is no error, so it gets no error tone.
       buzz(.failed)
     }
   }
@@ -111,8 +112,11 @@ extension AppStore {
     guard let turn = retryTurn else { return nil }
     let local = retryAttempt?.turn == turn.key && retryAttempt?.state == .settled ? retryAttempt?.receipt : nil
     let claim = conversation?.retry.flatMap { $0.retryOf == turn.message.id ? $0 : nil }
-    guard let status = local?.status ?? claim?.status, status == "rejected" || status == "interrupted" else { return nil }
-    let detail = (local != nil ? local?.message : claim?.message).flatMap { $0.isEmpty ? nil : $0 }
+    let outcome = local ?? claim.map { Receipt(requestId: $0.requestId, status: $0.status, message: $0.message, turn: $0.turn) }
+    // A retry whose words were a typed stop phrase reached nobody either: Hermes answers that ID the same
+    // way, so the message box sends it anew, as for a refusal.
+    guard let outcome, ["rejected", "interrupted"].contains(outcome.status) || outcome.admittedNothing else { return nil }
+    let detail = outcome.message.flatMap { $0.isEmpty ? nil : $0 }
     return RetryRefusal(text: detail.map { "\(RetryTurn.refusedNotice) \($0)" } ?? RetryTurn.refusedNotice, message: turn.message)
   }
   /// Puts a refused retry's message in the composer as the web does: its text after the draft's
