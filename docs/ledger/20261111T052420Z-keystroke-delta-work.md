@@ -59,6 +59,14 @@ when its own parent re-renders even if the memo below bails out, so the header i
 | `use-routine-runs` memo keyed on `messages` again | delta and StrictMode scan tests red |
 | `sameRows` always false | 4 red: list identity, read count, delta, StrictMode |
 | `sameRows` compares length only | "returns a new list when a saved message is edited" red |
+| `useLatestMessageAt`'s `useMemo` dependencies cut to `[bot]` (review fix) | "moves when one arrives" red: `10:00` where `11:00` is expected. It survived before: each step built a fresh roster row, so the memo recomputed on `bot` alone |
+| the same dependencies cut to `[saved]` | the same test red at its roster step: `10:30` where `10:00` is expected |
+
+## Review fix (Claude Opus 5.5 on `18ad9c7`)
+
+P3, `tests/saved-messages.test.ts`: the "moves when one arrives" case now keeps one roster row across its arrival and
+live-reply steps, so the saved messages are the only input that changes there. Only the first step still swaps rows, which
+is what the `bot` dependency is tested by. No production code changed.
 
 ## Checks
 

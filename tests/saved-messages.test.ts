@@ -78,11 +78,14 @@ describe("useLatestMessageAt", () => {
   it("answers with the newest of the roster preview and the saved messages, and moves when one arrives", async () => {
     const rows = [watched("a", "2026-11-10T10:00:00Z")];
     expect(await show({ bot: bot("2026-11-10T10:30:00Z"), messages: rows })).toBe("2026-11-10T10:30:00Z");
-    expect(await show({ bot: bot("2026-11-10T09:00:00Z"), messages: rows })).toBe("2026-11-10T10:00:00Z");
+    // A new roster row is a new object; the same one across the next steps leaves the saved messages as the only change,
+    // so a memo that ignored them would answer 10:00 and stay there.
+    const older = bot("2026-11-10T09:00:00Z");
+    expect(await show({ bot: older, messages: rows })).toBe("2026-11-10T10:00:00Z");
     const arrived = [...rows, watched("b", "2026-11-10T11:00:00Z")];
-    expect(await show({ bot: bot("2026-11-10T09:00:00Z"), messages: arrived })).toBe("2026-11-10T11:00:00Z");
+    expect(await show({ bot: older, messages: arrived })).toBe("2026-11-10T11:00:00Z");
     // A live reply never counts as read.
-    expect(await show({ bot: bot("2026-11-10T09:00:00Z"), messages: [...arrived, live("x")] })).toBe("2026-11-10T11:00:00Z");
+    expect(await show({ bot: older, messages: [...arrived, live("x")] })).toBe("2026-11-10T11:00:00Z");
   });
 
   it("has no time without a bot to be shown", async () => {
