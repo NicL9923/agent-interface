@@ -291,8 +291,14 @@ cause to the private log. Other failures keep maintenance closed for installer r
 
 Exit `75` after the gate request also needs the add-on's acquire handler to have
 returned, since a release cannot remove a lease the handler writes afterwards. The
-handler first stops each running idle compaction, one at a time for up to 30 s
-each, so the hook waits up to 120 s for its answer. A request fails in one of three
+handler first refuses at once, without stopping anything, if the request would be refused
+anyway. Otherwise it stops each running idle compaction, one at a time for up to 30 s
+each, so the hook waits up to 120 s for its answer. The add-on also accepts a `deadline`
+on acquire, the seconds the caller will wait, and writes no lease after it passes; it
+reports that as `maintenance_deadline` in its capabilities. The deadline starts when the
+handler starts, after the request crossed the socket, so a caller sends less than its own
+read timeout, with a margin of a few seconds, or a lease can still land just after it gave up. The hook does not send one yet, so
+everything below still applies to an acquire the hook gave up on. A request fails in one of three
 ways, and the hook reads each differently. The add-on answered with an error: its
 handler returned. The service ticket or the socket failed before the request was
 sent: the add-on never saw it. Or no answer came back after the request may have
@@ -530,27 +536,56 @@ cannot send a drain request to another home.
 
 The guarded activation, `deploy-guarded-app-release.py`, checks under the update claim that
 the maintenance gate is free and nothing is busy, that the gateway is idle, and that Google
-sign-in and the app work. `--check` stops there and changes nothing. Activation then:
+sign-in and the app work. `--check` stops there and changes nothing. Where those checks find
+Hermes busy (the add-on's busy list, the gateway's agents or work, the dashboard's agents or
+sessions) or cannot reach it (the status request fails before it is sent), activation exits `75`
+with nothing changed, so `release-app.py activate` leaves the stage prepared to run again.
+`--check` keeps failing with exit `1` at the same checks, which `prepare-when-idle.py` reads
+by the fence's name. A gate held by another operation is not busy work, since the tool found no
+lease at the configured path a moment earlier: that is a concurrent or misconfigured operation, it
+fails with exit `1` (the table below), and `prepare-when-idle.py` does not retry it. Activation then:
 
 1. Writes the blocked update status. From here the app refuses sends, update checks and
    installs with "Hermes is being upgraded. Your draft is saved; send it after the update finishes."
 2. Journals `maintenance-acquiring` and takes Hermes's maintenance lease while the app still
-   runs. A send admitted since the check, or any other active work, makes this refuse.
-3. Journals `owned-maintenance-acquired`, stops the app, requires every update request the app
+   runs. A send admitted since the check, or any other active work, makes this refuse. The
+   add-on's busy answer is asked again, up to three attempts two seconds apart, because the
+   app's own five-second poll holds a reservation and can make an idle app look busy once.
+3. Reads the gateway's published record with the lease held. A Discord turn runs in the
+   gateway, not in the add-on's sessions, so the add-on's busy list never names it; the
+   lease admits no new turn, so a count above zero, listed active work or an unreadable record
+   refuses here, before the app stops.
+4. Journals `owned-maintenance-acquired`, stops the app, requires every update request the app
    admitted to be complete, and writes the blocked status again, so an app request that was
    already past its own checks cannot leave its status behind.
-4. Backs up the app, drains the gateway, stops the native owners and switches the release.
+5. Backs up the app, drains the gateway, stops the native owners and switches the release.
 
-When the add-on answers acquire with its busy refusal, or with a lease that fails the tool's
-checks, its handler has returned. The tool then releases, which removes this operation's lease if
+When the add-on answers acquire with its busy refusal on all three attempts, with a lease that
+fails the tool's checks, or the gateway then counts active work, the add-on's handler has
+returned. Or the request was never sent: the tool's last stdout line from `NATIVE` is
+`{"unsent": true}` because the service ticket or the connection failed, so the add-on never saw
+it and no lease can appear. The tool then releases, which removes this operation's lease if
 acquire took one, and requires no lease to remain, the blocked status to be its own and no update
 request to be pending. It then restores the saved status, journals `maintenance-refused` and
 exits 75. Nothing stopped, so the household keeps the app and the work that refused the lease
-finishes as usual; `release-app.py activate` leaves the stage prepared to run again.
+finishes as usual; `release-app.py activate` leaves the stage prepared to run again. An unsent
+acquire whose release is unsent too cannot prove that, and exits 2 like a failed release.
+
+| The tool ends with | Exit | The app and the stage |
+| --- | --- | --- |
+| Preflight finds Hermes busy, or the status request is never sent | `75` (`1` under `--check`) | Nothing changed; stage stays `prepared` |
+| Any other preflight failure: a lease held by another operation, a stale gateway heartbeat, the gateway not running, a git or repair mismatch, a status request that failed with no marker or answered an error | `1` | Nothing changed; `release-app.py` marks the stage `needs-review` |
+| The add-on's exact busy answer on three attempts | `75` after a release | Saved status back, app running; stage stays `prepared` |
+| A success answer that fails the tool's checks | `75` after a release | The same |
+| The gateway counts an agent or lists work after the lease | `75` after a release | The same |
+| The acquire request was never sent | `75` after a release | The same; if the release is unsent too, exit `2` |
+| An acquire with no answer | `2`, after one release attempt | Blocked status kept, held for review; see below |
+| Any other error answer, a failed release or fence | `2` | Blocked status kept, held for review |
+| Activation finished | `0` | Stage `activated` |
 
 Any other failure journals `maintenance-held-needs-review`, exits 2 and keeps the blocked status,
 with the app possibly still running behind it. That includes a failed release, any other error
-answer, and a status file that changed after the tool wrote the blocked status. The tool leaves a
+answer, a send that failed after it may have reached Hermes, and a status file that changed after the tool wrote the blocked status. The tool leaves a
 changed status file as it found it: those bytes are the app's, so leave them in place and never
 write the blocked status back over them.
 

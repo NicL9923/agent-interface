@@ -428,6 +428,17 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     return missing.length - added.length;
   });
   const ownConversation = conversation?.botId === botId ? conversation : null;
+  // The run this screen shows. The Stop button names it as of the click, and Cmd+. as of the question it asked.
+  const shownRun = ownConversation?.activity.runId;
+  const stopShownRun = useStableCallback(() => stop(shownRun));
+  // What Cmd+. asked about: the run shown then, if any, and whether the question was asked again because another run began.
+  const [stopQuestion, setStopQuestion] = useState<{ run: string | undefined; renewed: boolean }>({ run: undefined, renewed: false });
+  const confirmStop = () => {
+    // Asked while no run was shown, as during a Discord turn: whatever runs now began while the question was open and the person
+    // was never shown it, so stopping it would answer a different question. Ask again about this run.
+    if (stopQuestion.run === undefined && shownRun !== undefined) { setStopQuestion({ run: shownRun, renewed: true }); setOverlay("stop"); return; }
+    stop(stopQuestion.run);
+  };
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
@@ -462,11 +473,11 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       if (!bot) return false;
       setOverlay(null); setPanel(null); selectBot(bot.id);
     },
-    stop: () => { if (!canStop) return false; setOverlay("stop"); },
+    stop: () => { if (!canStop) return false; setStopQuestion({ run: shownRun, renewed: false }); setOverlay("stop"); },
     help: () => { if (!boot) return false; setOverlay("shortcuts"); },
     undo: () => toast.undo(),
   });
-  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0);
+  useAppBadge(boot ? badgeCount(boot.bots, shownBotId, readThrough) : 0, boot?.user.id);
   // Home as it stands, for the next visit to draw at once. A bootstrap that missed Hermes lists no live roster.
   const connected = !!boot?.connection.connected;
   useEffect(() => {
@@ -559,7 +570,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
             send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
-            stopping={stopping} onStop={stop} dock={dock} />}
+            stopping={stopping} onStop={stopShownRun} dock={dock} />}
         </>}
       </main>
       {creatingGroup && <Loading><GroupCreate bootstrap={boot} canSend={catalog?.canSend ?? false} onClose={() => setCreatingGroup(false)} onCreated={groupCreated} /></Loading>}
@@ -609,7 +620,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} onAsk={askMain} />}
       {choosingMain && <MainAssistantPicker boot={boot} onChoose={setMain} onMakePersonal={bot => setPanel({ kind: "settings", bot })} onClose={() => setChoosingMain(false)} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
-      {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}
+      {overlay === "stop" && liveBot && <StopConfirm key={`${stopQuestion.run}`} name={liveBot.name} renewed={stopQuestion.renewed} onStop={confirmStop} onClose={closeOverlay} />}
       <Toast toast={toast.toast} onDismiss={toast.dismiss} onUndo={toast.undo} />
     </div>
   );

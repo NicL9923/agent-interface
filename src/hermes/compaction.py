@@ -140,6 +140,11 @@ class IdleCompaction:
         with self.lock:
             return sid in self.attempts
 
+    def running(self):
+        """How many background compactions hold a session now."""
+        with self.lock:
+            return len(self.attempts)
+
     @contextlib.contextmanager
     def admitting(self, sid):
         """Hold off any new compaction of this session while an input is admitted.

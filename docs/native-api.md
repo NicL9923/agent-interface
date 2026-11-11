@@ -708,7 +708,7 @@ did with the message's turn, when the add-on reports `admission_turn`:
 | --- | --- | --- |
 | `started` | started the message's turn | the assistant thinking until Hermes reports the turn |
 | `queued` | put it in its busy queue behind running work; it may merge it into a queued prompt or drop it as a copy of the running one | as for a message that starts a turn |
-| `joined` | put it into the running turn | nothing more, as for `steered: true`; Hermes's copy does not carry `steered` |
+| `joined` | put it into the running turn | nothing more, as for `steered: true`; the saved copy carries `steered: true` once the add-on has bound it to its row, after the turn it joined completes, and until then, or when it cannot bind it, it carries none |
 | `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message, put its text and files back in the draft as for a refused message, and show the receipt's `message` |
 | `unknown` | answered in a way neither the add-on nor this server knows | as for a message that starts a turn; never take it for `started` |
 
@@ -1129,6 +1129,13 @@ tabs, and attaches it to its Web Push subscription with `deviceId` on
 accepts upper case and stores lower case. A registration without `deviceId` clears any
 earlier one for that endpoint.
 
+A Web Push endpoint names one browser profile, which has one session. When a member's session
+lapses there, the browser still holds that member's subscription and nothing can remove it. The
+next member to sign in and `POST /api/push/subscriptions` with the same endpoint and the same
+`keys` takes it over: the server moves the row and its device label to them, and the earlier
+member is sent nothing through it. A request with another member's endpoint and different keys
+answers 409, so knowing an endpoint is not enough to silence its holder.
+
 | Route | Body |
 | --- | --- |
 | `PUT /api/devices/activity` | `{ "deviceId": "UUID", "state": "active", "idleMs": 1200 }` or `{ "deviceId": "UUID", "state": "inactive" }`; returns `{ "ok": true }` |
@@ -1429,7 +1436,7 @@ action's request, `POST /api/bots/:id/approvals/:approvalId` with
 `{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop` with
 `{ "account": ACCOUNT }`. The server answers 409 when the account is not the signed-in
 person's, so a sign-in that changed since the app's check cannot act with another
-person's token. Stop without a body, as the chat and the web send it, is unchanged.
+person's token. The chat's Stop sends an empty body, and a web client sends `{ "runId": RUN }` for the run it showed. Without a `runId` the server stops whatever is running, and answers 409 with code `nothing_to_stop` when nothing is; with one, it also answers 409 with code `run_changed` when another run is the one running, and sends no interrupt for either, because Hermes's interrupt also clears every member's queued messages and denies pending approvals.
 When either does not go through, a local notification says so and opens the chat.
 Approving stays in the chat, where the approval card shows what it would run.
 
