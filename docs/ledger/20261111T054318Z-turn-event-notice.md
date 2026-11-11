@@ -118,3 +118,12 @@ against an old server gets every notice. iOS, on `?inflight=1` and `?inflight=2`
 No real Hermes run: the 1.5 s hold and the saved-before-the-tool ordering come from the add-on's documented behavior and the
 existing ledgers, and the browser figure is from the scripted runtime. A file produced by a tool and shown before the turn ends was
 checked at the client function (`withTurn`), not in a browser.
+
+## A flake in the new close test, fixed by the orchestrator
+
+The pull request's first Node 26 CI run failed "stops waiting when the stream closes, leaving no timer behind"
+with `expected +0 to be 1`. The test compared the global fake-timer count before and after, and another app timer
+fired on its own schedule during the wait, so the count dropped by one on a busy runner. The test now watches the
+hold's own timer: it records the timer the server sets with `TURN_HOLD_MS` and asserts that closing the stream
+clears it. Removing `clearTimeout(held?.timer)` from the stream's teardown turns it red ("expected [...] to include
+{ refed: true ... }"); restored, the file's 41 tests pass, and the changed test passed 3 runs of 3.

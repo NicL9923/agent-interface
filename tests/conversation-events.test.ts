@@ -448,14 +448,31 @@ describe("conversation change stream", () => {
       it("stops waiting when the stream closes, leaving no timer behind", async () => {
         const { s, events } = await turnStream();
         await events.close();
-        await pass(100);
-        const closed = vi.getTimerCount();
-        const held = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
-        await held.until(() => held.text.includes("retry"));
-        s.change("shared", undefined, "b:1:2");
-        await held.close();
-        await pass(100);
-        expect(vi.getTimerCount()).toBe(closed);
+        // Watch the hold's own timer rather than the global count, which other timers of the app change on their
+        // own schedule (a throttle firing during the wait made the count drop on a busy runner).
+        const holds: unknown[] = [], cleared: unknown[] = [];
+        const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
+        const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) => {
+          const timer = set(handler, ms, ...rest);
+          if (ms === TURN_HOLD_MS) holds.push(timer);
+          return timer;
+        }) as typeof setTimeout);
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+          cleared.push(timer);
+          return clear(timer);
+        }) as typeof clearTimeout);
+        try {
+          const held = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
+          await held.until(() => held.text.includes("retry"));
+          s.change("shared", undefined, "b:1:2");
+          expect(holds).toHaveLength(1);
+          await held.close();
+          await pass(100);
+          expect(cleared).toContain(holds[0]);
+        } finally {
+          setSpy.mockRestore();
+          clearSpy.mockRestore();
+        }
       });
     });
 
