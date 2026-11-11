@@ -208,13 +208,19 @@ const joinedWork = (echo: SentEcho) => echo.steered || echo.turn === "joined";
  * report counts at once, also in the read that brings the copy, and an earlier read's never does, however late it
  * arrives. Reads from another server process do not compare and fall back to the rule below.
  *
- * Otherwise, as from an older add-on, a queued or unknown turn, or a receipt without the version, a settled report
+ * A queued turn's report never counts. Hermes saves its row when it accepts it, so the copy shows while the turn it
+ * queued behind still runs, and the settle that follows (usually `interrupted`, the default busy mode) is that
+ * turn's, in this read or any later one: a settled report carries nothing that tells it from this turn's own. Only
+ * a read that shows the run start, which hands the row to Hermes's report, or the handoff bound ends the row.
+ *
+ * Otherwise, as from an older add-on, an unknown turn, or a receipt without the version, a settled report
  * counts only from a read that began after the one that brought the copy. In the read that brought the copy it
  * never does; the next read or the handoff bound ends the row. Two reads asked inside one admission, the second
  * ordered after the first, still end the row on the turn before's report there.
  */
 function settledHere(echo: SentEcho, conversation: SavedConversation) {
   if (!["done", "failed", "interrupted"].includes(conversation.activity.state)) return false;
+  if (echo.turn === "queued") return false;
   const admitted = echo.turn === "started" ? compareVersions(conversation.version, echo.admittedVersion) : undefined;
   if (admitted !== undefined) return admitted > 0;
   return (compareVersions(conversation.version, echo.copiedVersion) ?? 0) > 0;
