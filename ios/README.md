@@ -72,7 +72,7 @@ released, with the short commit hash as a detail.
 A conversation's header shows only the back button and the assistant's live avatar
 and name. Tap it for the assistant's card: Find in loaded messages, Pin, Artifacts
 and Settings, plus **Notify me about all activity** and its **Home section**. An
-assistant sits in at most one section. Cmd+F still opens Find. While typing, the
+assistant sits in at most one section. Cmd+F still opens Find. In a chat other household members can write in, a message with no sender, such as one a native Hermes client wrote, is labeled **Household member** instead of reading as yours, unless it is one of your own recent sends that Hermes saved without saying so, as it does a steer or a queued message; the app remembers up to 20 of those per chat in memory, and only while it runs. While typing, the
 keyboard button beside Send or a tap on the transcript puts the keyboard away.
 
 Long-press a settled assistant reply to copy the whole answer, share it, or save a reference. Search opens a matching message when Hermes supplies a pointer, including after compression moves it to another history page.
