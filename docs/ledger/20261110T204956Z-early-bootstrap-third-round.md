@@ -140,3 +140,32 @@ any app draws, which the page-side table's cells do not reach: each starts with 
 
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 199 files, 3382
 tests. `npm run build`: pass. `npm run test:e2e`: 29 passed.
+
+## Sixth round: the account transitions' fifth review, merged from `t3/account-transitions`
+
+`t3/account-transitions` at `6695309` merged in as `744e8bd`, bringing `origin/main` at `785f4f2`
+(merged there as `0f120ae`). No conflict. This branch has no code of its own in the worker's
+account steps, in `restore` and `decline`, or in the page's `accountStart` and `accountRefused`, so
+the fixes are the ones on `t3/account-transitions`; its fifth round in
+`20261110T191900Z-account-transitions.md` has the changes and the reasons.
+
+`public/boot.js` and the worker's `openBoot` do not touch the account steps. The new
+`tellWorker(null)` in `accountStart` runs at a settled sign-out, after `boot.js` has already
+decided what to read, so the early read is unchanged.
+
+### Red runs on this branch
+
+Every mutation in that round's table, run again on this branch's merged code, each with the same
+result: the named worker tests, the page tests and the writer row failed for the mutations they
+protect; the orderings test failed for the tap and Decline mutations (restore without its settle 2
+of 4,000 orders, without its account check 437, a Decline notice without its account 1,145,
+without its check 329, without its settle 2, a refused notice that rejects 363), and failed for
+the guard after the reads in 4 of 40,000 four-word orders; the guards after opening the cache and
+after the badge clear passed, as redundant.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 200 files, 3423
+tests. `npm run build`: pass. `npm run test:e2e`: 29 passed. Ran on the merge commit, after a real
+`npm ci`; the ledger commit after it changes no code.
+
