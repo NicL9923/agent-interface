@@ -283,7 +283,8 @@ and zero native chat, cron, API, or deferred work. Active or unknown work blocks
 shutdown. Exit code `75` means the hook proved that its gate and drain were
 released and that source, settings, and service processes stayed unchanged.
 A failed baseline also exits `75`: those checks run before the gate is taken and
-change no Hermes source, setting or service. Renew that session with `.agents/tools/renew-google-verification-session.py`. On Nov 6, 2026 an expired Google verification session failed
+change no Hermes source, setting or service. They include reading the private
+service key and finding no existing `.drain_request.json`. Renew that session with `.agents/tools/renew-google-verification-session.py`. On Nov 6, 2026 an expired Google verification session failed
 the baseline, the hook reported it as an interrupted install, and the app refused
 chat sends until the record was reviewed by hand. The hook writes the refusal's
 cause to the private log. Other failures keep maintenance closed for installer review.
@@ -291,19 +292,27 @@ cause to the private log. Other failures keep maintenance closed for installer r
 Exit `75` after the gate request also needs the add-on's acquire handler to have
 returned, since a release cannot remove a lease the handler writes afterwards. The
 handler first stops each running idle compaction, one at a time for up to 30 s
-each, so the hook waits up to 120 s for its answer. Each way the acquire ends:
+each, so the hook waits up to 120 s for its answer. A request fails in one of three
+ways, and the hook reads each differently. The add-on answered with an error: its
+handler returned. The service ticket or the socket failed before the request was
+sent: the add-on never saw it. Or no answer came back after the request may have
+reached it: the handler can still be running, and an acquire handler can still
+write the lease. Each way the acquire ends:
 
 | Acquire ends with | Hook | `platform.json` phase | Lease | The app shows |
 | --- | --- | --- | --- | --- |
 | This operation's lease, no busy work | Drains the gateway and continues | `quiescent` | Held | The install continues |
 | The add-on's exact busy answer | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
 | A success answer that fails the hook's checks | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| The service ticket or the socket failed before the request was sent | Releases, proves nothing changed, exits `75`; a release that also fails exits `1` | `rejected`, or `acquiring` after the `1` | None | Stopped before installation, Hermes open; or failed, held for review |
 | Any other error answer | Exits `1` without a release; the log names the error code | `acquiring` | None from this operation | Failed, held for review |
-| No answer, then this operation's lease within `lateLeaseSeconds` (300) | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| No answer and no lease by then | Exits `76` without a release | `acquire_unanswered` | None yet, can still appear | Failed, held: "Hermes did not answer the request to pause…" |
+| No answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| No answer, and by then no lease, or a lease that names another operation or cannot be read | Exits `76` without a release, and never touches that lease | `acquire_unanswered` | None yet, or another operation's | Failed, held: "Hermes did not answer the request to pause…" |
 
-After a lease, a failed drain, active work or a slow drain acknowledgement also
-releases and exits `75`. A protected setting or the source changing while the gate
+A failed ticket or connection that fails the same way for the release (a wrong
+service key, a dashboard that is down) exits `1` at once, with no five-minute
+watch. After a lease, a failed drain, active work or a slow drain acknowledgement
+also releases and exits `75`. A protected setting or the source changing while the gate
 was requested is released but still exits `1`, because live state changed. A release
 with no answer exits `1` and keeps maintenance closed. The worker treats `76` like
 any held failure, with the message above. The hook does not release after an
@@ -467,9 +476,16 @@ exited, and it requested no drain.
    `maintenanceFile` does not exist. If `maintenanceFile` holds exactly
    `{"operationId": "OPERATION"}`, go back to step 1. Stop and investigate a lease
    that names another operation or does not parse.
-3. If idle compactions are still running one after another, wait until they stop.
-   A lease the old acquire writes after step 5 releases would stay behind and close
-   Hermes again.
+3. Let the old acquire finish. Its handler keeps running inside the add-on after
+   the hook gave up. It stops each assistant's idle compaction in turn, waiting at
+   most 30 s for each canonical Bot Chat session, so it runs at most 30 s times
+   the number of assistants (Hermes profiles with a Bot Chat). At least 300 s have
+   passed since the request by the time exit `76` shows. With 10 assistants or
+   fewer it has finished by then. With more, wait a further 30 s for each one
+   past 10. The add-on logs nothing when the handler finishes, so the lease file
+   is the only sign: after the wait, check that `maintenanceFile` still does not
+   exist. If it exists now, go back to step 1. A lease that the old acquire writes
+   after step 5 releases would stay behind and close Hermes again.
 4. Write this operation's lease in the same directory as `maintenanceFile`, mode
    600:
 
@@ -488,8 +504,19 @@ exited, and it requested no drain.
 
 A held failure from any other acquire error, or from a release with no answer,
 names its cause in the private log under the generic held message. Fix that cause
-first, such as a service key mismatch or another operation's lease. Then follow
-the same steps, accepting phase `acquiring` in step 2.
+first, then follow the same steps, accepting phase `acquiring` in step 2. A service
+key that the dashboard rejects does not get this far: the request is never sent,
+the hook's release fails the same way, and the update fails with exit `1` and
+phase `acquiring`. Repair the key in the service environment file, or bring the
+dashboard back, before anything else. Writing a lease then would break Cancel,
+which verifies Hermes through the same key and cannot, so the lease would block
+every chat and Discord message.
+
+A lease that names another operation is not yours to delete. It can belong to a
+guarded app release or another update that is running now. Read its `operationId`
+and compare it with this update's OPERATION from step 2. If they differ, stop: ask
+the installer to check whether that operation is still running, and leave the file
+alone. Only a lease that names this OPERATION is this update's.
 
 ## App release tooling
 

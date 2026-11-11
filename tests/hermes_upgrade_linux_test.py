@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -254,6 +255,28 @@ class PlatformTests(HostFixture):
         self.assertEqual(self.states.read_bytes(), before)
         self.assertFalse(self.platform.gate)
         self.assertFalse(self.platform.record.exists())
+
+    def test_a_missing_service_key_or_an_existing_drain_is_a_harmless_refusal(self):
+        # Both are read before the gate is taken and change nothing, so neither may hold the update.
+        marker, env = self.home / ".drain_request.json", self.service_env.read_text()
+        def missing_key():
+            self.service_env.write_text("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE=" + str(self.home / "maintenance.json") + "\n")
+        def existing_drain(): linux.atomic(marker, {"principal": "agent-interface:another-operation"})
+        for name, setup, reason in (("service key", missing_key, "Private service key is missing or ambiguous"),
+                                    ("drain marker", existing_drain, "An existing native drain requires installer review")):
+            with self.subTest(name):
+                self.service_env.write_text(env)
+                setup()
+                before, drain = self.states.read_bytes(), marker.read_bytes() if marker.exists() else None
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit) as refusal: self.platform.quiescence()
+                self.assertEqual(refusal.exception.code, 75)
+                self.assertIn("Quiescence refused before maintenance: " + reason, errors.getvalue())
+                self.assertEqual(self.states.read_bytes(), before)
+                self.assertEqual(marker.read_bytes() if marker.exists() else None, drain)
+                self.assertFalse(self.platform.rpc_calls)
+                self.assertFalse(self.platform.record.exists())
+                marker.unlink(missing_ok=True)
 
     def test_partial_clone_candidate_materializes_before_stop_and_installs_without_upstream(self):
         upstream = self.directory / "upstream"
@@ -922,7 +945,7 @@ class AddonPlatform(FixturePlatform):
 # answers each maintenance request with the next step a test scripted for that action and fails on
 # any request the test did not script. Lease writes are private, as the real handler's are.
 FAKE_ADDON = r"""
-import json, os, subprocess, sys
+import json, os, subprocess, sys, time
 from pathlib import Path
 SCRIPT, CALLS, LEASE = Path(__SCRIPT__), Path(__CALLS__), Path(__LEASE__)
 BUSY = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
@@ -961,6 +984,7 @@ class Socket:
         step = script[action].pop(0)
         SCRIPT.write_text(json.dumps(script))
         if step == "silence": raise TimeoutError("timed out while waiting for a message")
+        if step == "stall": time.sleep(60)
         if step == "busy": return json.dumps({"id": 1, "error": BUSY})
         if step == "grant":
             write_lease(operation)
@@ -983,6 +1007,7 @@ class Socket:
         return json.dumps(dict(step, id=1))
 def connect(url, *, open_timeout, close_timeout):
     record("connect", url)
+    if SCRIPT.exists() and json.loads(SCRIPT.read_text()).get("refuseConnect"): raise ConnectionRefusedError("connection refused")
     return Socket()
 """
 
@@ -999,16 +1024,23 @@ class MaintenanceRpcTests(HostFixture):
         (self.source / "websockets/__init__.py").write_text(""); (client.parent / "__init__.py").write_text("")
         client.write_text(FAKE_ADDON.replace("__SCRIPT__", repr(str(self.script))).replace("__CALLS__", repr(str(self.calls))).replace("__LEASE__", repr(str(self.lease))))
         key = "a" * 43
+        self.refused_tickets = 0
+        outer = self
         class Tickets(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 ok = self.path == "/api/agent-interface/service-ticket" and self.headers["Authorization"] == "Bearer " + key
+                if ok and outer.refused_tickets:
+                    outer.refused_tickets -= 1
+                    ok = False
                 body = json.dumps({"ticket": "ticket-1"}).encode() if ok else b"{}"
                 self.send_response(200 if ok else 403); self.end_headers(); self.wfile.write(body)
             def log_message(self, *_): pass
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Tickets)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
-        self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(server.server_address[1]), lateLeaseSeconds=10)
+        self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(server.server_address[1]))
+        # Long enough for a test whose lease appears late; the rest end their watch at once or never start it.
+        patcher = patch.object(linux, "LATE_LEASE_SECONDS", 10); patcher.start(); self.addCleanup(patcher.stop)
 
     def scripted(self, **steps): self.script.write_text(json.dumps(steps))
 
@@ -1056,10 +1088,9 @@ class MaintenanceRpcTests(HostFixture):
         self.assert_unchanged(states)
 
     def test_unanswered_acquire_without_a_lease_is_held_and_cancel_recovers_a_later_lease(self):
-        self.platform.config.update(lateLeaseSeconds=0.5)
         self.scripted(acquire=["silence"])
         states = self.states.read_bytes()
-        code, log = self.quiescence()
+        with patch.object(linux, "LATE_LEASE_SECONDS", 0.5): code, log = self.quiescence()
         self.assertNotEqual(code, 75)
         self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
         self.assertIn("Quiescence held for review, maintenance may still be taken: Hermes did not answer maintenance acquire: "
@@ -1085,6 +1116,28 @@ class MaintenanceRpcTests(HostFixture):
         self.assertEqual(self.requests(), [["acquire", 120]])
         self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "another-operation"})
 
+    def test_a_lease_that_cannot_be_read_as_this_operations_ends_the_watch_and_is_left_alone(self):
+        def malformed(): self.lease.write_text("{"); self.lease.chmod(0o600)
+        def not_private(): self.lease.write_text(json.dumps({"operationId": self.platform.operation})); self.lease.chmod(0o644)
+        def unreadable(): self.lease.write_text(json.dumps({"operationId": self.platform.operation})); self.lease.chmod(0o200)
+        cases = [("not JSON", malformed), ("readable by others", not_private)]
+        if os.getuid(): cases.append(("unreadable", unreadable))
+        for name, write in cases:
+            with self.subTest(name):
+                self.lease.unlink(missing_ok=True); self.calls.unlink(missing_ok=True)
+                write()
+                before = self.lease.read_bytes() if name != "unreadable" else None
+                self.scripted(acquire=["silence"])
+                code, log = self.quiescence()
+                # Held without a release: a lease this hook cannot prove is its own is never released.
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review", log)
+                self.assertEqual(self.requests(), [["acquire", 120]])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+                self.assertTrue(self.lease.exists())
+                if before is not None: self.assertEqual(self.lease.read_bytes(), before)
+                self.lease.chmod(0o600)
+
     def test_another_error_answer_is_held_for_review_without_a_release(self):
         self.scripted(acquire=[{"error": {"code": 409, "message": "Another maintenance operation owns this lease"}}])
         with self.assertRaisesRegex(RuntimeError, "^Hermes refused maintenance for a reason other than active work, error code 409$"):
@@ -1103,6 +1156,66 @@ class MaintenanceRpcTests(HostFixture):
             with self.subTest(line=line):
                 self.scripted(status=[{"print": line}])
                 with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
+
+    def test_a_failed_child_is_unsent_only_when_its_last_line_is_exactly_the_unsent_line(self):
+        for line in ('{"unsent": false}', '{"unsent": true, "id": 1}', '"unsent"', "unsent"):
+            with self.subTest(line=line):
+                self.scripted(status=[{"print": line}])
+                with self.assertRaises(linux.Unanswered): self.platform.rpc("status")
+
+    def test_a_timed_out_child_is_unanswered(self):
+        # The child timeout is the wait plus the overhead. A wait of 0 and an overhead of 1 s let
+        # the real subprocess timeout fire on a stalled add-on without a 45 s test.
+        self.scripted(status=["stall"])
+        with patch.object(linux, "DEFAULT_MAINTENANCE_WAIT", 0), patch.object(linux, "MAINTENANCE_OVERHEAD", 1):
+            with self.assertRaisesRegex(linux.Unanswered, r"^Hermes did not answer maintenance status: TimeoutExpired after 1s ") as lost:
+                self.platform.rpc("status")
+        self.assertIsNone(lost.exception.__cause__)
+
+    def make_ticket_fail(self, how):
+        """Break the service ticket or the connection, and say which."""
+        if how == "wrong service key":
+            self.service_env.write_text("HERMES_AGENT_INTERFACE_TOKEN=" + "b" * 43 + "\nHERMES_AGENT_INTERFACE_MAINTENANCE_FILE=" + str(self.lease) + "\n")
+        elif how == "closed dashboard port":
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                self.platform.config.update(dashboardOrigin="http://127.0.0.1:" + str(probe.getsockname()[1]))
+        else:
+            self.scripted(refuseConnect=True)
+
+    def test_a_failure_before_the_request_is_sent_is_not_an_unanswered_acquire(self):
+        # Neither failure reached the add-on, so there is no lease to wait for and no handler running.
+        env, origin = self.service_env.read_text(), self.platform.config["dashboardOrigin"]
+        for how in ("wrong service key", "closed dashboard port", "refused connection"):
+            with self.subTest(how):
+                self.service_env.write_text(env); self.platform.config.update(dashboardOrigin=origin); self.script.unlink(missing_ok=True)
+                self.make_ticket_fail(how)
+                self.assertFalse(self.requests())
+                with self.assertRaisesRegex(linux.NotSent, r"^Hermes was not asked for maintenance acquire: CalledProcessError \(exit 1, "):
+                    self.platform.rpc("acquire")
+                # The release the hook then makes fails the same way: it is held for review at once
+                # (exit 1), never the 300 s watch and exit 76.
+                started = time.monotonic()
+                with self.assertRaisesRegex(linux.NotSent, "^Hermes was not asked for maintenance release"):
+                    self.platform.quiescence()
+                self.assertLess(time.monotonic() - started, 5)
+                self.assertEqual(self.phase(), "acquiring")
+                self.assertFalse(self.requests())
+                self.assertFalse(self.lease.exists())
+                self.assertFalse((self.home / ".drain_request.json").exists())
+
+    def test_an_acquire_refused_before_it_is_sent_is_a_finished_refusal_once_the_release_confirms(self):
+        self.refused_tickets = 1
+        self.scripted(release=["release"])
+        states = self.states.read_bytes()
+        code, log = self.quiescence()
+        self.assertEqual(code, 75)
+        self.assertIn("Quiescence refused and released maintenance: Hermes was not asked for maintenance acquire", log)
+        # The acquire never reached the add-on; only the release did.
+        self.assertEqual(self.requests(), [["release", 15]])
+        self.assertEqual(self.phase(), "rejected")
+        self.assertFalse(self.lease.exists())
+        self.assert_unchanged(states)
 
     def test_after_an_acquire_failures_release_and_success_keeps_the_lease(self):
         cases = [("active work in the drain", 1, ["grant"], "Gateway has active or unknown chat"),

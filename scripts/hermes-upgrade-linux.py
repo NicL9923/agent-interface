@@ -87,9 +87,14 @@ def timestamp(value):
 
 # The subprocess runs in the current native PM-selected interpreter, activates
 # its managed dependency generation, and reads credentials only from stdin.
-# rpc waits `wait` seconds (default 15) for each message. An error answer exits
-# nonzero as before, after printing it as the last stdout line, so a caller can tell
-# "the add-on refused" from "no answer arrived" (.agents/tools/deploy_common.py).
+# rpc waits `wait` seconds (default 15) for each message. A failure exits nonzero as before,
+# after printing one marker as the last stdout line, so a caller can tell three things apart
+# (.agents/tools/deploy_common.py reads the first):
+#   {"answeredError": ERROR}  the add-on answered with an error, so its handler returned
+#   {"unsent": true}          the service ticket or the socket failed before the request was sent,
+#                             so the add-on never saw it
+#   no marker                 the request may have reached the add-on and no answer came back
+# Successful output is the add-on's result alone.
 NATIVE = r'''
 import json,sys
 from pathlib import Path
@@ -103,11 +108,16 @@ elif v['action']=='runtime':
     from pm.environments import project_python
     print(json.dumps({'python':str(project_python(Path(v['source'])))}))
 elif v['action']=='rpc':
-    import urllib.request
-    from websockets.sync.client import connect
-    req=urllib.request.Request(v['origin']+'/api/agent-interface/service-ticket',data=b'{}',headers={'Authorization':'Bearer '+v['key'],'Content-Type':'application/json'})
-    with urllib.request.urlopen(req,timeout=10) as r: ticket=json.load(r)['ticket']
-    with connect(v['origin'].replace('http://','ws://',1)+'/api/ws?ticket='+ticket,open_timeout=10,close_timeout=5) as ws:
+    try:
+        import urllib.request
+        from websockets.sync.client import connect
+        req=urllib.request.Request(v['origin']+'/api/agent-interface/service-ticket',data=b'{}',headers={'Authorization':'Bearer '+v['key'],'Content-Type':'application/json'})
+        with urllib.request.urlopen(req,timeout=10) as r: ticket=json.load(r)['ticket']
+        ws=connect(v['origin'].replace('http://','ws://',1)+'/api/ws?ticket='+ticket,open_timeout=10,close_timeout=5)
+    except Exception:
+        print(json.dumps({'unsent':True}),flush=True)
+        raise
+    with ws:
         ws.send(json.dumps({'jsonrpc':'2.0','id':1,'method':'agent-interface.maintenance','params':{'action':v['method'],'operation_id':v['operation'],'service_key':v['key']}}))
         for _ in range(100):
             result=json.loads(ws.recv(timeout=v.get('wait',15)))
@@ -140,6 +150,14 @@ class ActiveWork(RuntimeError):
     """A known active or unreadable aggregate must abort, never wait it away."""
 
 
+class NotSent(RuntimeError):
+    """A maintenance RPC failed before its request was sent, in the service ticket or the socket
+    connection. The add-on never saw it, so nothing can still be running there."""
+
+    def __init__(self, method, failure):
+        super().__init__("Hermes was not asked for maintenance " + method + ": " + describe(failure))
+
+
 class Answered(RuntimeError):
     """The add-on answered a maintenance RPC with this JSON-RPC error, so its handler returned."""
 
@@ -157,16 +175,26 @@ class Unanswered(RuntimeError):
         super().__init__("Hermes did not answer maintenance " + method + ": " + describe(failure))
 
 
-def answered_error(stdout):
-    """The add-on's error when NATIVE's last stdout line is exactly its answered-error line."""
+def last_line(stdout):
+    """NATIVE's last stdout line as JSON, or None when there is none or it is not JSON."""
     lines = (stdout or "").splitlines()
     try:
-        answer = json.loads(lines[-1]) if lines else None
+        return json.loads(lines[-1]) if lines else None
     except ValueError:
         return None
+
+
+def answered_error(stdout):
+    """The add-on's error when NATIVE's last stdout line is exactly its answered-error line."""
+    answer = last_line(stdout)
     if isinstance(answer, dict) and list(answer) == ["answeredError"] and isinstance(answer["answeredError"], dict):
         return answer["answeredError"]
     return None
+
+
+def unsent(stdout):
+    """Whether NATIVE's last stdout line is exactly its failed-before-sending line."""
+    return last_line(stdout) == {"unsent": True}
 
 
 class Platform:
@@ -310,9 +338,10 @@ class Platform:
         return matches[0]
 
     def rpc(self, method):
-        """The add-on's maintenance RPC. Raises Answered when the add-on answered with an error, and
+        """The add-on's maintenance RPC. Raises Answered when the add-on answered with an error,
+        NotSent when the service ticket or the connection failed before the request was sent, and
         Unanswered when the request may have reached it but no answer came back. A failure before
-        the request is sent, such as a missing key, raises as itself."""
+        NATIVE runs, such as a missing key, raises as itself."""
         wait = MAINTENANCE_WAIT.get(method, DEFAULT_MAINTENANCE_WAIT)
         values = dict(origin=self.config["dashboardOrigin"], key=self.key(), method=method, operation=self.operation, wait=wait)
         python = self.store_python()
@@ -321,6 +350,7 @@ class Platform:
         except subprocess.CalledProcessError as failed:
             error = answered_error(failed.stdout)
             if error is not None: raise Answered(error) from None
+            if unsent(failed.stdout): raise NotSent(method, failed) from None
             raise Unanswered(method, failed) from None
         except subprocess.TimeoutExpired as failed:
             raise Unanswered(method, failed) from None
@@ -461,6 +491,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
         interpreter = self.launcher_python()
         if not self.in_tool_store(interpreter): raise RuntimeError("The baseline managed interpreter is outside the native tool store")
         self.interpreter = interpreter
+        # Neither changes anything, so a missing key or an existing drain exits 75 like the other
+        # baseline refusals. After phase `acquiring` is saved, a failure exits 1 and holds the update.
+        self.key()
+        if (self.home / ".drain_request.json").exists(): raise RuntimeError("An existing native drain requires installer review")
         units = {name: self.unit(name) for name in ("gatewayUnit", "dashboardUnit", "appUnit")}
         gateway = self.gateway()
         if any(gateway.get("platforms", {}).get(key, {}).get("state") != "connected" for key in self.config["discordConnections"]): raise RuntimeError("Both baseline Discord connections must be connected")
@@ -521,10 +555,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
             print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
             raise SystemExit(75) from None
         self.save({"baseline": baseline, "phase": "acquiring"})
-        marker = self.home / ".drain_request.json"
-        if marker.exists(): raise RuntimeError("An existing native drain requires installer review")
-        # 75 is a proven harmless rejection: the add-on's acquire handler returned, and a release then
-        # left no lease, drain or changed host state. The handler preempts compactions before it
+        # 75 is a proven harmless rejection: the add-on's acquire handler returned or never received
+        # the request, and a release then left no lease, drain or changed host state. The handler preempts compactions before it
         # writes the lease, so an acquire with no answer may still take it after any release; that
         # is never 75. Every other failure, including any cleanup uncertainty, fails closed.
         try:
@@ -534,6 +566,10 @@ print(json.dumps({'ok':True,'state':'synced'}))
             # work a later check can outwait. Any other is a configuration or ownership problem.
             if answer.error != BUSY_REFUSAL: raise RuntimeError("Hermes refused maintenance for a reason other than active work, error code " + str(answer.error.get("code"))) from None
             refusal = answer
+        except NotSent as unsent_request:
+            # The request never reached the add-on, so no lease can appear. The release below proves
+            # it: 75 when that confirms, and the release's own failure (exit 1) when it cannot.
+            refusal = unsent_request
         except Unanswered as lost:
             self.save({"baseline": baseline, "phase": "acquire_unanswered"})
             if not self.late_lease():
@@ -561,11 +597,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
         raise SystemExit(75) from None
 
     def late_lease(self):
-        """Whether this operation's lease appears within lateLeaseSeconds of an unanswered acquire.
+        """Whether this operation's lease appears within LATE_LEASE_SECONDS of an unanswered acquire.
         The handler writes it last, so its lease means the handler returned. Anything else in the
         file ends the watch: it is not this operation's to release."""
         path = Path(self.config["maintenanceFile"])
-        deadline = time.monotonic() + self.config.get("lateLeaseSeconds", LATE_LEASE_SECONDS)
+        deadline = time.monotonic() + LATE_LEASE_SECONDS
         while True:
             if os.path.lexists(path):
                 try: return json.loads(private(path).read_text()) == {"operationId": self.operation}

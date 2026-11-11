@@ -37,7 +37,7 @@ Retry only when the lease exists and names the operation (`src/server/upgrades.t
   before the request is sent (the key, the interpreter) as itself.
 - `quiescence`: the exact busy answer goes through the old release path to 75. Any other error answer raises without
   a release, exit 1. An unanswered acquire saves phase `acquire_unanswered` and watches `maintenanceFile` for
-  `lateLeaseSeconds` (300). This operation's lease there means the handler returned, so the old release path runs
+  `LATE_LEASE_SECONDS` (300, a module constant). This operation's lease there means the handler returned, so the old release path runs
   and can exit 75. Otherwise, including another operation's lease, the hook exits 76 without a release.
 - The worker turns exit 76 from quiescence into `MaintenanceUnanswered`: phase `failed`, `install_requires_review`,
   `maintenance` true, request pending, and a message that says to use Cancel if it appears, otherwise to ask the
@@ -80,7 +80,8 @@ an answer that is not this operation's lease, a setting changed while acquiring,
 the exit-76 outcome. `tests/hermes_send_lanes_test.py` pins the helper's `BUSY_REFUSAL` against the add-on's real
 answer beside the release tool's.
 
-Not covered by a red run: the child timeout of wait plus 30 s, since a test would wait at least 45 s for it to fire.
+The child timeout of wait plus 30 s is covered in the review round below: patching `DEFAULT_MAINTENANCE_WAIT` to 0
+and `MAINTENANCE_OVERHEAD` to 1 gives a 1 s child timeout, so its test takes about 1 s, not 45 s.
 
 ## Checks
 
@@ -97,3 +98,74 @@ Not covered by a red run: the child timeout of wait plus 30 s, since a test woul
 
 The worker was not run against a real system, and `NATIVE` has not reached a real Hermes. The 120 s acquire wait
 and the 300 s watch are sized from the add-on's source, not measured.
+
+## Review round: a failure before the request is sent, and the guards around it
+
+A review ran the real `rpc` and `NATIVE` against the fixture's ticket server. A wrong service key (ticket 403) and a
+closed dashboard port both exited 76 after the 300 s watch with no add-on request made, because `rpc` raised
+`Unanswered` for any failed child without the answered-error line, and `NATIVE` fails before `ws.send` in the ticket
+request and the connect. The app then said Hermes may still pause itself, which was false, no lease ever appeared so
+Cancel never showed, and the runbook made it worse: a hand-written lease made Cancel's `recovery_guard` call
+`rpc("status")`, which fails on the same ticket, so recovery failed and the lease blocked every chat and Discord message.
+
+Changes, in `scripts/hermes-upgrade-linux.py` unless named:
+
+- `NATIVE` wraps the imports, the ticket request and the connect. A failure there prints `{"unsent": true}` as the last
+  stdout line and fails as before. Output of a successful run is unchanged.
+- `rpc` raises a new `NotSent` for exactly that line. `quiescence` sends `NotSent` through the release path: 75 when the
+  release confirms, and the release's own `NotSent` (exit 1, phase `acquiring`) when it fails too.
+- `baseline` reads the service key and checks for an existing drain marker before phase `acquiring`, so both exit 75.
+- The `lateLeaseSeconds` config key is gone. Nothing set it outside the tests, which now patch `LATE_LEASE_SECONDS`.
+  No operator need turned up: the watch exists to outlast a handler that already ran, and the runbook states the wait.
+- `docs/HermesUpgradeLinux.md`: the three-way answer, the `NotSent` row, a table row that says another operation's or an
+  unreadable lease also ends in 76, a corrected key-mismatch paragraph, a step 3 wait with its arithmetic, and how to tell
+  whose lease it is.
+
+Other callers of `NATIVE` read only the exit status and stdout of a success, or the last line of a failure, so the new
+line changes nothing for them: `.agents/tools/deploy_common.py` `maintenance_rpc` (its last-line check wants the single
+key `answeredError`, so it raises its generic failure as before), `.agents/tools/recover-app-after-native-update.py`,
+`.agents/tools/deploy-app-release.py` and `scripts/spike/service_probe.py` (all fail on a nonzero exit; the spike's
+wrong-key and wrong-route checks only assert a nonzero exit and keep the `/api/ws?ticket=` text it rewrites),
+`scripts/hermes-upgrade-linux.py` `native()` (parses stdout on success only), and `.agents/tools/deploy-guarded-app-release.py`
+(through `maintenance_rpc`). Not changed: the guarded release tool still treats a failure before the send as no answer.
+
+### Red proof
+
+Same method as above: each replacement applied, every `__pycache__` deleted, the test file run with `python3 -B` and
+`PYTHONDONTWRITEBYTECODE=1`, and the line restored. All ten went red; the restored tree passed.
+
+| Broken | Class run | Red |
+| --- | --- | --- |
+| `NATIVE` prints no unsent line | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `rpc` never raises `NotSent` | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `unsent` accepts any JSON object | `MaintenanceRpcTests` | the unsent-line test, the answered-line test |
+| `unsent` accepts extra keys | `MaintenanceRpcTests` | the unsent-line test |
+| `quiescence` has no `NotSent` release path | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `baseline` does not read the key | `PlatformTests` | the missing-key-or-drain test |
+| `baseline` does not check the drain marker | `PlatformTests` | the missing-key-or-drain test |
+| `late_lease` treats an unreadable lease as this operation's | `MaintenanceRpcTests` | the unreadable-lease test, all three cases |
+| `rpc` lets a child timeout escape | `MaintenanceRpcTests` | the timed-out-child test |
+| Child timeout uses 30 instead of `MAINTENANCE_OVERHEAD` | `MaintenanceRpcTests` | the timed-out-child test |
+
+New tests: a wrong key, a closed port and a refused connection each raise `NotSent`, reach no add-on, and fail the
+release at once with no watch; an acquire refused once before it is sent exits 75 when the release confirms; the exact
+unsent line; a stalled add-on hits the real child timeout; a malformed, a group-readable and an unreadable lease each end
+the watch with exit 76 and are left alone; a missing key and an existing drain each exit 75 from the baseline.
+
+### Checks after the review round
+
+On `59a1b49` (the branch merged with `origin/main` at `785f4f2`) plus these changes, same machine and tool versions.
+
+| Check | Result |
+| --- | --- |
+| `npm run test:py` | 44 files passed, 0 skipped, 0 failed (245.1 s) |
+| `tests/hermes_upgrade_linux_test.py` | 64 tests, 6 new since the first round |
+| `ruff check .` (0.17.3) | all checks passed |
+| `npm run typecheck` | passed |
+| `npm run lint` | passed |
+| `tests/upgrades.test.ts`, `tests/hermes-upgrade-ui.test.ts`, `tests/hermes-update-tool.test.ts` | 47 tests passed |
+
+`NATIVE` still has not reached a real Hermes; the wrong-key, closed-port and refused-connection cases run the real
+`NATIVE` against the local ticket server and the fake WebSocket client. A failure of the interpreter's own
+`hermes_bootstrap` import still prints no marker, so it still counts as no answer; the baseline's launcher and runtime
+checks run that interpreter first.
