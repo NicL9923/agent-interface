@@ -309,19 +309,28 @@ gets the same wait, because `NATIVE` waits out the rest of the 120 s before it s
 deadline passed.
 
 No answer for the whole 120 s does not prove by itself that no lease is coming. Hermes
-dispatches each request with `asyncio.to_thread(server.dispatch)` on a thread pool shared by
-every connection (`tui_gateway/ws.py`), and nothing caps how long a request waits for a thread.
-A handler that starts more than 30 s late runs its deadline past the hook's wait and can write
-its lease after a release that found none. What bounds it is the pool's queue, which is first in,
-first out: the acquire was sent over its own socket at least 120 s before the release, so its
-handler started no later than the release's, and it writes a lease no later than 90 s plus its
-own overrun after the release's handler began. So after a release that confirms, the hook
-watches for this operation's lease for 100 s (the deadline plus a 10 s grace for threads
-taking the add-on's short maintenance lock in another order), journals `acquire_unanswered`
-for the watch, and releases again if the lease shows, confirming that too. Only then does it
-exit `75`. A watch that sees nothing is the proof. This rests on the queue order: a Hermes
-change that dispatches maintenance outside that pool, or not in order, voids it (see "A lease
-that appears after exit `75`").
+runs each request's handler on the event loop's default executor, a thread pool shared by
+every connection, and nothing caps how long a request waits for a thread. A handler that
+starts more than 30 s late runs its deadline past the hook's wait and can write its lease
+after a release that found none. The pool's queue is first in, first out, and that is what the
+watch rests on, but only for one trip through it. A request is `asyncio.to_thread(server.dispatch)`
+(`tui_gateway/ws.py:387`) or, behind the session authority, `asyncio.to_thread(dispatch_legacy)`
+(`:396`) after `AuthorityConnection.dispatch`, which under profile multiplexing first sends the
+owner scope's reads to the same executor (`gateway/session_authorities.py`, `async_owner_scope`).
+Each connection also makes trips before its first frame is read:
+`to_thread(start_deferred_mcp_discovery_now)` (`hermes_cli/web_routers/chat_ws.py:659`) and
+`to_thread(server.resolve_skin)` (`tui_gateway/ws.py:639`), all at `ed1afb0`. The acquire was
+sent over its own socket at least 120 s before the release, so its handler ordinarily starts first
+and writes a lease no later than 90 s plus its own overrun after that. A chain of FIFO trips is
+not FIFO, though: the release's handler can start first if the pool was blocked for over 120 s
+and then again, at the wrong moment, for over 10 s. So after a release that confirms, the hook
+watches for this operation's lease for 100 s (the deadline plus a 10 s grace, which covers a
+handler that starts up to 10 s after the release's, and threads taking the add-on's short
+maintenance lock in another order), journals `acquire_unanswered` for the watch, and releases
+again if the lease shows, confirming that too. Only then does it exit `75`. A watch that sees
+nothing is strong evidence and not a proof: a gap over the grace takes two long blockages of the
+pool in a row, and a lease it misses surfaces as "A lease that appears after exit `75`". A Hermes
+change that runs maintenance outside that pool widens the gap.
 
 The hook also reads the capabilities again once the deadline passes and requires the same
 `executor_epoch`, a value the add-on makes once per process. A restart between the first read
@@ -346,6 +355,7 @@ acquire ends:
 | Any other error answer | Exits `1` without a release; the log names the error code | `acquiring` | None from this operation | Failed, held for review |
 | An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch` and no lease in the 100 s after a confirmed release | Releases, watches, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
 | The same, and this operation's lease shows in that watch | Releases again, confirms, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
+| The same, and a lease that is not this operation's, or cannot be read, appears in that watch | Releases once, leaves the file alone, exits `76` | `acquire_unanswered` | Another operation's, or unreadable | Failed, held: "Hermes did not answer the request to pause…" |
 | The same, and the epoch differs or the second capability read fails | Treated as no deadline: watches five minutes for a lease as below, exits `76` without a release when none shows | `acquire_unanswered` | None yet | Failed, held: "Hermes did not answer the request to pause…" |
 | No deadline sent (an add-on without the capability, or a capability read that failed), no answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
 | No deadline sent, no answer, and by then no lease, or a lease that names another operation or cannot be read | Exits `76` without a release, and never touches that lease | `acquire_unanswered` | None yet, or another operation's | Failed, held: "Hermes did not answer the request to pause…" |
@@ -571,11 +581,13 @@ alone. Only a lease that names this OPERATION is this update's.
 ### A lease that appears after exit `75`
 
 Exit `75` after a deadline passed says the tool released, then watched 100 s and saw no lease. That
-rests on Hermes starting requests in the order they arrive (the quiescence hook above). If the app
-shows "Hermes is being upgraded. Your current work and drafts are preserved." after such an exit,
-that order did not hold, and a handler that started later wrote its lease after the watch. No manual
-lease step is needed beforehand, but this one is, and it is worth a report: Hermes's dispatch has
-changed.
+rests on Hermes starting the acquire's handler no more than 10 s after the release's (the quiescence
+hook above). A request goes through a chain of first-in, first-out trips, and a chain is not first in,
+first out, so this can happen on today's Hermes if its pool was blocked for over 120 s and then again
+for over 10 s at the wrong moment. If the app shows "Hermes is being upgraded. Your current work and
+drafts are preserved." after such an exit, a handler that started later wrote its lease after the
+watch. No manual lease step is needed beforehand, but this one is, and it is worth a report with the
+pool's blockage in the Hermes log.
 
 1. Find OPERATION: the `operationId` in the tool's private log, or in `status.json` for a guarded
    app release, or `platform.json` for an update.

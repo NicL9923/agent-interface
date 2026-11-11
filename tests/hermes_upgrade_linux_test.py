@@ -963,13 +963,14 @@ LATE = '''
 import json, os, sys, time
 from pathlib import Path
 parent, lease, operation = int(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
+body = sys.argv[4] if len(sys.argv) > 4 else json.dumps({"operationId": operation})
 while True:
     try: os.kill(parent, 0)
     except ProcessLookupError: break
     time.sleep(.02)
 time.sleep(.3)
 temporary = lease.with_name(lease.name + ".late")
-with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(json.dumps({"operationId": operation}))
+with os.fdopen(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as output: output.write(body)
 temporary.replace(lease)
 '''
 def record(*event):
@@ -1027,7 +1028,7 @@ class Socket:
         if "releaseThenLease" in step:
             # The release finds no lease and answers; the handler that started late writes it afterwards.
             if held() == {"operationId": operation}: LEASE.unlink()
-            subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["releaseThenLease"]],
+            subprocess.Popen([sys.executable, "-c", LATE, str(os.getpid()), str(LEASE), step["releaseThenLease"], *step.get("body", [])],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
             return result({"active": held() is not None, "operationId": (held() or {}).get("operationId"), "busy": []})
         if "lateLease" in step:
@@ -1356,13 +1357,24 @@ class MaintenanceRpcTests(HostFixture):
             self.platform.quiescence()
         self.assertEqual(self.phase(), "acquire_unanswered")
 
-    def test_another_operations_lease_in_the_watch_is_left_alone_and_is_not_released(self):
-        self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[{"releaseThenLease": "another-operation"}])
-        with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, _ = self.quiescence()
-        # Not this operation's, so not this operation's to release; the acquire it sent can never have written it.
-        self.assertEqual(code, 75)
-        self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
-        self.assertEqual(json.loads(self.lease.read_text()), {"operationId": "another-operation"})
+    def test_a_lease_that_is_not_this_operations_in_the_watch_is_held_for_review_and_left_alone(self):
+        # Not this operation's, so not this operation's to release, and the acquire it sent can never have written it. Exit 75
+        # would tell the app Hermes is open while something holds maintenance, so the run is held like an unanswered acquire.
+        cases = (("another operation's", {"releaseThenLease": "another-operation"}, '{"operationId": "another-operation"}'),
+                 ("one that cannot be read", {"releaseThenLease": "", "body": ["{not json"]}, "{not json"))
+        for name, step, text in cases:
+            with self.subTest(name):
+                self.calls.unlink(missing_ok=True)
+                self.lease.unlink(missing_ok=True)
+                self.scripted(capabilities=self.CAPABLE, acquire=["silence"], release=[step])
+                states = self.states.read_bytes()
+                with patch.object(linux, "DEADLINE_WATCH_SECONDS", 10): code, log = self.quiescence()
+                self.assertEqual(code, linux.upgrade_worker().MAINTENANCE_UNANSWERED)
+                self.assertIn("Quiescence held for review, a maintenance lease that is not this operation's appeared", log)
+                self.assertEqual(self.requests(), [["acquire", 120], ["release", 15]])
+                self.assertEqual(self.phase(), "acquire_unanswered")
+                self.assertEqual(self.lease.read_text(), text)
+                self.assert_unchanged(states)
 
     def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_with_no_release(self):
         # The acquire went to a different process than the one that said it honors a deadline, so its silence proves nothing.

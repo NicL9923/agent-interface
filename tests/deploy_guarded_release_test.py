@@ -376,8 +376,8 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         # Not asked again: the add-on answered nothing for the whole wait.
         self.assertEqual(self.rpc_calls(), ["status", "acquire", "release"])
         self.assertEqual(self.acquire_requests(), [(120, 90)])
-        # The tool watched for a late lease for at least as long as the deadline it sent, with the blocked status kept.
-        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), 90)
+        # The tool watched for a late lease for the deadline it sent and the grace after it, with the blocked status kept.
+        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), deploy_common.DEADLINE_WATCH_SECONDS)
 
     def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_not_refused(self):
         restarted = [{"result": {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-2"}}]

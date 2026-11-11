@@ -75,17 +75,23 @@ DEADLINE_MARGIN = 30
 ACQUIRE_DEADLINE = MAINTENANCE_WAIT["acquire"] - DEADLINE_MARGIN
 # The clock starts when the handler does, not when the request was sent, and a handler that starts late can write its
 # lease after the wait is over. So an acquire with no answer for the whole wait does not prove there is no lease: a
-# release confirmed at that point proves only that none existed then. What bounds a late handler is the order of
-# the queue. Hermes dispatches each WebSocket request with asyncio.to_thread(server.dispatch) (tui_gateway/ws.py,
-# _dispatch_request), the loop's default executor, whose work queue is first in, first out, and the maintenance
-# methods are not among the handlers that move to the separate RPC pool. The acquire was sent over its own socket
-# at least a full wait before the release, so it was queued first, and its handler started no later than the
-# release's. Its lease is therefore written no later than the deadline, ACQUIRE_DEADLINE s, plus the overrun above
-# after the release's handler began, and the release's answer came after that. So the tool watches for this
-# operation's lease for ACQUIRE_DEADLINE s plus this grace, which covers a few threads taking the add-on's
-# maintenance lock in another order (it is only ever held for a file read or write, never across a preempt),
-# and releases again if the lease shows. This rests on that queue order. A change of Hermes's dispatch that
-# stops queuing in order, or runs maintenance elsewhere, breaks it.
+# release confirmed at that point proves only that none existed then. The watch rests on the order of Hermes's thread
+# pool, and that order holds for a trip and not for a chain of them. Each request's handler runs on the event loop's
+# default executor, whose work queue is first in, first out: asyncio.to_thread(server.dispatch), or, behind the session
+# authority, asyncio.to_thread(dispatch_legacy) after AuthorityConnection.dispatch, which under profile multiplexing
+# first sends the owner scope's reads to the same executor (tui_gateway/ws.py:387 and :396, gateway/session_authorities.py
+# async_owner_scope), at revision ed1afb0. The maintenance methods are not among the handlers that move to the
+# separate RPC pool. But each connection also makes trips through that executor before its first frame is read:
+# to_thread(start_deferred_mcp_discovery_now) (hermes_cli/web_routers/chat_ws.py:659) and to_thread(server.resolve_skin)
+# (tui_gateway/ws.py:639). The acquire was sent over its own socket at least a full wait before the release, so its handler
+# ordinarily starts first. The release's can overtake it if the pool was blocked for more than that wait and then again, at
+# the wrong moment, for longer than the grace below. The acquire's lease is written no later than the deadline plus
+# the overrun above after its own handler began, so the tool watches for this operation's lease for ACQUIRE_DEADLINE s
+# plus a grace, which covers a handler that starts up to that grace after the release's, and a few threads taking the
+# add-on's maintenance lock in another order (it is only ever held for a file read or write, never across a preempt).
+# It releases again if the lease shows. What remains is a gap longer than the grace, which takes two long blockages of
+# the pool in a row, so it is not impossible: a lease then lands after the exit 75 and the runbook's "A lease that
+# appears after exit `75`" applies. A change of Hermes's dispatch that runs maintenance elsewhere widens it.
 DEADLINE_WATCH_GRACE = 10
 DEADLINE_WATCH_SECONDS = ACQUIRE_DEADLINE + DEADLINE_WATCH_GRACE
 # Beyond the wait: 10 s for the service ticket, 10 s to open the socket, 5 s to close it, and 5 s to start the

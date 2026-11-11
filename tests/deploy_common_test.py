@@ -551,9 +551,9 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         # Not asked again: the add-on answered nothing for two minutes. The release still ran and the app never stopped.
         self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
         # The capabilities were read again, for the process epoch, and then the lease was watched for. The handler may
-        # have started as late as the release's did, so the watch lasts at least as long as its whole deadline.
+        # have started as late as the release's did, so the watch lasts its whole deadline and the grace after it.
         self.assertEqual([event[0] for event in self.recorded(capabilities=True)], ["capabilities", "acquire", "capabilities", "release"])
-        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), deploy_common.ACQUIRE_DEADLINE)
+        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), deploy_common.DEADLINE_WATCH_SECONDS)
         self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
 
     def test_the_status_stays_blocked_until_the_watch_ends(self):
@@ -582,6 +582,19 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         self.assertEqual(self.sleeps.call_count, 5)
         self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
         self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_a_lease_written_in_the_last_second_of_the_watch_is_still_released_again(self):
+        # The handler started as late as the grace allows. The last look comes after the last sleep, so it is the one
+        # that sees a lease written during that sleep.
+        def last_second(seconds):
+            if len(self.sleeps.call_args_list) == deploy_common.DEADLINE_WATCH_SECONDS: self.acquired()
+        self.sleeps.side_effect = last_second
+        self.answers.update(capabilities=lambda: self.CAPABLE, acquire=self.silent_acquire,
+                            release=self.in_turn(self.released, lambda: self.released([{"profile": "late"}])))
+        with self.assertRaisesRegex(deploy_common.Refused, 'Busy work at release: .*"profile": "late"'):
+            self.run_steps()
+        self.assertEqual([event[0::3] for event in self.recorded()], [["acquire", False], ["release", False], ["release", True]])
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
 
     def test_a_late_lease_that_the_second_release_cannot_clear_is_held_for_review(self):
         def late_lease(seconds): self.acquired() if not self.d.lease.exists() else None
