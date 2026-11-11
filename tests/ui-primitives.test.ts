@@ -79,6 +79,66 @@ it("does not report a stale native close event after StrictMode reopens", async 
   expect(closed).not.toHaveBeenCalled();
 });
 
+// The top layer stacks dialogs in the order they open, and React runs a child's effect before its parent's.
+it("opens a dialog nested in another after it when both mount together, and focuses the inner one last", async () => {
+  const opened = () => vi.mocked(HTMLDialogElement.prototype.showModal).mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"));
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer", initialFocus: "#outer-field" },
+    h(Input, { id: "outer-field" }),
+    h(Dialog, { "aria-label": "inner", initialFocus: "#inner-field" }, h(Input, { id: "inner-field" })))));
+  expect(opened()).toEqual(["outer", "inner"]);
+  expect(document.activeElement?.id).toBe("inner-field");
+});
+
+it("opens a dialog nested in an outer one that is already open at once", async () => {
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" })));
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
+  expect(vi.mocked(HTMLDialogElement.prototype.showModal).mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"))).toEqual(["outer", "inner"]);
+});
+
+it("keeps a nested dialog closed while its outer one is closed", async () => {
+  // Only the outer dialog refuses to open, as a sheet whose showModal fails would.
+  vi.mocked(HTMLDialogElement.prototype.showModal).mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
+  expect(container.querySelector<HTMLDialogElement>('dialog[aria-label="inner"]')!.open).toBe(false);
+});
+
+it("never opens a nested dialog that unmounted while it waited for its outer one", async () => {
+  const showModal = vi.mocked(HTMLDialogElement.prototype.showModal);
+  showModal.mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" })));
+  // A browser throws if asked to show a dialog that is no longer in the document.
+  await act(async () => { container.querySelector<HTMLDialogElement>("dialog")!.open = true; });
+  expect(showModal.mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"))).toEqual(["outer"]);
+});
+
+/** Both dialogs mounted, the outer one left closed by a `showModal` that does nothing, so a test opens it by hand. */
+async function mountNestedUnderClosedOuter() {
+  const showModal = vi.mocked(HTMLDialogElement.prototype.showModal);
+  showModal.mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
+  await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
+  const inner = () => showModal.mock.contexts.filter(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label") === "inner").length;
+  return { outer: container.querySelector<HTMLDialogElement>('dialog[aria-label="outer"]')!, inner };
+}
+
+it("stops watching its outer dialog once it has opened, so a later change to it does not open it again", async () => {
+  const { outer, inner } = await mountNestedUnderClosedOuter();
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+  await act(async () => { outer.open = false; });
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+});
+
+it("waits for its outer dialog's next opening when that opened and closed before it could open", async () => {
+  const { outer, inner } = await mountNestedUnderClosedOuter();
+  // One change notice for both: by the time it runs, the outer dialog is closed again.
+  await act(async () => { outer.open = true; outer.open = false; });
+  expect(inner()).toBe(0);
+  await act(async () => { outer.open = true; });
+  expect(inner()).toBe(1);
+});
+
 it.each([false, true])("portals a popover into its native dialog when nested=%s", async (nested) => {
   const popover = h(Popover, { defaultOpen: true }, h(PopoverTrigger, null, "Options"),
     h(PopoverContent, { "aria-label": "Options" }, h(Button, null, "Action")));

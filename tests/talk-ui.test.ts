@@ -7,7 +7,7 @@ import { useTalk, type Talk } from "../src/app/use-talk";
 import { TalkPanel } from "../src/components/TalkPanel";
 import { VoicePicker } from "../src/components/VoicePicker";
 import { STOP_SPEECH } from "../src/shared/voice";
-import { mountRoot } from "./ui-harness";
+import { mountRoot, stubMatchMedia } from "./ui-harness";
 
 const press = (label: string) => act(async () => {
   const target = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
@@ -103,6 +103,90 @@ describe("live talk", () => {
       expect(asks[1]!.requestId).toBe(asks[0]!.requestId);
       await press("End talk");
     } finally { vi.useRealTimers(); }
+  });
+
+  describe("when the page leaves", () => {
+    const message = (mount: ReturnType<typeof mountRoot>) => mount.container.querySelector(".talk-message")?.textContent ?? "";
+    const hide = () => act(async () => {
+      vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const live = async () => {
+      write.mockResolvedValue(session);
+      const mount = mountRoot();
+      await mount.render(createElement(Harness, { botId: "ranch" }));
+      return mount;
+    };
+
+    it.each([
+      { name: "idle Talk on a phone, with no notice", coarse: true, started: false, ends: false },
+      { name: "live Talk on a desktop, which keeps playing in a hidden tab", coarse: false, started: true, ends: false },
+      { name: "live Talk on a phone", coarse: true, started: true, ends: true },
+    ])("switching tabs with $name", async ({ coarse, started, ends }) => {
+      stubMatchMedia(query => coarse && query === "(pointer: coarse)");
+      const mount = await live();
+      if (started) await act(async () => talk.start());
+      await hide();
+      expect(talkLive()).toBe(started && !ends);
+      expect(message(mount)).toBe(ends ? "Talk ended when the app went to the background." : "");
+    });
+
+    it("keeps going on a phone when the page becomes visible again", async () => {
+      stubMatchMedia(query => query === "(pointer: coarse)");
+      const mount = await live();
+      await act(async () => talk.start());
+      await act(async () => {
+        vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(talkLive()).toBe(true);
+      expect(message(mount)).toBe("");
+      expect(peers[0]!.close).not.toHaveBeenCalled();
+    });
+
+    it("ends Talk on a phone when the tab is switched while the microphone is still being asked for", async () => {
+      stubMatchMedia(query => query === "(pointer: coarse)");
+      const track = { stop: stopTrack, enabled: true };
+      let grant!: (stream: unknown) => void;
+      getUserMedia.mockImplementation(() => new Promise(resolve => { grant = resolve; }));
+      const mount = await live();
+      await act(async () => talk.start());
+      expect(talk.status).toBe("connecting");
+      expect(talkLive()).toBe(true);
+      await hide();
+      expect(talkLive()).toBe(false);
+      expect(talk.status).toBe("idle");
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+      // The person answers the permission prompt afterward: the microphone is let go and nothing connects.
+      await act(async () => grant({ getTracks: () => [track], getAudioTracks: () => [track] }));
+      expect(stopTrack).toHaveBeenCalledOnce();
+      expect(peers).toHaveLength(0);
+      expect(write).not.toHaveBeenCalled();
+      expect(talkLive()).toBe(false);
+      expect(talk.status).toBe("idle");
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+    });
+
+    it("leaves an earlier notice alone when a tab switch or page exit finds Talk idle", async () => {
+      stubMatchMedia(query => query === "(pointer: coarse)");
+      const mount = await live();
+      await act(async () => talk.start());
+      await hide();
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+      await act(async () => window.dispatchEvent(new Event("pagehide")));
+      await hide();
+      expect(message(mount)).toBe("Talk ended when the app went to the background.");
+    });
+
+    it("releases live Talk when the page is hidden for good, with no notice to show", async () => {
+      const mount = await live();
+      await act(async () => talk.start());
+      await act(async () => window.dispatchEvent(new Event("pagehide")));
+      expect(peers[0]!.close).toHaveBeenCalled();
+      expect(stopTrack).toHaveBeenCalled();
+      expect(talkLive()).toBe(false);
+      expect(message(mount)).toBe("");
+    });
   });
 
   it("ends when the assistant changes", async () => {
