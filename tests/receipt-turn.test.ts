@@ -40,8 +40,8 @@ describe("the admission's turn on a receipt", () => {
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
-  // A lookup never carries it, so a client whose answer was lost learns it from the recorded receipt.
-  it("checks a recorded receipt with the turn the lookup cannot carry, only while both say accepted", async () => {
+  // A lookup from an add-on that saved the answer before the field existed carries none, so the recorded receipt supplies it.
+  it("checks a recorded receipt with the turn a lookup without one cannot carry, only while both say accepted", async () => {
     let looked: SubmissionReceipt["status"] = "accepted";
     const { send, check } = await installation({ lookupSubmission: async requestId => ({ requestId, status: looked, runId: "run", steered: false }) });
     const requestId = randomUUID();
@@ -53,6 +53,14 @@ describe("the admission's turn on a receipt", () => {
     expect(settled.status).toBe("interrupted");
     expect(settled).not.toHaveProperty("turn");
     expect(settled).not.toHaveProperty("admittedVersion");
+  });
+
+  it("answers a check with the turn the add-on saved, over the recorded one", async () => {
+    const { send, check } = await installation({ lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run", turn: "started" }) });
+    const requestId = randomUUID();
+    await send({ requestId, text: "Hello" });
+    // The recorded receipt says queued; the version it was stamped with stays, since only this server saw the answer arrive.
+    expect(await check(requestId)).toMatchObject({ status: "accepted", turn: "started", admittedVersion: admitted.admittedVersion });
   });
 
   it("does not take a turn from a receipt recorded before it was accepted", async () => {
@@ -95,6 +103,24 @@ describe("the admission's turn on a receipt", () => {
     expect(draft).toMatchObject(kept
       ? { text: "Stop voice", attachments: [photo], revision: 1, reason: "edit", sentRevision: 0 }
       : { text: "", attachments: [], revision: 2, reason: "sent", sentRevision: 2 });
+  });
+
+  // The answer was lost on its way to the server, so the first thing it learns is the lookup's.
+  it.each([
+    { saved: "none", kept: true },
+    { saved: undefined, kept: false },
+  ] as const)("keeps a typed stop's draft when only the lookup says what happened (saved turn $saved)", async ({ saved, kept }) => {
+    const { send, check, app, headers } = await installation({
+      submit: async input => ({ requestId: input.requestId, status: "uncertain", message: "Hermes response lost. Review before retrying." }),
+      lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run", ...saved ? { turn: saved, message: "Hermes ended its voice chat." } : {} }),
+    });
+    await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Stop voice", attachments: [], baseRevision: 0 } });
+    const requestId = randomUUID();
+    expect((await send({ requestId, text: "Stop voice", attachments: [], draftBaseRevision: 1 })).json()).toMatchObject({ status: "uncertain" });
+    const checked = await check(requestId);
+    expect(checked).toMatchObject({ status: "accepted", ...saved ? { turn: saved } : {} });
+    const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
+    expect(draft).toMatchObject(kept ? { text: "Stop voice", revision: 1, reason: "edit" } : { text: "", reason: "sent" });
   });
 
   it("answers a later retry of the same failed turn with the first retry's recorded receipt, turn included", async () => {
