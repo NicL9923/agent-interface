@@ -8,10 +8,10 @@ import { useMenu } from "./use-menu";
  * when Hermes can host one. Without the group choice there is nothing to pick from, so the
  * button makes an assistant at once.
  */
-export function NewMenu({ canGroup, groupHint, onNewBot, onNewGroup }: { canGroup: boolean; groupHint?: string; onNewBot(): void; onNewGroup(): void }) {
+export function NewMenu({ canGroup, groupHint, disabled = false, onNewBot, onNewGroup }: { canGroup: boolean; groupHint?: string; disabled?: boolean; onNewBot(): void; onNewGroup(): void }) {
   const { open, setOpen, wrap, trigger, menuId, keys, choose } = useMenu();
   useEffect(() => { if (!canGroup) setOpen(false); }, [canGroup, setOpen]);
-  if (!canGroup) return <Button className="home-round" aria-label="New assistant" onClick={onNewBot}><Icon name="plus" /></Button>;
+  if (!canGroup) return <Button className="home-round" aria-label="New assistant" disabled={disabled} onClick={onNewBot}><Icon name="plus" /></Button>;
   return <span className="home-new" ref={wrap} onKeyDown={keys}>
     <Button ref={trigger} className="home-round" aria-label="New" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
       onClick={() => setOpen(value => !value)}><Icon name="plus" /></Button>

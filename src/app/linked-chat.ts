@@ -26,8 +26,8 @@ export function settleLinkedChat(user: string) {
 }
 
 /**
- * Starts reading the chat the first address names, such as a notification link, beside bootstrap
- * instead of after it. The chat's first load after the page loaded opens from this read, on its
+ * Starts reading the chat the first address names, such as a notification link, or the chat chosen
+ * on the saved home, beside bootstrap instead of after it. The chat's first load after the page loaded opens from this read, on its
  * way or finished, and no later load does (see prefetchedFirstPage). The read is dropped if
  * bootstrap finds another account or none.
  *
@@ -37,9 +37,10 @@ export function settleLinkedChat(user: string) {
  * message, not the latest page, and Today or a group chat shows no chat at all; those wait for
  * bootstrap.
  */
-export function prefetchLinkedChat() {
-  const botId = new URLSearchParams(location.search).get("bot");
-  if (!botId || initialView() !== "conversation" || initialMessage()) return;
+export function prefetchLinkedChat(chosen?: string) {
+  // A chat chosen on home before bootstrap answers (see saved-roster.ts) is read the same way.
+  const botId = chosen ?? new URLSearchParams(location.search).get("bot");
+  if (!botId || chosen === undefined && (initialView() !== "conversation" || initialMessage())) return;
   const hint = readHint();
   if (!hint?.user || !hint.bots.includes(botId)) return;
   speculative = hint.user;

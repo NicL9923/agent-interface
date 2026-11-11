@@ -13,8 +13,10 @@ export const initials = (name: string) => name.split(/\s+/).filter(Boolean).slic
  * The person's own avatar, with the connection dot, opens their profile menu: who is signed in, how
  * close the household's accounts are to their limits, Settings and Sign out.
  */
-export function AccountMenu({ user, status, onUsage, onSettings, onSignOut }: {
+export function AccountMenu({ user, status, disabled = false, onUsage, onSettings, onSignOut }: {
   user: Bootstrap["user"]; status: "connected" | "reconnecting" | "offline";
+  /** Shown but closed, as before bootstrap answers: every item in it needs the server. */
+  disabled?: boolean;
   onUsage(): void; onSettings(): void; onSignOut(): void;
 }) {
   const { open, setOpen, wrap, trigger, menuId, keys, choose } = useMenu();
@@ -23,11 +25,11 @@ export function AccountMenu({ user, status, onUsage, onSettings, onSignOut }: {
   const summary = usage.data ? usageSummary(usage.data.accounts) ?? "No limits reported" : "Plans, limits and credits";
   return <span className="home-new account-menu" ref={wrap} onKeyDown={keys}>
     <Button ref={trigger} className="home-account" aria-label="Account" title="Account" aria-haspopup="menu" aria-expanded={open}
-      aria-controls={open ? menuId : undefined} onClick={() => setOpen(value => !value)}>
+      aria-controls={open ? menuId : undefined} disabled={disabled} onClick={() => setOpen(value => !value)}>
       {user.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer" /> : initials(user.name)}
       <span className={`home-status home-status-${status}`} aria-hidden="true" />
     </Button>
-    {open && <div className="home-new-menu account-menu-list" id={menuId} role="menu" aria-label="Account">
+    {open && !disabled && <div className="home-new-menu account-menu-list" id={menuId} role="menu" aria-label="Account">
       <div className="account-menu-who" role="presentation"><strong>{user.name}</strong><small>{user.email}</small></div>
       <button type="button" role="menuitem" onClick={() => choose(onUsage)}>
         <Icon name="gauge" size={16} /><span className="account-menu-text">Usage<small>{summary}</small></span>

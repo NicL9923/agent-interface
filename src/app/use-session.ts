@@ -3,7 +3,8 @@ import type { Bootstrap, Preferences } from "../shared/types";
 import { AccountChanged, ApiError, changeStream, request as apiRequest, setCsrf } from "../client-api";
 import { preferenceQueue } from "./preference-queue";
 import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
-import { accountEpoch, accountNamed, accountRefused, rememberChats } from "./account-epoch";
+import { accountEpoch, accountNamed, accountRefused, pendingSignOut, rememberChats } from "./account-epoch";
+import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
 type SessionEvents = {
   onFirstBootstrap(next: Bootstrap): void;
@@ -59,6 +60,11 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   authRef.current = auth;
   const refresh = useCallback((): Promise<Bootstrap | null> => {
     if (bootstrapRequest.current) return bootstrapRequest.current;
+    // A sign-out made without the server reads nothing as that account; the server's session ends first.
+    if (pendingSignOut() !== null) {
+      void finishSignOut();
+      return Promise.resolve(null);
+    }
     const epoch = accountEpoch.current;
     const marked = preferences.current?.mark() ?? -1;
     const request = (async () => {
@@ -138,7 +144,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     if (start === "bootstrap") {
       prefetchLinkedChat();
       void refresh();
-    }
+    } else void finishSignOut();
     // Every 45 seconds while the household stream is down. While it is live it announces roster changes,
     // Hermes outages included, so only changes it never announces, such as preferences saved on another
     // device, wait for this, at most about 5 minutes. Focus and showing the page still read at once.

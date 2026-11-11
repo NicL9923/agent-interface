@@ -49,7 +49,10 @@ const MOVE_TOLERANCE = 10;
 const CLICK_GRACE_MS = 100;
 type Point = { x: number; y: number };
 
-export function BotMenu({ children, ...props }: Omit<BotMenuProps, "opensAt" | "restoreFocus">) {
+export function BotMenu({ children, disabled = false, ...props }: Omit<BotMenuProps, "opensAt" | "restoreFocus"> & {
+  /** The row's menu does not open, as on home drawn from this device before bootstrap answers. */
+  disabled?: boolean;
+}) {
   const [opened, setOpened] = useState<{ Popup: Popup; at: Point } | null>(null);
   const swapped = useSyncExternalStore(subscribe, ready, ready);
   const press = useRef<{ at: Point; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
@@ -79,6 +82,7 @@ export function BotMenu({ children, ...props }: Omit<BotMenuProps, "opensAt" | "
     touchEnded();
   };
   const open = (at: Point) => {
+    if (disabled) return;
     const gesture = pendingGesture = {};
     const show = (Popup: Popup) => {
       if (!mounted.current) return;
@@ -92,7 +96,7 @@ export function BotMenu({ children, ...props }: Omit<BotMenuProps, "opensAt" | "
     else preloadBotMenu().then(show, () => {});
   };
 
-  const Popup = opened?.Popup ?? swapped;
+  const Popup = disabled ? undefined : opened?.Popup ?? swapped;
   if (Popup) {
     // A row focused when it is swapped keeps its focus, unless the menu is opening and takes it.
     restoreFocus.current ??= !opened && !!row.current && row.current === document.activeElement;

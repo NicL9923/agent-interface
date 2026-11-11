@@ -25,6 +25,8 @@
 // - first paint: the paint entry `first-paint`
 // - theme: the first time <html data-theme> holds the chosen theme
 // - roster: the frame after the first assistant's row is in the rail
+// - layout shift: the largest load's summed layout-shift score (CLS's measure), up to 800 ms after
+//   bootstrap answered
 // The marks are set by an init script with performance.mark, so they come from the page's own clock.
 // Each figure is reported as the median with its quartiles and the number of loads.
 import { spawn, spawnSync } from 'node:child_process';
@@ -88,6 +90,10 @@ const instrument = () => {
     if (document.documentElement?.dataset.theme === window.__chosenTheme) mark('theme-applied');
     if (!rosterSeen && /ranch hand/i.test(document.querySelector('.bot-rail')?.textContent ?? '')) { rosterSeen = true; afterPaint('roster-painted'); }
   };
+  // Layout shift: the sum of every shift's score during the load, as CLS adds them.
+  window.__layoutShift = 0;
+  new PerformanceObserver(list => { for (const entry of list.getEntries()) if (!entry.hadRecentInput) window.__layoutShift += entry.value; })
+    .observe({ type: 'layout-shift', buffered: true });
   // The init script runs before <html> exists, so the first look waits for the first change.
   new MutationObserver(check).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-theme'] });
 };
@@ -103,6 +109,7 @@ const collect = () => {
     firstPaint: performance.getEntriesByType('paint').find(entry => entry.name === 'first-paint')?.startTime ?? null,
     themeApplied: at('theme-applied'),
     rosterPainted: at('roster-painted'),
+    layoutShift: Math.round(window.__layoutShift * 1000) / 1000,
     shell: document.querySelector('script[src$="boot.js"]') ? 'boot.js' : 'main',
   };
 };
@@ -166,8 +173,10 @@ async function scenario(_name, { serviceWorker, httpCache }) {
   for (let run = 0; run < runs; run++) {
     await page.reload({ waitUntil: 'load' });
     await page.waitForFunction(() => performance.getEntriesByName('roster-painted').length > 0, null, { timeout: 60_000 });
-    // Let a late duplicate bootstrap, if any, show in the resource list.
-    await page.waitForTimeout(300);
+    // Past bootstrap's answer and the group catalog's, so a swap's layout shift and a late duplicate
+    // bootstrap, if any, are counted.
+    await page.waitForFunction(() => performance.getEntriesByType('resource').some(entry => new URL(entry.name).pathname === '/api/bootstrap' && entry.responseEnd > 0));
+    await page.waitForTimeout(800);
     const sample = await page.evaluate(collect);
     sample.controlled = await page.evaluate(() => navigator.serviceWorker?.controller !== null && navigator.serviceWorker?.controller !== undefined);
     samples.push(sample);
@@ -180,9 +189,11 @@ const keys = ['bootstrapSent', 'bootstrapAnswered', 'firstPaint', 'themeApplied'
 // How long a light page showed before the chosen theme, taking each load on its own.
 const withFlash = (samples) => samples.map(sample => ({ ...sample,
   lightFlashMs: sample.themeApplied === null || sample.firstPaint === null ? null : Math.max(0, sample.themeApplied - sample.firstPaint) }));
+const maxShift = (samples) => Math.max(...samples.map(sample => sample.layoutShift ?? 0));
 function summarize(samples) {
   const summary = Object.fromEntries(keys.map(key => [key, spread(samples.map(sample => sample[key]))]));
   summary.bootstrapRequests = Math.max(...samples.map(sample => sample.bootstrapRequests));
+  summary.layoutShiftMax = maxShift(samples);
   summary.controlled = samples.every(sample => sample.controlled);
   summary.shell = samples[0]?.shell;
   return summary;
