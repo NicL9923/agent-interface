@@ -3,7 +3,7 @@ import SwiftUI
 /// A hardware keyboard shortcut, delivered to whichever screen owns it. Home opens pinned
 /// assistants and Search; the open chat finds and stops. The number keeps repeats distinct.
 struct KeyboardCommand: Equatable {
-  enum Kind: Equatable { case pinned(Int), find, stop, quickSwitch, settings }
+  enum Kind: Equatable { case pinned(Int), find, stop, quickSwitch }
   var number: Int
   var kind: Kind
 }
@@ -20,6 +20,12 @@ extension AppStore {
 /// switcher, as in the web app. None of these keys is used by
 /// the composer: its hardware Return sends and Shift-Return adds a line, and Command-Return is
 /// left to the system.
+///
+/// Do not add Cmd+, here. On iOS 27 a `Settings` item with that shortcut in this menu stops every
+/// shortcut after it from reaching the app (Cmd+K, Cmd+F and Cmd+. all went dead), and Cmd+, itself never
+/// fired either, even in `CommandGroup(replacing: .appSettings)`. Settings stays one tap away in the
+/// quick switcher. `ShellFlowTests.testCommandKOpensTheQuickSwitcherAndGoesWhereChosen` and
+/// `NativeFlowTests.testCommandPeriodAsksBeforeStoppingActiveWork` fail when this menu breaks.
 struct AssistantCommands: Commands {
   var store: AppStore
   var body: some Commands {
@@ -29,8 +35,6 @@ struct AssistantCommands: Commands {
           .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
       }
       if !store.pinnedForShortcuts.isEmpty { Divider() }
-      Button("Settings") { store.command(.settings) }.keyboardShortcut(",", modifiers: .command)
-        .disabled(store.bootstrap == nil)
       Button("Go to…") { store.command(.quickSwitch) }.keyboardShortcut("k", modifiers: .command)
         .disabled(store.bootstrap == nil)
       Button("Find") { store.command(.find) }.keyboardShortcut("f", modifiers: .command)
