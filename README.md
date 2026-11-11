@@ -696,8 +696,9 @@ last turn's Retry. A message sent while the assistant works adds none, and neith
 does one Hermes puts into the running turn. Stop appears once Hermes reports the
 turn. Hermes's typed stop phrase, which acts only while Hermes's own voice mode is
 on for the session, admits nothing: the message leaves the chat, its words and files
-stay in the draft on every device, and the composer says Hermes ended its voice
-chat. WildBots never turns that mode on. An older
+stay in the server's draft and in the web composer, and the composer says Hermes
+ended its voice chat. The iOS app does not read this yet and empties its own
+composer as for any accepted message. WildBots never turns that mode on. An older
 add-on reports the phrase as accepted like any message, which shows thinking for
 the echo's 30 seconds with nothing running. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
