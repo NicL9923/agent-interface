@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { signedIn } from "./auth.js";
+import { hermesMaintenanceSendMessage } from "../shared/errors.js";
 import { routePattern } from "./route-path.js";
 import type { HermesUpgrades } from "./upgrades.js";
 
@@ -16,7 +17,7 @@ export function installMaintenanceGate(app: FastifyInstance, upgrades: Pick<Herm
     if ((path.startsWith("/api/bots") && !/\/(draft|read-position|presence)$/.test(path)) || path.startsWith("/api/routines") || path.startsWith("/api/groups") || path.startsWith("/api/integrations") || path === "/api/push/actions")
       return reply.code(409).send({ error: path.startsWith("/api/integrations")
         ? "Hermes is being upgraded. Try changing connections after the update finishes."
-        : "Hermes is being upgraded. Your draft is saved; send it after the update finishes.", code: "hermes_maintenance" });
+        : hermesMaintenanceSendMessage, code: "hermes_maintenance" });
   });
 }
 

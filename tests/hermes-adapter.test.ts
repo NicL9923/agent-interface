@@ -2,7 +2,7 @@ import { automationOverviewFixture, automationTaskFixture, memoryFixture, runRec
 import type { ExperienceRequest } from '../src/shared/experience.js';
 import type { AutomationRequest } from '../src/shared/automation.js';
 import { Store } from "../src/server/store.js";
-import { IncompleteCreationError } from "../src/shared/errors.js";
+import { hermesMaintenanceSendMessage, IncompleteCreationError } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
@@ -329,6 +329,40 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(await runtime.submit({...input(),text:'Again',retryOf:'m1'})).toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
     // Any other send keeps its uncertain receipt, since admission may have happened.
     expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('uncertain');
+  });
+  it('reports the errors the add-on answers before admitting a send as a message that was not sent', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // The add-on's own answers (src/hermes/extension.py). Each is answered before its receipt is written.
+    const refused: [number, string, string][] = [
+      [409, 'Hermes is being upgraded. Your current work and drafts are preserved.', hermesMaintenanceSendMessage],
+      [5035, 'backend is retiring; reconnect to continue', 'Hermes did not accept this message: backend is retiring; reconnect to continue. Your draft is saved.'],
+      [-32602, "Open this profile's canonical conversation before admission", "Hermes did not accept this message: Open this profile's canonical conversation before admission. Your draft is saved."],
+      // A trailing period is not doubled, and the add-on's text is capped by the transport.
+      [4093, 'Request ID already belongs to a different input.', 'Hermes did not accept this message: Request ID already belongs to a different input. Your draft is saved.'],
+    ];
+    for (const [code, message, expected] of refused) {
+      rpcErrors.set('agent-interface.submit', {code, message});
+      // A steer is the same RPC, so it reads the same refusals.
+      for (const send of [() => runtime.submit({...input(), text: 'Hello'}), () => runtime.steer({...input(), text: 'Hello'})])
+        expect(await send(), String(code)).toEqual({requestId: 'request-one', status: 'rejected', message: expected});
+    }
+    // An answer with no message of its own still says nothing was sent.
+    rpcErrors.set('agent-interface.submit', {code: 5035} as {code: number; message: string});
+    expect(await runtime.submit({...input(), text: 'Hello'})).toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message. Your draft is saved.'});
+  });
+  it('keeps a send whose error may have followed admission uncertain, whatever Hermes says', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // A handler that raised after it may have written its receipt, and codes the add-on does not answer before it admits.
+    for (const code of [-32000, -32603, 4090, 4091, 4010, 5000, 404]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes private detail'});
+      const receipt = await runtime.submit({...input(), text: 'Hello'});
+      expect(receipt, String(code)).toMatchObject({requestId: 'request-one', status: 'uncertain'});
+      expect(receipt.message, String(code)).not.toContain('private detail');
+    }
+    rpcErrors.set('agent-interface.submit', {code: -32000, message: 'Hermes private detail'});
+    expect((await runtime.submit({...input(), text: 'Hello'})).message).toBe('Hermes refused the request (code -32000). Review before retrying.');
   });
   it('lets native answers prove staleness without a second open', async () => {
     rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];

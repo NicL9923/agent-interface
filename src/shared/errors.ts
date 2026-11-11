@@ -56,6 +56,8 @@ export type ErrorCode =
 
 /** Sent when a request ID already names a different message. */
 export const submissionConflictMessage = "This submission ID was already used for different content";
+/** Sent when a send reaches the app, or Hermes, while Hermes is being upgraded. The message was not sent and its draft is kept. */
+export const hermesMaintenanceSendMessage = "Hermes is being upgraded. Your draft is saved; send it after the update finishes.";
 /** Sent when a conversation's interrupted task needs review before another message starts. */
 export const interruptionPendingMessage = "Review the interrupted task before starting another message.";
 
