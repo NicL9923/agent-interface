@@ -368,6 +368,11 @@ describe("talk progress", () => {
       expect(said.length).toBeGreaterThan(200);
       expect(said.length).toBeLessThanOrEqual(280);
     }
+    // The same for a line with one early English word or a Chinese sentence end, and for a space only past 60% of the head.
+    expect(spokenProgress(`OK ${"今日は晴れです".repeat(100)}`)).toBe(`OK ${"今日は晴れです".repeat(39)}今日は晴`);
+    for (const mark of ["。", "！", "？"]) expect(spokenProgress(`${"あ".repeat(150)}${mark}${"い".repeat(200)}`)).toBe(`${"あ".repeat(150)}${mark}`);
+    expect(spokenProgress(`${"a".repeat(60)} ${"b".repeat(100)}`, 100)).toBe("a".repeat(60));
+    expect(spokenProgress(`${"a".repeat(59)} ${"b".repeat(100)}`, 100)).toBe(`${"a".repeat(59)} ${"b".repeat(40)}`);
     // A limit inside a character gives up that character: 101 and 103 units are 50 emoji or 25 flags.
     expect(spokenProgress("😀".repeat(200), 101)).toBe("😀".repeat(50));
     expect(spokenProgress("🇹🇷".repeat(200), 103)).toBe("🇹🇷".repeat(25));
@@ -536,6 +541,22 @@ describe("talk answer states", () => {
   it("still cuts text with spaces at the last space, and at a late sentence end", () => {
     expect(spokenText("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda", 60)).toBe(`alpha beta gamma${tail}`);
     expect(spokenText(`${"a".repeat(45)}. ${"b ".repeat(40)}`, 100)).toBe(`${"a".repeat(45)}.${tail}`);
+  });
+  // The last space is a place to cut only when it is late in the head, as in `excerpt`. One English word at the start of a
+  // Chinese reply is not, and the reply is spoken to its limit.
+  it("cuts a long reply at its last space only when the space is past 60% of what fits, and at the limit otherwise", () => {
+    const chinese = "今日は晴れです".repeat(200);
+    expect(spokenText(`OK ${chinese}`, 100)).toBe(`OK ${"今日は晴れです".repeat(8)}今${tail}`);
+    // The head is 60 units, so the boundary is a space at 36: kept there, and not at 35.
+    expect(spokenText(`${"a".repeat(36)} ${"b".repeat(100)}`, 100)).toBe(`${"a".repeat(36)}${tail}`);
+    expect(spokenText(`${"a".repeat(35)} ${"b".repeat(100)}`, 100)).toBe(`${"a".repeat(35)} ${"b".repeat(24)}${tail}`);
+  });
+  it.each(["。", "！", "？"])("ends a long Chinese reply at a late %s, and not at an early one", mark => {
+    const kanji = "今日は晴れです";
+    // The head is 60 units: the mark at 50 is past 60% of it, the one at 20 is not.
+    expect(spokenText(`${"あ".repeat(50)}${mark}${kanji.repeat(100)}`, 100)).toBe(`${"あ".repeat(50)}${mark}${tail}`);
+    const early = `${"あ".repeat(20)}${mark}${kanji.repeat(100)}`;
+    expect(spokenText(early, 100)).toBe(`${early.slice(0, 60)}${tail}`);
   });
   it("names the assistant by whole characters when its name is cut", () => {
     // 80 units fall in the middle of the 40th emoji, so 39 go.

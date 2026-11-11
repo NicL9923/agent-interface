@@ -61,15 +61,19 @@ export function talkTools(name: string): RealtimeSessionInput["tools"] {
   }];
 }
 
+/** The sentence ends in Chinese and Japanese, which no space follows. */
+const CJK_ENDS = ["。", "！", "？"];
+
 /** A reply short enough to speak. It ends at a sentence when one ends late enough, and points to the chat for the rest. */
 export function spokenText(text: string, limit = MAX_TALK_ANSWER) {
   const trimmed = text.trim();
   if (trimmed.length <= limit) return trimmed;
   const head = cutText(trimmed, limit - 40);
-  const sentence = Math.max(...[". ", "! ", "? ", "\n"].map(mark => head.lastIndexOf(mark)));
-  // Text with no space in it, as in Chinese or Japanese or a run of emoji, is cut where the limit falls, not after its first character.
+  const sentence = Math.max(...[". ", "! ", "? ", "\n", ...CJK_ENDS].map(mark => head.lastIndexOf(mark)));
+  // Text with no space in it, as in Chinese or Japanese or a run of emoji, or only one early on, is cut where the limit
+  // falls, not after its first word or character. A space counts only when it is late enough, as in `excerpt`.
   const space = head.lastIndexOf(" ");
-  const cut = sentence > head.length * 0.6 ? head.slice(0, sentence + 1) : head.slice(0, space > 0 ? space : head.length);
+  const cut = sentence > head.length * 0.6 ? head.slice(0, sentence + 1) : head.slice(0, space >= head.length * 0.6 ? space : head.length);
   return `${cut.trim()} The rest is in the chat.`;
 }
 
@@ -112,9 +116,9 @@ export function spokenProgress(text: string, limit = MAX_TALK_PROGRESS) {
   const plain = markdownPlain(text).replace(/[\p{Cc}\p{Cf}]+/gu, " ").replace(/\s+/g, " ").trim();
   if (plain.length <= limit) return plain;
   const head = cutText(plain, limit);
-  const sentence = Math.max(...[". ", "! ", "? "].map(mark => head.lastIndexOf(mark)));
+  const sentence = Math.max(...[". ", "! ", "? ", ...CJK_ENDS].map(mark => head.lastIndexOf(mark)));
   const space = head.lastIndexOf(" ");
-  return (sentence > limit * 0.5 ? head.slice(0, sentence + 1) : head.slice(0, space > 0 ? space : head.length)).trim();
+  return (sentence > limit * 0.5 ? head.slice(0, sentence + 1) : head.slice(0, space >= head.length * 0.6 ? space : head.length)).trim();
 }
 
 /**
