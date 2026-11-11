@@ -15,6 +15,8 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     private var delayed: [String: () -> Void] = [:]
     private var currentUser = "one"
     private var messageStatus = 200
+    /// Fields added to an accepted send's receipt, as the add-on's `turn` and a message.
+    private var sendReceiptExtras: [String: Any] = [:]
     private var uploadStatus = 200
     private var pushAvailable = true
     private var run = "run-one"
@@ -43,6 +45,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     private var draftRecords: [String: [String: Any]]?
     let origin = URL(string: "https://native-\(UUID().uuidString.lowercased()).example.test")!
     var user: String { get { lock.withLock { currentUser } } set { lock.withLock { currentUser = newValue } } }
+    func answerSends(_ extras: [String: Any]) { lock.withLock { sendReceiptExtras = extras } }
     var sendStatus: Int { get { lock.withLock { messageStatus } } set { lock.withLock { messageStatus = newValue } } }
     var requests: [URLRequest] { lock.withLock { recorded } }
     func startRun(_ runId: String) { lock.withLock { run = runId; state = "thinking" } }
@@ -329,10 +332,12 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         else if path.hasSuffix("/messages") {
             status = sendStatus
             let payload = FakeExchange.body(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            if status == 200, let text = payload?["text"] as? String {
+            // The app server keeps the draft of a send that admitted nothing.
+            if status == 200, lock.withLock({ sendReceiptExtras["turn"] as? String }) != "none", let text = payload?["text"] as? String {
                 clearDraft(request.url!.pathComponents.dropLast().last ?? "", sent: text, base: payload?["draftBaseRevision"] as? Int)
             }
-            data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"]) : Self.json(["error": "Synthetic admission failure"])
+            let extras = lock.withLock { sendReceiptExtras }
+            data = status == 200 ? Self.json(["requestId": payload?["requestId"] as? String ?? "missing", "status": "accepted", "runId": "run-one"].merging(extras) { $1 }) : Self.json(["error": "Synthetic admission failure"])
         } else if path.hasSuffix("/uploads") {
             status = lock.withLock { uploadStatus }
             data = status == 200 ? Self.json(["id": "file.signature", "name": "note.txt", "mime": "text/plain"]) : Self.json(["error": "Synthetic upload failure"])
@@ -947,6 +952,90 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await Task.sleep(for: AppStore.draftSaveDelay + .milliseconds(300))
         XCTAssertEqual(server.requests.filter { $0.httpMethod == "POST" && $0.url?.path.hasSuffix("/messages") == true }.count, 1)
         XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path.hasSuffix("/draft") == true }.isEmpty)
+    }
+
+    func testASendHermesSavesWithoutASenderStaysTheirsAfterItsEchoLeavesAndEndsWithTheSession() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // The chat already shows a message when the send goes out, which anchors the send.
+        let hi = Message(id: "a", role: "assistant", text: "Hi")
+        var seeded = try XCTUnwrap(value.conversation)
+        seeded.messages = [hi]
+        value.conversation = seeded
+        await value.send()
+        XCTAssertEqual(value.echoes.map(\.status), [.accepted])
+        XCTAssertEqual(value.echoes.first?.after, "a")
+        // Hermes saves the send under its own ID with no sender, as it does a queued one.
+        var rows = try XCTUnwrap(value.conversation)
+        rows.messages = [hi, Message(id: "queued-row", role: "user", text: "Send this")]
+        value.conversation = rows
+        XCTAssertEqual(value.echoes, [], "Hermes's copy replaced the echo")
+        XCTAssertEqual(value.ownRows, ["queued-row"], "The row is this person's own send, so it carries no household label")
+        XCTAssertEqual(value.ownSends.map(\.text), ["Send this"])
+        // Another member's later message with the same words has no send of this person's behind it.
+        var later = rows
+        later.messages.append(Message(id: "theirs", role: "user", text: "Send this"))
+        value.conversation = later
+        XCTAssertEqual(value.ownRows, ["queued-row"])
+        // The record lives in memory with the account: signing out forgets it.
+        value.bootstrap = nil
+        XCTAssertEqual(value.ownSends, []); XCTAssertEqual(value.ownRows, [])
+    }
+
+    func testASendThatNeverGetsItsOwnCopyEndsItsRecordWhenItsEchoLeaves() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        await value.send()
+        XCTAssertEqual(value.ownSends.map(\.text), ["Send this"], "Recorded when Hermes accepted it, from the echo it had until then")
+        // The turn runs and ends without Hermes saving the words as their own row, as for a steer joined with another.
+        var running = try XCTUnwrap(value.conversation)
+        running.activity = Activity(state: .working)
+        value.conversation = running
+        XCTAssertEqual(value.ownSends.count, 1, "Still waiting for its copy while the work runs")
+        running.activity = Activity(state: .done)
+        value.conversation = running
+        XCTAssertEqual(value.echoes, [], "The echo left with no copy")
+        XCTAssertEqual(value.ownSends, [], "So its record left too, and cannot claim another member's identical words later")
+    }
+
+    func testASendThatAdmittedNothingKeepsTheDraftTheDeclineAndTheQuietCueAndSaysWhy() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        value.declinedApprovals["bot"] = "approval"
+        server.answerSends(["turn": "none", "message": "Hermes ended its voice chat."])
+        value.updateDraft(Draft(text: "Send this", attachments: []))
+        await value.send()
+        XCTAssertNil(value.pending)
+        XCTAssertEqual(value.receipt?.turn, "none")
+        XCTAssertEqual(value.receipt?.message, "Hermes ended its voice chat.")
+        XCTAssertEqual(value.draft.text, "Send this", "No copy is coming, so the words stay in the draft")
+        XCTAssertFalse(value.sendingDraft, "The draft is the person's again")
+        XCTAssertFalse(value.draft.isSentCopy, "It is no longer marked as text that was sent, as for a refusal")
+        XCTAssertEqual(value.declinedApprovals["bot"], "approval", "Nothing answered the declined step")
+        XCTAssertNil(value.haptic, "No sent cue, and no error tone either")
+        XCTAssertEqual(value.echoes, [], "The echo leaves with no copy to wait for")
+        XCTAssertEqual(value.transcript?.messages.contains { $0.id == value.receipt?.requestId }, false)
+        XCTAssertEqual(DockItem.items(connectionLost: false, uncertain: false, receiptStatus: value.receipt?.status,
+            receiptMessage: value.receipt?.message, receiptTurn: value.receipt?.turn, interrupted: false, decisions: 0, holdsText: false),
+            [.notAdmitted("Hermes ended its voice chat.")])
+        // Typing again is ordinary: the next message is a new request.
+        value.editComposer { $0.text = "Send this, please" }
+        server.answerSends([:])
+        await value.send()
+        XCTAssertEqual(value.draft.text, ""); XCTAssertNil(value.declinedApprovals["bot"]); XCTAssertEqual(value.haptic?.kind, .sent)
+    }
+
+    func testEveryOtherTurnAnAcceptedSendReportsClearsTheDraftAndPlaysTheSentCue() async throws {
+        for turn in [nil, "started", "queued", "joined", "unknown", "from-a-newer-server"] {
+            let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+            value.declinedApprovals["bot"] = "approval"
+            server.answerSends(turn.map { ["turn": $0, "admittedVersion": "9:4"] } ?? [:])
+            await value.send()
+            let label = "turn \(turn ?? "absent")"
+            XCTAssertEqual(value.receipt?.turn, turn, label)
+            XCTAssertEqual(value.receipt?.admittedVersion, turn == nil ? nil : "9:4", label)
+            XCTAssertEqual(value.draft.text, "", label)
+            XCTAssertNil(value.declinedApprovals["bot"], label)
+            XCTAssertEqual(value.haptic?.kind, .sent, label)
+            XCTAssertEqual(value.echoes.first?.steered, turn == "joined", "Only a message Hermes put into the running turn reads as guidance, \(label)")
+        }
     }
 
     func testDefinitiveAdmissionRejectionAndUncertainServerFailureKeepDifferentRetryState() async throws {

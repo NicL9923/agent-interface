@@ -428,7 +428,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         const prior = await open(input.botId).catch(() => undefined);
         return {...receipt(value), runId: value.runId ?? prior?.app_run_id};
       }
-      return receipt(value, {reportsTurn: contract.admissionTurn, version: admitted});
+      return receipt(value, {version: admitted});
     } catch (error) {
       if (error instanceof TransportError && error.rpcCode === 4094) throw httpError(409, interruptionPendingMessage, {code: 'interruption_pending'});
       // Refused before admission: nothing reached the assistant.
