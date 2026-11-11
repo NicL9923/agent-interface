@@ -406,6 +406,8 @@ struct ConversationView: View {
         .environment(\.transcriptConnected, store.connected)
         .environment(\.transcriptRecipient, bot.name)
         .environment(\.transcriptUserId, store.bootstrap?.user.id)
+        .environment(\.transcriptSharedChat, bot.othersCanWrite)
+        .environment(\.transcriptOwnRows, store.ownRows)
         .environment(\.sentAnchor, anchoredMessage)
         .environment(\.scrollTranscript, { id in
           openingCard = nil
@@ -800,6 +802,8 @@ struct MessageView: View {
   var replyFiles: [Artifact]? = nil
   @Environment(\.transcriptRecipient) private var recipient
   @Environment(\.transcriptUserId) private var userId
+  @Environment(\.transcriptSharedChat) private var sharedChat
+  @Environment(\.transcriptOwnRows) private var ownRows
   @Environment(\.colorScheme) private var scheme
   @Environment(\.foundMessage) private var foundMessage
   @Environment(\.sentAnchor) private var sentAnchor
@@ -853,12 +857,19 @@ struct MessageView: View {
   }
   /// A name goes above a message only where it tells the reader something: a scheduled prompt, or
   /// another member of the household. The person's own words and the assistant's replies need none.
-  private var label: String {
-    if scheduled { return "Scheduled" }
+  /// A person's message with no sender, such as one a native Hermes client wrote, is theirs in a private
+  /// chat, where they are the only member. In a shared one it could be anyone's, so it is labeled rather
+  /// than passed off as theirs, unless it is a send of this person's own that Hermes saved without saying
+  /// so, as it does a steer or a queued send (see `SentEcho.ownRows`).
+  private var label: String { Self.label(for: message, userId: userId, sharedChat: sharedChat, ownRows: ownRows) }
+  static func label(for message: Message, userId: String?, sharedChat: Bool, ownRows: Set<String>) -> String {
+    if message.presentationOrigin?.kind == "scheduled" && !message.isInternalActivity { return "Scheduled" }
     if message.isInternalActivity { return message.presentationOrigin?.title ?? message.activityGroup }
     switch message.role {
     case "assistant": return ""
-    case "user": return message.sender.flatMap { $0.id == userId ? nil : $0.name } ?? ""
+    case "user":
+      guard let sender = message.sender else { return sharedChat && !ownRows.contains(message.id) ? SentEcho.unknownSender : "" }
+      return sender.id == userId ? "" : sender.name
     case "tool": return message.toolName ?? "Tool"
     default: return message.role.capitalized
     }

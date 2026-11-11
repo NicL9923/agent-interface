@@ -186,24 +186,23 @@ export function bot(row: Wire, activity: ActivityState, detail?: Wire): Bot {
     lastMessage: preview(row.canonical_session),
   };
 }
-const reportedTurns: readonly unknown[] = ['queued', 'joined', 'none', 'unknown'] satisfies AdmissionTurn[];
+const reportedTurns: readonly unknown[] = ['started', 'queued', 'joined', 'none', 'unknown'] satisfies AdmissionTurn[];
 /**
- * What an accepted new task's admission answer says about its turn. The add-on sends `turn` only when Hermes did
- * not start the turn, so a missing one means started only from an add-on that reports turns (`reportsTurn`, its
- * `admission_turn` capability); from an older one, and from a receipt lookup, which never carries it, the turn
- * stays unknown to clients. A steer carries `steered` instead, and a value this server does not know is `unknown`.
+ * What an accepted new task's answer says about its turn, from an admission answer and from a receipt lookup alike:
+ * the add-on saves the turn with the answer. A missing one is never read as started. An answer saved by an add-on
+ * older than the field has none, and so does a receipt that was never answered, so nobody can say what Hermes did.
+ * A steer carries `steered` instead, and a value this server does not know is `unknown`.
  */
-function admissionTurn(value: Wire, reportsTurn: boolean): AdmissionTurn | undefined {
-  if (value.status !== 'accepted' || value.steering === true) return undefined;
-  if (value.turn === undefined) return reportsTurn ? 'started' : undefined;
+function admissionTurn(value: Wire): AdmissionTurn | undefined {
+  if (value.status !== 'accepted' || value.steering === true || value.turn === undefined) return undefined;
   return reportedTurns.includes(value.turn) ? value.turn : 'unknown';
 }
 /**
- * A receipt from the add-on's answer. An admission answer passes whether the add-on reports turns and the
- * structural version when the answer arrived; a lookup passes neither.
+ * A receipt from the add-on's answer. An admission answer passes the structural version when the answer arrived;
+ * a lookup passes none.
  */
-export function receipt(value: Wire, admission?: {reportsTurn: boolean; version: string}): SubmissionReceipt {
-  const turn = admissionTurn(value, admission?.reportsTurn === true);
+export function receipt(value: Wire, admission?: {version: string}): SubmissionReceipt {
+  const turn = admissionTurn(value);
   return {
     requestId: value.requestId,
     status: value.status,

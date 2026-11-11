@@ -954,6 +954,48 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertTrue(server.requests.filter { $0.httpMethod == "PUT" && $0.url?.path.hasSuffix("/draft") == true }.isEmpty)
     }
 
+    func testASendHermesSavesWithoutASenderStaysTheirsAfterItsEchoLeavesAndEndsWithTheSession() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        // The chat already shows a message when the send goes out, which anchors the send.
+        let hi = Message(id: "a", role: "assistant", text: "Hi")
+        var seeded = try XCTUnwrap(value.conversation)
+        seeded.messages = [hi]
+        value.conversation = seeded
+        await value.send()
+        XCTAssertEqual(value.echoes.map(\.status), [.accepted])
+        XCTAssertEqual(value.echoes.first?.after, "a")
+        // Hermes saves the send under its own ID with no sender, as it does a queued one.
+        var rows = try XCTUnwrap(value.conversation)
+        rows.messages = [hi, Message(id: "queued-row", role: "user", text: "Send this")]
+        value.conversation = rows
+        XCTAssertEqual(value.echoes, [], "Hermes's copy replaced the echo")
+        XCTAssertEqual(value.ownRows, ["queued-row"], "The row is this person's own send, so it carries no household label")
+        XCTAssertEqual(value.ownSends.map(\.text), ["Send this"])
+        // Another member's later message with the same words has no send of this person's behind it.
+        var later = rows
+        later.messages.append(Message(id: "theirs", role: "user", text: "Send this"))
+        value.conversation = later
+        XCTAssertEqual(value.ownRows, ["queued-row"])
+        // The record lives in memory with the account: signing out forgets it.
+        value.bootstrap = nil
+        XCTAssertEqual(value.ownSends, []); XCTAssertEqual(value.ownRows, [])
+    }
+
+    func testASendThatNeverGetsItsOwnCopyEndsItsRecordWhenItsEchoLeaves() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        await value.send()
+        XCTAssertEqual(value.ownSends.map(\.text), ["Send this"], "Recorded when Hermes accepted it, from the echo it had until then")
+        // The turn runs and ends without Hermes saving the words as their own row, as for a steer joined with another.
+        var running = try XCTUnwrap(value.conversation)
+        running.activity = Activity(state: .working)
+        value.conversation = running
+        XCTAssertEqual(value.ownSends.count, 1, "Still waiting for its copy while the work runs")
+        running.activity = Activity(state: .done)
+        value.conversation = running
+        XCTAssertEqual(value.echoes, [], "The echo left with no copy")
+        XCTAssertEqual(value.ownSends, [], "So its record left too, and cannot claim another member's identical words later")
+    }
+
     func testASendThatAdmittedNothingKeepsTheDraftTheDeclineAndTheQuietCueAndSaysWhy() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         value.declinedApprovals["bot"] = "approval"
