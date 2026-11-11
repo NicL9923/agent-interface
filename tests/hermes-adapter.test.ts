@@ -2,7 +2,7 @@ import { automationOverviewFixture, automationTaskFixture, memoryFixture, runRec
 import type { ExperienceRequest } from '../src/shared/experience.js';
 import type { AutomationRequest } from '../src/shared/automation.js';
 import { Store } from "../src/server/store.js";
-import { IncompleteCreationError } from "../src/shared/errors.js";
+import { hermesMaintenanceSendMessage, IncompleteCreationError, nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
@@ -12,7 +12,10 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import { gzipSync } from 'node:zlib';
+import { createApp } from '../src/server/app.js';
+import { loadConfig } from '../src/server/config.js';
 import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
+import { retryRequestId } from '../src/shared/retry-id.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import { SendTimings } from '../src/server/send-timing.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
@@ -329,6 +332,128 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(await runtime.submit({...input(),text:'Again',retryOf:'m1'})).toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
     // Any other send keeps its uncertain receipt, since admission may have happened.
     expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('uncertain');
+  });
+  it('reports the errors the add-on answers before admitting a send as a message that was not sent', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // The add-on's own answers (src/hermes/extension.py). Each is answered before its receipt is written.
+    const refused: [number, string, string][] = [
+      [409, 'Hermes is being upgraded. Your current work and drafts are preserved.', hermesMaintenanceSendMessage],
+      [5035, 'backend is retiring; reconnect to continue', 'Hermes did not accept this message: backend is retiring; reconnect to continue. Your draft is saved.'],
+      [-32602, "Open this profile's canonical conversation before admission", "Hermes did not accept this message: Open this profile's canonical conversation before admission. Your draft is saved."],
+      // A trailing period is not doubled, and the add-on's text is capped by the transport.
+      [4093, 'Request ID already belongs to a different input.', 'Hermes did not accept this message: Request ID already belongs to a different input. Your draft is saved.'],
+    ];
+    for (const [code, message, expected] of refused) {
+      rpcErrors.set('agent-interface.submit', {code, message});
+      // A steer is the same RPC, so it reads the same refusals.
+      for (const send of [() => runtime.submit({...input(), text: 'Hello'}), () => runtime.steer({...input(), text: 'Hello'})])
+        expect(await send(), String(code)).toEqual({requestId: 'request-one', status: 'rejected', message: expected});
+    }
+    // An answer with no message of its own still says nothing was sent.
+    rpcErrors.set('agent-interface.submit', {code: 5035} as {code: number; message: string});
+    expect(await runtime.submit({...input(), text: 'Hello'})).toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message. Your draft is saved.'});
+  });
+  it('keeps a retry refused for a passing reason uncertain, and rejects one refused for a permanent reason', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // A retry has one request ID for its failed turn, and a rejected receipt is final, so an upgrade or a retiring
+    // backend must leave it uncertain for the reviewed resend. A refusal that no wait changes may stay rejected.
+    for (const code of [409, 5035]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes is being upgraded.'});
+      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
+        .toEqual({requestId: 'request-one', status: 'uncertain', message: `Hermes refused the request (code ${code}). Review before retrying.`});
+    }
+    for (const code of [-32602, 4093]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Not this request'});
+      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
+        .toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message: Not this request. Your draft is saved.'});
+    }
+  });
+  it('sends a retry again once an upgrade that refused it ends', async () => {
+    canonicalSubmission=true;
+    snapshot.messages=[{row_id: 1, role: 'user', text: 'Order more feed', app_run_id: 'run-1'}];
+    snapshot.info={running:false,failed:true};
+    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    try {
+      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
+      const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
+      const read=await runtime.conversation('shared');
+      const retryOf=read.messages[0].id;
+      const requestId=await retryRequestId('shared',retryOf,read.activity.runId??'');
+      const retry=(reviewedUncertain=false)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers,
+        payload:{requestId,text:'Order more feed',attachments:[],retryOf,...(reviewedUncertain?{reviewedUncertain:true}:{})}});
+      const submits=()=>calls.filter(call=>call.method==='agent-interface.submit');
+      rpcErrors.set('agent-interface.submit',{code:409,message:'Hermes is being upgraded. Your current work and drafts are preserved.'});
+      const refused=await retry();
+      expect(refused.json()).toMatchObject({requestId,status:'uncertain'});
+      // The same retry, not yet reviewed, only reports what the app recorded.
+      expect((await retry()).json().status).toBe('uncertain');
+      expect(submits()).toHaveLength(1);
+      // The update ends. Reviewing the retry sends it again, so Hermes is asked a second time.
+      rpcErrors.delete('agent-interface.submit');
+      const resent=await retry(true);
+      expect(resent.statusCode).toBe(200);
+      expect(resent.json()).toMatchObject({requestId,status:'accepted'});
+      expect(submits()).toHaveLength(2);
+      expect(submits()[1].params).toMatchObject({request_id:requestId,require_idle:true});
+    } finally { await app.close(); }
+  });
+  it('keeps a send whose error may have followed admission uncertain, whatever Hermes says', async () => {
+    canonicalSubmission=true;
+    await runtime.status(); calls=[];
+    // A handler that raised after it may have written its receipt, and codes the add-on does not answer before it admits.
+    for (const code of [-32000, -32603, 4090, 4091, 4010, 5000, 404]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes private detail'});
+      const receipt = await runtime.submit({...input(), text: 'Hello'});
+      expect(receipt, String(code)).toMatchObject({requestId: 'request-one', status: 'uncertain'});
+      expect(receipt.message, String(code)).not.toContain('private detail');
+    }
+    rpcErrors.set('agent-interface.submit', {code: -32000, message: 'Hermes private detail'});
+    expect((await runtime.submit({...input(), text: 'Hello'})).message).toBe('Hermes refused the request (code -32000). Review before retrying.');
+  });
+  describe('stop', () => {
+    const interrupts = () => calls.filter(call => call.method === 'session.interrupt');
+    const refused = (code: string, message: string) => ({statusCode: 409, code, message});
+    beforeEach(async () => { await runtime.status(); calls = []; });
+    it('interrupts the session when the run the caller named is the one running', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toEqual([{method: 'session.interrupt', params: {session_id: 'live-one', profile: 'shared'}, id: expect.any(Number), jsonrpc: '2.0'}]);
+    });
+    it('refuses, and never sends the interrupt, when nothing is running', async () => {
+      // Hermes's interrupt on an idle session still clears every member's queued messages and denies pending approvals.
+      for (const named of [undefined, 'run-one']) {
+        await expect(runtime.stop('shared', named), String(named)).rejects.toMatchObject(refused('nothing_to_stop', nothingToStopMessage));
+      }
+      expect(interrupts()).toEqual([]);
+    });
+    it('refuses, and never sends the interrupt, when the run the caller named is not the one running', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+      // A turn Hermes runs with no app run, such as a Discord message, matches no run a client could have been shown.
+      delete snapshot.app_run_id;
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+      expect(interrupts()).toEqual([]);
+    });
+    it('stops whatever is running for a caller that names no run, as the iOS app does', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
+      await runtime.stop('shared');
+      delete snapshot.app_run_id;
+      await runtime.stop('shared');
+      expect(interrupts()).toHaveLength(2);
+    });
+    it('counts a task Hermes is finishing, with its app run still open, as running', async () => {
+      snapshot.info = {running: false}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toHaveLength(1);
+    });
+    it('reads the session fresh for each Stop, so a refusal never lingers', async () => {
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject({code: 'nothing_to_stop'});
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toHaveLength(1);
+    });
   });
   it('lets native answers prove staleness without a second open', async () => {
     rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
@@ -2078,6 +2203,7 @@ describe('Hermes conversation and roster read costs', () => {
     hermesChanged();
     await runtime.conversation('shared', {window: {turns: 20}});
     expect(opens()).toHaveLength(2);
+    snapshot.info = {running: true};
     await runtime.stop('shared');
     await runtime.conversation('shared', {window: {turns: 20}});
     expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(3);

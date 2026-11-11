@@ -4,7 +4,7 @@ import argparse,datetime,fcntl,hashlib,json,os,runpy,stat,subprocess,sys,time,tr
 from pathlib import Path
 from urllib.parse import urlsplit
 sys.dont_write_bytecode=True  # Keep the release tree exactly as archived.
-from deploy_common import Deployment,Refused,fence,tripped
+from deploy_common import Deployment,Fence,NotSent,Refused,fence,tripped
 os.umask(0o077)
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--config",type=Path,required=True)
@@ -57,6 +57,14 @@ def rpc(action):
  secret=dict(line.split("=",1) for line in service_env.read_text().splitlines() if "=" in line)["HERMES_AGENT_INTERFACE_TOKEN"]
  req={"action":"rpc","source":str(source),"origin":"http://127.0.0.1:9119","key":secret,"operation":operation,"method":action}
  return d.maintenance_rpc([c["managedPython"],"-I","-c",code],req)
+def not_started(why):
+ """Hermes was busy or unreachable at the preflight, before anything changed: the same exit as a refused acquire."""
+ print("Release not started: "+why+" Nothing was changed. Activate again when Hermes is idle and answers.");sys.exit(75)
+def idle(condition,why,detail=None):
+ """Preflight guard for work Hermes is doing. Under --check it stays a Fence, which prepare-when-idle retries by name."""
+ if condition:return
+ if args.check:raise Fence(why)
+ not_started("Hermes has active work ("+why+")"+(": "+json.dumps(detail) if detail else "")+".")
 def gateway_idle(after=None):
  if not ready_gateway("draining"):return False
  record=gateway_state();updated=datetime.datetime.fromisoformat(record["updated_at"]).timestamp()
@@ -68,11 +76,17 @@ with claim:
  os.environ["HERMES_UPDATE_HANDOFF_PID"]=str(claim.owner_pid)
  fence(run(["git","-C",str(source),"rev-parse","HEAD"]).strip()==c["hermesRevision"], "Hermes source revision unchanged under the update claim")
  fence(hashlib.sha256(subprocess.check_output(["git","-c","core.abbrev=10","-C",str(source),"diff","HEAD","--binary"])).hexdigest()==c["repairSha256"], "Hermes repair unchanged under the update claim")
- gate=rpc("status");fence(gate["active"] is False and gate["busy"]==[], "maintenance gate inactive with no busy work")
+ try:gate=rpc("status")
+ except NotSent as unsent:
+  if args.check:raise
+  not_started("Hermes could not be reached ("+str(unsent)+").")
+ # A lease at the configured path was not there a moment ago (see the fence above): another operation, or a path that is not this host's, needs a person.
+ fence(gate["active"] is False, "no other operation holds the maintenance gate")
+ idle(gate["busy"]==[], "maintenance gate inactive with no busy work",gate.get("busy"))
  fence(ready_gateway("running"), "gateway running, guarded and connected")
- record=gateway_state();fence(type(record.get("active_agents")) is int and record["active_agents"]==0 and "active_work" in record and record["active_work"] in (None,[]), "gateway reports no active agents or work")
+ record=gateway_state();idle(type(record.get("active_agents")) is int and record["active_agents"]==0 and "active_work" in record and record["active_work"] in (None,[]), "gateway reports no active agents or work",record.get("active_work"))
  fence(0<=time.time()-datetime.datetime.fromisoformat(record["updated_at"]).timestamp()<=120, "gateway heartbeat under two minutes old")
- status=get_status();fence(status["active_agents"]==status["active_sessions"]==0, "no active agents or sessions")
+ status=get_status();idle(status["active_agents"]==status["active_sessions"]==0, "no active agents or sessions")
  google();fence(app_ready(), "app ready and signed-out requests refused")
  if args.check:
   print(json.dumps({"nativeAndWorkerOwnership":True,"idleGatewayVerified":True,"originalGoogleVerified":True,"noServiceChanges":True}));sys.exit(0)
@@ -121,7 +135,7 @@ with claim:
   result={"webBuild":c["webBuild"],"hermesRevision":c["hermesRevision"],"hermesVersionUnchanged":True,"repairPreserved":True,"profileSettingsPreserved":True,"originalGoogleHttpAndFreshWebsocket":True,"gatewayGuardVerified":True,"bothDiscordConnected":True,"actualInstallerMaintenanceRpc":True}
   atomic(ops/"result.json",(json.dumps(result,indent=2)+"\n").encode());journal("complete");print(json.dumps(result))
  except Refused as refused:
-  traceback.print_exc(file=log);log.flush();print("Release not started: "+str(refused)+tripped(refused.__cause__)+" Nothing was stopped and the update status was restored. Activate again when Hermes is idle.");sys.exit(75)
+  traceback.print_exc(file=log);log.flush();print("Release not started: "+str(refused)+tripped(refused.__cause__)+" Nothing was stopped and the update status was restored.");sys.exit(75)
  except BaseException:
   traceback.print_exc(file=log);log.flush();journal("admission-needs-review" if opened else "maintenance-held-needs-review");print("Release activation needs review; native owners preserved and private phase recorded."+tripped(sys.exc_info()[1]));sys.exit(2)
  finally:log.close();worker_lock.close()

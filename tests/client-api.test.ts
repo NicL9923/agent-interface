@@ -227,9 +227,9 @@ describe('typed route requests',()=>{
   it('sends a route without a body as a bare POST with the CSRF token',async()=>{
     const fetch=vi.fn().mockResolvedValue(ok({ok:true}));
     vi.stubGlobal('fetch',fetch);
-    await request('POST /bots/:id/stop',{params:{id:'bot'}});
+    await request('POST /connection/retry');
     const [path,init]=fetch.mock.calls[0];
-    expect(path).toBe('/api/bots/bot/stop');
+    expect(path).toBe('/api/connection/retry');
     expect(init.method).toBe('POST');expect(init.body).toBeUndefined();
     const headers=new Headers(init.headers);
     expect(headers.get('Content-Type')).toBeNull();expect(headers.get('X-CSRF-Token')).toBe('current-session-csrf');

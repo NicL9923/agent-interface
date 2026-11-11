@@ -32,6 +32,13 @@ import type {
 } from "./types.js";
 
 export type Ok = { ok: true };
+/**
+ * What a Stop acts on. Hermes's interrupt reaches the whole session, whatever runs in it: it clears every member's queued
+ * messages, denies every pending approval and blocks notification turns until the next prompt. So the web names the run
+ * it showed (`runId`), and the server refuses with 409 when nothing runs or another run does. `account` is the iOS Live
+ * Activity's: a Stop for another signed-in account is refused.
+ */
+export interface StopRequest { runId?: string; account?: string }
 export type BotSaveRequest = BotInput & {
   /** Making an assistant personal hides it from everyone else, so the person confirms that. */
   confirmPrivate?: boolean;
@@ -246,7 +253,8 @@ export interface ApiRoutes {
   "GET /submissions/:id": { response: SubmissionReceipt };
   /** `answerFormat: "json"` says multi-select answers are JSON arrays; without it they are read as an older client's comma-joined picks. */
   "POST /bots/:id/requests/:approvalId": { body: { answers: Record<string, string>; answerFormat?: "json" }; response: Ok };
-  "POST /bots/:id/stop": { response: Ok };
+  /** Without a body the server stops whatever runs now, but only when something does. */
+  "POST /bots/:id/stop": { body: StopRequest | undefined; response: Ok };
   /** `scope` reaches past this one command only when Hermes offered it for this approval. Absent means once. */
   "POST /bots/:id/approvals/:approvalId": { body: { decision: "approved" | "denied"; scope?: ApprovalScope; account?: string }; response: Ok };
   // --- Approval settings (Workstream B) ---

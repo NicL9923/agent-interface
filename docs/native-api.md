@@ -1440,7 +1440,7 @@ action's request, `POST /api/bots/:id/approvals/:approvalId` with
 `{ "decision": "denied", "account": ACCOUNT }`; Stop sends `POST /api/bots/:id/stop` with
 `{ "account": ACCOUNT }`. The server answers 409 when the account is not the signed-in
 person's, so a sign-in that changed since the app's check cannot act with another
-person's token. Stop without a body, as the chat and the web send it, is unchanged.
+person's token. The chat's Stop sends an empty body, and a web client sends `{ "runId": RUN }` for the run it showed. Without a `runId` the server stops whatever is running, and answers 409 with code `nothing_to_stop` when nothing is; with one, it also answers 409 with code `run_changed` when another run is the one running, and sends no interrupt for either, because Hermes's interrupt also clears every member's queued messages and denies pending approvals.
 When either does not go through, a local notification says so and opens the chat.
 Approving stays in the chat, where the approval card shows what it would run.
 

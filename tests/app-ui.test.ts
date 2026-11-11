@@ -744,6 +744,20 @@ describe("conversation state", () => {
     expect(container.querySelector(".activity-copy")?.textContent).not.toContain("Shared is running terminal...");
   });
 
+  it("names the run it shows when Stop is pressed, and names none when it shows none", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "run-one" } };
+    await render();
+    await typeInto(container.querySelector("textarea")!, "");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run-one" });
+    // Hermes running a turn that has no app run leaves nothing to name; the server then stops what runs, if anything.
+    vi.mocked(write).mockClear();
+    conversation = { ...conversation, activity: { state: "working" } };
+    await changed();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Stop response"]')!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
+  });
+
   it("hides empty tool-call replies and the assistant's own name, keeping one timestamp under the last part of a reply", async () => {
     conversation = { ...conversation, activity: { state: "done" }, messages: [
       { id: "question", role: "user", text: "Check the NAS", sender: { id: "one", name: "One" }, createdAt: "2026-10-07T12:00:00Z" },

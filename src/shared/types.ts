@@ -569,7 +569,11 @@ export interface Runtime {
   watchRoster?(changed: () => void): () => void;
   saveBot(input: BotInput, id?: string): Promise<Bot>;
   deleteBot(id: string): Promise<void>;
-  stop(botId: string): Promise<void>;
+  /**
+   * Interrupts the assistant's session, which Hermes does for every run and every member's queued message in it. Refuses with
+   * a 409 and sends nothing when no run is open, or, with `runId`, when the open run is another one.
+   */
+  stop(botId: string, runId?: string): Promise<void>;
   generatePortrait(botId: string, prompt: string): Promise<FileRef>;
   setAvatar?(botId: string, avatar: Avatar): Promise<void>;
   /** Saves the Talk voice with the profile, beside its avatar. */
