@@ -139,3 +139,46 @@ release therefore needs a new Hermes qualification: `release-app.py prepare COMM
 for this branch. `release-app.py activate` runs the guarded tool from the release being activated (`cd RELEASE && python3
 .agents/tools/deploy-guarded-app-release.py`), so the first activation of a release that carries this change already writes the
 file, and the new server reads it at its start: pages open under the release it replaces get the grace at once.
+
+## Review round 1: the name test and the base of previous-release.json
+
+Claude Opus 5.5 reviewed `6665b4f` and approved it with two P3s. The commit after it is `3ddd3e4`, after `origin/main` (`fe83029`) was
+merged in as `25aaa18`, on NicolasLaptop (Fedora 44, Linux x64), Node 24.22.2, Python 3.14.10, ruff 0.17.3. Nothing was deployed and
+the production host was not touched.
+
+- **`isPreviousAsset` ran `realpathSync` on every live static response that is not hashed** (`src/server/static-cache.ts:57-62`).
+  It now tests `hashedName.test(basename(file))` first. That saves the syscall for the shell's icons, manifest and unhashed files, and
+  restores the defense the branch described: `previousAssetFile` only sends a hashed name, so another file in the previous
+  release's directory is not told to cache for a year. Test: `tests/static-cache.test.ts` "counts a hashed name there and nothing
+  else, though the directory is the right one" (`logo.png`, `old-short.js` and `index.html` in the previous assets directory) and a
+  second one for a file outside the directory, no named release and a pruned directory.
+- **`resolve("dist/previous-release.json")` depended on the working directory, as `dist/client` does** (`src/server/app.ts:163`).
+  The default is now `join(dirname(clientRoot), "previous-release.json")`, derived from the client root the app serves, so the two
+  cannot disagree. `docs/Hosting.md` says so. The contract test reads that expression from `app.ts` beside the tooling's
+  `PREVIOUS_RELEASE_FILE`; the existing test that starts the app from a layout's working directory still proves the file is found.
+
+### Break-by-hand runs
+
+Each line was broken, `npx vitest run tests/static-cache.test.ts` run, and the file restored from a copy (a `git checkout` restore
+once reverted uncommitted edits during this session; none were committed that way).
+
+| Broken line | Result |
+| --- | --- |
+| `isPreviousAsset` without the name test | red, 1: "counts a hashed name there and nothing else" |
+| the default back to `resolve("dist/previous-release.json")` | red, 1: "reads the file the deploy tooling writes, in the place the tooling writes it". The two paths are the same when the client root is `dist/client`, so only the source-text contract tells them apart; the by-construction derivation is the guard |
+
+The saving of the syscall itself is not asserted: it is the same early return, and spying on `node:fs` in ESM would test the spy.
+
+### Checks
+
+`.agents/tools/check-all --py always --keep-going` on `3ddd3e4`: all 7 passed in 9m12s, 3m01s of it queued behind another session.
+
+| Check | Result |
+| --- | --- |
+| typecheck, lint, `ruff check .` (0.17.3) | passed |
+| `npm test` | 205 files, 3,684 tests passed |
+| `npm run build` | 892 modules |
+| `npm run test:e2e` | 40 tests passed (ports 24302, 24303) |
+| `npm run test:py` | 46 files passed in 4m37s |
+
+Independent review of this commit is owed: the implementer is Claude Sonnet 5.5 and the previous head was reviewed by Claude Opus 5.5.
