@@ -2,7 +2,7 @@ import { automationOverviewFixture, automationTaskFixture, memoryFixture, runRec
 import type { ExperienceRequest } from '../src/shared/experience.js';
 import type { AutomationRequest } from '../src/shared/automation.js';
 import { Store } from "../src/server/store.js";
-import { IncompleteCreationError } from "../src/shared/errors.js";
+import { IncompleteCreationError, nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
@@ -329,6 +329,49 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(await runtime.submit({...input(),text:'Again',retryOf:'m1'})).toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
     // Any other send keeps its uncertain receipt, since admission may have happened.
     expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('uncertain');
+  });
+  describe('stop', () => {
+    const interrupts = () => calls.filter(call => call.method === 'session.interrupt');
+    const refused = (code: string, message: string) => ({statusCode: 409, code, message});
+    beforeEach(async () => { await runtime.status(); calls = []; });
+    it('interrupts the session when the run the caller named is the one running', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toEqual([{method: 'session.interrupt', params: {session_id: 'live-one', profile: 'shared'}, id: expect.any(Number), jsonrpc: '2.0'}]);
+    });
+    it('refuses, and never sends the interrupt, when nothing is running', async () => {
+      // Hermes's interrupt on an idle session still clears every member's queued messages and denies pending approvals.
+      for (const named of [undefined, 'run-one']) {
+        await expect(runtime.stop('shared', named), String(named)).rejects.toMatchObject(refused('nothing_to_stop', nothingToStopMessage));
+      }
+      expect(interrupts()).toEqual([]);
+    });
+    it('refuses, and never sends the interrupt, when the run the caller named is not the one running', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+      // A turn Hermes runs with no app run, such as a Discord message, matches no run a client could have been shown.
+      delete snapshot.app_run_id;
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+      expect(interrupts()).toEqual([]);
+    });
+    it('stops whatever is running for a caller that names no run, as the iOS app does', async () => {
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
+      await runtime.stop('shared');
+      delete snapshot.app_run_id;
+      await runtime.stop('shared');
+      expect(interrupts()).toHaveLength(2);
+    });
+    it('counts a task Hermes is finishing, with its app run still open, as running', async () => {
+      snapshot.info = {running: false}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toHaveLength(1);
+    });
+    it('reads the session fresh for each Stop, so a refusal never lingers', async () => {
+      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject({code: 'nothing_to_stop'});
+      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
+      await runtime.stop('shared', 'run-one');
+      expect(interrupts()).toHaveLength(1);
+    });
   });
   it('lets native answers prove staleness without a second open', async () => {
     rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
@@ -2078,6 +2121,7 @@ describe('Hermes conversation and roster read costs', () => {
     hermesChanged();
     await runtime.conversation('shared', {window: {turns: 20}});
     expect(opens()).toHaveLength(2);
+    snapshot.info = {running: true};
     await runtime.stop('shared');
     await runtime.conversation('shared', {window: {turns: 20}});
     expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(3);

@@ -175,7 +175,21 @@ describe("keyboard shortcuts", () => {
     expect(confirm.textContent).toContain("Stop Shared's work?");
     expect(document.activeElement?.textContent).toBe("Keep working");
     await act(async () => [...confirm.querySelectorAll("button")].find(button => button.textContent === "Stop work")!.click());
-    expect(write).toHaveBeenCalledWith("/bots/shared/stop", {});
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run" });
+  });
+
+  it("stops the run Ctrl+. asked about, not one that began while the question was open", async () => {
+    conversation = { ...conversation, activity: { state: "working", runId: "run" } };
+    await render();
+    await key({ key: ".", ctrlKey: true });
+    conversation = { ...conversation, activity: { state: "working", runId: "next" } };
+    await act(async () => FakeEventSource.notifyAll());
+    await advance(1500);
+    // The screen behind the question has moved on to the new run.
+    expect(document.body.querySelector('[aria-label="Stop response"]')).not.toBeNull();
+    await act(async () => [...document.body.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')].find(button => button.textContent === "Stop work")!.click());
+    expect(write).toHaveBeenCalledWith("/bots/shared/stop", { runId: "run" });
+    expect(write).not.toHaveBeenCalledWith("/bots/shared/stop", { runId: "next" });
   });
 
   it("ignores Ctrl+. when nothing is running", async () => {

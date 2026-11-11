@@ -10,7 +10,7 @@ import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
 import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
 import { formatBytes } from '../shared/uploads.js';
-import { IncompleteCreationError, interruptionPendingMessage } from '../shared/errors.js';
+import { IncompleteCreationError, interruptionPendingMessage, nothingToStopMessage, runChangedMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
 
 const approvalSettingsUnsupported = "This Hermes integration can't list always-allowed commands. Update it to manage them here.";
@@ -885,8 +885,15 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         live.delete(id);
       } finally { edited(id); }
     },
-    async stop(botId) {
+    async stop(botId, runId) {
       const state = await open(botId);
+      // Hermes's session.interrupt takes no run. It reaches the whole session: it clears the queued prompts of every
+      // member, blocks notification turns and auto-continue until the next prompt, cancels a background review and
+      // denies every pending approval, even when nothing is running (tui_gateway/methods_session_interrupt.py and
+      // session_lifecycle.py at ed1afb0). So it is sent only for a run that is open now and, when the caller named
+      // one, is that run. The read and the interrupt are two calls, so a run that ends or starts between them is not caught.
+      if (!state.info?.running && !state.app_run_id) throw httpError(409, nothingToStopMessage, {code: 'nothing_to_stop'});
+      if (runId !== undefined && state.app_run_id !== runId) throw httpError(409, runChangedMessage, {code: 'run_changed'});
       try { await rpc('session.interrupt', {session_id: state.session_id, profile: botId}); }
       finally { touched(botId); }
     },

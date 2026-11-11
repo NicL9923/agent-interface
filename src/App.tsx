@@ -428,6 +428,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     return missing.length - added.length;
   });
   const ownConversation = conversation?.botId === botId ? conversation : null;
+  // The run this screen shows. The Stop button names it as of the click, and Cmd+. as of the question it asked.
+  const shownRun = ownConversation?.activity.runId;
+  const stopShownRun = useStableCallback(() => stop(shownRun));
+  const askedAboutRun = useRef<string | undefined>(undefined);
   const prompts = useOwnPrompts(ownConversation?.messages, userId);
   const decisions = (ownConversation?.attention?.length ?? 0) + (ownConversation?.approvals.filter(approval => approval.status === "pending").length ?? 0);
   const checkingConnection = session.checkingConnection;
@@ -462,7 +466,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
       if (!bot) return false;
       setOverlay(null); setPanel(null); selectBot(bot.id);
     },
-    stop: () => { if (!canStop) return false; setOverlay("stop"); },
+    stop: () => { if (!canStop) return false; askedAboutRun.current = shownRun; setOverlay("stop"); },
     help: () => { if (!boot) return false; setOverlay("shortcuts"); },
     undo: () => toast.undo(),
   });
@@ -559,7 +563,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
             send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
-            stopping={stopping} onStop={stop} dock={dock} />}
+            stopping={stopping} onStop={stopShownRun} dock={dock} />}
         </>}
       </main>
       {creatingGroup && <Loading><GroupCreate bootstrap={boot} canSend={catalog?.canSend ?? false} onClose={() => setCreatingGroup(false)} onCreated={groupCreated} /></Loading>}
@@ -609,7 +613,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         onFind={selected && view === "conversation" ? () => findInChat(selected.id) : undefined} onAsk={askMain} />}
       {choosingMain && <MainAssistantPicker boot={boot} onChoose={setMain} onMakePersonal={bot => setPanel({ kind: "settings", bot })} onClose={() => setChoosingMain(false)} />}
       {overlay === "shortcuts" && <ShortcutsDialog onClose={closeOverlay} />}
-      {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={stop} onClose={closeOverlay} />}
+      {overlay === "stop" && liveBot && <StopConfirm name={liveBot.name} onStop={() => stop(askedAboutRun.current)} onClose={closeOverlay} />}
       <Toast toast={toast.toast} onDismiss={toast.dismiss} onUndo={toast.undo} />
     </div>
   );
