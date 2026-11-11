@@ -184,7 +184,10 @@ import XCTest
     XCTAssertTrue(composer.wait(until: "value == %@", "Ask @kitchen "), "\(composer.value ?? "")")
     composer.typeWhenFocused("to check the pantry")
     app.buttons["Send to group"].tapWhenReady()
-    XCTAssertTrue(app.staticTexts["Local test member"].waitForExistence(timeout: 10), "Your message names you")
+    // The group names your own message "You" and another member's by name, as the web's thread does.
+    XCTAssertTrue(app.staticTexts["You"].waitForExistence(timeout: 10), "Your message says it is yours: \(app.debugDescription)")
+    XCTAssertTrue(app.staticTexts["Ask @kitchen to check the pantry"].exists)
+    XCTAssertFalse(app.staticTexts["Local test member"].exists, "Your own name is not shown on your own message")
     // The reply arrives by the stream's notice, well before the 30-second fallback poll.
     XCTAssertTrue(app.staticTexts["Fixture live reply: the smoker is free Sunday."].waitForExistence(timeout: 15), app.debugDescription)
     try capture("06-group-live")

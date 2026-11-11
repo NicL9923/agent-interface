@@ -1406,13 +1406,20 @@ struct TranscriptMetrics: Equatable {
 
 /// Which reply to read out after a refresh, ported from the web's src/app/reply-announcement.ts.
 /// Only a message after the last one seen counts, so history, the first load and a switch stay
-/// quiet, and a reply waits until the assistant stops working, so it is read once.
+/// quiet, and a reply waits until the assistant stops working, so it is read once rather than as
+/// it grows. A turn can save its reply as several rows, such as text, a tool call and more text, and
+/// the reply is all of them, joined, including the rows of an earlier read that were still waiting.
+/// An unsaved reply that was already read is not read again when saved rows replace it, however many
+/// rows they are.
 struct ReplyWatch: Equatable {
   struct Heard: Equatable { var text: String; var turn: String? }
   /// The newest saved message already accounted for. Pages of older history never move it.
   var lastId: String?
-  /// A reply that arrived while the assistant was still working.
+  /// A reply that arrived while the assistant was still working: its last row, which may be the unsaved
+  /// tail, the words of the saved rows before it, and the turn it belongs to.
   var waiting: Message?
+  var waitingBefore: [String] = []
+  var waitingTurn: String?
   /// An unsaved reply already read, or already there on load, until its saved rows arrive.
   var heard: Heard?
   // Hermes shows the unsaved tail of a reply as a message replaced by saved rows with new IDs.
@@ -1420,32 +1427,64 @@ struct ReplyWatch: Equatable {
   private static func speakable(_ message: Message) -> Bool {
     message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity && !message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
+  /// Streamed and saved copies of the same words separate them differently, so compare without whitespace.
+  private static func bare(_ text: String) -> String { text.filter { !$0.isWhitespace } }
+  /// What is left of a reply's parts after the last run of them that spells the words already read aloud.
+  /// The run can be the whole reply, its tail or its head. With no such run, nothing was read and all of it is left.
+  private static func after(heard: String, in parts: [String]) -> [String] {
+    let words = bare(heard)
+    for end in stride(from: parts.count, to: 0, by: -1) {
+      for start in 0..<end where bare(parts[start..<end].joined()) == words { return Array(parts[end...]) }
+    }
+    return parts
+  }
   static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
     let messages = conversation.messages
     // A turn is named by the prompt that opened it, so the same words in a later turn are new.
-    func turn(at index: Int) -> String? { messages[...index].last { $0.role == "user" }?.id }
+    func turn(at index: Int) -> String? { index < 0 ? nil : messages[...index].last { $0.role == "user" }?.id }
     let unsaved = messages.last.flatMap { !saved($0) && speakable($0) ? $0 : nil }
     let unsavedHeard = unsaved.map { Heard(text: $0.text, turn: turn(at: messages.count - 1)) }
     let lastId = messages.last(where: saved)?.id
-    let known = watch.lastId.flatMap { id in messages.firstIndex { $0.id == id } }
+    let knownIndex = watch.lastId.flatMap { id in messages.firstIndex { $0.id == id } }
     // A conversation that no longer holds the last message seen was replaced, not extended.
-    if baseline || watch.lastId != nil && known == nil { return (ReplyWatch(lastId: lastId, heard: unsavedHeard), nil) }
-    let start = (known ?? -1) + 1
-    let arrivedAt = start < messages.count ? messages[start...].lastIndex { saved($0) && speakable($0) } : nil
+    if baseline || watch.lastId != nil && knownIndex == nil { return (ReplyWatch(lastId: lastId, heard: unsavedHeard), nil) }
+    let known = knownIndex ?? -1
+    let arrivedAt = messages.indices.last { $0 > known && saved(messages[$0]) && speakable(messages[$0]) }
     let arrived = arrivedAt.map { messages[$0] }
     let heard = watch.heard
-    func trimmed(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-    // The saved rows of a reply that was already read replace it silently.
-    if unsaved == nil, let arrived, let arrivedAt, let heard, trimmed(arrived.text) == trimmed(heard.text), turn(at: arrivedAt) == heard.turn {
-      return (ReplyWatch(lastId: lastId), nil)
+    // The reply is every speakable saved row of the newest turn that arrived since the last read, and the
+    // rows of that turn an earlier read held back while the assistant was still working, saved or not. A
+    // saved row can grow in place while that lasts, so a held one is read again from the conversation. The
+    // newest turn is the one the unsaved tail belongs to, or else the one of the newest saved row.
+    let newest = unsaved != nil ? messages.count - 1 : arrivedAt ?? -1
+    let turnStart = messages.indices.last { $0 <= newest && messages[$0].role == "user" } ?? -1
+    let heldRow = watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting }
+    var held: [String] = []
+    if watch.waiting != nil, watch.waitingTurn == turn(at: newest) {
+      held = watch.waitingBefore + (heldRow.map { saved($0) ? [$0.text] : [] } ?? [])
     }
-    let unread = unsaved != nil && (unsaved?.text != heard?.text || unsavedHeard?.turn != heard?.turn) ? unsaved : nil
-    let latest = unsaved != nil ? unread : arrived
-    let reply = latest ?? (unsaved != nil ? nil : watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting })
-    if let reply, ![.thinking, .working].contains(conversation.activity.state) {
-      return (ReplyWatch(lastId: lastId, heard: reply.id == unsaved?.id ? unsavedHeard : heard), reply)
+    var parts: [String] = []
+    if arrived != nil || unsaved != nil {
+      let from = max(known, turnStart) + 1
+      parts = held + (from <= newest ? messages[from...newest].filter { saved($0) && speakable($0) }.map(\.text) : [])
     }
-    return (ReplyWatch(lastId: lastId, waiting: reply, heard: heard), nil)
+    // The saved rows of a reply that was already read replace it silently, and only rows after what was read are new.
+    if unsaved == nil, let arrivedAt, let heard, turn(at: arrivedAt) == heard.turn {
+      parts = after(heard: heard.text, in: parts)
+      if parts.isEmpty { return (ReplyWatch(lastId: lastId), nil) }
+    }
+    let unread = unsaved.flatMap { $0.text != heard?.text || unsavedHeard?.turn != heard?.turn ? $0 : nil }
+    // The row that ends the reply, the words of the rows before it, and the turn they belong to.
+    var last: Message?, before: [String] = [], lastTurn = watch.waitingTurn
+    if unsaved != nil { last = unread; before = parts; lastTurn = unsavedHeard?.turn }
+    else if let arrived, let arrivedAt { last = arrived; before = Array(parts.dropLast()); lastTurn = turn(at: arrivedAt) }
+    else { last = heldRow; before = watch.waitingBefore }
+    if var last, ![.thinking, .working].contains(conversation.activity.state) {
+      let next = ReplyWatch(lastId: lastId, heard: last.id == unsaved?.id ? unsavedHeard : heard)
+      if !before.isEmpty { last.text = (before + [last.text]).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.joined(separator: "\n\n") }
+      return (next, last)
+    }
+    return (ReplyWatch(lastId: lastId, waiting: last, waitingBefore: before, waitingTurn: last == nil ? nil : lastTurn, heard: heard), nil)
   }
   /// Markdown read aloud as written would spell out its symbols, so keep only the words.
   static func snippet(_ text: String) -> String {
