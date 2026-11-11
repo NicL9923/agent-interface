@@ -1661,7 +1661,7 @@ describe('service worker app badge for the page', () => {
     expect(sw.setAppBadge).toHaveBeenCalledOnce();
   });
 
-  it('ignores a browser without the badge API, keeping no record of a badge, and answers', async () => {
+  it('answers a browser without the badge API that it cannot write one, so the page does, and keeps no record of a badge', async () => {
     const sw = worker({ badging: false });
     await sw.signedIn('one');
     const channel = new FakeMessageChannel(), answers: unknown[] = [];
@@ -1669,7 +1669,7 @@ describe('service worker app badge for the page', () => {
     await sw.pageBadge('one', 3, channel.port2);
     await sw.pageBadge('one', 0, channel.port2);
     await Promise.resolve();
-    expect(answers).toEqual([{ badge: true }, { badge: true }]);
+    expect(answers).toEqual([{ badge: false }, { badge: false }]);
     expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
   });
 

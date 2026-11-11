@@ -245,7 +245,9 @@ the badge too (a `BADGE` message naming the account its screens show), in the or
 account words, so the page and the worker never race: a count is set only for the latest account,
 and a clear never removes the latest account's count unless that account's own page asks. A page no
 worker controls, or whose worker does not answer within three seconds, as one from a release before
-this message, writes the badge itself. Its account steps run one at a time, so a late step for an
+this message, writes the badge itself, and so does a page whose worker answers that it has no badge
+API. Once a worker has answered on a page, that page waits on no later answer, and a write the page
+makes itself is dropped when its account generation has ended. Its account steps run one at a time, so a late step for an
 earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:

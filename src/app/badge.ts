@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Bot } from "../shared/types";
-import { tellWorkerInOrder } from "./account-epoch";
+import { accountGeneration, tellWorkerInOrder } from "./account-epoch";
 import { isUnread, type ReadThrough } from "./unread";
 
 const APP_NAME = "WildBots";
@@ -54,7 +54,9 @@ function drawDottedIcon(source: string) {
 /** How long a worker has to answer a badge write before the page makes it itself. */
 export const BADGE_ANSWER_MS = 3000;
 /** The newest write a worker has not answered yet. */
-let unanswered: { timer: ReturnType<typeof setTimeout>; channel: MessageChannel } | undefined;
+let unanswered: { timer: ReturnType<typeof setTimeout> | undefined; channel: MessageChannel } | undefined;
+/** Whether a worker has answered a badge write on this page: one that answers once answers always, so none is waited on again. */
+let workerAnswered = false;
 function writeBadgeHere(count: number) {
   const badging = navigator as BadgingNavigator;
   if (count > 0) void badging.setAppBadge?.(count).catch(() => {});
@@ -71,19 +73,27 @@ function stopWaiting(waiting: NonNullable<typeof unanswered>) {
  * account, so a worker that controls this page makes the page's write too: one writer, on the order of
  * the account words this page sent it, means an old account's clear can never land after the next
  * account's count. A page no worker controls writes it itself. So does a page whose worker does not
- * answer in time, as one from a release before this message existed never does; only the newest write
- * waits on its answer, since the next one replaces it.
+ * answer in time, as one from a release before this message existed never does, and one whose worker
+ * answers that it cannot write a badge. Only the newest write waits on its answer, since the next one
+ * replaces it, and none waits once a worker has answered on this page. A write the page makes on its
+ * own is dropped when the account generation it was asked in has ended: the next account's page says
+ * its own count, and a late write here would be outside the order the worker keeps.
  */
 function writeBadge(user: string | undefined, count: number) {
   if (unanswered) stopWaiting(unanswered);
   if (typeof MessageChannel === "undefined") return writeBadgeHere(count);
-  const channel = new MessageChannel();
+  const channel = new MessageChannel(), asked = accountGeneration();
   if (!tellWorkerInOrder({ type: "BADGE", user: user ?? null, count }, [channel.port2])) {
     channel.port1.close();
     return writeBadgeHere(count);
   }
-  const waiting = unanswered = { channel, timer: setTimeout(() => { stopWaiting(waiting); writeBadgeHere(count); }, BADGE_ANSWER_MS) };
-  channel.port1.onmessage = () => stopWaiting(waiting);
+  const writeHere = () => { if (accountGeneration() === asked) writeBadgeHere(count); };
+  const waiting = unanswered = { channel, timer: workerAnswered ? undefined : setTimeout(() => { stopWaiting(waiting); writeHere(); }, BADGE_ANSWER_MS) };
+  channel.port1.onmessage = event => {
+    stopWaiting(waiting);
+    if (event.data?.badge === false) writeHere();
+    else workerAnswered = true;
+  };
 }
 
 /** The plain title, no app badge and the plain icon, as a page that shows no account has. */

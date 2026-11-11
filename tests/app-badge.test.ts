@@ -12,7 +12,7 @@ type Posted = { message: { type: string; user?: unknown; count?: number }; ports
 
 class FakeChannel {
   static all: FakeChannel[] = [];
-  readonly port1 = { onmessage: null as (() => void) | null, closed: false, close: () => { this.port1.closed = true; } };
+  readonly port1 = { onmessage: null as ((event: { data?: unknown }) => void) | null, closed: false, close: () => { this.port1.closed = true; } };
   readonly port2 = { channel: this as FakeChannel };
   constructor() { FakeChannel.all.push(this); }
 }
@@ -35,8 +35,20 @@ function browser({ controlled = true, active = true, slow = false }: { controlle
   return { registered: () => registered() };
 }
 const badgeMessages = () => posted.filter(({ message }) => message.type === "BADGE").map(({ message }) => [message.user, message.count]);
-/** The worker answers the badge write posted at `index` among the badge messages. */
-const answer = (index: number) => FakeChannel.all[index]!.port1.onmessage?.();
+/** The worker answers the badge write posted at `index` among the badge messages, as it does by default, or says it cannot write one. A closed port hears nothing, as in a browser. */
+const answer = (index: number, data: { badge: boolean } = { badge: true }) => {
+  const { port1 } = FakeChannel.all[index]!;
+  if (!port1.closed) port1.onmessage?.({ data });
+};
+/** Ends the account generation this page is in, as a refused session does. */
+async function endGeneration() {
+  const epoch = await import("../src/app/account-epoch");
+  localStorage.setItem(authEpochKey, JSON.stringify({ id: "earlier", at: Date.now() - 60_000, user: "one" }));
+  epoch.accountStart();
+  const before = epoch.accountGeneration();
+  epoch.accountRefused(true);
+  expect(epoch.accountGeneration()).toBeGreaterThan(before);
+}
 
 async function load() {
   vi.resetModules();
@@ -115,6 +127,53 @@ describe("with a worker that controls the page", () => {
     await page.show(0, "one");
     await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS);
     expect(badging.clearAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting on any later write once a worker has answered on this page", async () => {
+    const page = await load();
+    await page.show(2, "one");
+    answer(0);
+    // The next write is never answered, as when the worker is busy, and the page does not take over.
+    await page.show(3, "one");
+    await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS * 3);
+    expect(badging.setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it("drops the write it would make itself when the account generation it was asked in has ended", async () => {
+    const page = await load();
+    await page.show(3, "one");
+    await endGeneration();
+    await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS);
+    expect(badging.setAppBadge).not.toHaveBeenCalled();
+    expect(badging.clearAppBadge).not.toHaveBeenCalled();
+    // A write asked in the new generation still falls back.
+    await page.show(4, "two");
+    await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS);
+    expect(badging.setAppBadge.mock.calls).toEqual([[4]]);
+  });
+
+  it("writes the count itself at once when the worker answers that it cannot, and keeps waiting on the next one's answer", async () => {
+    const page = await load();
+    await page.show(3, "one");
+    answer(0, { badge: false });
+    expect(badging.setAppBadge.mock.calls).toEqual([[3]]);
+    expect(FakeChannel.all[0]!.port1.closed).toBe(true);
+    await page.show(0, "one");
+    answer(1, { badge: false });
+    expect(badging.clearAppBadge).toHaveBeenCalledOnce();
+    // A worker that cannot write a badge is not one that answers: the next write still has the timeout.
+    await page.show(5, "one");
+    await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS);
+    expect(badging.setAppBadge.mock.calls).toEqual([[3], [5]]);
+  });
+
+  it("does not write when a worker's answer that it cannot comes after the account generation ended", async () => {
+    const page = await load();
+    await page.show(3, "one");
+    await endGeneration();
+    answer(0, { badge: false });
+    await vi.advanceTimersByTimeAsync(page.BADGE_ANSWER_MS);
+    expect(badging.setAppBadge).not.toHaveBeenCalled();
   });
 
   it("waits only on the newest count, since the next one replaces the last", async () => {

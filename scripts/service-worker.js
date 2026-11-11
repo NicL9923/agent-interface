@@ -113,9 +113,11 @@ self.addEventListener('message', (event) => {
   if (event.data?.type === 'ACCOUNT') event.waitUntil(setAccount(event.data.user));
   // The page's app badge, ordered with its account words and the pushes (see setPageBadge). It answers on the
   // port the page sent once the step ended, so a page can tell this worker from one before this message existed.
+  // A worker with no badge API can never write it, so it says so at once and the page writes it itself.
   if (event.data?.type === 'BADGE') {
     const answer = event.ports?.[0];
-    event.waitUntil(setPageBadge(event.data.user, event.data.count).then(() => answer?.postMessage({ badge: true })));
+    if (!self.navigator?.setAppBadge && !self.navigator?.clearAppBadge) answer?.postMessage({ badge: false });
+    else event.waitUntil(setPageBadge(event.data.user, event.data.count).then(() => answer?.postMessage({ badge: true })));
   }
 });
 
@@ -279,7 +281,6 @@ function settlePush(named, count) {
 function setPageBadge(user, count) {
   const wanted = typeof user === 'string' && user ? user : null;
   if (!Number.isInteger(count) || count < 0 || !wanted && count) return Promise.resolve();
-  if (!self.navigator?.setAppBadge && !self.navigator?.clearAppBadge) return Promise.resolve();
   // Judged by the word that was latest when it arrived: a page that said this before a newer word is a
   // generation that word ended, and its write is not the latest account's, even for the same account.
   const at = generation;
