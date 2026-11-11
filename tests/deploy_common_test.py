@@ -4,6 +4,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
@@ -226,6 +227,24 @@ with open({str(self.events)!r}, "a") as events:
 for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): Path(path).write_text(text)
 """))
         self.answers = {}
+        # The retry pause is a clock; pin it so no test waits.
+        sleep = mock.patch.object(deploy_common.time, "sleep")
+        self.sleeps = sleep.start()
+        self.addCleanup(sleep.stop)
+        self.gateway()
+
+    def gateway(self, **changes):
+        """The gateway's published record. Each Discord turn changes its count at the turn's boundaries."""
+        record = {"pid": 4242, "gateway_state": "running", "active_agents": 0, "active_work": None, **changes}
+        (self.host.home / "gateway_state.json").write_text(json.dumps(record))
+
+    def in_turn(self, *answers):
+        """An RPC action answering with each of these in turn, then failing on any further call."""
+        remaining = list(answers)
+        def answer():
+            if not remaining: raise AssertionError("unexpected extra maintenance RPC")
+            return remaining.pop(0)()
+        return answer
 
     def rpc(self, action):
         """The add-on's maintenance RPC. Each test configures the actions it expects."""
@@ -284,11 +303,90 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
 
     def test_busy_work_at_acquire_releases_restores_the_status_and_never_stops_the_app(self):
         self.answers.update(acquire=self.busy, release=lambda: self.released([{"profile": "nic", "state": "queued"}]))
-        with self.assertRaisesRegex(deploy_common.Refused, '"profile": "nic"') as caught:
+        with self.assertRaisesRegex(deploy_common.Refused, '^Hermes has active work\\. Busy work at release: .*"profile": "nic".*Activate again') as caught:
             self.run_steps()
-        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+        # Three asks, two pauses between them, then the release that proves nothing changed.
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "acquire", "acquire", "release"])
+        self.assertEqual(self.sleeps.call_args_list, [mock.call(2), mock.call(2)])
         self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
         self.assertIsInstance(caught.exception.__cause__, deploy_common.Answered)
+
+    def test_busy_answer_from_the_apps_own_poll_is_asked_again_before_refusing(self):
+        # The app's 5 s poll can hold a reservation when acquire runs, so an idle app can answer busy once.
+        self.answers["acquire"] = self.in_turn(self.busy, self.busy, self.acquired)
+        self.run_steps()
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "acquire", "acquire", "stop"])
+        self.assertEqual(self.sleeps.call_args_list, [mock.call(2), mock.call(2)])
+        # Each ask met the blocked status and no lease, and a busy answer needed no release between them.
+        self.assertEqual([event[3] for event in self.recorded()], [False, False, False, True])
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "owned-maintenance-acquired"))
+
+    def test_the_gateways_active_agent_refuses_after_the_acquire_and_before_the_app_stops(self):
+        """A Discord turn runs in the gateway runner, so the add-on's own busy list never names it."""
+        def acquired_with(**record):
+            def acquire():
+                gate = self.acquired()
+                self.gateway(**record)  # the turn is counted by the time acquire returns
+                return gate
+            return acquire
+        cases = (
+            ("an active agent", {"active_agents": 1}),
+            ("named active work", {"active_work": [{"kind": "chat"}]}),
+            ("a count that is not a number", {"active_agents": "0"}),
+            ("a boolean count", {"active_agents": False}),
+            ("no count", {"active_agents": None}),
+        )
+        for name, record in cases:
+            with self.subTest(name):
+                self.status.write_bytes(self.PREVIOUS)
+                self.events.unlink(missing_ok=True)
+                self.answers.update(acquire=acquired_with(**record), release=self.released)
+                with self.assertRaisesRegex(deploy_common.Refused, "^The gateway has an active agent") as caught:
+                    self.run_steps()
+                self.assertEqual(str(caught.exception.__cause__), "gateway reports no active agents or work after maintenance was acquired")
+                self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+                # The release removed the lease the acquire took, and the household's status is back.
+                self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+        self.assertEqual(self.sleeps.call_count, 0)
+
+    def test_an_unreadable_gateway_record_after_the_acquire_is_a_refusal_not_a_stop(self):
+        self.answers.update(acquire=self.acquired, release=self.released)
+        (self.host.home / "gateway_state.json").write_text("{")
+        with self.assertRaises(deploy_common.Refused) as caught:
+            self.run_steps()
+        self.assertIsInstance(caught.exception.__cause__, ValueError)
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+        self.assertEqual((self.status.read_bytes(), self.d.lease.exists()), (self.PREVIOUS, False))
+
+    def test_a_gateway_refusal_that_cannot_prove_the_release_is_held_for_review(self):
+        self.gateway(active_agents=1)
+        self.answers.update(acquire=self.acquired, release=lambda: {"active": True, "operationId": "op-1", "busy": []})
+        with self.assertRaisesRegex(deploy_common.Fence, "^refused: maintenance released$"):
+            self.run_steps()
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+
+    def test_a_request_that_was_never_sent_is_a_refusal_through_the_release_path(self):
+        def unsent():
+            raise deploy_common.NotSent("Hermes was not asked for maintenance acquire")
+        self.answers.update(acquire=unsent, release=self.released)
+        with self.assertRaisesRegex(deploy_common.Refused, "^Hermes could not be reached: .*before the request was sent\\.") as caught:
+            self.run_steps()
+        self.assertIsInstance(caught.exception.__cause__, deploy_common.NotSent)
+        # Not retried: nothing was busy. The release still ran, the saved status is back and the app never stopped.
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+        self.assertEqual(self.sleeps.call_count, 0)
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+
+    def test_an_unsent_acquire_whose_release_is_unsent_too_is_held_for_review(self):
+        # Nothing was ever sent, but the tool cannot prove it: the worker keeps the same rule.
+        def unsent():
+            raise deploy_common.NotSent("Hermes was not asked for maintenance")
+        self.answers.update(acquire=unsent, release=unsent)
+        with self.assertRaises(deploy_common.NotSent) as caught:
+            self.run_steps()
+        self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
 
     def test_another_error_answer_is_held_for_review_without_a_release(self):
         # Same code as the busy refusal, but no busy work to wait out: a rerun cannot succeed.
@@ -300,6 +398,7 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
         self.assertNotIsInstance(caught.exception, deploy_common.Refused)
         self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
         self.assertEqual([event[0] for event in self.recorded()], ["acquire"])
+        self.assertEqual(self.sleeps.call_count, 0)
 
     def test_unanswered_acquire_keeps_the_blocked_status_since_its_lease_can_still_appear(self):
         """No answer means the add-on may still be preempting compactions before it writes the lease."""
@@ -411,7 +510,9 @@ class Socket:
     def __init__(self): self.steps = json.loads(Path({str(self.script)!r}).read_text())
     def __enter__(self): return self
     def __exit__(self, *_): return False
-    def send(self, message): record("send", json.loads(message))
+    def send(self, message):
+        record("send", json.loads(message))
+        if self.steps and self.steps[0] == "send-fails": raise ConnectionResetError("reset while sending")
     def recv(self, timeout):
         record("recv", timeout)
         if not self.steps: raise AssertionError("unscripted WebSocket receive")
@@ -470,6 +571,45 @@ def connect(url, *, open_timeout, close_timeout):
         self.assertNotIsInstance(caught.exception, deploy_common.Answered)
         self.assertIn("TimeoutError", (self.host.ops / "commands.log").read_text())
 
+    def test_a_failure_before_the_request_is_sent_is_reported_as_not_sent_and_reaches_no_add_on(self):
+        with socket.socket() as closed:
+            closed.bind(("127.0.0.1", 0))
+            closed_port = closed.getsockname()[1]
+        cases = (("the service key is refused", dict(self.request, key="wrong-key")),
+                 ("the dashboard is not listening", dict(self.request, origin=f"http://127.0.0.1:{closed_port}")))
+        for name, request in cases:
+            with self.subTest(name):
+                self.script.write_text("[]")
+                self.calls.unlink(missing_ok=True)
+                with self.assertRaisesRegex(deploy_common.NotSent, "^Hermes was not asked for maintenance acquire$") as caught:
+                    self.d.maintenance_rpc(self.argv, dict(request, method="acquire"))
+                self.assertNotIsInstance(caught.exception, deploy_common.Answered)
+                self.assertFalse(self.calls.exists(), "no WebSocket message was sent")
+
+    def test_a_connection_refused_by_the_socket_is_not_sent_either(self):
+        (self.host.source / "websockets/sync/client.py").write_text(
+            "def connect(url, *, open_timeout, close_timeout): raise ConnectionRefusedError('refused')\n")
+        with self.assertRaises(deploy_common.NotSent):
+            self.call("acquire")
+
+    def test_a_send_that_fails_may_have_reached_the_add_on_so_it_is_not_reported_as_not_sent(self):
+        # The request can be delivered before the send reports an error, and acquire's handler writes the lease last.
+        with self.assertRaises(RuntimeError) as caught:
+            self.call("acquire", "send-fails")
+        self.assertNotIsInstance(caught.exception, (deploy_common.NotSent, deploy_common.Answered))
+        self.assertIn("ConnectionResetError", (self.host.ops / "commands.log").read_text())
+
+    def test_a_failed_child_is_not_sent_only_when_its_last_line_is_exactly_the_unsent_marker(self):
+        for stdout in ('{"unsent": false}', '{"unsent": true, "answeredError": {}}', '{"unsent": 1}', '"unsent"', 'unsent'):
+            with self.subTest(stdout=stdout):
+                child = executable(self.host.root / "child", f"import sys; print({stdout!r}); sys.exit(1)")
+                with self.assertRaises(RuntimeError) as caught:
+                    self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire"))
+                self.assertNotIsInstance(caught.exception, deploy_common.NotSent)
+        child = executable(self.host.root / "child", "import sys; print('noise'); print('{\"unsent\": true}'); sys.exit(1)")
+        with self.assertRaises(deploy_common.NotSent):
+            self.d.maintenance_rpc([str(child)], dict(self.request, method="release"))
+
     def test_a_failed_child_is_answered_only_when_its_last_line_is_the_answered_error(self):
         for stdout in ('{"active": false}', '{"answeredError": "409"}', 'answeredError'):
             with self.subTest(stdout=stdout):
@@ -513,7 +653,7 @@ class FenceTests(unittest.TestCase):
                 tree = ast.parse(path.read_text())
                 self.assertEqual([node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assert)], [])
                 names = [node.args[1] for node in ast.walk(tree)
-                         if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "fence"]
+                         if isinstance(node, ast.Call) and getattr(node.func, "id", None) in ("fence", "idle")]
                 self.assertTrue(all(isinstance(name, ast.Constant) and isinstance(name.value, str) for name in names))
                 values = [name.value for name in names]
                 self.assertEqual(sorted(value for value in set(values) if values.count(value) > 1), [])
@@ -536,17 +676,20 @@ class ToolWiringTests(unittest.TestCase):
     def test_idle_wait_recognizes_the_guarded_preflights_busy_fence(self):
         idle = load_source(".agents/tools/prepare-when-idle.py", "prepare_when_idle")
         source = (TOOLS / "deploy-guarded-app-release.py").read_text()
-        busy = [node.args[1].value for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
-                and getattr(node.func, "id", None) == "fence" and ast.unparse(node.args[0]) == "gate['active'] is False and gate['busy'] == []"]
+        calls = [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)]
+        named = lambda name: [node for node in calls if getattr(node.func, "id", None) == name]
+        # The preflight's busy guards are idle() calls, which exit 75 on activation and raise a Fence under --check.
+        busy = [node.args[1].value for node in named("idle") if ast.unparse(node.args[0]) == "gate['active'] is False and gate['busy'] == []"]
         self.assertEqual(len(busy), 1)
         # Only the fence's own line, as a traceback without source would print it.
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + busy[0]))
-        gateway = sorted((node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
-            and getattr(node.func, "id", None) == "fence" and "record['active_agents'] == 0" in ast.unparse(node.args[0])),
-            key=lambda node: node.lineno)
-        self.assertEqual(len(gateway), 2)
+        gateway = [node for node in named("idle") if "record['active_agents'] == 0" in ast.unparse(node.args[0])]
+        self.assertEqual(len(gateway), 1)
         self.assertTrue(idle.BUSY.search("deploy_common.Fence: " + gateway[0].args[1].value))
-        self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + gateway[1].args[1].value))
+        # The same count after the drain is a fence of the cutover, which prepare-when-idle never sees.
+        drained = [node for node in named("fence") if "record['active_agents'] == 0" in ast.unparse(node.args[0])]
+        self.assertEqual(len(drained), 1)
+        self.assertFalse(idle.BUSY.search("deploy_common.Fence: " + drained[0].args[1].value))
         self.assertFalse(idle.BUSY.search("deploy_common.Fence: release serves the configured web build"))
 
     def test_guarded_check_exits_before_any_step_that_changes_the_host(self):
