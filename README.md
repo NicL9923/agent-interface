@@ -209,7 +209,8 @@ its way, and starts again from the account check. Meanwhile it shows the connect
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
 address belongs to the account the record named when its screen started, even one still
 connecting, or to the account the saved home or its check drew since. A check that names another
-account than the saved home drew starts the app again. It is reset to `/`, fragment included,
+account than the saved home drew, or than the record named when the screen started, starts the app
+again, as when the record lags the cookie. It is reset to `/`, fragment included,
 before a sign-out or another account draws; an address opened while signed out, or while another
 tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that
 the server refuses puts the record back, so other tabs read the

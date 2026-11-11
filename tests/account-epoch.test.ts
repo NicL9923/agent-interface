@@ -79,6 +79,50 @@ describe("a page that shows member one", () => {
   });
 });
 
+// The record can lag the cookie, as when storage refused the write of a sign-in, so a bootstrap may name
+// another account than the record did. Each row is a page that opened under `record`; the address it
+// opened with belongs to the account the record named, if it named one.
+describe("a bootstrap that names an account, for a page that opened under a record", () => {
+  it.each([
+    { name: "the account the record named", record: settled({ user: "one" }), named: "one" },
+    { name: "an account when the record named none", record: settled({}), named: "two" },
+    { name: "an account after a sign-out, as when the sign-in's record was never written", record: settled({ signedOut: true, user: "one" }), named: "two" },
+    { name: "an account when there is no record", record: null, named: "two" },
+  ])("uses the answer for $name, and the address stays that account's", async ({ record, named }) => {
+    const epoch = await openWith(record);
+    epoch.accountStart();
+    expect(epoch.accountNamed(named, undefined)).toBe(true);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ user: named });
+    // The same account put back by another tab keeps the address; only another account takes it.
+    expect(another(epoch, settled({ user: named }, "put back"))).toEqual({ start: "bootstrap", leftAccount: false });
+    expect(another(epoch, settled({ user: "other" }, "another"))).toEqual({ start: "bootstrap", leftAccount: true });
+  });
+
+  it("ends the generation for another account than the record named, and resets the address before that account draws", async () => {
+    const epoch = await openWith(settled({ user: "one" }));
+    epoch.accountStart();
+    expect(epoch.accountNamed("two", undefined)).toBe(false);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ user: "two" });
+    // What App asks next, once the generation ended: the address goes, as at any change of account.
+    expect(epoch.accountStart()).toEqual({ start: "bootstrap", leftAccount: true });
+    // The new generation asks again, finds the record naming member two, and keeps what it draws.
+    expect(epoch.accountNamed("two", undefined)).toBe(true);
+    expect(another(epoch, settled({ user: "two" }, "put back"))).toEqual({ start: "bootstrap", leftAccount: false });
+  });
+
+  it("does the same when storage refuses the write, from the record this tab keeps in memory", async () => {
+    const epoch = await openWith(settled({ user: "one" }));
+    epoch.accountStart();
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new DOMException("The quota has been exceeded.", "QuotaExceededError"); });
+    try {
+      expect(epoch.accountNamed("two", undefined)).toBe(false);
+      expect(epoch.accountStart()).toEqual({ start: "bootstrap", leftAccount: true });
+      // The second answer meets a record that names member two, here only in memory, so it is not another account.
+      expect(epoch.accountNamed("two", undefined)).toBe(true);
+    } finally { write.mockRestore(); }
+  });
+});
+
 describe("the mark a sign-in or sign-out writes", () => {
   it.each([
     { name: "nothing stored", before: null, fromSignedOut: true, user: undefined },

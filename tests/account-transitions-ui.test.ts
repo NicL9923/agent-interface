@@ -770,6 +770,44 @@ describe("the address after a change", () => {
     expect(location.hash).toBe("#latest");
   });
 
+  // The record can lag the cookie, as when storage refused the write of a sign-in. The page then opens
+  // under member one's record with member two's cookie, and its address is member one's.
+  it("drops member one's address when bootstrap names member two for a record that still names member one", async () => {
+    signedInAs("one");
+    cookie = "two";
+    // Home is shared, so member two could open it too; the fragment names member one's message.
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Barn door sticks");
+    expect(tab.text()).not.toContain("Two's home chat");
+    expect(tab.text()).not.toContain("no longer available");
+    showsNothingOf(tab);
+    expect(new URLSearchParams(location.search).get("bot")).toBe("barn");
+    expect(location.hash).toBe("");
+    expect(JSON.parse(data.get(authEpochKey)!)).toMatchObject({ user: "two" });
+  });
+
+  it("drops it too when storage refuses the write of the record, and asks the server twice, not forever", async () => {
+    signedInAs("one");
+    cookie = "two";
+    refusing = { write: true };
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("Barn door sticks");
+    showsNothingOf(tab);
+    expect(new URLSearchParams(location.search).get("bot")).toBe("barn");
+    expect(location.hash).toBe("");
+    await advance(5_000);
+    expect(calls.filter(call => call.call.startsWith("GET /bootstrap"))).toHaveLength(2);
+  });
+
+  it("keeps member one's address when bootstrap names member one for a record that names member one", async () => {
+    signedInAs("one");
+    const tab = await openTab("/?bot=home#home-1");
+    expect(tab.text()).toContain("One's home chat");
+    expect(new URLSearchParams(location.search).get("bot")).toBe("home");
+    expect(location.hash).toBe("#home-1");
+    expect(calls.filter(call => call.call.startsWith("GET /bootstrap"))).toHaveLength(1);
+  });
+
   it("keeps an address the person opened while signed out, which named no account's chat yet", async () => {
     const tab = await openTab("/?bot=home");
     await signInAs(tab, "two");
