@@ -103,7 +103,7 @@ class NativeUpdateClaim:
 import json, sys
 from pathlib import Path
 request = json.load(sys.stdin)
-with open({str(self.calls)!r}, "a") as calls: calls.write(json.dumps({{"method": request["method"], "wait": request["wait"]}}) + "\\n")
+with open({str(self.calls)!r}, "a") as calls: calls.write(json.dumps({{"method": request["method"], "wait": request["wait"], "deadline": request.get("deadline")}}) + "\\n")
 plan = json.loads(Path({str(self.plan_path)!r}).read_text())
 queue = plan.get(request["method"], [])
 if not queue: sys.exit("unscripted maintenance RPC: " + request["method"])
@@ -113,6 +113,7 @@ for path, text in step.get("writes", {{}}).items(): Path(path).write_text(text)
 for path in step.get("removes", []): Path(path).unlink(missing_ok=True)
 if "answeredError" in step: print(json.dumps({{"answeredError": step["answeredError"]}})); sys.exit(1)
 if step.get("unsent"): print(json.dumps({{"unsent": True}})); sys.exit(1)
+if step.get("deadlinePassed"): print(json.dumps({{"deadlinePassed": True}})); sys.exit(1)
 if step.get("fail"): sys.exit(1)
 print(json.dumps(step["result"]))
 """)
@@ -171,6 +172,8 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
     def script(self, **steps):
         """What the add-on answers to each maintenance action, in order. Status is idle unless scripted."""
         steps.setdefault("status", [{"result": IDLE_GATE}])
+        # An add-on older than the maintenance_deadline capability, which every test not about it meets.
+        steps.setdefault("capabilities", [{"result": {"revision": "r"}}])
         self.plan_path.write_text(json.dumps(steps))
 
     def acquired(self, **writes):
@@ -192,8 +195,15 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
                 return done.code, out.getvalue()
         raise AssertionError("the tool returned without exiting")
 
-    def rpc_calls(self):
-        return [json.loads(line)["method"] for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+    def rpc_calls(self, capabilities=False):
+        """The maintenance methods the tool called, in order. The capability read is left out unless asked for."""
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return [call["method"] for call in calls if capabilities or call["method"] != "capabilities"]
+
+    def acquire_requests(self):
+        """The (wait, deadline) each acquire was sent with."""
+        calls = [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
+        return [(call["wait"], call["deadline"]) for call in calls if call["method"] == "acquire"]
 
     def stopped(self):
         return [call for call in map(json.loads, self.systemctl_calls.read_text().splitlines()) if call[1] == "stop"] if self.systemctl_calls.exists() else []
@@ -340,11 +350,57 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         self.assertEqual(((self.state / "status.json").read_text().count("blocked"), self.stopped(), self.phase()), (1, [], "maintenance-held-needs-review"))
 
     def test_an_acquire_with_no_answer_is_still_held_for_review(self):
+        # An add-on without the capability is sent no deadline, so a lost answer proves nothing.
         self.script(acquire=[{"fail": True}], release=[self.released()])
         code, out = self.run_tool()
         self.assertEqual(code, 2)
         self.assertIn("Stopped at fence: Hermes answered maintenance acquire.", out)
         self.assertEqual((self.stopped(), self.phase()), ([], "maintenance-held-needs-review"))
+        self.assertEqual(self.acquire_requests(), [(120, None)])
+
+    CAPABLE = [{"result": {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-1"}}]
+
+    def test_a_capable_add_on_is_asked_first_and_sent_a_deadline_shorter_than_the_wait(self):
+        self.script(capabilities=self.CAPABLE, acquire=[self.acquired()])
+        # The backup fails by design: the run reaches the app stop and ends held for review.
+        code, _ = self.run_tool()
+        self.assertEqual(code, 2)
+        self.assertEqual(self.rpc_calls(capabilities=True)[:3], ["status", "capabilities", "acquire"])
+        self.assertEqual(self.acquire_requests(), [(120, 90)])
+        self.assertEqual(self.stopped(), [["--user", "stop", "agent-interface.service"]])
+
+    def test_no_answer_after_the_deadline_is_a_refusal_with_nothing_stopped(self):
+        # The capabilities are read again after the deadline passed, for the process epoch.
+        self.script(capabilities=self.CAPABLE * 2, acquire=[{"deadlinePassed": True}], release=[self.released()])
+        self.assert_refused(self.run_tool(), r"Hermes did not answer the maintenance request within its deadline, so none was granted\. Busy work at release: \[\]")
+        # Not asked again: the add-on answered nothing for the whole wait.
+        self.assertEqual(self.rpc_calls(), ["status", "acquire", "release"])
+        self.assertEqual(self.acquire_requests(), [(120, 90)])
+        # The tool watched for a late lease for the deadline it sent and the grace after it, with the blocked status kept.
+        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), deploy_common.DEADLINE_WATCH_SECONDS)
+
+    def test_an_add_on_restarted_since_the_capability_read_is_held_for_review_not_refused(self):
+        restarted = [{"result": {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-2"}}]
+        self.script(capabilities=self.CAPABLE + restarted, acquire=[{"deadlinePassed": True}], release=[self.released()])
+        code, out = self.run_tool()
+        self.assertEqual(code, 2)
+        self.assertIn("Stopped at fence: Hermes answered maintenance acquire.", out)
+        self.assertEqual((self.stopped(), self.phase(), self.sleeps.call_count), ([], "maintenance-held-needs-review", 0))
+
+    def test_a_capable_add_ons_plain_failure_is_still_held_for_review(self):
+        # Only the marker NATIVE prints after the wait proves no lease can appear.
+        self.script(capabilities=self.CAPABLE, acquire=[{"fail": True}], release=[self.released()])
+        code, out = self.run_tool()
+        self.assertEqual(code, 2)
+        self.assertIn("Stopped at fence: Hermes answered maintenance acquire.", out)
+        self.assertEqual((self.stopped(), self.phase()), ([], "maintenance-held-needs-review"))
+
+    def test_a_capability_read_that_fails_leaves_the_acquire_without_a_deadline(self):
+        self.script(capabilities=[{"fail": True}], acquire=[{"fail": True}], release=[self.released()])
+        code, _ = self.run_tool()
+        self.assertEqual(code, 2)
+        self.assertEqual(self.acquire_requests(), [(120, None)])
+        self.assertEqual(self.phase(), "maintenance-held-needs-review")
 
 
 if __name__ == "__main__":

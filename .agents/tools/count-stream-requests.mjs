@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Counts the app's /api requests in real Chromium against e2e/server.ts, for a cold load of a chat,
-// a tab woken after a minute in the background, and an idle stretch on a chat and on home.
+// a tab woken after a minute in the background, an idle stretch on a chat and on home, and a turn that streams through
+// a tool (the Trail Cook's scripted reply, whose tool finishes in the middle of it).
 // Run `npm run build` first; port 4173 must be free. Prints JSON: per scenario, requests by path.
-//   node .agents/tools/count-stream-requests.mjs [--idle-ms 600000] [--only cold,wake,idle]
+//   node .agents/tools/count-stream-requests.mjs [--idle-ms 600000] [--only cold,wake,idle,turn]
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
@@ -11,7 +12,7 @@ const args = process.argv.slice(2);
 const flag = (name, fallback) => { const at = args.indexOf(name); return at < 0 ? fallback : args[at + 1]; };
 const IDLE_MS = Number(flag("--idle-ms", 600_000));
 const HIDDEN_MS = Number(flag("--hidden-ms", 70_000));
-const ONLY = new Set(flag("--only", "cold,wake,idle").split(","));
+const ONLY = new Set(flag("--only", "cold,wake,idle,turn").split(","));
 const base = "http://127.0.0.1:4173";
 
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true });
@@ -71,6 +72,20 @@ if (ONLY.has("cold") || ONLY.has("wake")) {
     await sleep(settle);
     results.wake = tab.count();
   }
+  await tab.context.close();
+}
+if (ONLY.has("turn")) {
+  // The conversation reads one turn costs: the chat opens first, so those that follow are the turn's own.
+  const tab = await signedInPage();
+  await tab.page.goto("/?bot=trail");
+  await tab.page.getByRole("region", { name: "Conversation" }).waitFor();
+  await sleep(settle);
+  tab.reset();
+  await tab.page.getByRole("textbox", { name: "Message Trail Cook" }).fill("Is the gate latched?");
+  await tab.page.getByRole("button", { name: "Send message" }).click();
+  await tab.page.getByText("Post two is loose, so I tightened the wire and checked the gate.").first().waitFor({ timeout: 20_000 });
+  await sleep(settle);
+  results.turn = tab.count();
   await tab.context.close();
 }
 if (ONLY.has("idle")) {

@@ -24,7 +24,6 @@ kbd {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 18px;
-  box-shadow: 0 24px 90px #0006;
   overflow: hidden;
 }
 .command-palette[open] { display: flex; flex-direction: column; }
