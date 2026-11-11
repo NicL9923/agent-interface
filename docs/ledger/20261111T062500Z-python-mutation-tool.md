@@ -139,6 +139,21 @@ ruff       pass    -       0.0s   -
 py         pass    1m08s   5m03s  47 files
 ```
 
+After the review fixes and the merge of `origin/main` (`7d794ef`), `.agents/tools/check-all --py always` on the tree at `2bdf986`:
+
+```
+check      result  queued  run    counts
+typecheck  pass    -       1.0s   -
+lint       pass    -       0.2s   -
+ruff       pass    -       0.0s   -
+test       pass    -       18.5s  208 files, 3771 tests
+build      pass    -       1.9s   894 modules
+e2e        pass    -       2m00s  55 tests
+py         pass    -       5m20s  47 files
+
+All 7 checks passed (7m43s total, 0.0s of it queued for heavy slots)
+```
+
 ## Not exercised
 
 Windows and macOS: the tool uses process groups, `os.killpg`, `SIGHUP` and `/proc`-free liveness through `os.kill`, which exist on both Unix
