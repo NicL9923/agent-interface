@@ -153,8 +153,8 @@ it shows the plain title and no app badge, and the back-forward cache covers it 
 rest. Bootstrap's answer redraws the same rows in place, so scroll and
 focus stay, and the saved group chats stay until the group list answers, except a group chat with
 an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
-fails. The copy belongs to one account: it is drawn only while the sign-in record names that
-account, read once per account generation (see Accounts in one browser below), so every change
+fails. The copy belongs to one account: it is drawn only while the sign-in hint names that
+account and the record does not name another (a sign-in whose two writes did not both land), read once per account generation (see Accounts in one browser below), so every change
 of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
 off the page, and it is removed with the sign-in record, so a second member never sees the
 first's home. Every field is checked as the server would accept it: assistant, section and group
@@ -209,7 +209,8 @@ its way, and starts again from the account check. Meanwhile it shows the connect
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
 address belongs to the account the record named when its screen started, even one still
 connecting, or to the account the saved home or its check drew since. A check that names another
-account than the saved home drew starts the app again. It is reset to `/`, fragment included,
+account than the saved home drew, or than the record named when the screen started, starts the app
+again, as when the record lags the cookie. It is reset to `/`, fragment included,
 before a sign-out or another account draws; an address opened while signed out, or while another
 tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that
 the server refuses puts the record back, so other tabs read the

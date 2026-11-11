@@ -1,6 +1,6 @@
 import type { GroupMember, GroupRoom } from "../shared/collaboration";
 import { avatarAccessories, avatarEyes, avatarShapes, defaultPreferences, mascotFamilies, type Avatar, type Bootstrap, type Bot, type Preferences } from "../shared/types";
-import { hintedUser } from "./account-epoch";
+import { hintedUser, recordedUser } from "./account-epoch";
 import { localRemove, localSave, savedRosterKey } from "./storage";
 
 /**
@@ -17,8 +17,8 @@ import { localRemove, localSave, savedRosterKey } from "./storage";
  *
  * It leaves out the latest messages and their times, unread marks, activity, the connection, the
  * person's email and every other preference. What the copy cannot know is never drawn from it.
- * It belongs to one account and is shown only while the sign-in hint names that account; it goes
- * with the hint (see accountKeys). A value of another version is not read.
+ * It belongs to one account and is shown only while the sign-in hint and the record both name that
+ * account (or the record names none); it goes with the hint (see accountKeys). A value of another version is not read.
  */
 export const SAVED_ROSTER_VERSION = 1;
 type SavedBot = Pick<Bot, "id" | "name" | "shared"> & { avatar?: Avatar };
@@ -91,10 +91,16 @@ function storedRoster() {
   try { return parseSavedRoster(JSON.parse(raw)); } catch { return null; }
 }
 
-/** The saved home of the account this browser's sign-in names, or nothing. */
+/**
+ * The saved home of the account this browser's sign-in names, or nothing. Nothing too when the record
+ * names another account than the hint, as when storage refused one of the two writes of a sign-in: the
+ * address was opened under the record's account, and drawing the hint's home would mark it as that one's.
+ */
 export function readSavedRoster(): SavedRoster | null {
   const user = hintedUser();
   if (!user) return null;
+  const recorded = recordedUser();
+  if (recorded !== undefined && recorded !== user) return null;
   const saved = storedRoster();
   return saved?.user === user ? saved : null;
 }
