@@ -10,8 +10,12 @@ the traps agents kept hitting by hand:
 - A node_modules that is missing, or older than package-lock.json: it refuses to run and prints the fix.
 - ruff: it needs the exact version in .github/requirements-ci.txt, from PATH or a cached venv, never another.
 
-Locks are flock(2) locks on small files in a per-user cache directory, so a holder that dies, even by SIGKILL,
-frees its lock the moment its process ends. Nothing here needs a package outside the standard library.
+Locks are flock(2) locks on small files in a per-user cache directory. Each check's process inherits the lock
+descriptors, so a lock lives as long as any process of that check does: check-all killed by SIGKILL leaves its
+suite running and its slot and ports still held, and they free when the suite ends. A stopped run (Ctrl-C,
+SIGTERM or --check-timeout) sends its check SIGINT first, as Ctrl-C would, so Playwright can shut down the web
+server it started in a process group of its own, and kills what is left after ten seconds. Nothing here needs a
+package outside the standard library.
 """
 from __future__ import annotations
 
@@ -36,6 +40,9 @@ CHECKS = ("typecheck", "lint", "ruff", "test", "build", "e2e", "py")
 HEAVY = frozenset({"test", "e2e", "py"})
 # e2e serves dist/client, which only a build produces.
 NEEDS = {"e2e": "build"}
+# Checks whose passing output always has counts. A pass without them means the tool's output changed, which the
+# table says, where for the others a clean run has nothing to count.
+COUNTED = frozenset({"test", "build", "e2e", "py"})
 PY_MODES = ("auto", "always", "never")
 # The app port and its control port (port + 1) come from pairs in this range. It sits above the ports the
 # measuring tools default to and below the ephemeral range (32768 and up on Linux, 49152 on macOS), so an
@@ -75,11 +82,15 @@ def cache_dir(env=None, home=None):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Locks. A held lock is an open file descriptor with flock(LOCK_EX); the kernel drops it when the process dies.
+# Locks. A held lock is an open file descriptor with flock(LOCK_EX). The lock belongs to the open file description,
+# so it lasts until every process holding a copy of the descriptor has closed it or died.
 
 
 class Held:
-    """A flock held on a file until `release()` or the end of the process."""
+    """A flock held on a file until `release()` or the end of the process.
+
+    Processes that inherited the descriptor keep the lock after `release()`, which closes the descriptor without
+    unlocking it, so a check that outlives its run still holds its slot."""
 
     def __init__(self, fd, path):
         self.fd, self.path = fd, path
@@ -94,7 +105,6 @@ class Held:
         try:
             os.ftruncate(self.fd, 0)
         finally:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
             os.close(self.fd)
             self.fd = None
 
@@ -106,7 +116,8 @@ class Held:
 
 
 def try_lock(path):
-    """The lock on `path`, or None when another process holds it. The descriptor is not inherited by children."""
+    """The lock on `path`, or None when another process holds it. The descriptor is not inherited by a child unless
+    the caller passes it on, as `run_process` does for the check it runs."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -136,7 +147,7 @@ def read_info(path):
 
 def describe_holder(info, now):
     if not info:
-        return "another run"
+        return "another run, or a process a run left behind"
     seconds = max(0, int(now - info.get("since", now)))
     return f"{info.get('check', '?')} in {info.get('worktree', '?')} (pid {info.get('pid', '?')}, {seconds}s)"
 
@@ -356,8 +367,16 @@ def find_ruff(root, cache, env=None, bootstrap_python=sys.executable, note=None)
 # Whether the Python suite is worth running.
 
 
+# Beyond .py files: the directories whose files the Python tests run or read. src/hermes and scripts/ hold the code
+# under test, .agents/tools holds the tools and shell scripts the tests run, src/shared holds the TypeScript and
+# JSON the voice, delegation and qualification tests read, and public/voice-previews is listed by the voice test.
+# tests/check_all_test.py scans the Python tests and fails when one reads a path outside this list.
+PYTHON_INPUT_DIRS = ("src/hermes/", "scripts/", ".agents/tools/", "src/shared/", "public/voice-previews/")
+PYTHON_INPUTS = "Python or a file the Python tests read"
+
+
 def python_touched(paths):
-    return any(path.endswith(".py") or path.startswith("src/hermes/") or path.startswith("scripts/") for path in paths)
+    return any(path.endswith(".py") or path.startswith(PYTHON_INPUT_DIRS) for path in paths)
 
 
 def changed_paths(root, base):
@@ -386,8 +405,8 @@ def decide_py(mode, paths, base, explicit=False):
     if paths is None:
         return True, f"cannot diff against {base}, so it runs"
     if python_touched(paths):
-        return True, f"the diff against {base} touches Python, src/hermes or scripts/"
-    return False, f"no Python, src/hermes or scripts/ changes against {base}"
+        return True, f"the diff against {base} touches {PYTHON_INPUTS}"
+    return False, f"no changes to {PYTHON_INPUTS} against {base}"
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -478,23 +497,67 @@ class Result:
         self.counts, self.note, self.detail, self.log = counts or {}, note, detail, log
 
 
-def kill_group(process):
+# How long a stopped check gets to shut itself down after SIGINT before its group is killed.
+STOP_GRACE = 10.0
+
+
+def signal_group(pgid, number):
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(pgid, number)
     except (ProcessLookupError, PermissionError):
         pass
 
 
-def run_process(argv, cwd, env, log_path, timeout, verbose):
-    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output)."""
+def group_alive(pgid):
+    """Whether any process is left in the group. A leader that has exited but was not reaped still counts."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def wait_for_group(process, seconds):
+    """Reap the group's leader and wait up to `seconds` for the rest of the group to be gone. True when it is."""
+    deadline = time.monotonic() + seconds
+    while True:
+        process.poll()
+        if not group_alive(process.pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def stop_group(process, grace=None):
+    """Stop the check's process group, returning once it is gone: SIGINT first, as Ctrl-C would send it, then SIGKILL
+    for whatever is left after `grace` seconds. SIGINT is how Playwright and vitest shut down cleanly, and it is the
+    only thing that reaches the web server Playwright starts in a process group of its own. An interrupt that arrives
+    during the wait skips the rest of it."""
+    signal_group(process.pid, signal.SIGINT)
+    try:
+        wait_for_group(process, STOP_GRACE if grace is None else grace)
+    finally:
+        if group_alive(process.pid):
+            signal_group(process.pid, signal.SIGKILL)
+            wait_for_group(process, 5)
+
+
+def run_process(argv, cwd, env, log_path, timeout, verbose, inherit=()):
+    """Run `argv` in its own process group, saving its output. Returns (returncode or None on timeout, output).
+
+    The descriptors in `inherit` (the lock files) go to the child and to everything it starts, so the locks last
+    as long as any of those processes does, even if this one is killed."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               text=True, errors="replace", start_new_session=True)
+                               text=True, errors="replace", start_new_session=True, pass_fds=tuple(inherit))
     expired = threading.Event()
 
     def expire():
         expired.set()
-        kill_group(process)
+        stop_group(process)
 
     timer = threading.Timer(timeout, expire)
     timer.start()
@@ -508,10 +571,11 @@ def run_process(argv, cwd, env, log_path, timeout, verbose):
                     sys.stderr.write(line)
         process.wait()
     except BaseException:
-        kill_group(process)
+        stop_group(process)
         raise
     finally:
         timer.cancel()
+        timer.join()  # a timeout's stop finishes before the caller releases its locks
         process.stdout.close()
     return (None if expired.is_set() else process.returncode), "".join(chunks)
 
@@ -535,7 +599,7 @@ def render_table(results):
     labels = {"pass": "pass", "fail": "FAIL", "timeout": "TIMEOUT", "locked": "NOT QUEUED", "skip": "skipped"}
     rows = [("check", "result", "queued", "run", "counts")]
     for result in results:
-        text = describe_counts(result.name, result.counts) or result.note or "-"
+        text = describe_counts(result.name, result.counts) or result.note or ("counts unknown" if result.status == "pass" and result.name in COUNTED else "-")
         rows.append((result.name, labels[result.status], format_queued(result.queued), format_seconds(result.seconds) if result.status != "skip" else "-", text))
     widths = [max(len(row[column]) for row in rows) for column in range(4)]
     return "\n".join("  ".join(cell.ljust(widths[column]) for column, cell in enumerate(row[:4])) + "  " + row[4] for row in rows)
@@ -558,7 +622,7 @@ def build_parser():
                                      epilog=f"Checks: {', '.join(CHECKS)}. Heavy (machine-wide slot): {', '.join(sorted(HEAVY))}.")
     parser.add_argument("--only", metavar="LIST", help="run only these checks, comma separated")
     parser.add_argument("--skip", metavar="LIST", help="leave out these checks, comma separated")
-    parser.add_argument("--py", choices=PY_MODES, default="auto", help="auto runs py when the diff against --base touches Python, src/hermes or scripts/")
+    parser.add_argument("--py", choices=PY_MODES, default="auto", help="auto runs py when the diff against --base touches Python or a file the Python tests read")
     parser.add_argument("--keep-going", "--continue", dest="keep_going", action="store_true", help="run the rest after a failure")
     parser.add_argument("--verbose", action="store_true", help="stream each check's output as it runs")
     parser.add_argument("--base", default="origin/main", help="ref the auto Python decision diffs against (default origin/main)")
@@ -659,7 +723,8 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             log(f"e2e: app port {port}, control port {port + 1}")
         started = time.monotonic()
         log_path = logs / f"{name}.log"
-        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose)
+        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose,
+                                   inherit=[lease.fd for lease in (port_lease, held) if lease])
         seconds = time.monotonic() - started
     except Refusal as error:
         return Result(name, "fail", queued, 0.0, note="refused", detail=str(error))

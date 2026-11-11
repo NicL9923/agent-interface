@@ -1,6 +1,7 @@
 """check-all: the ports, the machine-wide lock, the node_modules and ruff guards, the Python decision, the
 summary parsing and the whole command, run against real processes, real sockets, real git and fake executables
 on PATH. Nothing here touches the network or the real check battery."""
+import ast
 import contextlib
 import io
 import json
@@ -127,6 +128,21 @@ class HeavySlotTest(TempCase):
         Holder(self, "slot", self.tmp, 2, "test", "/w/a")
         with self.assertRaises(check_all.LockTimeout):
             check_all.acquire_slot(self.tmp, 1, self.info(), 0.2)
+
+    def test_a_process_holding_a_copy_of_the_descriptor_keeps_the_slot_after_release(self):
+        # run_process hands the descriptors to the suite. Releasing the run's own copy must not unlock them, or a
+        # suite that outlives its run would stop holding its slot.
+        held, _ = check_all.acquire_slot(self.tmp, 1, self.info(), 1)
+        inherited = os.dup(held.fd)
+        self.addCleanup(lambda: os.close(inherited) if inherited is not None else None)
+        held.release()
+        with self.assertRaises(check_all.LockTimeout) as raised:
+            check_all.acquire_slot(self.tmp, 1, self.info(), 0.2)
+        self.assertIn("a process a run left behind", str(raised.exception))
+        os.close(inherited)
+        inherited = None
+        again, _ = check_all.acquire_slot(self.tmp, 1, self.info(), 0.2)
+        again.release()
 
     def test_a_released_slot_leaves_no_stale_holder_for_the_next_waiter_to_read(self):
         held, _ = check_all.acquire_slot(self.tmp, 1, self.info(), 1)
@@ -419,6 +435,9 @@ class PythonDecisionTest(TempCase):
             ("a Python file", ["tests/x_test.py"], True), ("the Hermes add-on", ["src/hermes/journal.txt"], True),
             ("a script", ["scripts/build-worker.mjs"], True), ("a web-only change", ["src/App.tsx", "e2e/smoke.spec.ts", "package.json"], False),
             ("nothing", [], False), ("a name that only contains the directory", ["docs/scripts/readme.md", "src/hermesx/a.ts"], False),
+            ("a tool the tests run", [".agents/tools/validate-ios.sh"], True), ("a shared file the tests read", ["src/shared/voice.ts"], True),
+            ("the voice previews the voice test lists", ["public/voice-previews/nova.mp3"], True),
+            ("neighbors of those inputs that no test reads", ["src/server/app.ts", "src/sharedx/a.ts", "public/icons/a.svg", "tests/app.test.ts"], False),
         ]
         for name, paths, expected in cases:
             with self.subTest(name):
@@ -480,6 +499,69 @@ class PythonDecisionTest(TempCase):
     def test_a_base_ref_git_does_not_know_gives_none_not_an_empty_diff(self):
         self.repo()
         self.assertIsNone(check_all.changed_paths(self.tmp, "origin/nowhere"))
+
+
+def repository_reads(source):
+    """Repository paths a Python test source names relative to the repository root: the argument of `load_source`,
+    `ROOT / "a" / "b"` and `TOOLS / "x"` chains, and `ROOT.glob("pattern")`. Paths built under a temporary
+    directory (`root / ...`, `self.repo / ...`) are fixtures, not reads of this repository, and are left out."""
+    bases = {"ROOT": "", "TOOLS": ".agents/tools"}
+    tree = ast.parse(source)
+    inner = {id(node.left) for node in ast.walk(tree) if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)}
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+            function = node.func
+            if isinstance(function, ast.Name) and function.id == "load_source":
+                found.add(node.args[0].value)
+            elif isinstance(function, ast.Attribute) and function.attr == "glob" and isinstance(function.value, ast.Name) and function.value.id in bases:
+                found.add("/".join(part for part in (bases[function.value.id], node.args[0].value) if part))
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and id(node) not in inner:  # the whole chain only
+            parts, base = [], node
+            while isinstance(base, ast.BinOp) and isinstance(base.op, ast.Div):
+                parts.append(base.right.value if isinstance(base.right, ast.Constant) and isinstance(base.right.value, str) else None)
+                base = base.left
+            if isinstance(base, ast.Name) and base.id in bases and None not in parts:
+                found.add("/".join(part for part in [bases[base.id], *reversed(parts)] if part))
+    return found
+
+
+class PythonInputsTest(unittest.TestCase):
+    def test_the_scan_finds_reads_of_this_repository_and_skips_fixtures(self):
+        source = textwrap.dedent("""
+            from support import load_source
+            ROOT = Path(__file__).resolve().parents[1]
+            TOOLS = ROOT / ".agents/tools"
+            module = load_source("src/hermes/voice.py", "voice")
+            names = (ROOT / "src" / "shared" / "voice.ts").read_text(), (TOOLS / "validate-ios.sh").read_text()
+            previews = sorted(ROOT.glob("public/voice-previews/*"))
+            fixture = self.repo / "src/app.ts"
+            temp = root / "package.json"
+            computed = ROOT / name
+        """)
+        self.assertEqual(repository_reads(source), {"src/hermes/voice.py", "src/shared/voice.ts", ".agents/tools/validate-ios.sh", ".agents/tools",
+                                                    "public/voice-previews/*"})
+
+    def test_every_repository_path_a_python_test_reads_is_an_input_that_makes_auto_run_py(self):
+        # A test that reads src/shared/voice.ts must run when only that file changes. A new read outside the list
+        # fails here, naming the test: add its directory to PYTHON_INPUT_DIRS in check_all.py.
+        files = sorted({path for pattern in ("tests/*.py", "scripts/*test*.py", "scripts/spike/*test*.py") for path in ROOT.glob(pattern)})
+        reads = {}
+        for path in files:
+            for read in repository_reads(path.read_text()):
+                reads.setdefault(read, path.name)
+        # The scan still sees reads, so it cannot pass by finding none.
+        self.assertGreaterEqual(set(reads), {"src/shared/voice.ts", "public/voice-previews", ".agents/tools/validate-ios.sh", "src/hermes/voice.py"})
+        uncovered = []
+        for read, name in sorted(reads.items()):
+            if read == "tests":
+                continue  # put on sys.path to import support.py; the .py files in it already count
+            if "*" not in read and not (ROOT / read).exists():
+                continue  # a fragment joined to something other than the repository root
+            represent = read.replace("*", "x") if "*" in read else read + "/x" if (ROOT / read).is_dir() else read
+            if not check_all.python_touched([represent]):
+                uncovered.append(f"{read} (read by {name})")
+        self.assertEqual(uncovered, [])
 
 
 # The summary parts of each tool's real output, captured from this repository's own runs.
@@ -558,8 +640,20 @@ class CacheDirTest(unittest.TestCase):
             self.assertEqual(check_all.cache_dir({"XDG_CACHE_HOME": "/x/cache"}, home="/h"), Path("/x/cache/agent-interface/check-all"))
 
 
+# What Playwright's web server is to the browser suite: a process in a session of its own that listens on E2E_PORT
+# and writes its pid once it does.
+SERVER = """
+import os, socket, sys, time
+sock = socket.socket()
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(("127.0.0.1", int(sys.argv[1])))
+sock.listen()
+open(sys.argv[2], "w").write(str(os.getpid()))
+time.sleep(600)
+"""
+
 FAKE_NPM = """
-    import json, os, sys, time
+    import json, os, signal, subprocess, sys, time
     key = " ".join(sys.argv[1:])
     with open(os.environ["FAKE_LOG"], "a") as log:
         log.write(json.dumps({"call": key, "port": os.environ.get("E2E_PORT"), "no_color": os.environ.get("NO_COLOR"), "cwd": os.getcwd(), "at": time.time(), "pid": os.getpid()}) + "\\n")
@@ -567,8 +661,21 @@ FAKE_NPM = """
     if key not in plan:
         print("UNPLANNED npm call: " + key); sys.exit(97)
     step = plan[key]
+    if step.get("ignore_sigint"):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
     if step.get("pidfile"):
         open(step["pidfile"], "w").write(str(os.getpid()))
+    if step.get("server"):
+        # Like Playwright: start the web server detached, and on SIGINT shut it down (after a delay that makes an
+        # early release of the locks visible) before exiting. SIGKILL gives it no chance, and leaks the server.
+        server = subprocess.Popen([sys.executable, "-c", step["server_source"], os.environ["E2E_PORT"], step["server"]], start_new_session=True,
+                                  close_fds=not step.get("server_inherits_descriptors"))
+        def shut_down(signum, frame):
+            time.sleep(step.get("shutdown_delay", 0))
+            server.terminate()
+            server.wait()
+            sys.exit(130)
+        signal.signal(signal.SIGINT, shut_down)
     time.sleep(step.get("sleep", 0))
     sys.stdout.write(step.get("out", ""))
     with open(os.environ["FAKE_LOG"], "a") as log:
@@ -600,11 +707,12 @@ class CommandTest(TempCase):
         self.plan = self.tmp / "plan.json"
         self.set_plan(PASSING)
         script(self.bin / "npm", FAKE_NPM)
-        script(self.bin / "node", "import json; print(json.dumps({'ok': True, 'version': 'v24.0.0', 'range': '^24'}))\n")
+        self.fake_node(True, "v24.0.0")
         script(self.bin / "ruff", """
             import json, os, sys
             if sys.argv[1:] == ["--version"]: print("ruff 0.17.3"); sys.exit(0)
-            with open(os.environ["FAKE_LOG"], "a") as log: log.write(json.dumps({"call": "ruff " + " ".join(sys.argv[1:]), "port": None}) + "\\n")
+            if sys.argv[1:] != ["check", "."]: print("UNPLANNED ruff call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
+            with open(os.environ["FAKE_LOG"], "a") as log: log.write(json.dumps({"call": "ruff check .", "port": None}) + "\\n")
             print(os.environ.get("FAKE_RUFF_OUT", "All checks passed!")); sys.exit(int(os.environ.get("FAKE_RUFF_RC", "0")))
         """)
         self.git("init", "-q", "-b", "main")
@@ -612,6 +720,15 @@ class CommandTest(TempCase):
         self.git("add", "README.md")
         self.git("commit", "-q", "-m", "init")
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+
+    def fake_node(self, ok, version):
+        """The one call the tool makes: `node --input-type=module -e SCRIPT`. Any other arguments exit 97."""
+        script(self.bin / "node", f"""
+            import json, sys
+            if sys.argv[1:3] != ["--input-type=module", "-e"] or len(sys.argv) != 4:
+                print("UNPLANNED node call: " + " ".join(sys.argv[1:]), file=sys.stderr); sys.exit(97)
+            print(json.dumps({{'ok': {ok!r}, 'version': {version!r}, 'range': '^24'}}))
+        """)
 
     def git(self, *args):
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", *args], cwd=self.root, check=True, capture_output=True)
@@ -693,7 +810,7 @@ class CommandTest(TempCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.names(), ["test"])
         self.assertIn("skipped", self.row(out, "py"))
-        self.assertIn("no Python, src/hermes or scripts/ changes against origin/main", self.row(out, "py"))
+        self.assertIn("no changes to Python or a file the Python tests read against origin/main", self.row(out, "py"))
         self.assertIn("All 1 checks passed", out)
 
     def test_py_auto_runs_when_the_diff_touches_scripts(self):
@@ -701,7 +818,15 @@ class CommandTest(TempCase):
         (self.root / "scripts/tool.mjs").write_text("x")
         self.git("add", "scripts/tool.mjs")
         self.git("commit", "-q", "-m", "script")
-        self.run_main("--only", "py")
+        self.run_main("--skip", "typecheck,lint,ruff,test,build,e2e")  # py is not named, so only the diff can run it
+        self.assertEqual(self.names(), ["run test:py"])
+
+    def test_py_auto_runs_when_the_diff_touches_a_file_the_python_tests_read(self):
+        (self.root / "src/shared").mkdir(parents=True)
+        (self.root / "src/shared/voice.ts").write_text("x")
+        self.git("add", "src/shared/voice.ts")
+        self.git("commit", "-q", "-m", "voice")
+        self.run_main("--skip", "typecheck,lint,ruff,test,build,e2e")
         self.assertEqual(self.names(), ["run test:py"])
 
     def test_py_never_skips_even_when_named_and_always_runs_on_a_web_diff(self):
@@ -725,6 +850,19 @@ class CommandTest(TempCase):
         port = int(ports.pop("run test:e2e"))
         self.assertTrue(check_all.PORT_BASE <= port < check_all.PORT_BASE + 2 * check_all.PORT_PAIRS)
         self.assertEqual(set(ports.values()), {None})
+        # Both leases are let go with the run: the next one can take the same pair and the only heavy slot.
+        lease, _ = check_all.pick_e2e_port(self.cache / "locks", str(self.root), requested=port)
+        lease.release()
+        slot, _ = check_all.acquire_slot(self.cache / "locks", 1, {"check": "x"}, 0.2)
+        slot.release()
+
+    def test_a_pass_whose_counts_cannot_be_read_says_so_but_a_clean_lint_has_nothing_to_count(self):
+        self.set_plan({**PASSING, "test": {"out": "the output changed shape\n"}})
+        code, out, _ = self.run_main("--only", "lint,test")
+        self.assertEqual(code, 0)
+        self.assertTrue(self.row(out, "test").endswith("counts unknown"), self.row(out, "test"))
+        self.assertTrue(self.row(out, "lint").endswith("-"), self.row(out, "lint"))
+        self.assertNotIn("counts unknown", self.row(out, "lint"))
 
     def test_a_port_the_caller_set_is_honored_when_free_and_refused_when_not(self):
         free = BASE + 24  # past the candidate pairs, so it is only ever used because the caller asked
@@ -771,7 +909,7 @@ class CommandTest(TempCase):
         self.assertIn("Warning: node_modules is a symlink", out)
 
     def test_a_node_outside_the_supported_range_is_refused_with_the_switch_command(self):
-        script(self.bin / "node", "import json; print(json.dumps({'ok': False, 'version': 'v22.1.0', 'range': '^24'}))\n")
+        self.fake_node(False, "v22.1.0")
         code, _, err = self.run_main("--only", "lint")
         self.assertEqual(code, 2)
         self.assertIn("node v22.1.0 is outside", err)
@@ -887,6 +1025,167 @@ class CommandTest(TempCase):
         held.release()
         port_lock, _ = check_all.pick_e2e_port(self.cache / "locks", str(self.root))
         port_lock.release()
+
+    def start_e2e_with_server(self, *argv, inherits=False, **step):
+        """Run the e2e check through a fake that starts a listening web server in its own session, as Playwright does.
+        Returns (process, server pid, port, the lock files of the port pair and the heavy slot)."""
+        pidfile = self.tmp / "server.pid"
+        self.set_plan({**PASSING, "run test:e2e": {"sleep": 60, "server": str(pidfile), "server_source": SERVER, "server_inherits_descriptors": inherits, **step}})
+        process = self.spawn("--only", "e2e", *argv)
+        self.wait_for(lambda: pidfile.exists() and pidfile.read_text(), "the web server to listen")
+        port = int(self.calls()[0]["port"])
+        locks = self.cache / "locks"
+        self.addCleanup(lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text())))
+        return process, int(pidfile.read_text()), port, [locks / f"e2e-port-{port}.lock", locks / "heavy-0.lock"]
+
+    def wait_for(self, condition, what, seconds=20):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if condition():
+                return
+            time.sleep(0.02)
+        self.fail(f"timed out waiting for {what}")
+
+    def kill_quietly(self, pid, number=signal.SIGKILL):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, number)
+
+    def alive(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def assert_locks_free_only_after_the_server_is_gone(self, locks, pid, port):
+        """Poll every lock file together: each must be seen held first, so an instant release cannot pass, and the
+        first moment any can be taken the web server must already be dead and its port free."""
+        seen_held, deadline = set(), time.monotonic() + 20
+        while True:
+            for lock in locks:
+                held = check_all.try_lock(lock)
+                if held:
+                    held.release()
+                    self.assertIn(lock, seen_held, f"{lock.name} was free before the stop began")
+                    self.assertFalse(self.alive(pid), f"{lock.name} was released while the web server still ran")
+                    self.assertTrue(check_all.can_bind(port), f"{lock.name} was released while the web server still listened")
+                    return
+                seen_held.add(lock)
+            self.assertLess(time.monotonic(), deadline, "the locks were never released")
+            time.sleep(0.02)
+
+    def test_ctrl_c_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
+        process, pid, port, locks = self.start_e2e_with_server(shutdown_delay=1.0)
+        process.send_signal(signal.SIGINT)
+        self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
+        _, err = process.communicate(timeout=15)
+        self.assertEqual(process.returncode, 130)
+        self.assertIn("stopped by SIGINT", err)
+
+    def test_sigterm_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
+        process, pid, port, locks = self.start_e2e_with_server(shutdown_delay=1.0)
+        process.send_signal(signal.SIGTERM)
+        self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
+        _, err = process.communicate(timeout=15)
+        self.assertEqual(process.returncode, 130)
+        self.assertIn("stopped by SIGTERM", err)
+
+    def test_a_check_timeout_stops_the_suite_gracefully_so_the_web_server_goes_too_and_the_locks_free_after(self):
+        process, pid, port, locks = self.start_e2e_with_server("--check-timeout", "1.5", shutdown_delay=1.0)
+        self.assert_locks_free_only_after_the_server_is_gone(locks, pid, port)
+        out, _ = process.communicate(timeout=15)
+        self.assertEqual(process.returncode, 1)
+        self.assertIn("TIMEOUT", self.row(out, "e2e"))
+
+    def test_a_second_ctrl_c_does_not_wait_out_the_grace_for_a_suite_that_ignores_the_first(self):
+        pidfile = self.tmp / "stubborn.pid"
+        self.set_plan({**PASSING, "test": {"sleep": 60, "pidfile": str(pidfile), "ignore_sigint": True}})
+        process = self.spawn("--only", "test")
+        self.wait_for(lambda: pidfile.exists() and pidfile.read_text(), "the suite to start")
+        pid = int(pidfile.read_text())
+        self.addCleanup(self.kill_quietly, pid)
+        process.send_signal(signal.SIGINT)
+        time.sleep(0.5)
+        self.assertTrue(self.alive(pid))  # still inside the ten-second grace
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=5)
+        self.wait_for(lambda: not self.alive(pid), "the suite to be killed")
+
+    def test_killing_check_all_with_sigkill_leaves_its_suite_holding_the_slot_and_ports_until_the_suite_ends(self):
+        process, pid, port, locks = self.start_e2e_with_server(inherits=True)
+        server = pid
+        leader = int(self.calls()[0]["pid"])  # the fake npm, started in a session of its own
+        process.kill()
+        process.communicate(timeout=5)
+        locks_dir = self.cache / "locks"
+        with self.assertRaises(check_all.LockTimeout):
+            check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 0.3)
+        with self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
+            check_all.pick_e2e_port(locks_dir, "w", requested=port)
+        # The suite ends but the web server it started (which inherited the descriptors, as Playwright's does) lives on.
+        os.kill(leader, signal.SIGKILL)
+        self.wait_for(lambda: not self.alive(leader), "the suite to die")
+        with self.assertRaises(check_all.LockTimeout):
+            check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 0.3)
+        os.kill(server, signal.SIGKILL)
+        self.wait_for(lambda: not self.alive(server), "the web server to die")
+        held, _ = check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 2)
+        held.release()
+        lease, _ = check_all.pick_e2e_port(locks_dir, "w", requested=port)
+        lease.release()
+
+    def test_a_stop_that_the_suite_ignores_kills_it_only_after_the_grace(self):
+        script(self.tmp / "stubborn", """
+            import signal, sys, time
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            print("ready", flush=True)
+            time.sleep(60)
+        """)
+        with mock.patch.object(check_all, "STOP_GRACE", 1.0):
+            started = time.monotonic()
+            code, output = check_all.run_process([str(self.tmp / "stubborn")], self.tmp, dict(os.environ), self.tmp / "log", 0.3, False)
+            took = time.monotonic() - started
+        self.assertIsNone(code)
+        self.assertIn("ready", output)
+        self.assertGreaterEqual(took, 1.2)  # the 0.3s timeout, then the whole 1s grace
+        self.assertLess(took, 5)
+
+    def test_a_stop_returns_only_when_a_descendant_that_ignores_it_and_closed_its_output_is_gone_too(self):
+        # No pipe holds run_process open for this one, so only the stop itself can make it wait for the group.
+        script(self.tmp / "parent", """
+            import signal, subprocess, sys, time
+            from pathlib import Path
+            child = subprocess.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); time.sleep(60)"],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            Path(sys.argv[1]).write_text(str(child.pid))
+            signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+            time.sleep(60)
+        """)
+        pidfile = self.tmp / "descendant.pid"
+        self.addCleanup(lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text())))
+        with mock.patch.object(check_all, "STOP_GRACE", 1.0):
+            check_all.run_process([str(self.tmp / "parent"), str(pidfile)], self.tmp, dict(os.environ), self.tmp / "log", 0.5, False)
+        self.assertFalse(self.alive(int(pidfile.read_text())))
+
+    def test_a_stop_that_the_suite_honors_ends_at_once_with_its_own_cleanup_not_a_kill(self):
+        script(self.tmp / "polite", """
+            import signal, sys, time
+            from pathlib import Path
+            def clean(signum, frame):
+                Path(sys.argv[1]).write_text("cleaned up")
+                sys.exit(0)
+            signal.signal(signal.SIGINT, clean)
+            print("ready", flush=True)
+            time.sleep(60)
+        """)
+        marker = self.tmp / "cleanup-marker"
+        with mock.patch.object(check_all, "STOP_GRACE", 10.0):
+            started = time.monotonic()
+            code, _ = check_all.run_process([str(self.tmp / "polite"), str(marker)], self.tmp, dict(os.environ), self.tmp / "log", 0.3, False)
+            took = time.monotonic() - started
+        self.assertIsNone(code)
+        self.assertEqual(marker.read_text(), "cleaned up")
+        self.assertLess(took, 3)
 
     def test_the_command_file_runs_and_describes_itself(self):
         result = subprocess.run([str(TOOLS / "check-all"), "--help"], capture_output=True, text=True, check=False)
