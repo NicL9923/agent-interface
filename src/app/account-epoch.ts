@@ -467,22 +467,37 @@ export function signOutFinished() {
   if (mine) held = seen = now;
 }
 
+let told: string | null | undefined;
+let telling = Promise.resolve();
+const workerContainer = () => typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
+/** Posts `message` to the active worker after everything this tab posted before it, so the worker hears them in the order this tab said them. */
+function post(message: object, ports: MessagePort[] = []) {
+  const container = workerContainer();
+  if (!container) return;
+  telling = telling.then(() => container.getRegistration())
+    .then(registration => registration?.active?.postMessage(message, ports))
+    .catch(() => {});
+}
 /**
  * Tells the service worker which account it may show notifications for, or none. It keeps that where
  * it can read it after the browser stops and restarts it, and drops a push, or refuses a notification's
  * action, for any other account (see scripts/service-worker.js). Each tab tells it in order, once per
  * generation for each account it names, so a bootstrap on every focus does not repeat it.
  */
-let told: string | null | undefined;
-let telling = Promise.resolve();
 function tellWorker(user: string | null) {
   if (told === user) return;
   told = user;
-  const container = typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
-  if (!container) return;
-  telling = telling.then(() => container.getRegistration())
-    .then(registration => registration?.active?.postMessage({ type: "ACCOUNT", user }))
-    .catch(() => {});
+  post({ type: "ACCOUNT", user });
+}
+/**
+ * Posts a message the worker handles in order with this tab's account words, such as the app badge
+ * (see src/app/badge.ts), and says whether it did: false when no worker controls this page, and the
+ * caller then acts on its own.
+ */
+export function tellWorkerInOrder(message: object, ports: MessagePort[] = []) {
+  if (!workerContainer()?.controller) return false;
+  post(message, ports);
+  return true;
 }
 
 /** Notifications already on screen for an account that left this browser. */

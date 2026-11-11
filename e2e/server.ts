@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { botFixture, capabilitiesFixture, conversationFixture, experienceRequester } from "../tests/helpers/runtime-fixtures.js";
-import type { Activity, LiveTurn, Message, Runtime, ToolCall } from "../src/shared/types.js";
+import type { Activity, Bot, LiveTurn, Message, Runtime, ToolCall } from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
 
 /**
@@ -18,6 +18,8 @@ const bots = [
   botFixture({ id: "ranch", name: "Ranch Hand", lastMessage: { text: "Fence check is done." } }),
   botFixture({ id: "trail", name: "Trail Cook" }),
 ];
+// Roster rows as a test left them with POST /activity, put back by DELETE like everything else.
+const initialBots = bots.map(bot => ({ ...bot }));
 const seedMessages = () => new Map<string, Message[]>([
   ["ranch", [{ id: "seed-1", role: "assistant", text: "Morning. The north fence is fixed.", createdAt: "2026-11-05T14:00:00Z" }]],
   ["trail", []],
@@ -182,9 +184,17 @@ app.addHook("onRequest", async (req, reply) => {
 await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
-// POST /admission-delay?ms=N slows each send's admission.
+// POST /admission-delay?ms=N slows each send's admission. POST /activity?bot=ID&state=STATE gives that assistant
+// the roster activity from the next bootstrap on, such as "waiting", which the app badge counts.
 const control = createServer((req, res) => {
-  if (req.method === "DELETE") { violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0; }
+  if (req.method === "DELETE") {
+    violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
+    bots.splice(0, bots.length, ...initialBots.map(bot => ({ ...bot })));
+  }
+  if (req.method === "POST" && req.url?.startsWith("/activity")) {
+    const query = new URL(req.url, "http://localhost").searchParams, at = bots.findIndex(bot => bot.id === query.get("bot"));
+    if (at >= 0) bots[at] = { ...bots[at]!, activity: query.get("state") as Bot["activity"] };
+  }
   if (req.method === "POST" && req.url?.startsWith("/admission-delay")) admissionDelay = Number(new URL(req.url, "http://localhost").searchParams.get("ms")) || 0;
   if (req.method === "POST" && req.url?.startsWith("/next-release")) nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
   res.setHeader("content-type", "application/json");

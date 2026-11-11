@@ -1,5 +1,7 @@
-// Packages whose code only administrators run: the terminal and the remote desktop.
-const onDemandSources = /^node_modules\/@(?:novnc|xterm)\//;
+// Packages whose code only administrators run: the terminal and the remote desktop. Vite records a package
+// by the path it resolved, which is outside the project when node_modules is a symlink (`../../shared/node_modules/...`,
+// or an absolute path), so the match is on the directory name, not on the manifest key's start.
+const onDemandSources = /(?:^|[\\/])node_modules[\\/]@(?:novnc|xterm)[\\/]/;
 // Voice previews in assistant settings: 300 KB of audio that few visits play. Media elements fetch
 // with Range requests, which a cached full response would answer wrongly in Safari, so the worker
 // leaves them to the network.

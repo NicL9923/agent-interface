@@ -241,15 +241,22 @@ Decline, and a tap on it opens the app without its chat. A push that names no ac
 server before this change, shows as before while someone is signed in. The worker sets the app
 badge from a push only once its notification is on screen and its account is still the one
 signed in, and clears a badge another account's push set when the account changes; it records
-in Cache Storage whose push set the badge, and never changes a badge the page set. Its account
-steps run one at a time, so a late step for an earlier account never overwrites a later one's.
+in Cache Storage which account set the badge. A page the worker controls asks it to set or clear
+the badge too (a `BADGE` message naming the account its screens show), in the order it said its
+account words, so the page and the worker never race: a count is set only for the latest account,
+and a clear never removes the latest account's count unless that account's own page asks. A page no
+worker controls, or whose worker does not answer within three seconds, as one from a release before
+this message, writes the badge itself, and so does a page whose worker answers that it has no badge
+API. Once a worker has answered on a page, that page waits on no later answer, and a write the page
+makes itself is dropped when its account generation has ended. Its account steps run one at a time, so a late step for an
+earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:
 
 | Record | Holds | Removed |
 | --- | --- | --- |
 | `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
-| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push set the app badge | Never; each change replaces it |
+| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push or page set the app badge | Never; each change replaces it |
 | `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
 | `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
 | `agent-interface:roster` | The home last shown: assistants, order, group chats and their members, the member's name and picture | With the hint, and at any sign-in |
@@ -920,8 +927,12 @@ stream, the service worker opening the app offline and recovering, a deploy whos
 reaches the next load and whose release is offered until taken, a deploy whose worker cannot
 install still reaching the next load, a lazy screen whose file a deploy retired offering
 Reload without reloading on its own, a notification's chat opening in the open window
-without a reload, and no page errors,
-console errors or CSP violation reports. It does not cover real Hermes behavior, push
+without a reload, the app badge written through the service worker across a sign-out and
+another member's sign-in, and no page errors,
+console errors or CSP violation reports. It runs in full Chromium (`channel: "chromium"`, which
+`npx playwright install chromium` installs beside the headless shell): the shell crashes the
+page when a service worker calls the badge API, which the worker does for every page it controls,
+and it has no back-forward cache. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.
 
@@ -930,6 +941,8 @@ real Hermes execution using a deterministic local provider, visual checks, and
 acceptance that needs a physical phone or configured external service. Tests with
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
+
+`.agents/tools/check-all` runs every local check in CI's order, chooses a free browser-suite port and queues the heavy suites across worktrees; see the [tools index](.agents/tools/README.md).
 
 Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the

@@ -43,7 +43,7 @@ type Stores = Map<string, Map<string, unknown>>;
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
  * run left, as when the browser stops an idle worker and starts it again for the next event.
  */
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number }; holdHashes?: number[] } = {}) {
+function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number }; holdHashes?: number[]; badging?: boolean } = {}) {
   const options_ = options;
   const handlers: Record<string, (event: any) => void> = {};
   // The badge as the person sees it: the last call wins.
@@ -129,7 +129,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
       registration: { showNotification, getNotifications, update, unregister },
       clients,
-      navigator: { setAppBadge, clearAppBadge },
+      navigator: options.badging === false ? {} : { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
     caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
@@ -171,7 +171,13 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
-  return { handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, releaseHash, refusedPuts, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
+  // A page's app badge, with the port it listens on for the worker's answer. Resolves once the worker ended the step.
+  const pageBadge = (user: unknown, count: unknown, answer?: Port) => {
+    let waited: Promise<unknown> | undefined;
+    handlers.message({ data: { type: 'BADGE', user, count }, ports: answer ? [answer] : [], waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    return waited;
+  };
+  return { pageBadge, handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, releaseHash, refusedPuts, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
 }
 
 describe('service worker privacy and return path', () => {
@@ -1506,5 +1512,180 @@ describe('service worker pushes for the account signed in here', () => {
       await done;
       expect(sw.shown).toEqual([]);
     });
+  });
+});
+
+
+describe('service worker app badge for the page', () => {
+  // The server's marker for each account, as src/server/apns.ts makes it.
+  const marker = (user: string) => createHash('sha256').update(`wildbots-account:${user}`).digest('hex').slice(0, 16);
+  const forOne = { title: 'Ranch Hand', body: 'Gate code is 4471', url: '/?bot=ranch', tag: 'event-1', badge: 1, account: marker('one') };
+  async function push(sw: ReturnType<typeof worker>, data: object) {
+    let done: Promise<unknown> | undefined;
+    sw.handlers.push({ data: { json: () => data }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    await done;
+  }
+  const badgeCalls = (sw: ReturnType<typeof worker>) => [...sw.setAppBadge.mock.calls.map(([count]) => `set ${count}`), ...sw.clearAppBadge.mock.calls.map(() => 'clear')];
+
+  it("sets the latest account's count from its page, and a restarted worker clears it when another account signs in", async () => {
+    const first = worker();
+    await first.signedIn('one');
+    await first.pageBadge('one', 3);
+    expect(first.setAppBadge).toHaveBeenCalledExactlyOnceWith(3);
+    const sw = worker({ stores: first.stores });
+    await sw.signedIn('two');
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it("sets a count only for the account the latest word names", async () => {
+    const sw = worker();
+    await sw.pageBadge('one', 2);
+    // No word has arrived yet, so nothing names another account.
+    expect(sw.setAppBadge).toHaveBeenLastCalledWith(2);
+    await sw.signedIn('two');
+    await sw.pageBadge('one', 5);
+    expect(sw.badge.count).toBe(0);
+    await sw.signedIn(null);
+    await sw.pageBadge('two', 5);
+    expect(sw.badge.count).toBe(0);
+    expect(sw.setAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a count that is not a whole number', 'one', 1.5],
+    ['a negative count', 'one', -1],
+    ['a count that is text', 'one', '3'],
+    ['a count that is not a number', 'one', Number.NaN],
+    ['no account for a count', null, 3],
+    ['an empty account for a count', '', 3],
+    ['an account that is not text for a count', 7, 3],
+  ])('does nothing for %s', async (_name, user, count) => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await sw.pageBadge(user, count);
+    expect(badgeCalls(sw)).toEqual([]);
+    expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
+  });
+
+  it("clears the badge its own push set when the account's own page says nothing is counted", async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await push(sw, { ...forOne, badge: 4 });
+    expect(sw.badge.count).toBe(4);
+    await sw.pageBadge('one', 0);
+    expect(sw.badge.count).toBe(0);
+  });
+
+  it.each([
+    ['a tab of another account', 'two'],
+    ['a tab that shows no account', null],
+  ])("leaves the latest account's count alone when %s clears, since it never set it", async (_name, asker) => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await push(sw, { ...forOne, badge: 4 });
+    await sw.pageBadge(asker, 0);
+    expect(sw.badge.count).toBe(4);
+    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('clears when it knows of no badge to protect, as a page of any account may after the worker was stopped', async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    await sw.pageBadge('two', 0);
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it("clears a count of the member who left when a page that shows no account asks, though the worker stopped before its sign-out cleared it", async () => {
+    const first = worker();
+    await first.signedIn('one');
+    await push(first, { ...forOne, badge: 4 });
+    // The sign-out's word was kept, and the browser stopped the worker before the clear and its record.
+    first.stores.get('wildbots-account')!.set('/account', new Response(JSON.stringify({ signedOut: true })));
+    const sw = worker({ stores: first.stores });
+    await sw.pageBadge(null, 0);
+    expect(sw.clearAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the new account's count when the old account's clear reaches the worker after the word, in the page's own order", async () => {
+    // The word's hash is slow, so the clear and the count are both waiting behind it when it arrives.
+    const sw = worker({ holdHashes: [3] });
+    await sw.signedIn('one');
+    await sw.pageBadge('one', 2);
+    sw.setAppBadge.mockClear();
+    const sent = [sw.signedIn('two'), sw.pageBadge('one', 0), sw.pageBadge('two', 4)];
+    sw.releaseHash(3);
+    await Promise.all(sent);
+    expect(sw.badge.count).toBe(4);
+    expect(sw.setAppBadge).toHaveBeenLastCalledWith(4);
+    // The last call to the badge API is member two's count, not a clear.
+    expect(sw.setAppBadge.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(sw.clearAppBadge.mock.invocationCallOrder.at(-1)!);
+  });
+
+  it("drops a count that a newer word overtook before the worker reached it", async () => {
+    const sw = worker({ holdHashes: [2] });
+    await sw.signedIn('one');
+    sw.setAppBadge.mockClear();
+    // Member one's page says a count; before the worker reaches it (its account's hash is held), two signs in.
+    const stale = sw.pageBadge('one', 3);
+    const word = sw.signedIn('two');
+    sw.releaseHash(2);
+    await Promise.all([stale, word]);
+    expect(sw.setAppBadge).not.toHaveBeenCalled();
+    expect(sw.badge.count).not.toBe(3);
+  });
+
+  it("drops the clear a page of an older generation sent once the same account has come back, which would wipe the count it set", async () => {
+    // The clear's hash is held, so member two's word and member one's again overtake it before it reaches the front.
+    const sw = worker({ holdHashes: [2] });
+    await sw.signedIn('one');
+    await push(sw, { ...forOne, badge: 4 });
+    const stale = sw.pageBadge('one', 0);
+    const words = [sw.signedIn('two'), sw.signedIn('one')];
+    sw.releaseHash(2);
+    await Promise.all([stale, ...words]);
+    expect(sw.clearAppBadge).not.toHaveBeenCalled();
+    expect(sw.badge.count).toBe(4);
+  });
+
+  it('answers on the page\'s port once the step has ended, whether it changed the badge or not', async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    const channel = new FakeMessageChannel(), answers: unknown[] = [];
+    channel.port1.onmessage = event => answers.push(event.data);
+    await sw.pageBadge('one', 3, channel.port2);
+    await Promise.resolve();
+    expect(answers).toEqual([{ badge: true }]);
+    await sw.pageBadge('two', 3, channel.port2);
+    await Promise.resolve();
+    expect(answers).toEqual([{ badge: true }, { badge: true }]);
+    expect(sw.setAppBadge).toHaveBeenCalledOnce();
+  });
+
+  it('answers a browser without the badge API that it cannot write one, so the page does, and keeps no record of a badge', async () => {
+    const sw = worker({ badging: false });
+    await sw.signedIn('one');
+    const channel = new FakeMessageChannel(), answers: unknown[] = [];
+    channel.port1.onmessage = event => answers.push(event.data);
+    await sw.pageBadge('one', 3, channel.port2);
+    await sw.pageBadge('one', 0, channel.port2);
+    await Promise.resolve();
+    expect(answers).toEqual([{ badge: false }, { badge: false }]);
+    expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
+  });
+
+  it('sets nothing for a page that names no account before any word has arrived either', async () => {
+    const sw = worker();
+    await sw.pageBadge(null, 3);
+    expect(badgeCalls(sw)).toEqual([]);
+  });
+
+  it('keeps going when the browser refuses the record of the badge, and the next write still applies', async () => {
+    const sw = worker();
+    await sw.signedIn('one');
+    sw.refusedPuts.add('/badge');
+    await sw.pageBadge('one', 3);
+    sw.refusedPuts.delete('/badge');
+    await sw.pageBadge('one', 4);
+    expect(badgeCalls(sw)).toEqual(['set 3', 'set 4']);
   });
 });
