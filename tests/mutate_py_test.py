@@ -3,6 +3,7 @@
 import json
 import os
 import py_compile
+import shutil
 import signal
 import subprocess
 import sys
@@ -41,7 +42,12 @@ class ToolTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.repo = Path(directory.name)
+        self.repo = Path(directory.name) / "repo"
+        self.repo.mkdir()
+        # The tool keeps its pending records under the temp directory, so each test gets its own and never sees another's.
+        self.scratch = Path(directory.name) / "tmp"
+        self.scratch.mkdir()
+        self.env = {**ENV, "TMPDIR": str(self.scratch)}
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
         self.write("m.py", MODULE)
         self.write("check.py", CHECK)
@@ -63,7 +69,7 @@ class ToolTest(unittest.TestCase):
         return path
 
     def tool(self, *args, check_exit=None, timeout=60):
-        result = subprocess.run([sys.executable, str(TOOL), *args], cwd=self.repo, env=ENV, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run([sys.executable, str(TOOL), *args], cwd=self.repo, env=self.env, capture_output=True, text=True, timeout=timeout, check=False)
         if check_exit is not None:
             self.assertEqual(result.returncode, check_exit, result.stdout + result.stderr)
         return result
@@ -186,18 +192,18 @@ class ToolTest(unittest.TestCase):
         wait_for(lambda: not alive(child) and not alive(grandchild), "the command's process group ending")
         self.assertEqual(self.snapshot("m.py"), before)
 
-    def start_hanging_run(self, *extra):
+    def start_hanging_run(self, *extra, name="m.py"):
         """The tool, running a command that reports its pid and then waits; returns once the mutant is on disk."""
         pids = self.repo / "hang.pids"
         pids.unlink(missing_ok=True)
         script = f"import os, time; open({str(pids)!r}, 'w').write(str(os.getpid())); time.sleep(600)"
-        tool = subprocess.Popen([sys.executable, str(TOOL), "m.py", "--old", "return 1", "--new", "return 2", *extra, "--", sys.executable, "-c", script],
-                                cwd=self.repo, env=ENV, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        tool = subprocess.Popen([sys.executable, str(TOOL), name, "--old", "return 1", "--new", "return 2", *extra, "--", sys.executable, "-c", script],
+                                cwd=self.repo, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: tool.poll() is None and tool.kill())
         wait_for(lambda: pids.exists() and pids.read_text(), "the command starting")
         child = int(pids.read_text())
         self.children.append(child)
-        self.assertEqual((self.repo / "m.py").read_text(), MODULE.replace("return 1", "return 2"))
+        self.assertEqual((self.repo / name).read_text(), MODULE.replace("return 1", "return 2"))
         return tool, child
 
     def test_ctrl_c_stops_the_command_restores_the_file_and_exits_130(self):
@@ -231,6 +237,100 @@ class ToolTest(unittest.TestCase):
         self.assertIn("restored", result.stderr)
         self.assertEqual(self.rows(result), ["| m.py: 'return 1' | failed: test_value (exit 1) |"])
         self.assertEqual(self.snapshot("m.py"), before)
+
+    def kill_a_run_on_m_py(self):
+        """A run killed mid-mutation: m.py stays mutated and its original waits in the pending record."""
+        tool, child = self.start_hanging_run()
+        tool.kill()
+        tool.communicate(timeout=30)
+        os.killpg(child, signal.SIGKILL)
+        self.assertEqual((self.repo / "m.py").read_text(), MODULE.replace("return 1", "return 2"))
+
+    def test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated(self):
+        before = self.snapshot("m.py")
+        self.kill_a_run_on_m_py()
+        self.write("b.py", MODULE)
+        result = self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", "import sys; sys.exit(1)", check_exit=0)
+        self.assertIn(f"restored {self.repo / 'm.py'} from the unfinished run", result.stderr)
+        self.assertEqual(self.rows(result), ["| b.py: 'return 1' | failed: exit 1 |"])
+        self.assertEqual(self.snapshot("m.py"), before)
+        self.assertEqual(list(self.scratch.rglob("*.json")) + list(self.scratch.rglob("*.orig")), [])
+
+    def test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever(self):
+        self.write("gone/m.py", MODULE)
+        tool, child = self.start_hanging_run(name="gone/m.py")
+        tool.kill()
+        tool.communicate(timeout=30)
+        os.killpg(child, signal.SIGKILL)
+        shutil.rmtree(self.repo / "gone")
+        self.write("b.py", MODULE)
+        command = (sys.executable, "-c", "import sys; sys.exit(1)")
+        first = self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", *command, check_exit=0)
+        self.assertIn("gone", first.stderr)
+        self.assertIn("directory no longer exists", first.stderr)
+        self.assertEqual(list(self.scratch.rglob("*.json")) + list(self.scratch.rglob("*.orig")), [])
+        # Only the first run had anything to say.
+        self.assertEqual(self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", *command, check_exit=0).stderr, "")
+
+    def test_a_live_runs_record_is_left_alone_when_another_file_starts(self):
+        tool, child = self.start_hanging_run()
+        self.write("b.py", MODULE)
+        result = self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", "import sys; sys.exit(1)", check_exit=0)
+        self.assertNotIn("restored", result.stderr)
+        # m.py is still the live run's mutant.
+        self.assertEqual((self.repo / "m.py").read_text(), MODULE.replace("return 1", "return 2"))
+        tool.send_signal(signal.SIGINT)
+        tool.communicate(timeout=30)
+        self.assertEqual((self.repo / "m.py").read_text(), MODULE)
+
+    def test_an_unreadable_record_is_reported_and_blocks_only_its_own_file(self):
+        self.kill_a_run_on_m_py()
+        [record] = self.scratch.rglob("*.json")
+        [backup] = self.scratch.rglob("*.orig")
+        for damage in ('{"pid": 12', '[]', '{"pid": "x"}'):
+            record.write_text(damage)
+            with self.subTest(damage=damage):
+                self.write("b.py", MODULE)
+                other = self.tool("b.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", "import sys; sys.exit(1)", check_exit=0)
+                self.assertIn(f"the pending record {record} is unreadable", other.stderr)
+                self.assertNotIn("Traceback", other.stderr)
+                self.assertEqual(self.rows(other), ["| b.py: 'return 1' | failed: exit 1 |"])
+                same = self.tool("m.py", "--old", "return 2", "--new", "return 3", "--", sys.executable, "-c", "import sys; sys.exit(1)", check_exit=2)
+                self.assertIn("error: the pending record for this file is unreadable", same.stdout)
+                self.assertNotIn("Traceback", same.stderr)
+                # Nothing was touched: the mutant is still on disk and the saved original is still kept.
+                self.assertEqual((self.repo / "m.py").read_text(), MODULE.replace("return 1", "return 2"))
+                self.assertEqual(backup.read_bytes(), MODULE.encode())
+
+    def test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command(self):
+        marker = self.repo / "ran"
+        before = self.snapshot("m.py")
+        result = self.tool("m.py", "--old", "return 1", "--new", "return (", "--", sys.executable, "-c", f"open({str(marker)!r}, 'w')", check_exit=2)
+        self.assertRegex(self.rows(result)[0], r"^\| m\.py: 'return 1' \| error: the mutant does not compile \(line 2: .*\) \|$")
+        self.assertFalse(marker.exists())
+        self.assertEqual(self.snapshot("m.py"), before)
+
+    def test_a_second_stop_signal_cannot_interrupt_the_restore(self):
+        # A grandchild in its own session outlives the stop and keeps signalling the tool, as a second Ctrl-C would, until m.py is restored.
+        storm = ("import os, sys, signal\n"
+                 "tool, path, original = int(sys.argv[1]), sys.argv[2], sys.argv[3]\n"
+                 "while open(path).read() != original:\n"
+                 "    try:\n"
+                 "        os.kill(tool, signal.SIGTERM)\n"
+                 "    except ProcessLookupError:\n"
+                 "        break\n")
+        script = ("import os, subprocess, sys, time\n"
+                  f"g = subprocess.Popen([sys.executable, '-c', {storm!r}, str(os.getppid()), 'm.py', {MODULE!r}], start_new_session=True)\n"
+                  f"open({str(self.repo / 'storm.pid')!r}, 'w').write(str(g.pid))\n"
+                  "time.sleep(600)\n")
+        tool = subprocess.Popen([sys.executable, str(TOOL), "m.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", script],
+                                cwd=self.repo, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: tool.poll() is None and tool.kill())
+        wait_for(lambda: (self.repo / "storm.pid").exists() and (self.repo / "storm.pid").read_text(), "the signalling grandchild starting")
+        self.children.append(int((self.repo / "storm.pid").read_text()))
+        tool.communicate(timeout=30)
+        self.assertEqual((self.repo / "m.py").read_text(), MODULE)
+        self.assertEqual(list(self.scratch.rglob("*.json")), [])
 
     def test_a_second_run_on_a_file_another_live_run_is_mutating_is_refused(self):
         tool, child = self.start_hanging_run()

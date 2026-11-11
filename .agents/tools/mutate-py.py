@@ -25,8 +25,11 @@ reads as "survived"; the file restored in the same second as a mutant run runs t
 
 Restore on every exit path. The mutation is undone in a `finally`, and SIGINT, SIGTERM and SIGHUP stop the command's
 process group and then restore. SIGKILL cannot be caught, so before touching a file the tool records its original
-bytes in a private directory under the system temp directory. A later run that finds a record whose process died
-restores that file first and says so, and refuses a file another live run is mutating.
+bytes in a private directory under the system temp directory, written to a temporary file and renamed so a kill mid-write
+leaves no half record. Every run starts by restoring every file whose record names a dead process, whichever file this
+run targets, and says so. A record whose directory is gone is discarded. It refuses a file another live run is mutating. An unreadable record is reported and kept,
+because its saved original may be the only copy; it blocks a run on that file only. A mutant that does not compile is an
+`error:` row, not a caught mutant, because every test would fail on the import.
 """
 from __future__ import annotations
 
@@ -118,35 +121,88 @@ def alive(pid: int) -> bool:
     return True
 
 
+def write_atomic(path: Path, data: bytes | str) -> None:
+    """Write beside the destination and rename over it, so a kill mid-write leaves the old file or the new one, never half."""
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    with open(temporary, "wb") as handle:
+        handle.write(data.encode() if isinstance(data, str) else data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def read_record(record: Path) -> dict:
+    """The pending record's fields, or a ValueError when the file is not a record this tool wrote."""
+    info = json.loads(record.read_text())
+    if not isinstance(info, dict) or not all(isinstance(info.get(key), kind) for key, kind in
+                                             (("pid", int), ("path", str), ("mode", int), ("mtime_ns", int))):
+        raise ValueError("it lacks pid, path, mode and mtime_ns")
+    return info
+
+
+def pending_names(path: Path) -> tuple[Path, Path]:
+    key = hashlib.sha256(str(path).encode()).hexdigest()[:24]
+    return pending_dir() / f"{key}.json", pending_dir() / f"{key}.orig"
+
+
+def recover_dead_runs() -> list[str]:
+    """Restore every file a dead run left mutated, whichever file this run targets. Returns one note per record.
+
+    A record of a live run is left alone. An unreadable record is reported and kept, because its `.orig` may be the only copy."""
+    notes = []
+    for record in sorted(pending_dir().glob("*.json")):
+        backup = record.with_suffix(".orig")
+        try:
+            info = read_record(record)
+        except (OSError, ValueError) as error:
+            notes.append(f"the pending record {record} is unreadable ({error}); its original bytes may be in {backup}, so check them and delete both")
+            continue
+        if alive(info["pid"]):
+            continue
+        path = Path(info["path"])
+        if not path.parent.is_dir():
+            # A throwaway checkout deleted after a killed run: nothing can be restored, and the record would warn forever.
+            record.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+            notes.append(f"discarded the record of {path}: its directory no longer exists")
+            continue
+        if backup.exists():
+            try:
+                write_original(path, backup.read_bytes(), info["mode"], info["mtime_ns"])
+            except OSError as error:
+                notes.append(f"{path} could not be restored from the unfinished run of pid {info['pid']} ({error}); the original bytes are in {backup}")
+                continue
+        record.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
+        notes.append(f"restored {path} from the unfinished run of pid {info['pid']}")
+    return notes
+
+
 class Pending:
     """The original bytes of the file being mutated, kept outside the repository until the restore is verified."""
 
     def __init__(self, path: Path, original: bytes, stat: os.stat_result):
-        key = hashlib.sha256(str(path).encode()).hexdigest()[:24]
-        self.record = pending_dir() / f"{key}.json"
-        self.backup = pending_dir() / f"{key}.orig"
+        self.record, self.backup = pending_names(path)
         self.path, self.original, self.stat = path, original, stat
 
     @staticmethod
-    def recover(path: Path) -> str | None:
-        """Restore a file a dead run left mutated. Returns what it did, or None when nothing was pending."""
-        key = hashlib.sha256(str(path).encode()).hexdigest()[:24]
-        record, backup = pending_dir() / f"{key}.json", pending_dir() / f"{key}.orig"
+    def guard(path: Path) -> None:
+        """Refuse to mutate a file that still has a record after recover_dead_runs: another live run owns it, or its record cannot be trusted."""
+        record, backup = pending_names(path)
         if not record.exists():
-            return None
-        info = json.loads(record.read_text())
+            return
+        try:
+            info = read_record(record)
+        except (OSError, ValueError) as error:
+            raise ToolError(f"the pending record for this file is unreadable ({error}); its original bytes may be in {backup}, so check the file against them, then delete both") from None
         if alive(info["pid"]):
             raise ToolError(f"another mutate-py run (pid {info['pid']}) is mutating this file")
-        if backup.exists():
-            write_original(path, backup.read_bytes(), info["mode"], info["mtime_ns"])
-        record.unlink(missing_ok=True)
-        backup.unlink(missing_ok=True)
-        return f"restored {path} from the unfinished run of pid {info['pid']}"
+        raise ToolError(f"an earlier run of pid {info['pid']} left this file mutated and could not restore it; the original bytes are in {backup}")
 
     def save(self) -> None:
-        self.backup.write_bytes(self.original)
-        self.record.write_text(json.dumps({"pid": os.getpid(), "path": str(self.path), "mode": self.stat.st_mode,
-                                           "mtime_ns": self.stat.st_mtime_ns}))
+        write_atomic(self.backup, self.original)
+        write_atomic(self.record, json.dumps({"pid": os.getpid(), "path": str(self.path), "mode": self.stat.st_mode,
+                                              "mtime_ns": self.stat.st_mtime_ns}))
 
     def drop(self) -> None:
         self.record.unlink(missing_ok=True)
@@ -251,9 +307,7 @@ def stop_group(child: subprocess.Popen) -> None:
 def mutate_once(path: Path, root: Path, old: str | None, new: str, line: int | None, command: list[str], timeout: float | None,
                 keep_mtime: bool) -> Result:
     """Apply one mutation, run the command, and restore the file whatever happens."""
-    note = Pending.recover(path)
-    if note:
-        print(f"mutate-py: {note}", file=sys.stderr)
+    Pending.guard(path)
     if not path.is_file():
         return Result("error", f"{path} is not a file")
     stat = path.stat()
@@ -262,11 +316,20 @@ def mutate_once(path: Path, root: Path, old: str | None, new: str, line: int | N
         mutated = apply_text(original, old, new, line)
     except ToolError as error:
         return Result("error", str(error))
+    try:
+        compile(mutated, str(path), "exec", dont_inherit=True)
+    except (SyntaxError, ValueError) as error:
+        # A mutant that cannot be imported fails every test, which would read as a caught mutant.
+        where = f"line {error.lineno}: {error.msg}" if isinstance(error, SyntaxError) and error.lineno else str(error)
+        return Result("error", f"the mutant does not compile ({where})")
     pending = Pending(path, original, stat)
     state: dict = {"child": None}
     previous = {sig: signal.getsignal(sig) for sig in STOP_SIGNALS}
 
     def stop(signum, _frame):
+        # First, so a second stop signal cannot interrupt the restore that this one starts.
+        for sig in STOP_SIGNALS:
+            signal.signal(sig, signal.SIG_IGN)
         child = state.get("child")
         if child is not None:
             stop_group(child)
@@ -383,6 +446,8 @@ def main(argv: list[str]) -> int:
             parser.error("give FILE, --new, and --old or --line")
         specs = [{"file": args.file, "old": args.old, "new": args.new, "line": args.line, "name": args.name}]
     specs = [{**spec, "path": Path(spec["file"]).resolve()} for spec in specs]
+    for note in recover_dead_runs():
+        print(f"mutate-py: {note}", file=sys.stderr)
     status = 0
     if args.baseline:
         try:

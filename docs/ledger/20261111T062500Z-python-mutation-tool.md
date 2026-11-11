@@ -77,6 +77,41 @@ failing-restore test cannot produce without a broken filesystem. Both lines stay
 Before those tests existed the same batch left six survivors (no clearing before the run, no clearing after, no `-B`, the restore's mode,
 the stop handler's kill, the read-back); the tests for pycache clearing before and after, `-B` under `python -I`, and a deleted file's mode and mtime killed four of them.
 
+## Review fixes
+
+An Opus review of the pushed branch (head `e5e129a`) found four defects in the tool. The branch is merged with `origin/main` (`7d794ef`) and fixed
+in `.agents/tools/mutate-py.py`; each fix has one test in `tests/mutate_py_test.py`, now 30 tests. Each test uses its own `TMPDIR`, so its pending
+records are its own.
+
+| Finding | Fix | Test |
+| --- | --- | --- |
+| P1 recovery ran only for the file being mutated | `recover_dead_runs()` runs once at startup and restores every record whose pid is dead. A live run's record is left alone. A record whose directory no longer exists is discarded, because a killed run in a deleted checkout would otherwise warn on every later run | `test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated`, `test_a_live_runs_record_is_left_alone_when_another_file_starts`, `test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever` |
+| P2 a second stop signal could abort the restore | `stop()` sets SIGINT, SIGTERM and SIGHUP to `SIG_IGN` before it does anything else | `test_a_second_stop_signal_cannot_interrupt_the_restore` |
+| P2 a mutant that does not compile read as caught | `compile()` the mutant first; `error: the mutant does not compile (line N: ...)`, exit 2, the command never runs | `test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command` |
+| P3 a kill mid-write could leave bad JSON that crashed later runs | the record and the saved original are written to a temporary file and renamed. Recovery and the per-file guard catch an unreadable or wrongly shaped record, report it and keep it (its `.orig` may be the only copy). It blocks a run on its own file only | `test_an_unreadable_record_is_reported_and_blocks_only_its_own_file` |
+
+The second-signal test cannot rely on timing: the reviewer's pair of signals failed 2 of 100 runs. Its command starts a grandchild in its own session, which
+survives the tool's process-group kill and sends SIGTERM to the tool in a loop until `m.py` is restored. The first SIGTERM is the stop; the loop is the
+second, third and later ones, so some always land between the stop and the restore. Without the fix it failed 40 of 40 runs, with it 40 of 40 passed.
+
+The rename that makes a record write atomic has no test: a kill between the first byte and the rename cannot be produced on demand, and a test that only
+checks the final content passes with an in-place write too. The unreadable-record test covers what that write prevents from crashing.
+
+### Red runs for the fixes
+
+`python3 .agents/tools/mutate-py.py --batch mutations.json --baseline --timeout 120`, each mutation running only the test written for it; the file restored after each.
+
+| Mutation | Result |
+| --- | --- |
+| Recovery limited to the file this run targets | failed: test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated (exit 1) |
+| A live run's record is restored too | failed: test_a_live_runs_record_is_left_alone_when_another_file_starts (exit 1) |
+| A record whose directory is gone is kept | failed: test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever (exit 1) |
+| Mutant not compiled | failed: test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command (exit 1) |
+| Unreadable record not caught in recovery | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
+| Unreadable record not caught in the file guard | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
+| Record shape not checked | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
+| Stop handler does not ignore later stop signals (by hand, 40 runs) | failed 40 of 40: test_a_second_stop_signal_cannot_interrupt_the_restore |
+
 ## Checks
 
 `.agents/tools/check-all --py always --keep-going` on this tree:
