@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
 import { act, createElement, type ComponentType } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authEpochKey, draftKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, draftKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
@@ -132,6 +133,21 @@ async function answerHeld(match: string, override?: { status: number; body: unkn
   await advance(0);
 }
 
+/** Answers the one held request that went out with `carried` as its cookie. */
+async function answerSentAs(match: string, carried: Member | null, override?: { status: number; body: unknown }) {
+  const found = held.filter(item => item.call.call.startsWith(match) && item.call.cookie === carried);
+  expect(found, `one held ${match} sent as ${carried}`).toHaveLength(1);
+  held = held.filter(item => item !== found[0]);
+  await act(async () => found[0].answer(override));
+  await advance(0);
+}
+// public/boot.js as the shell runs it, before the bundle: the browser's fetch, storage and window.
+const runBoot = () => window.eval(readFileSync("public/boot.js", "utf8"));
+const accountMenu = async (tab: Tab) => {
+  await act(async () => tab.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  return tab.container.querySelector('[role="menu"][aria-label="Account"]')?.textContent ?? "";
+};
+
 // --- Tabs ---
 type Tab = { container: HTMLDivElement; text(): string };
 async function openTab(url = "/"): Promise<Tab> {
@@ -186,6 +202,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
   data.clear();
+  window.__wildbotsStartup = undefined;
   queued = [];
   onWrite = undefined;
   onRead = undefined;
@@ -413,6 +430,114 @@ describe("the account record's guards", () => {
   });
 });
 
+describe("the theme this device keeps", () => {
+  it("goes with member one when another tab signs member two in, while the tab waits for two's bootstrap", async () => {
+    const one = accounts.one;
+    accounts.one = { ...one, preferences: { ...one.preferences, theme: "dark" } };
+    try {
+      const signInTab = await openTab();
+      signedInAs("one");
+      const oneTab = await openTab("/?bot=ranch");
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      holding = ["GET /bootstrap"];
+      await signInAs(signInTab, "two");
+      await deliver();
+      expect(oneTab.text()).toContain("Connecting to your household");
+      expect(document.documentElement.dataset.theme).toBe("system");
+      expect(data.has("agent-interface:theme")).toBe(false);
+    } finally {
+      accounts.one = one;
+    }
+  });
+});
+
+// The reviewer's case: boot.js applied member one's saved dark theme, correctly at that moment, then
+// another tab's change finished before this page's bundle drew anything.
+describe("the theme boot.js applied before the bundle", () => {
+  it.each([
+    ["member two's sign-in", { id: "two-settled", at: NOW, user: "two" }, "two"],
+    ["a sign-out", { id: "one-gone", at: NOW, signedOut: true, user: "one" }, null],
+  ] as const)("is gone from the first draw when %s finished meanwhile, and stays gone if bootstrap fails", async (_name, settled, now) => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    // What the other tab's change leaves: a sign-in writes a hint that names no account yet, a sign-out none; neither keeps the theme.
+    data.delete(savedThemeKey);
+    if (now) data.set(signInHintKey, JSON.stringify({ until: NOW + 3_600_000, bots: [] }));
+    else data.delete(signInHintKey);
+    data.set(authEpochKey, JSON.stringify(settled));
+    cookie = now;
+    const tab = await openTab();
+    expect(tab.text()).toContain("Connecting to your household");
+    expect(document.documentElement.dataset.theme).toBe("system");
+    // A bootstrap that fails names no one, so nothing else would ever replace the theme.
+    await answerHeld("GET /bootstrap", { status: 503, body: { error: "Down for a moment" } });
+    expect(document.documentElement.dataset.theme).toBe("system");
+  });
+
+  it("stays on the first draw while the hint still names its account and nothing changed", async () => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    const tab = await openTab();
+    expect(tab.text()).toContain("Connecting to your household");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+});
+
+describe("the read boot.js starts before the bundle", () => {
+  it("is not shown when another tab signed member two in while the bundle loaded", async () => {
+    // The reviewer's case: member one's early bootstrap is on its way when another tab signs two in.
+    const signInTab = await openTab();
+    signedInAs("one");
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(held.map(item => [item.call.call, item.call.cookie])).toEqual([["GET /bootstrap?roster=lean", "one"]]);
+    // The read is on the first page's window, which the test's one window stands in for; the other tab never sees it.
+    const early = window.__wildbotsStartup;
+    window.__wildbotsStartup = undefined;
+    await signInAs(signInTab, "two");
+    await answerSentAs("GET /bootstrap", "two");
+    expect(signInTab.text()).toContain("Barn Cat");
+    // The first page's bundle arrives now, then member one's early answer.
+    window.__wildbotsStartup = early;
+    const firstTab = await openTab();
+    await answerSentAs("GET /bootstrap", "two");
+    await answerSentAs("GET /bootstrap", "one");
+    expect(firstTab.text()).toContain("Barn Cat");
+    showsNothingOf(firstTab);
+    expect(await accountMenu(firstTab)).toContain("bo@example.test");
+    showsNothingOf(firstTab);
+  });
+
+  it("is discarded when another tab starts a sign-in after the app took it, before it answered", async () => {
+    signedInAs("one");
+    holding = ["GET /bootstrap", "POST /auth/local"];
+    runBoot();
+    const firstTab = await openTab();
+    // The app took the early read instead of asking: one bootstrap so far.
+    expect(calls.filter(call => call.call.startsWith("GET /bootstrap"))).toHaveLength(1);
+    data.set(authEpochKey, JSON.stringify({ id: "elsewhere", at: NOW, changing: true, user: "one" }));
+    await answerSentAs("GET /bootstrap", "one");
+    showsNothingOf(firstTab);
+    expect(firstTab.text()).toContain("Connecting to your household");
+  });
+
+  it.each([
+    ["is not started while another tab's sign-in is on its way", NOW - 64_000, 0],
+    ["is started when the mark is older than any request could take", NOW - 65_000, 1],
+  ])("%s", (_name, at, reads) => {
+    signedInAs("one");
+    data.set(authEpochKey, JSON.stringify({ id: "elsewhere", at, changing: true, user: "one" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    expect(held).toHaveLength(reads);
+  });
+});
+
 // --- What the second review found ---
 
 /** Member one's boot with changes for one test, put back after it. */
@@ -485,6 +610,58 @@ describe("a page in the back-forward cache", () => {
     expect(covered()).toBe(false);
     showsNothingOf(tab);
     expect(tab.text()).toContain("Enter local workspace");
+  });
+});
+
+// The theme boot.js applied from this device, which the cover takes away and gives back. A restored page
+// never runs boot.js again; only the cover and the app decide its theme.
+describe("a page in the back-forward cache, in the theme boot.js applied", () => {
+  it("comes back in member one's saved theme when it left before bootstrap answered, with the account unchanged", async () => {
+    signedInAs("one");
+    data.set(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    holding = ["GET /bootstrap"];
+    runBoot();
+    const tab = await openTab();
+    expect([tab.text().includes("Connecting to your household"), root.dataset.theme]).toEqual([true, "dark"]);
+    await pageTransition("pagehide");
+    expect(root.dataset.theme).toBe("system");
+    await pageTransition("pageshow");
+    expect([covered(), root.dataset.theme]).toEqual([false, "dark"]);
+  });
+
+  it("shows none of member one's saved theme once restored after another tab signed member two in", async () => {
+    await withOne(oneWithNews, async () => {
+      signedInAs("one");
+      const tab = await openTab("/?bot=ranch");
+      expect(root.dataset.theme).toBe("dark");
+      expect(JSON.parse(data.get(savedThemeKey)!)).toMatchObject({ user: "one", theme: "dark" });
+      await pageTransition("pagehide");
+      // Another tab signs member two in while this page is frozen, and its storage events never reach it.
+      data.set(authEpochKey, JSON.stringify({ id: "two-changing", at: NOW, changing: true, user: "one" }));
+      data.delete(savedThemeKey);
+      data.set(signInHintKey, JSON.stringify({ until: NOW + 3_600_000, bots: [] }));
+      cookie = "two";
+      data.set(authEpochKey, JSON.stringify({ id: "two-settled", at: NOW, user: "two" }));
+      queued = [];
+      holding = ["GET /bootstrap"];
+      // Every theme the page takes from the moment it shows again, including one a later commit replaces:
+      // each record carries the value before its change, and the last value follows them.
+      const changes: (string | null)[] = [];
+      const observer = new MutationObserver(records => { for (const change of records) changes.push(change.oldValue); });
+      const themes = () => [...changes, ...observer.takeRecords().map(change => change.oldValue), root.dataset.theme];
+      window.addEventListener("pageshow", () => {
+        observer.observe(root, { attributeFilter: ["data-theme"], attributeOldValue: true });
+      }, { once: true, capture: true });
+      await pageTransition("pageshow");
+      await advance(0);
+      expect([tab.text().includes("Connecting to your household"), covered(), root.dataset.theme]).toEqual([true, false, "system"]);
+      await answerHeld("GET /bootstrap");
+      expect(tab.text()).toContain("Barn Cat");
+      const seen = themes();
+      observer.disconnect();
+      expect(seen[0]).toBe("system");
+      expect(seen).not.toContain("dark");
+    });
   });
 });
 

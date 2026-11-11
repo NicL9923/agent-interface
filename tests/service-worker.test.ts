@@ -660,6 +660,46 @@ describe('service worker app shell', () => {
     for (const client of open) expect(client.navigate).not.toHaveBeenCalled();
   });
 
+  describe('boot.js, which belongs to the shell that loads it', () => {
+    const BOOT = 'https://app.example/boot.js';
+    const withBoot = () => {
+      const sw = installed();
+      sw.stores.get('agent-interface-test')!.set('/boot.js', js('this release'));
+      return sw;
+    };
+    // The page's request for the script, as the shell's <script src> makes it.
+    const boot = async (sw: ReturnType<typeof worker>) => {
+      let answer: Promise<unknown> | undefined;
+      sw.handlers.fetch({ request: { url: BOOT, method: 'GET', mode: 'no-cors' }, respondWith: (value: Promise<unknown>) => { answer = value; } });
+      expect(answer, 'the worker answers boot.js').toBeDefined();
+      return (await answer as Response).text();
+    };
+    const fromNetwork = (sw: ReturnType<typeof worker>) => sw.fetch.mockImplementation(async (request: unknown) =>
+      typeof request === 'string' ? shell(NEXT) : js('next release'));
+
+    it('comes from this release\'s cache while the cached shell opens', async () => {
+      const sw = withBoot();
+      fromNetwork(sw);
+      expect(await boot(sw)).toBe('this release');
+    });
+
+    it('comes from this release\'s cache without asking the network, even once the shell is noted as out of date', async () => {
+      const sw = withBoot();
+      fromNetwork(sw);
+      await sw.navigate();
+      expect(outdated(sw)).toBe(true);
+      // A download that never finishes would block the page's <head>; the network is not asked.
+      sw.fetch.mockImplementation(() => new Promise(() => {}));
+      expect(await boot(sw)).toBe('this release');
+    });
+
+    it('comes from the network only when this release holds no copy', async () => {
+      const sw = installed();
+      fromNetwork(sw);
+      expect(await boot(sw)).toBe('next release');
+    });
+  });
+
   it('starts a new release with no note, whatever the last release noted', async () => {
     const old = installed();
     old.fetch.mockImplementation(async () => shell(NEXT));
@@ -1076,6 +1116,21 @@ describe('service worker pushes for the account signed in here', () => {
     await push(sw, forOne);
     expect(sw.showNotification).not.toHaveBeenCalled();
     expect(sw.setAppBadge).not.toHaveBeenCalled();
+  });
+
+  it('keeps whose notifications may show when a new release takes over, which removes only release caches', async () => {
+    const old = worker();
+    await old.install();
+    await old.signedIn('two');
+    // The next release's worker installs beside it in the same storage, then takes over.
+    old.stores.set('agent-interface-previous', old.stores.get('agent-interface-test')!);
+    old.stores.delete('agent-interface-test');
+    const next = worker({ stores: old.stores });
+    await next.install();
+    await next.activate();
+    expect([...next.stores.keys()].sort()).toEqual(['agent-interface-test', 'wildbots-account']);
+    await push(next, forOne);
+    expect(next.showNotification).not.toHaveBeenCalled();
   });
 
   it('shows a push that names no account, as from a server before this field, while someone is signed in', async () => {

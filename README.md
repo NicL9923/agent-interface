@@ -121,6 +121,56 @@ the worker never reloads the window over the form. A chat waiting on a sheet bel
 sheet and account: if the sheet goes without closing, as when another tab signs in as someone
 else, the chat never opens.
 
+The web app's first read, its sign-in check (`/api/bootstrap`), starts before the app's code
+has downloaded. `index.html` loads `public/boot.js` first, a small script served as written,
+which starts that read and leaves it for the app, so a load reads bootstrap once and a
+returning visit no longer waits for the code before asking. The app takes the read only if it
+is the one the app would make and the account record below is the one the script saw, and
+judges its answer exactly as its own, discarding it if the record changes before it arrives.
+The script starts no read while another tab's sign-in or sign-out is under way. If the read fails or
+is cancelled, the app reads again itself; if it finds no session, the app shows sign-in, as
+before. The same script applies the theme this device last showed the signed-in person, so a
+dark theme never opens light. The browser keeps that theme with the account it belongs to, in
+`agent-interface:theme`, and uses it only while the sign-in record below names that account and
+no other tab's sign-in or sign-out is under way. The app's first draw of each account applies
+the same rule again before it paints, so a change another tab finishes after the script ran,
+before the app's code arrived, leaves none of the last member's theme on screen. See
+`src/startup-read.ts` and `src/app/saved-theme.ts`.
+
+A returning visit draws home at once from the last roster this device showed, instead of waiting
+for bootstrap. The browser keeps, in `agent-interface:roster`, only what home draws: the person's
+name and picture address for the account button, each assistant's ID, name, avatar and whether it
+is shared, the pinned assistants, sections, main assistant and whether the person put off choosing
+one, and each group chat's ID, name and members. It keeps no message, preview, time, unread mark,
+activity, draft, token or email, and lists only the assistants bootstrap gave that person. Until
+bootstrap answers, home says "Connecting" (or "Offline", or "Can't connect" once a check failed),
+each row says "Shared assistant" or "Personal assistant" in place of its latest message, a group
+chat names its members, and no row is marked unread or busy. Account, Search, New, row menus and
+the main assistant suggestion wait for bootstrap. A tap on an assistant opens its chat once
+bootstrap answers, and starts reading it at the tap as a linked chat does; Today and group chats
+open once bootstrap answers, and read nothing before. The saved home is the account's screen too:
+it shows the plain title and no app badge, and the back-forward cache covers it as it does the
+rest. Bootstrap's answer redraws the same rows in place, so scroll and
+focus stay, and the saved group chats stay until the group list answers, except a group chat with
+an assistant bootstrap no longer lists, which goes at once and stays gone if the group list then
+fails. The copy belongs to one account: it is drawn only while the sign-in record names that
+account, read once per account generation (see Accounts in one browser below), so every change
+of account in any tab, cleared storage, a refused session and the sign-in record's lapse take it
+off the page, and it is removed with the sign-in record, so a second member never sees the
+first's home. Every field is checked as the server would accept it: assistant, section and group
+chat names take the server's own bounds, and the account's and group members' names, which the
+server does not bound, a generous one. A copy past any bound, a stored value over 200,000 characters, one this release cannot read,
+or storage that fails falls back to the welcome screen. When the first check fails, the saved
+home offers **Sign out of this device**: it signs out at once in every tab, removes this device's
+copy, sign-in record and theme, ends this browser's push subscription, which the server still
+holds for that account, and shows sign-in. Since the server could not be reached, the
+account record notes that the server's session may still be live; until it is ended there, which
+the sign-in screen does as soon as the server answers, nothing reads as that account. That note is
+written, and found in storage, before anything is removed. If storage refuses it or does not keep
+it, the record goes back, the copies stay, and the saved home says the sign-out could not be
+completed on this device. See
+`src/app/saved-roster.ts`.
+
 A notification or link that names a chat (`/?bot=ID`) starts reading that chat while the
 web app checks the sign-in, instead of after. It does so only when this browser signed in
 within the session's seven days and that sign-in's last check named the account and listed
@@ -138,8 +188,8 @@ is joined only while it is still on its way; once finished it only fills the res
 which the chat shows while it reads again. The response cache keeps the body of the
 latest-started read of each path, so a slower, older read that finishes last never replaces
 it. The browser keeps only the lapse time, the account ID and the chat IDs, in
-`agent-interface:sign-in-hint`, and drops them at sign-out, a refused session, a check
-that finds another account, or the lapse time. A link to a message, Today or a group chat
+`agent-interface:sign-in-hint`, and drops them, and the saved theme and home with them, at sign-out,
+a refused session, a new sign-in, a check that finds another account, or the lapse time. A link to a message, Today or a group chat
 waits for the check as before. See `src/app/linked-chat.ts`.
 
 ### Accounts in one browser
@@ -158,9 +208,11 @@ reads, live connections, drafts in memory and cached responses, discards any ans
 its way, and starts again from the account check. Meanwhile it shows the connecting screen, or
 sign-in after a sign-out, and never the previous account's rows, unread count or theme. An
 address belongs to the account the record named when its screen started, even one still
-connecting, or to the account its check named since. It is reset to `/`, fragment included,
+connecting, or to the account the saved home or its check drew since. A check that names another
+account than the saved home drew starts the app again. It is reset to `/`, fragment included,
 before a sign-out or another account draws; an address opened while signed out, or while another
-tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that the server refuses puts the record back, so other tabs read the
+tab's sign-in that began signed out is under way, is kept for the next sign-in. A sign-in that
+the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
 is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
@@ -171,8 +223,10 @@ tell other tabs. See `src/app/account-epoch.ts`.
 A page in the back-forward cache hears nothing while it is frozen, and a browser can show it
 again before its script runs. So as a page leaves, the account's screens are hidden in place,
 with the plain title and theme; nothing is unmounted. Coming back with the same account, they
-show again at once with their scroll, drafts and open panels. After a change they stay hidden
-until the next screen replaces them. Chromium restores this app from the cache, signed in, with
+show again at once with their scroll, drafts and open panels, and in their theme. After a
+change they stay hidden, in the plain theme, until the next screen replaces them. A restored page
+does not run `boot.js` again, so its theme until then is the cover's; a fresh load runs it, and
+has no cover. Chromium restores this app from the cache, signed in, with
 its live connections and service worker; `e2e/back-forward-cache.spec.ts` checks both cases.
 
 When another account signs in over one that never signed out here, that account's
@@ -196,6 +250,8 @@ What the browser keeps, in localStorage unless noted:
 | `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
 | `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push set the app badge | Never; each change replaces it |
 | `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
+| `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
+| `agent-interface:roster` | The home last shown: assistants, order, group chats and their members, the member's name and picture | With the hint, and at any sign-in |
 | `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
 | `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |
 | `agent-interface:group-send:<account>:<room>` and its `:draft` | A group message on its way, a group draft | Sign-out, or once sent |
@@ -217,8 +273,9 @@ open the profile can read its storage.
 
 One change is out of a browser's sight: a session revoked from another device, or a member
 removed from the household, while this browser is offline or has not yet asked the server.
-This browser keeps showing what it already shows until its first answer from the server, which
-refuses the session and so becomes the refused-session change above.
+This browser keeps showing what it already shows, the saved home included, until its first
+answer from the server, which refuses the session and so becomes the refused-session change
+above: the saved home, the sign-in record and the theme go, and sign-in shows.
 
 The browser tab title, favicon and installed app, and the iPhone and iPad app icon,
 show how many assistants have unread messages or a decision waiting for you. A web
@@ -288,8 +345,12 @@ returns to the entry's static imports.
 ### Motion and ambience
 
 `src/motion.css` holds the web client's motion layer and loads after `src/styles.css`. Every
-animation in it runs only when the system allows motion, and the existing reduced-motion rules
-still win.
+timed animation in it runs only when the system allows motion, and the existing reduced-motion rules
+still win. The header's lift follows scroll position rather than time, and the phone slide is a view
+transition the app does not start under reduced motion. The built app links some component stylesheets after it, so an animation the layer
+gives an element is that element's only one. Springs are sampled `linear()` easings. A browser without
+`linear()` gets the app's ease-out for the soft spring (menus, sheets, the status dock) and a cubic-bezier
+with about 5% overshoot for the livelier one (the toast, the jump button, sent messages, the work strip).
 
 - On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
   flies between its home row and the chat header while the screens slide. Browsers without the
@@ -386,6 +447,16 @@ when a release changed it.
 - A redirect, 401, 403, server error or no network changes nothing. No window reloads and
   the worker stays, so one bad answer never costs a person their work.
 - With no cached shell, as on a first visit or after storage is cleared, the network answers.
+
+`/boot.js` blocks the page's `<head>` before any of the app's code runs, so no deadline of the
+app's covers it: a download that stalls leaves a blank page, with no title, until the browser
+gives up on it. The worker installs it with the shell and always answers this release's copy at
+once, even after the shell is noted as out of date, so an installed app never waits on the
+network for it. A first visit, or a browser without the worker, fetches it, and a stall there
+looks as a stalled shell or bundle did before. The server sends it with `no-cache`, as it does
+the shell, and answers a missing one with a 404, not the shell. A `boot.js` and an app from
+different releases still work: the app takes the read only when it is the read the app would
+make, so the worst case is one extra bootstrap read.
 
 A release that finishes installing is offered with **Refresh**, as before; the worker never
 switches releases under an open page. The shell is not fetched with navigation preload,
