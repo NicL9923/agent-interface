@@ -90,3 +90,16 @@ On the final code state: `npm run test:py` 44 files passed; `ruff check .` clean
 
 Not exercised: a real Hermes, a real compaction, the release tools against this add-on, and production. The deadline
 is not sent by any caller yet.
+
+## Review: Claude Opus 5.5 on `8e10a04`
+
+Same-provider review: the cross-provider reviewers were unavailable, so this branch's pull request carries the
+`independent-review-owed` label. Approved, no P1 or P2. The reviewer confirmed from upstream `rpc_dispatch.handle_request`
+that a compaction holds exactly one reservation, that a truly busy session never gets a lease, and that no lease is
+written after the deadline but for the write itself and the arrival skew. Six breaks: four red; two green are
+equivalent, since a compaction still holding the session trips both the `running` check and the reservation count.
+
+Two P3s, applied by the orchestrator, Claude Opus 5.5, in comments and docs only: three comments in
+`scripts/hermes-upgrade-linux.py` and `.agents/tools/deploy_common.py` still said acquire preempts before it decides,
+and the runbook and the capability matrix now tell a caller to send a deadline shorter than its read timeout, since the
+deadline starts when the handler starts.

@@ -295,7 +295,9 @@ handler first refuses at once, without stopping anything, if the request would b
 anyway. Otherwise it stops each running idle compaction, one at a time for up to 30 s
 each, so the hook waits up to 120 s for its answer. The add-on also accepts a `deadline`
 on acquire, the seconds the caller will wait, and writes no lease after it passes; it
-reports that as `maintenance_deadline` in its capabilities. The hook does not send one yet, so
+reports that as `maintenance_deadline` in its capabilities. The deadline starts when the
+handler starts, after the request crossed the socket, so a caller sends less than its own
+read timeout, with a margin of a few seconds, or a lease can still land just after it gave up. The hook does not send one yet, so
 everything below still applies to an acquire the hook gave up on. A request fails in one of three
 ways, and the hook reads each differently. The add-on answered with an error: its
 handler returned. The service ticket or the socket failed before the request was
