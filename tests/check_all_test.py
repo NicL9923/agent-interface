@@ -22,8 +22,9 @@ TOOLS = ROOT / ".agents/tools"
 sys.path.insert(0, str(TOOLS))
 import check_all  # noqa: E402
 
-# Test ports sit away from the tool's own range, so a suite running on this machine never collides with them.
-BASE, PAIRS = 47200, 12
+# Test ports sit away from the tool's own range, and each test process gets its own window of them, so test
+# processes started together (CI shards, an agent running the file twice) never fight over a real socket.
+BASE, PAIRS = 28000 + (os.getpid() % 140) * 32, 8
 
 
 def script(path, body):
@@ -196,25 +197,25 @@ class PortTest(TempCase):
         self.assertIn("No free app and control port pair", str(raised.exception))
 
     def test_a_requested_port_is_used_when_free(self):
-        self.assertEqual(self.pick(requested=BASE + 40), BASE + 40)
+        self.assertEqual(self.pick(requested=BASE + 20), BASE + 20)
 
     def test_a_requested_port_that_is_busy_is_refused_rather_than_replaced(self):
-        self.listen(BASE + 41)  # the control port
+        self.listen(BASE + 21)  # the control port
         with self.assertRaises(check_all.Refusal) as raised:
-            check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 40)
-        self.assertIn(f"port {BASE + 41} is in use", str(raised.exception))
+            check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 20)
+        self.assertIn(f"port {BASE + 21} is in use", str(raised.exception))
 
     def test_a_requested_port_another_run_holds_is_refused_with_that_reason(self):
-        held, _ = check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 40)
+        held, _ = check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 20)
         self.addCleanup(held.release)
         with self.assertRaises(check_all.Refusal) as raised:
-            check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 40)
+            check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 20)
         self.assertIn("locked by another check-all", str(raised.exception))
 
     def test_binding_is_checked_for_real_on_loopback(self):
-        self.assertTrue(check_all.can_bind(BASE + 60))
-        self.listen(BASE + 60)
-        self.assertFalse(check_all.can_bind(BASE + 60))
+        self.assertTrue(check_all.can_bind(BASE + 30))
+        self.listen(BASE + 30)
+        self.assertFalse(check_all.can_bind(BASE + 30))
 
 
 class NodeModulesTest(TempCase):
@@ -726,7 +727,7 @@ class CommandTest(TempCase):
         self.assertEqual(set(ports.values()), {None})
 
     def test_a_port_the_caller_set_is_honored_when_free_and_refused_when_not(self):
-        free = check_all.PORT_BASE + 700
+        free = BASE + 24  # past the candidate pairs, so it is only ever used because the caller asked
         self.run_main("--only", "e2e", E2E_PORT=str(free))
         self.assertEqual([call["port"] for call in self.calls()], [str(free)])
         with socket.socket() as busy:

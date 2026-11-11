@@ -38,8 +38,9 @@ HEAVY = frozenset({"test", "e2e", "py"})
 NEEDS = {"e2e": "build"}
 PY_MODES = ("auto", "always", "never")
 # The app port and its control port (port + 1) come from pairs in this range. It sits above the ports the
-# measuring tools default to and below the range the operating system hands out to outgoing connections.
-PORT_BASE = 43100
+# measuring tools default to and below the ephemeral range (32768 and up on Linux, 49152 on macOS), so an
+# outgoing connection cannot take a port between the check and the bind.
+PORT_BASE = 24100
 PORT_PAIRS = 400
 EXIT_USAGE = 2
 EXIT_LOCK_TIMEOUT = 75
