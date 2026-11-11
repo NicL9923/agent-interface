@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, vi } from "vitest";
 import { recordActWarning, takeActWarnings } from "./act-guard";
 
@@ -7,6 +8,19 @@ if (typeof document !== "undefined") {
   // jsdom has no canvas. Its getContext already returns null, but logs "Not implemented" each
   // time; this returns the same null quietly. Tests that need a context still stub their own.
   HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+  // crypto.subtle.digest runs on Node's thread pool and settles in real time, outside the pinned clock and outside what act() and advance()
+  // flush, so under load a digest lands after the test's next step: a form's Send was still disabled for its receipt lookup, and a
+  // retry's request had not been sent. The same SHA-2 digest from node:crypto settles at once, in a microtask act() already flushes.
+  // Anything else goes to the real implementation.
+  const digestNames: Record<string, string> = { "SHA-1": "sha1", "SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512" };
+  const realDigest = crypto.subtle.digest.bind(crypto.subtle);
+  Object.defineProperty(crypto.subtle, "digest", { configurable: true, writable: true, value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+    const name = digestNames[(typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase()];
+    if (!name) return realDigest(algorithm, data);
+    const bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data);
+    const digest = createHash(name).update(bytes).digest();
+    return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength);
+  } });
   // A test's own console mock would otherwise swallow React's act warnings; see tests/act-guard.ts.
   const logError = console.error;
   console.error = (...args: unknown[]) => { if (!recordActWarning(args)) logError.apply(console, args); };
