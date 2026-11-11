@@ -49,7 +49,7 @@ seeds. The default 4,000 orders still run in under a second.
 
 ## Other tests
 
-- `tests/service-worker.test.ts` ("service worker app badge for the page", 20 cases): the count for the latest account, kept across a
+- `tests/service-worker.test.ts` ("service worker app badge for the page", 21 cases): the count for the latest account, kept across a
   restart; a count refused for another account, after a sign-out and for no account; seven malformed inputs; each clear rule; the old
   account's clear after the word and before the new count; a count a newer word overtook; a clear of an older generation after the
   account came back; the answer on the port, for a refused write and without the badge API; a refused record of the badge.
