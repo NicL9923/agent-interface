@@ -6,6 +6,7 @@ import { IncompleteCreationError } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
+import { compareVersions } from '../src/shared/inflight.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
@@ -2415,6 +2416,77 @@ describe('approval scopes, question shapes and the steering decision on the wire
     const {messages} = await runtime.conversation('shared');
     expect(messages.map(message => message.steered)).toEqual([undefined, true, undefined]);
   });
+  // The add-on sends `turn` only when Hermes did not start the turn, so only its capability makes silence mean started.
+  it('carries what Hermes did with a new task\'s turn, and says started only for an add-on that reports turns', async () => {
+    const answers: Record<string, Record<string, unknown>> = {
+      started: {}, queued: {turn: 'queued'}, joined: {turn: 'joined'}, none: {turn: 'none', message: 'Hermes ended its voice chat.'},
+      unknown: {turn: 'unknown'}, future: {turn: 'deferred'}, empty: {turn: ''}, null: {turn: null}, number: {turn: 3},
+      steered: {steering: true, turn: 'queued'}, refused: {status: 'rejected', turn: 'queued'}, uncertain: {status: 'uncertain'},
+    };
+    const answering = (request: Record<string, any>, socket: WireSocket) => {
+      if (request.method !== 'agent-interface.submit') return;
+      deferredMethods.add('agent-interface.submit');
+      const {status = 'accepted', ...rest} = answers[request.params.text];
+      queueMicrotask(() => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', steering: false, ...rest}}));
+    };
+    const turns = async () => Object.fromEntries(await Promise.all(Object.keys(answers).map(async (text, index) =>
+      [text, (await runtime.submit({...input(), requestId: `turn-${index}`, text})).turn])));
+    beforeSend = answering;
+    // An add-on that does not report turns: a missing one says nothing, and a reported one is still read.
+    expect(await turns()).toEqual({started: undefined, queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
+      future: 'unknown', empty: 'unknown', null: 'unknown', number: 'unknown', steered: undefined, refused: undefined, uncertain: undefined});
+    await runtime.close();
+    capabilities({admission_turn: true});
+    const reports = beforeSend!;
+    beforeSend = (request, socket) => { reports(request, socket); answering(request, socket); };
+    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    expect(await turns()).toEqual({started: 'started', queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
+      future: 'unknown', empty: 'unknown', null: 'unknown', number: 'unknown', steered: undefined, refused: undefined, uncertain: undefined});
+    // The typed stop's own words reach the client.
+    expect((await runtime.submit({...input(), requestId: 'stop', text: 'none'})).message).toBe('Hermes ended its voice chat.');
+    // A lookup never carries the turn, so it says nothing either.
+    deferredMethods.add('agent-interface.receipt');
+    beforeSend = (request, socket) => {
+      if (request.method === 'agent-interface.receipt')
+        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: 'r', status: 'accepted', runId: 'task-one', steering: false}}}));
+    };
+    const looked = await runtime.lookupSubmission('r');
+    expect(looked).toMatchObject({status: 'accepted', steered: false});
+    expect(looked).not.toHaveProperty('turn');
+    expect(looked).not.toHaveProperty('admittedVersion');
+  });
+
+  // A read asked at a newer structural version than the answer's arrival was asked after Hermes finished admitting.
+  it('stamps an accepted answer with the structural version it arrived at, not the one it was asked at', async () => {
+    let answer: (() => void) | undefined;
+    beforeSend = (request, socket) => {
+      if (request.method !== 'agent-interface.submit') return;
+      deferredMethods.add('agent-interface.submit');
+      const status = request.params.text === 'Refused' ? 'rejected' : 'accepted';
+      answer = () => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', steering: false}});
+    };
+    // A turn's start is a structural change; a streamed token or status line is not.
+    const started = () => sockets.at(-1)!.receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    await runtime.conversation('shared', {history: false});
+    const sending = runtime.submit({...input(), text: 'Start'});
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    const during = (await runtime.conversation('shared', {history: false})).version;
+    // Hermes reports a change while it admits, so a read asked before it is older than the answer.
+    started();
+    answer!();
+    const {admittedVersion} = await sending;
+    expect(compareVersions(during, admittedVersion)).toBeLessThan(0);
+    // A read at the same version may have been asked before the answer, so it is not after it; one after a change is.
+    expect(compareVersions((await runtime.conversation('shared', {history: false})).version, admittedVersion)).toBe(0);
+    started();
+    expect(compareVersions((await runtime.conversation('shared', {history: false})).version, admittedVersion)).toBeGreaterThan(0);
+    answer = undefined;
+    const refused = runtime.submit({...input(), requestId: 'two', text: 'Refused'});
+    await vi.waitFor(() => expect(answer).toBeDefined());
+    answer!();
+    expect(await refused).not.toHaveProperty('admittedVersion');
+  });
+
   it('refuses approval settings on an add-on that cannot manage them, before contacting it', async () => {
     const fetched = vi.fn(async () => Response.json({allowlist: ['recursive delete'], mode: 'smart'}));
     vi.stubGlobal('fetch', fetched);

@@ -386,6 +386,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         // A retry answers its failed turn. Hermes refuses it under its submission lock if another
         // turn started since the app checked, instead of steering the old question into that turn.
         ...(input.retryOf !== undefined ? {require_idle: true} : {})});
+      // Taken as the answer lands: a read asked at a newer version was asked after Hermes finished admitting.
+      const admitted = versionOf(structuralGenerationOf(input.botId));
       // A misadvertised older add-on must not be retried after possible admission.
       // Fall back to its old read checks for future sends, and recover participation now.
       if (fast && value.admission !== 'canonical') {
@@ -393,7 +395,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         const prior = await open(input.botId).catch(() => undefined);
         return {...receipt(value), runId: value.runId ?? prior?.app_run_id};
       }
-      return receipt(value);
+      return receipt(value, {reportsTurn: contract.admissionTurn, version: admitted});
     } catch (error) {
       if (error instanceof TransportError && error.rpcCode === 4094) throw httpError(409, interruptionPendingMessage, {code: 'interruption_pending'});
       // Refused before admission: nothing reached the assistant.
