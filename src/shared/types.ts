@@ -678,9 +678,28 @@ export interface Message {
    */
   interim?: boolean;
 }
+/**
+ * What Hermes did with an accepted new task's turn. `started`: it started the turn. `queued`: it put the text in
+ * its busy queue, which may merge it into a queued prompt or drop it as a copy of the running one, so no separate
+ * later turn is promised. `joined`: it put the text into the running turn. `none`: a typed stop phrase ended
+ * Hermes's voice chat and nothing was admitted. `unknown`: an answer neither the add-on nor this server knows,
+ * never taken for a started turn.
+ */
+export type AdmissionTurn = "started" | "queued" | "joined" | "none" | "unknown";
 export interface SubmissionReceipt {
   /** Whether this message joined the running task. Absent from an older add-on. */
   steered?: boolean;
+  /**
+   * What Hermes did with this message's turn, on an accepted new task only. Absent when nobody can say: an add-on
+   * too old to report it, a receipt recovered by lookup, a steer (see `steered`), or a receipt that is not accepted.
+   */
+  turn?: AdmissionTurn;
+  /**
+   * The assistant's structural version, as `Conversation.version`, when Hermes's admission answer reached this
+   * server. A conversation read with a newer version was asked after Hermes finished admitting the message, so
+   * what it reports is past this admission. Accepted answers from Hermes only; never comparable across restarts.
+   */
+  admittedVersion?: string;
 }
 /** An assistant's always-allowed command patterns and Hermes's own review of routine commands. */
 export interface ApprovalSettings {

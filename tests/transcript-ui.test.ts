@@ -183,6 +183,19 @@ describe("retry a failed turn", () => {
     expect(buttonText("Retry")).toBeUndefined();
   });
 
+  // Hermes answers that ID the same way again, so the retry reads as not taken, with Hermes's reason.
+  it("explains a retry that a typed stop phrase used to end Hermes's voice chat, as Hermes took nothing", async () => {
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) => (path === "/bots/shared/messages"
+      ? { requestId: (body as { requestId: string }).requestId, status: "accepted", turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." } : {}) as T);
+    await render();
+    await act(async () => buttonText("Retry")!.click());
+    await posted(1);
+    await advance(0);
+    expect(container.querySelector(".retry-refused")?.textContent).toContain("Hermes didn't take the retry. Hermes ended its voice chat. Nothing was sent to the assistant.");
+    expect(buttonText("Retry")).toBeUndefined();
+    expect(textarea().value).toBe("My saved draft");
+  });
+
   it("explains a refused retry from the server's record after a reload, and adds the message and its files to the draft", async () => {
     conversation = { ...conversation, retry: { requestId: await turnId(), status: "rejected", message: "The attachment is gone.", retryOf: "q1" } } as Conversation;
     await render();
@@ -1829,6 +1842,23 @@ describe("approval scopes, the decline handoff, recommended answers and steering
     await waitForUi(() => expect(container.querySelector(".approval-card")).toBeNull());
     await typeInto(textarea(), "");
     expect(textarea().placeholder).not.toBe("Tell Shared what to do instead");
+  });
+
+  // A typed stop phrase that ended Hermes's voice chat reached no one, so the person is still asked what to do instead.
+  it("keeps the decline's question after a typed stop that Hermes admitted as nothing", async () => {
+    conversation = { ...conversation, activity: { state: "waiting" }, approvals: [scoped] };
+    vi.mocked(write).mockImplementation(async <T>(path: string, body: unknown) => (path === "/bots/shared/messages"
+      ? { requestId: (body as { requestId: string }).requestId, status: "accepted", turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." } : {}) as T);
+    await render();
+    await act(async () => buttonText("Decline")!.click());
+    // The decline ended the turn.
+    conversation = { ...conversation, activity: { state: "idle" }, approvals: [] };
+    await changed();
+    await typeInto(textarea(), "Stop voice");
+    await act(async () => labelled("Send message").click());
+    await waitForUi(() => expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant."));
+    expect(textarea().value).toBe("Stop voice");
+    expect(textarea().placeholder).toBe("Tell Shared what to do instead");
   });
 
   it("keeps the decline's question in the message box when the chat opens again over an earlier accepted message", async () => {

@@ -291,6 +291,9 @@ export function accountStart(): AccountStart {
   addressFor = next;
   // Another tab may have told the service worker otherwise since, and closed before it settled.
   told = undefined;
+  // A worker the browser stopped while it closed the account that left still names it, and no later
+  // page says again that no one is signed in, so a settled sign-out says so at every start.
+  if (record?.signedOut) tellWorker(null);
   // A sign-out whose server session may still be live shows sign-in even on a fresh page, which would otherwise read it.
   const out = !!record?.signedOut && (generation > 0 || !!record.logout);
   return { start: out ? "signed-out" : "bootstrap", leftAccount };
@@ -381,7 +384,11 @@ export function accountRefused(hadAccount: boolean) {
   forgetSignIn();
   const record = current();
   if (stored() !== held || changingNow(record)) return true;
-  if (!hadAccount && (!record || record.signedOut)) return false;
+  if (!hadAccount && (!record || record.signedOut)) {
+    // Nothing to write, but the worker may still name the account that left, as at a signed-out start.
+    tellWorker(null);
+    return false;
+  }
   closeShownNotifications();
   transition({ signedOut: true, user: record?.user });
   return true;

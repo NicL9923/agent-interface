@@ -453,12 +453,12 @@ run, the line restored:
 
 | Mutation | Result |
 | --- | --- |
-| No generation check after the reads | passed: the check after the write stops the step, and the next step writes the latest word over the stale one |
-| No check after opening the cache | passed, for the same reason |
-| Neither of those two | passed: they only skip a write the next step overwrites |
+| No generation check after the reads | passed here, and wrongly called redundant: the fifth round found it protects the badge clear, see its red runs |
+| No check after opening the cache | passed, for the same reason: the check after the write stops the step, and the next step writes the latest word over the stale one. Confirmed redundant in the fifth round |
+| Neither of those two | passed here; the first of them is not redundant, so this row proved nothing about it |
 | No check after the write | failed: enumeration, the latest account's badge cleared in 66 orders |
 | No check after `getNotifications` | failed: enumeration, the latest account's notification closed in 36 orders |
-| No check after the badge clear | passed: the check after `getNotifications` follows it |
+| No check after the badge clear | passed: the check after `getNotifications` follows it. Confirmed redundant in the fifth round |
 | None of the four checks in the account step | failed: the overtaken sign-out test, and 432 orders |
 | No chain | failed: the overtaken sign-out test, and 280 orders (cache 234) |
 | Push sets its badge without the second account check | failed: three named badge tests, and 505 orders |
@@ -471,6 +471,7 @@ run, the line restored:
 | The writer counts nothing stored as signed in | failed: the "nothing stored" writer row |
 | The writer counts a sign-out as signed in | failed: the sign-out writer row |
 | The writer counts an unreadable record as signed out | failed: the unreadable writer row |
+| A mark begun over another tab's mark takes its `fromSignedOut` | not run in this round; the fifth round added its row and ran it |
 
 ### Checks on the final head
 
@@ -485,3 +486,104 @@ tests. `npm run build`: pass. `npm run test:e2e`: 27 passed.
 - The page and the worker both write the app badge, in no shared order. After a switch the
   worker's clear of the old account's badge can land after the new account's page set its count,
   which leaves no badge until the count next changes; it never shows the old account's.
+
+## Fifth round: the review of `ad3b65b`
+
+`origin/main` at `785f4f2` merged in first, as `0f120ae`, with no conflict. The review found one
+order that undoes a tapped notification's account check, and several places where the enumeration
+test could not have failed. The invariants were written for one worker instance; the last item says
+where that stops.
+
+### Changes
+
+- P1, a tapped notification that comes back: `restore` checked no account. Its `showAgain` ran
+  whenever no window came to the front, so a notification of member one came back, listed with the
+  chain idle, after `ACCOUNT null`, or under member two after `ACCOUNT two`. `restore` now checks
+  `mayShow` before each display, so a notification of a departed account never flashes, and chains
+  `settlePush(notification.data?.account)` after it, so one whose account left while the display was
+  on its way closes when it lands. A failed Decline's notice had the same hole and one more: it named
+  no account, so after a switch it stayed listed under member two and a tap on it opened member one's
+  chat. `decline` now puts the account in the notice's data, checks `mayShow` before showing it, and
+  settles after. It also no longer rejects `waitUntil` when the browser refuses to store the notice,
+  as a push never has.
+- P3, the guard after the account step's reads is not redundant. A word that arrives during the
+  reads leaves `state` the older word. When that word is also what the cache holds, the step skips
+  the write and, without the check, judges the badge by it: `settleAccount` clears the badge of the
+  latest account. The fourth round's row calling it redundant is corrected above. The guards after
+  opening the cache and after the badge clear were run again with the new tests and are redundant;
+  they stay, since each makes the order of checks read the same all the way down.
+- P3, a refused cache write: the account step's write and its badge clear are wrapped, so the step
+  goes on to close what the departed account has on screen. `saved` is only updated by a write that
+  worked, so the next step writes again.
+- P3, the badge: the page already clears the app badge on every start that draws no account, since
+  `useAppBadge(0)` runs with the screen's other hooks, before `AccountApp` returns the sign-in
+  screen (`src/app/badge.ts`). That is the reviewer's fix; it needed a test and no code.
+- P3, the worker named after a sign-out: `accountStart` tells the worker no one is signed in at every
+  start from a settled sign-out, and `accountRefused`'s early return tells it for a browser with
+  nothing stored. `told` is cleared at each `accountStart`, so a repeat of the same word is sent once
+  per generation, not once per bootstrap.
+- P3, the writer table has a row for a mark begun over another tab's mark.
+- Known limit, named in the invariants comment in `scripts/service-worker.js`: all of this holds for
+  one worker instance. While a release updates, the old worker can still be running steps it held
+  across the new worker's activation. The two share the saved account and the badge's owner but not
+  the chain, the generation or the memory, so the old one can write a word the new one overtook or
+  close a notification the new one allows, until the browser stops it. No ordering inside one
+  instance can fix that; the page repeating its word at each start puts the newest back.
+
+### The enumeration test
+
+`tests/service-worker-orderings.test.ts` now also:
+
+- takes a tap on a notification of one member and a Decline of one member, at random places, with
+  `clients.matchAll`, `clients.openWindow` and the Decline's `fetch` held like every other step. A
+  window the worker tries to open is refused three times in four, so the notification comes back; a
+  request is lost one time in four.
+- records every call the worker makes that the fakes refuse, and fails a run that has one. A throw
+  inside a chain step is swallowed by the chain's `catch`, so before this the test passed over it.
+- records every `showNotification` call with the word that was latest when the worker asked, and
+  fails a run that asked for a notification of an account that word excludes. The final listing hides
+  a display that flashed and was closed.
+- takes `SW_ORDER_WORDS` for the number of account words, three by default. Four is a scratch run:
+  24 page orders instead of 12.
+
+### Red runs
+
+Each protecting line broken by hand, the line restored. The named tests are in
+`tests/service-worker.test.ts`; "orders" are the seeded walks, 4,000 from seed 1 unless it says
+otherwise.
+
+| Mutation | Result |
+| --- | --- |
+| No check after the account step's reads | failed: the named test "words two, one, two, one"; 4 of 40,000 four-word orders (badge cleared under the latest), none of 4,000 with three words |
+| The chain without its `catch` | failed: the named test where a refused badge record ends a push and the next word still applies |
+| `clearBadge` without `keepBadgeFor(null)` | failed: the named test with exactly one clear across a sign-out and two sign-ins |
+| A refused cache write stops the step | failed: the named test where the sign-out's write is refused and the notification still closes |
+| `restore` without the settle after its display | failed: two named tests (sign-out, and a switch, while the display is on its way); 2 orders (screen) |
+| `restore` without the account check before its display | failed: the named "never displayed" test; 437 orders (shown after its word), none on the screen |
+| `decline` with no account in its notice | failed: the named test; 1,145 orders (screen 744, shown after its word 925) |
+| `decline` without the account check before its notice | failed: the named test; 329 orders (shown after its word) |
+| `decline` without the settle after its notice | failed: the named test; 2 orders (screen) |
+| An unscripted call inside the account step | failed: all 4,000 orders (the refused-call list); the chain swallowed every throw |
+| `accountStart` does not tell a settled sign-out | failed: two UI tests (another tab's sign-out, and a page opened after one) |
+| `accountRefused`'s early return does not tell | failed: the UI test of a page opened with nothing stored |
+| The page does not clear the app badge at a count of zero | failed: the UI test of a page started signed out |
+| A mark begun over a mark takes its `fromSignedOut` | failed: the new writer row |
+| No check after opening the cache; no check after the badge clear | passed, with the named tests and 40,000 four-word orders each: redundant, as the fourth round said |
+
+The first draft of `decline` kept a refused notice's rejection, and the new Decline events failed
+363 of 4,000 orders on `waitUntil`. It is caught now.
+
+### Checks on the final head
+
+`npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 199 files, 3373
+tests. `npm run build`: pass. `npm run test:e2e`: 27 passed. Ran on NicolasLaptop (Fedora, Node
+24.22.2) after a real `npm ci`.
+
+Orderings on the final worker, no order broke an invariant: three words, 20,000 orders each from seeds
+1, 100001 and 200001; four words, 40,000 orders each from the same seeds. The default 4,000 orders run
+in 0.6 s.
+
+### Not exercised
+
+- Two worker instances across an update, above. No test can show an old instance's step: it needs two
+  scripts sharing one Cache Storage, and the browser does not say when it stops the old one.

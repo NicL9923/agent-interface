@@ -828,16 +828,24 @@ message arrives one read before that report. That early row goes if the send is
 refused, fails or is unconfirmed; if its request has not answered within 5 seconds,
 when the message reads "Sending…" alone until Hermes accepts it; and if Hermes's
 copy arrives and no report of the turn follows within 5 seconds. A reply already
-after the copy ends the row on that read. A failed or interrupted report in the
-read that brings the copy may still be the last turn's, since Hermes saves the
-message before it opens the run. So the row keeps thinking through that read,
-until the next read or the 5 seconds; a turn that fails before any read sees it
-running therefore shows its failure, and its Retry, that much late. A message sent
-while the assistant works adds none. Stop appears once Hermes reports the turn.
-One case still shows thinking for the echo's 30 seconds with nothing running:
-Hermes's typed stop phrase, which acts only while Hermes's own voice mode is on
-for the session. WildBots never turns that mode on, and the add-on reports the
-phrase as accepted like any message. Thinking keeps the character visible with a gentle
+after the copy ends the row on that read. A failed or interrupted report can be
+the last turn's while Hermes admits the message, since Hermes saves the message
+before it opens the run. When Hermes's answer says the turn started, only a read
+the server asked after that answer arrived ends the row on such a report, and that
+can be the read that brings the copy; a read asked earlier never does, however late
+it arrives. Without that answer, as from an older add-on, the row keeps thinking
+through the read that brings the copy, until the next read or the 5 seconds; a turn
+that fails before any read sees it running therefore shows its failure, and its
+Retry, that much late, and two reads asked during one admission can still show the
+last turn's Retry. A message sent while the assistant works adds none, and neither
+does one Hermes puts into the running turn. Stop appears once Hermes reports the
+turn. Hermes's typed stop phrase, which acts only while Hermes's own voice mode is
+on for the session, admits nothing: the message leaves the chat, its words and files
+stay in the server's draft and in the web composer, and the composer says Hermes
+ended its voice chat. The iOS app does not read this yet and empties its own
+composer as for any accepted message. WildBots never turns that mode on. An older
+add-on reports the phrase as accepted like any message, which shows thinking for
+the echo's 30 seconds with nothing running. Thinking keeps the character visible with a gentle
 tilt and upward gaze. Completed work leaves the final reply without a separate
 Done status. Tool calls and delegated work appear in counted accordions inside each turn's fold.
 Advanced view adds tool inputs, outputs, errors and timestamps, plus reasoning

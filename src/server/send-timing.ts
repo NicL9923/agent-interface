@@ -1,5 +1,5 @@
 import type { Log } from "./logging.js";
-import type { TurnWatcher } from "../shared/types.js";
+import type { AdmissionTurn, TurnWatcher } from "../shared/types.js";
 
 /** How long after it begins a send's measurement is released, logged with whatever was correlated by then. */
 export const SEND_TIMING_GIVE_UP_MS = 120_000;
@@ -43,8 +43,10 @@ export type SendRoute = "messages" | "steer" | "talk";
  * - next-run: a read found another run running on the assistant's session, so the send's run is over.
  * - deadline: two minutes passed after the send began.
  * - disconnected: the Hermes socket dropped while the record was open, so frames may have been missed.
+ * - not-started: Hermes's answer says the send's turn did not start (`queued`, `none` or `unknown`), so no text
+ *   or live event is its own turn's. Logged at the answer, with no moments after it.
  */
-export type SendEnded = "measured" | "uncorrelated" | "next-run" | "deadline" | "disconnected";
+export type SendEnded = "measured" | "uncorrelated" | "next-run" | "deadline" | "disconnected" | "not-started";
 
 /** One turn of one session: from its message.start, or the first frame seen of it, to its message.complete. */
 interface Turn {
@@ -90,7 +92,7 @@ export interface SendRecord {
   lost: boolean;
   /** Released before Hermes answered. The answer logs this at once. */
   released?: "deadline" | "disconnected";
-  admission?: { route: SendRoute; steered: boolean; phases: Required<SendPhases> };
+  admission?: { route: SendRoute; steered: boolean; phases: Required<SendPhases>; turn?: AdmissionTurn };
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -100,6 +102,7 @@ const messages: Record<SendEnded, string> = {
   "next-run": "Send timing: another run started before it was measured",
   deadline: "Send timing: gave up at the deadline",
   disconnected: "Send timing: Hermes disconnected while it was measured",
+  "not-started": "Send timing: Hermes did not start the send's turn",
 };
 
 /**
@@ -121,16 +124,15 @@ const messages: Record<SendEnded, string> = {
  *   landed in it, or that two reads disagreed on. Such a turn may have been the run's, so the later text
  *   is not its first and is omitted. Until a turn is identified, the send keeps its first text time
  *   there, for at most SEND_TIMING_HELD turns at once.
- * - Limit, not guarded: a read names the session's open app run, which is not always the running turn's.
- *   A send preempts an idle compaction, an unrelated native turn starts before the add-on reads the
- *   session's state, and the add-on queues the send as a new task behind it. A read during the native turn
- *   names the send's run, so that turn's text and live events are recorded as the send's and the line can
- *   end "measured" with steered false. The answer is the same as for a send that started its own turn
- *   (steering false, its request ID as the run), and the native turn's frames may reach Node before or
- *   after it. Node could tell the two apart only by holding every new task's moments until a read after
- *   its run settled, and the add-on settles a run without a frame, so that would drop an unknown share of
- *   ordinary sends. The add-on sees the case (preempted, no open task, session running) and could say so
- *   in its answer; until it does, "measured" is not a guarantee in this one sequence.
+ * - A send whose turn did not start. A read names the session's open app run, which is not always the
+ *   running turn's: a send preempts an idle compaction, an unrelated native turn starts before the add-on
+ *   reads the session's state, and Hermes queues the send as a new task behind it or puts it into that turn.
+ *   A read during the native turn names the send's run, so that turn's text would be recorded as the send's.
+ *   An add-on that reports `admission_turn` says so in its answer (`turn`, see AdmissionTurn). A send Hermes
+ *   put into the running turn (`joined`) is measured as a steer, with steered true. One whose turn did not
+ *   start at all (`queued`, `none`, `unknown`) logs at the answer, ended "not-started", with no moments: a
+ *   queued text may be merged or dropped, so no later turn is its own either. Limit, not guarded: an older
+ *   add-on answers that sequence as a started turn, and the line can end "measured" with steered false.
  * - A steer is measured by its run's next growth after it arrived. Native steering answers "queued" for an
  *   ordinary steer too, and queued text drains into a later turn of the same run, so a steer and a queued
  *   send cannot be told apart. Both are measured on their run, past turn boundaries.
@@ -163,12 +165,17 @@ export class SendTimings implements TurnWatcher {
     return record;
   }
 
-  /** Hermes accepted the send into runId. steered is its admission decision when it reports one. */
-  admitted(record: SendRecord, route: SendRoute, steered: boolean, phases: Required<SendPhases>, runId: string | undefined): void {
+  /**
+   * Hermes accepted the send into runId. steered is its admission decision when it reports one, and turn what
+   * its answer said about the send's turn, when it says.
+   */
+  admitted(record: SendRecord, route: SendRoute, steered: boolean, phases: Required<SendPhases>, runId: string | undefined,
+    turn?: AdmissionTurn): void {
     if (record.admission) return;
-    record.admission = { route, steered, phases };
+    record.admission = { route, steered: steered || turn === "joined", phases, ...(turn ? { turn } : {}) };
     if (record.released) return this.write(record, record.released);
     if (!this.records.has(record)) return;
+    if (turn === "queued" || turn === "none" || turn === "unknown") return this.finish(record, "not-started");
     if (runId === undefined) return this.finish(record, "uncorrelated");
     record.runId = runId;
     record.firstLive = record.lives.get(runId);
@@ -354,10 +361,10 @@ export class SendTimings implements TurnWatcher {
   }
 
   private write(record: SendRecord, ended: SendEnded): void {
-    const { route, steered, phases: { arrival, hermesStart, admitted } } = record.admission!;
+    const { route, steered, turn, phases: { arrival, hermesStart, admitted } } = record.admission!;
     const since = (at: number | undefined) => at === undefined ? undefined : round(at - arrival);
     this.log.info({ sendTiming: {
-      route, botId: record.botId, requestId: record.requestId, steered,
+      route, botId: record.botId, requestId: record.requestId, steered, ...(turn ? { turn } : {}),
       prepareMs: since(hermesStart), admissionMs: since(admitted),
       firstFrameMs: since(record.firstFrame), firstLiveMs: since(record.firstLive), ended,
       ...(ended === "deadline" ? { gaveUpAfterMs: this.giveUpMs } : {}),
