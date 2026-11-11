@@ -91,19 +91,19 @@ Reads saved per turn are one per covered frame the notice throttle would not alr
 
 ## Checks
 
-`.agents/tools/check-all` at the commit (py ran because the diff touches a file the Python tests read):
+`.agents/tools/check-all --py always` at the review-fix commit, after merging `origin/main`:
 
 ```
 check      result  queued  run    counts
-typecheck  pass    -       0.7s   -
+typecheck  pass    -       0.6s   -
 lint       pass    -       0.2s   -
 ruff       pass    -       0.0s   -
-test       pass    -       15.2s  205 files, 3693 tests
+test       pass    -       16.6s  205 files, 3697 tests
 build      pass    -       1.5s   892 modules
 e2e        pass    -       1m14s  40 tests
-py         pass    -       4m07s  46 files
+py         pass    -       4m30s  46 files
 
-All 7 checks passed (5m40s total, 0.0s of it queued for heavy slots)
+All 7 checks passed (6m04s total, 0.0s of it queued for heavy slots)
 ```
 
 ## Ops and compatibility
