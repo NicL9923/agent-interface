@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import { assertPopupLibraryIsLazy, precachePlan } from "../scripts/precache-plan.mjs";
 
@@ -55,6 +58,42 @@ describe("service worker precache plan", () => {
   it("fails the build when no admin-only chunk is found, instead of quietly precaching them again", () => {
     const { "node_modules/@novnc/novnc/core/rfb.js": _rfb, "node_modules/@xterm/xterm/lib/xterm.mjs": _xterm, ...app } = manifest;
     expect(() => precachePlan(app, files)).toThrow(/terminal or remote desktop/);
+  });
+
+  it("finds the terminal and remote desktop chunks when node_modules is a symlink, which Vite records by the path it resolved", () => {
+    const base = mkdtempSync(join(tmpdir(), "precache-symlink-"));
+    try {
+      // A shared install outside the project, linked in as the project's node_modules.
+      const project = join(base, "project"), shared = join(base, "shared/node_modules");
+      for (const file of ["@novnc/novnc/core/rfb.js", "@xterm/xterm/lib/xterm.mjs"]) {
+        mkdirSync(join(shared, file, ".."), { recursive: true });
+        writeFileSync(join(shared, file), "");
+      }
+      mkdirSync(project);
+      symlinkSync(shared, join(project, "node_modules"));
+      const keyFor = (file: string, form: "plain" | "absolute" | "relative") => {
+        const resolved = realpathSync(join(project, "node_modules", file));
+        expect(resolved.startsWith(realpathSync(project))).toBe(false); // the link really leads outside the project
+        return form === "plain" ? `node_modules/${file}` : form === "absolute" ? resolved : relative(realpathSync(project), resolved);
+      };
+      const withKeys = (form: "plain" | "absolute" | "relative") => Object.fromEntries(Object.entries(manifest).map(([key, entry]) => {
+        const file = key.replace(/^node_modules\//, "");
+        return [key.startsWith("node_modules/") ? keyFor(file, form) : key, entry];
+      }));
+      const plain = precachePlan(withKeys("plain"), files);
+      expect(plain.onDemand).toEqual(["assets/remote-r.js", "assets/rfb-c.js", "assets/xterm-d.js"]);
+      expect(precachePlan(withKeys("absolute"), files)).toEqual(plain);
+      expect(precachePlan(withKeys("relative"), files)).toEqual(plain);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("does not take a package that merely has a similar name for an admin-only one", () => {
+    const lookalikes = { ...manifest, "node_modules/@xterm-lookalike/x/index.js": { file: "assets/look-l.js", isDynamicEntry: true }, "src/my_node_modules/@xterm/y.js": { file: "assets/my-m.js", isDynamicEntry: true } };
+    const { onDemand } = precachePlan(lookalikes, [...files, "assets/look-l.js", "assets/my-m.js"].sort());
+    expect(onDemand).not.toContain("assets/look-l.js");
+    expect(onDemand).not.toContain("assets/my-m.js");
   });
 
   it("fails the build when there is no HTML entry, instead of installing nothing", () => {
