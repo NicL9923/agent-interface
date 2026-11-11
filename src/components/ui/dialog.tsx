@@ -57,12 +57,29 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
       if (element.open) { element.close(); restoreFocus(element); }
       return;
     }
-    if (!element.open) {
+    let waiting: MutationObserver | undefined;
+    const present = () => {
       previous.current = element.ownerDocument.activeElement instanceof HTMLElement ? element.ownerDocument.activeElement : null;
       element.showModal();
       focus(target(options.current.initialFocus, element));
+    };
+    if (!element.open) {
+      // A dialog inside another sits above it in the top layer only if it opens after it, and React
+      // runs a child's effect first. Mounted together, as Settings opened at its sign-out question
+      // does, the inner one would open first and land underneath. So it waits for the outer one.
+      const outer = element.parentElement?.closest("dialog");
+      if (outer && !outer.open) {
+        waiting = new MutationObserver(() => {
+          // An outer dialog that opened and closed again before this ran is not open to sit above; wait for its next opening.
+          if (!outer.open) return;
+          waiting?.disconnect();
+          present();
+        });
+        waiting.observe(outer, { attributes: true, attributeFilter: ["open"] });
+      } else present();
     }
     return () => {
+      waiting?.disconnect();
       if (element.open) element.close();
       if (previous.current) restoreFocus(element);
     };
