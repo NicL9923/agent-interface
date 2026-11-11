@@ -70,10 +70,7 @@ Each protecting change broken by hand, the file run, the source restored. Where 
 | the memo comparators of `Conversation`, `Turns` and `TurnView` always `false` | app-ui "keeps the transcript from re-rendering while typing" | failed: 1, and the old test failed too |
 | `Conversation` given a fresh prop each render, and `TurnView`'s comparator dropped | the same test | passed, and so did the old one: both stop at the memo above the turn |
 
-A timer that re-renders `App` every 10 s failed the old mock test in a full-file run. The new avatar check failed it when the test ran first and passed it
-when any test ran before it (checked with `sends a custom answer` before it), and I did not find why. That break is artificial; the realistic one in the fourth row, the guard `use-session.ts` documents
-("an unchanged poll returns the cached object; keeping the derived state lets React skip the app render"), fails both, so the new test guards
-what the old one did for that cause but not for every cause. A reviewer should weigh that.
+A timer that re-renders `App` every 10 s failed the old mock test in a full-file run. The first avatar check did not: see "Review fixes" below, which finds why and replaces that check.
 
 ## Cost, and reduced motion as the default
 
@@ -81,8 +78,8 @@ With motion on, the real Avatar draws a frame every 16 ms of virtual time, and t
 unloaded machine `home-groups-ui` "does not poll any room's log from home" went from 42 ms to 1,291 ms and the file from 620 ms to 2,585 ms, and
 under a loaded full run (8 cores, 32 busy loops) that test timed out at 15 s and dragged seven others after it. `tests/setup-ui.ts` now answers
 only the reduced-motion query when a test stubs nothing, `reducedMotionOnly` in `ui-harness.ts` does the same where a file stubs `matchMedia` for
-layout, and seven of the eight files that stubbed it use it. `transcript-ui` failed with it, because its tests assert motion, and keeps motion. `bot-details-ui`,
-which asserts a live avatar, and the one `app-ui` test about which avatars move turn motion on. Full `npx vitest run`, user CPU time in two
+layout, and all eight files that stubbed it use it, `transcript-ui` last (see "Review fixes"). `bot-details-ui`, which asserts a live avatar,
+the one `app-ui` test about which avatars move, and the one `transcript-ui` test about avatar reactions turn motion on. Full `npx vitest run`, user CPU time in two
 runs each: `origin/main` 357 s and 375 s, this branch 401 s and 398 s, wall time 18 to 19 s for both. The heaviest files stay heavier because they
 render the real Avatar's artwork: `bot-settings` about three times its old time, `avatar-editor` and `transcript-ui` about twice.
 
@@ -125,3 +122,44 @@ e2e        pass     20m28s  1m15s  40 tests
 py         skipped  -       -      no changes to Python or a file the Python tests read against origin/main
 
 All 6 checks passed (26m19s total, 24m23s of it queued for heavy slots)
+
+## Review fixes
+
+An Opus review of `f46bcbf` found five things. Fixed on top of it, on NicolasLaptop, Node 24.22.2.
+
+1. **`app-ui` "does not re-render the app" compared by structure.** `toEqual` on elements and props passes for a re-render, since React's new props
+   object is deep-equal to the last. It now compares each avatar wrapper and its props with `!==`. The "passes when another test ran first" mystery was
+   not that. The row menu (`BotMenu`) loads its popup once after first paint, 2 s of virtual time later, through a real `import()`, and swaps the row's
+   contents when it lands. A cold run saw the swap land somewhere in the six minutes (the row's avatar was a new element); a run after a test that had
+   loaded the popup saw nothing. With identity compared, the cold run failed with no break at all. The test now awaits `preloadBotMenu()` before it
+   takes its baseline, as the file's menu tests do. Memoized `Sidebar` and `Conversation` also absorb a bare `App` render, so no avatar can show one: the
+   test additionally compares the props React keeps on `.app-shell`, which `App` renders itself.
+2. **`transcript-ui` ran the real Avatar's frame loop.** The file now stubs `reducedMotionOnly`, as `app-ui` does, and the one test that
+   asserts motion ("cheers the assistant on an approval...", which needs a moving avatar to hear it react) turns motion on, and failed without it.
+3. **`app-ui` "keeps the transcript from re-rendering while typing"** compares each `.conversation-turn`'s props with `!==`.
+4. **`transcript-rerender`** sampled after each `view()`, so a turn that rendered twice for one update counted once. A `Profiler` around `Conversation`
+   now samples after every commit.
+5. Two orphaned mock comments removed (`stream-hide-ui`, `collaboration-ui`).
+
+### Red runs
+
+| Break | Test | Before this fix (`f46bcbf`) | Now |
+| --- | --- | --- | --- |
+| `App` re-renders itself every 10 s (`setInterval` and state in `App`) | app-ui "does not re-render the app", full file | passed (103 of 103) | failed: 1, "the app shell was rendered again"; also failed when run alone |
+| `use-session.ts`: `unchanged && previous ? previous` made `false` | the same | failed alone | failed: 1, alone and in the full file |
+| `Sidebar` re-renders itself every 10 s | the same, avatar check | not run | failed: 1 (an avatar wrapper got new props) |
+| `TurnView` renders twice per update (`useLayoutEffect` that bumps state when `block` changes) | transcript-rerender | passed (8 of 8) | failed: 6 of 8 |
+| memo comparators of `Conversation`, `Turns` and `TurnView` all `() => false` | app-ui "keeps the transcript from re-rendering while typing" | failed | failed: 1 |
+| any one of those three comparators `() => false` | the same | passed | passed: the other two memo layers absorb it, for both forms of the check |
+
+The last row is not a gap in the identity check: the layers cover each other, and only breaking all three lets typing reach a turn. Identity is the stricter form by
+construction; I found no single source break that tells the two forms apart in this test.
+
+### Cost of item 2
+
+`transcript-ui` "checks a retry with a lost response by its ID, slowing down, and sends only that ID again" on an unloaded NicolasLaptop: 1,051 ms
+on `f46bcbf`, 41 ms now (the review measured 2,016 ms on its machine, under 66 ms on `main`). The file runs in 3.8 s, from 5.8 s.
+
+`taskset -c 16 npx vitest run tests/transcript-ui.test.ts` with four `yes > /dev/null` spinners on core 16, three runs: 114 of 114 passed each time,
+that test taking 451, 444 and 382 ms, files in 37.5, 36.4 and 34.8 s. I tried the same under load on the `f46bcbf` file; it had not finished after
+two minutes, so I stopped it and have no number for it. The spinners were stopped afterwards.
