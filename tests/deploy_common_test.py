@@ -280,7 +280,9 @@ with open({str(self.events)!r}, "a") as events:
     events.write(json.dumps(["stop", phase(), Path({str(self.status)!r}).read_text(), os.path.lexists({str(self.d.lease)!r})]) + "\\n")
 for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): Path(path).write_text(text)
 """))
-        self.answers = {}
+        # An add-on older than the maintenance_deadline capability, which every test not about it meets.
+        self.answers = {"capabilities": dict}
+        self.deadlines = []
         # The retry pause is a clock; pin it so no test waits.
         sleep = mock.patch.object(deploy_common.time, "sleep")
         self.sleeps = sleep.start()
@@ -301,9 +303,10 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
             return remaining.pop(0)()
         return answer
 
-    def rpc(self, action):
+    def rpc(self, action, deadline=None):
         """The add-on's maintenance RPC. Each test configures the actions it expects."""
         phase = self.host.ops / "phase.json"
+        if action == "acquire": self.deadlines.append(deadline)
         with self.events.open("a") as events:
             events.write(json.dumps([action, json.loads(phase.read_text())["phase"] if phase.exists() else None,
                                      self.status.read_text(), os.path.lexists(self.d.lease)]) + "\n")
@@ -327,8 +330,10 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
     def run_steps(self):
         self.d.acquire_then_stop_app(self.rpc, self.BLOCKED, self.PREVIOUS)
 
-    def recorded(self):
-        return [json.loads(line) for line in self.events.read_text().splitlines()] if self.events.exists() else []
+    def recorded(self, capabilities=False):
+        """[call, phase, status, lease present] per call. The capability read is left out unless asked for."""
+        events = [json.loads(line) for line in self.events.read_text().splitlines()] if self.events.exists() else []
+        return [event for event in events if capabilities or event[0] != "capabilities"]
 
     def phase(self):
         return json.loads((self.host.ops / "phase.json").read_text())["phase"]
@@ -485,6 +490,177 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
                 # The app keeps refusing sends: a lease that appears later never meets an idle status.
                 self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.BLOCKED, "maintenance-acquiring", late_lease))
 
+    CAPABLE = {"revision": "r", "maintenance_deadline": True, "executor_epoch": "epoch-1"}
+
+    def test_a_capable_add_on_is_asked_before_the_acquire_and_sent_a_deadline_with_each_attempt(self):
+        self.answers["capabilities"] = lambda: self.CAPABLE
+        self.answers["acquire"] = self.in_turn(self.busy, self.acquired)
+        self.run_steps()
+        blocked = self.BLOCKED.decode()
+        # The read comes after the app's gate closes, before the phase says an acquire may be under way, and holds no lease.
+        self.assertEqual(self.recorded(capabilities=True), [["capabilities", None, blocked, False], ["acquire", "maintenance-acquiring", blocked, False],
+                                                              ["acquire", "maintenance-acquiring", blocked, False], ["stop", "owned-maintenance-acquired", blocked, True]])
+        self.assertEqual(self.deadlines, [90, 90])
+
+    def test_an_add_on_that_does_not_say_it_honors_a_deadline_is_sent_none(self):
+        # Each is a capabilities answer that is not exactly maintenance_deadline: true. A deadline sent to an older
+        # add-on is ignored there, and the answer it never gives would then be read as proof.
+        for name, capabilities in (("an older add-on", {"revision": "r"}), ("false", {"maintenance_deadline": False}), ("a string", {"maintenance_deadline": "true"}),
+                                   ("the number one", {"maintenance_deadline": 1}), ("an unrelated key", {"maintenance_deadlines": True}), ("no object", ["maintenance_deadline"]),
+                                   # A restart cannot be told apart later without the process's epoch, so no epoch is no deadline.
+                                   ("no epoch", {"maintenance_deadline": True}), ("an empty epoch", {"maintenance_deadline": True, "executor_epoch": ""}),
+                                   ("a numeric epoch", {"maintenance_deadline": True, "executor_epoch": 7})):
+            with self.subTest(name):
+                self.deadlines.clear(); self.d.lease.unlink(missing_ok=True); self.events.unlink(missing_ok=True)
+                self.answers.update(capabilities=lambda capabilities=capabilities: capabilities, acquire=self.acquired)
+                self.run_steps()
+                self.assertEqual(self.deadlines, [None])
+
+    def test_a_capability_read_that_fails_leaves_the_acquire_to_run_as_before(self):
+        def timed_out(): raise subprocess.TimeoutExpired("python", 40)
+        def refused(): raise deploy_common.Answered({"code": -32601, "message": "unknown method"})
+        def unsent(): raise deploy_common.NotSent("Hermes was not asked for maintenance capabilities")
+        def not_json(): raise json.JSONDecodeError("Expecting value", "", 0)
+        for name, read in (("the child failed", lambda: (_ for _ in ()).throw(RuntimeError("A deployment command failed; private log retained"))),
+                           ("the child timed out", timed_out), ("the add-on answered an error", refused), ("it was not sent", unsent), ("the output was not JSON", not_json)):
+            with self.subTest(name):
+                self.deadlines.clear(); self.d.lease.unlink(missing_ok=True); self.events.unlink(missing_ok=True)
+                self.answers.update(capabilities=read, acquire=self.acquired)
+                self.run_steps()
+                # No deadline, so no proof is claimed: a lost answer from here is held for review, as for an older add-on.
+                self.assertEqual(self.deadlines, [None])
+                self.assertEqual([event[0] for event in self.recorded()], ["acquire", "stop"])
+
+    def test_a_capability_read_that_fails_for_an_unexpected_reason_is_not_swallowed(self):
+        # Only the failures of a read are a missing capability. A bug in the tool is not.
+        def broken(): raise KeyError("operation")
+        self.answers["capabilities"] = broken
+        with self.assertRaises(KeyError):
+            self.run_steps()
+        self.assertEqual(self.recorded(), [])
+
+    def silent_acquire(self):
+        raise deploy_common.DeadlinePassed("Hermes did not answer maintenance acquire within its 90 s deadline")
+
+    def test_no_answer_after_the_deadline_is_a_refusal_once_a_watch_after_the_release_sees_no_lease(self):
+        self.answers.update(capabilities=lambda: self.CAPABLE, release=lambda: self.released([{"profile": "nic", "state": "queued"}]), acquire=self.silent_acquire)
+        with self.assertRaisesRegex(deploy_common.Refused, "^Hermes did not answer the maintenance request within its deadline, so none was granted\\. "
+                                    'Busy work at release: .*"profile": "nic".*Activate again') as caught:
+            self.run_steps()
+        self.assertIsInstance(caught.exception.__cause__, deploy_common.DeadlinePassed)
+        # Not asked again: the add-on answered nothing for two minutes. The release still ran and the app never stopped.
+        self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+        # The capabilities were read again, for the process epoch, and then the lease was watched for. The handler may
+        # have started as late as the release's did, so the watch lasts its whole deadline and the grace after it.
+        self.assertEqual([event[0] for event in self.recorded(capabilities=True)], ["capabilities", "acquire", "capabilities", "release"])
+        self.assertGreaterEqual(sum(call.args[0] for call in self.sleeps.call_args_list), deploy_common.DEADLINE_WATCH_SECONDS)
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+
+    def test_the_status_stays_blocked_until_the_watch_ends(self):
+        # The app keeps refusing sends while a late handler may still write its lease.
+        seen = []
+        self.sleeps.side_effect = lambda seconds: seen.append(self.status.read_bytes())
+        self.answers.update(capabilities=lambda: self.CAPABLE, release=self.released, acquire=self.silent_acquire)
+        with self.assertRaises(deploy_common.Refused): self.run_steps()
+        self.assertEqual(set(seen), {self.BLOCKED})
+        self.assertEqual(self.status.read_bytes(), self.PREVIOUS)
+
+    def test_a_handler_that_starts_late_and_writes_its_lease_after_the_release_is_released_again(self):
+        # The handler waited for a thread in Hermes's pool, so the tool's wait ended before its deadline did. The first
+        # release found no lease, and the handler wrote one after it. Refusing now would leave Hermes refusing every chat.
+        written = []
+        def late_lease(seconds):
+            if len(self.sleeps.call_args_list) == 5 and not written: written.append(self.acquired())
+        self.sleeps.side_effect = late_lease
+        self.answers.update(capabilities=lambda: self.CAPABLE, acquire=self.silent_acquire,
+                            release=self.in_turn(lambda: self.released([{"profile": "nic"}]), lambda: self.released([{"profile": "late"}])))
+        with self.assertRaisesRegex(deploy_common.Refused, 'Busy work at release: .*"profile": "late"') as caught:
+            self.run_steps()
+        self.assertIsInstance(caught.exception.__cause__, deploy_common.DeadlinePassed)
+        self.assertEqual([event[0::3] for event in self.recorded()], [["acquire", False], ["release", False], ["release", True]])
+        # The watch ended when the lease showed, not at the end of its time.
+        self.assertEqual(self.sleeps.call_count, 5)
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_a_lease_written_in_the_last_second_of_the_watch_is_still_released_again(self):
+        # The handler started as late as the grace allows. The last look comes after the last sleep, so it is the one
+        # that sees a lease written during that sleep.
+        def last_second(seconds):
+            if len(self.sleeps.call_args_list) == deploy_common.DEADLINE_WATCH_SECONDS: self.acquired()
+        self.sleeps.side_effect = last_second
+        self.answers.update(capabilities=lambda: self.CAPABLE, acquire=self.silent_acquire,
+                            release=self.in_turn(self.released, lambda: self.released([{"profile": "late"}])))
+        with self.assertRaisesRegex(deploy_common.Refused, 'Busy work at release: .*"profile": "late"'):
+            self.run_steps()
+        self.assertEqual([event[0::3] for event in self.recorded()], [["acquire", False], ["release", False], ["release", True]])
+        self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))
+
+    def test_a_late_lease_that_the_second_release_cannot_clear_is_held_for_review(self):
+        def late_lease(seconds): self.acquired() if not self.d.lease.exists() else None
+        for name, second in (("it answers the lease still held", lambda: {"active": True, "operationId": "op-1", "busy": []}),
+                             ("it removes nothing", lambda: {"active": False, "operationId": None, "busy": []}),
+                             ("it gets no answer", lambda: (_ for _ in ()).throw(RuntimeError("A deployment command failed; private log retained"))),
+                             ("another operation owns the lease", lambda: (_ for _ in ()).throw(deploy_common.Answered({"code": 409, "message": "Another maintenance operation owns this lease"})))):
+            with self.subTest(name):
+                self.status.write_bytes(self.PREVIOUS); self.d.lease.unlink(missing_ok=True); self.events.unlink(missing_ok=True)
+                self.sleeps.side_effect = late_lease
+                self.answers.update(capabilities=lambda: self.CAPABLE, acquire=self.silent_acquire, release=self.in_turn(self.released, second))
+                with self.assertRaises(Exception) as caught: self.run_steps()
+                self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+                self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+                self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_a_restart_since_the_capability_read_is_held_for_review_after_a_release_attempt(self):
+        # The acquire went to a different process than the one that said it honors a deadline, so its silence proves nothing.
+        different = ({**self.CAPABLE, "executor_epoch": "epoch-2"}, "a new epoch"), ({"revision": "r"}, "an add-on that ignores the deadline"), \
+            ({"maintenance_deadline": True}, "no epoch"), ({"executor_epoch": ["epoch-1"]}, "an epoch that is not the string")
+        def no_answer(): raise RuntimeError("A deployment command failed; private log retained")
+        failures = ((no_answer, "the second read fails"), (lambda: (_ for _ in ()).throw(subprocess.TimeoutExpired("python", 40)), "the second read times out"),
+                    (lambda: (_ for _ in ()).throw(deploy_common.Answered({"code": -32601, "message": "unknown method"})), "the second read is an error"),
+                    (lambda: ["executor_epoch"], "the second read is not an object"))
+        for second, name in [(lambda capabilities=capabilities: capabilities, name) for capabilities, name in different] + list(failures):
+            with self.subTest(name):
+                self.status.write_bytes(self.PREVIOUS); self.d.lease.unlink(missing_ok=True); self.events.unlink(missing_ok=True); self.sleeps.reset_mock()
+                self.answers.update(capabilities=self.in_turn(lambda: self.CAPABLE, second), acquire=self.silent_acquire, release=self.released)
+                with self.assertRaisesRegex(deploy_common.Fence, "^Hermes answered maintenance acquire$") as caught:
+                    self.run_steps()
+                self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+                self.assertIsInstance(caught.exception.__cause__, deploy_common.DeadlinePassed)
+                # The release is still tried, as for any lost answer, but is not proof, and no watch runs.
+                self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
+                self.assertEqual(self.sleeps.call_count, 0)
+                self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+
+    def test_a_release_that_cannot_prove_it_after_the_deadline_is_held_for_review(self):
+        def silent(): raise deploy_common.DeadlinePassed("no answer")
+        def no_answer(): raise RuntimeError("A deployment command failed; private log retained")
+        self.answers.update(capabilities=lambda: self.CAPABLE, acquire=silent, release=no_answer)
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_steps()
+        self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+        self.assertNotIn("stop", [event[0] for event in self.recorded()])
+
+    def test_a_capable_add_on_that_fails_to_answer_some_other_way_is_still_held_for_review(self):
+        # Only the deadline passing proves no lease can appear. The child timing out itself does not.
+        def child_timed_out(): raise subprocess.TimeoutExpired("python", 145)
+        self.answers.update(capabilities=lambda: self.CAPABLE, acquire=child_timed_out, release=self.released)
+        with self.assertRaisesRegex(deploy_common.Fence, "^Hermes answered maintenance acquire$") as caught:
+            self.run_steps()
+        self.assertNotIsInstance(caught.exception, deploy_common.Refused)
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+
+    def test_an_older_add_ons_unanswered_acquire_is_still_held_for_review(self):
+        # The first release after this one meets an add-on without the capability. Without a deadline there is no
+        # proof, so a lost answer is held exactly as before and no DeadlinePassed can come from it.
+        def no_answer(): raise RuntimeError("A deployment command failed; private log retained")
+        self.answers.update(acquire=no_answer, release=self.released)
+        with self.assertRaisesRegex(deploy_common.Fence, "^Hermes answered maintenance acquire$"):
+            self.run_steps()
+        self.assertEqual(self.deadlines, [None])
+        self.assertEqual((self.status.read_bytes(), self.phase()), (self.BLOCKED, "maintenance-acquiring"))
+
     def test_unexpected_acquire_answers_are_refusals_once_released(self):
         def other_lease():
             self.d.lease.write_text(json.dumps({"operationId": "op-1", "owner": "someone else"}))
@@ -559,10 +735,17 @@ class MaintenanceRpcTests(unittest.TestCase):
         (source / "websockets/sync/__init__.py").write_text("")
         self.script, self.calls = self.host.root / "ws-script.json", self.host.root / "ws-calls.jsonl"
         (source / "websockets/sync/client.py").write_text(f"""
-import json
+import json, time
 from pathlib import Path
 def record(*event):
     with open({str(self.calls)!r}, "a") as calls: calls.write(json.dumps(event) + "\\n")
+# A clock that only moves when the fake socket blocks or NATIVE sleeps, so a 120 s wait costs no time.
+real_monotonic, skew = time.monotonic, [0.0]
+time.monotonic = lambda: real_monotonic() + skew[0]
+def sleep(seconds):
+    record("sleep", round(seconds))
+    skew[0] += seconds
+time.sleep = sleep
 class Socket:
     def __init__(self): self.steps = json.loads(Path({str(self.script)!r}).read_text())
     def __enter__(self): return self
@@ -574,7 +757,12 @@ class Socket:
         record("recv", timeout)
         if not self.steps: raise AssertionError("unscripted WebSocket receive")
         step = self.steps.pop(0)
-        if step == "silence": raise TimeoutError("timed out while waiting for a message")
+        if step == "silence":
+            skew[0] += timeout
+            raise TimeoutError("timed out while waiting for a message")
+        if step == "drop":
+            skew[0] += 2
+            raise ConnectionResetError("connection dropped after two seconds")
         return json.dumps(step)
 def connect(url, *, open_timeout, close_timeout):
     record("connect", url)
@@ -595,9 +783,15 @@ def connect(url, *, open_timeout, close_timeout):
         helper = ROOT / "scripts/hermes-upgrade-linux.py"
         self.argv = [sys.executable, "-I", "-c", "import runpy; m=runpy.run_path(" + repr(str(helper)) + "); exec(m['NATIVE'])"]
 
-    def call(self, method, *steps):
+    def call(self, method, *steps, deadline=None):
         self.script.write_text(json.dumps(list(steps)))
-        return self.d.maintenance_rpc(self.argv, dict(self.request, method=method))
+        request = dict(self.request, method=method)
+        if deadline is not None: request["deadline"] = deadline
+        return self.d.maintenance_rpc(self.argv, request)
+
+    def sleeps(self):
+        """How long NATIVE slept after a failure, on the fake clock."""
+        return [event[1] for event in self.recorded() if event[0] == "sleep"]
 
     def recorded(self):
         return [json.loads(line) for line in self.calls.read_text().splitlines()]
@@ -679,6 +873,95 @@ def connect(url, *, open_timeout, close_timeout):
                 with self.assertRaises(RuntimeError) as caught:
                     self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire"))
                 self.assertNotIsInstance(caught.exception, deploy_common.Answered)
+
+    def test_capabilities_are_read_without_credentials_and_with_the_short_wait(self):
+        capabilities = {"revision": "r", "maintenance_deadline": True}
+        self.assertEqual(self.call("capabilities", {"id": 1, "result": capabilities}), capabilities)
+        sent = {"jsonrpc": "2.0", "id": 1, "method": "agent-interface.capabilities", "params": {}}
+        port = self.request["origin"].rsplit(":", 1)[1]
+        self.assertEqual(self.recorded(), [["connect", f"ws://127.0.0.1:{port}/api/ws?ticket=ticket-1"], ["send", sent], ["recv", 15]])
+
+    def test_a_deadline_rides_on_the_acquire_and_is_shorter_than_the_wait_for_its_answer(self):
+        acquired = {"active": True, "operationId": "op-1", "busy": []}
+        self.assertEqual(self.call("acquire", {"id": 1, "result": acquired}, deadline=deploy_common.ACQUIRE_DEADLINE), acquired)
+        sent = next(event[1] for event in self.recorded() if event[0] == "send")
+        self.assertEqual(sent["params"], {"action": "acquire", "operation_id": "op-1", "service_key": "service-key", "deadline": 90})
+        self.assertEqual(self.recorded()[-1], ["recv", 120])
+        self.assertEqual(self.sleeps(), [])
+
+    def test_a_deadline_that_is_not_shorter_than_the_wait_is_refused_before_anything_runs(self):
+        # Without room between them, no answer would prove the deadline had passed.
+        for deadline in (120, 121, 1000):
+            with self.subTest(deadline=deadline):
+                self.calls.unlink(missing_ok=True)
+                with self.assertRaisesRegex(ValueError, "^A deadline must be shorter than the wait for its answer$"):
+                    self.call("acquire", deadline=deadline)
+                self.assertFalse(self.calls.exists(), "no WebSocket message was sent")
+        # A method with the short wait has no room for 90 s either.
+        with self.assertRaises(ValueError): self.call("release", deadline=90)
+
+    def test_no_answer_for_the_whole_wait_of_a_request_with_a_deadline_is_the_deadline_passing(self):
+        with self.assertRaisesRegex(deploy_common.DeadlinePassed, "^Hermes did not answer maintenance acquire within its 90 s deadline$") as caught:
+            self.call("acquire", "silence", deadline=90)
+        self.assertNotIsInstance(caught.exception, deploy_common.Answered)
+        # The receive itself waited the whole 120 s, so there was nothing left to wait out.
+        self.assertEqual([event for event in self.recorded() if event[0] in ("recv", "sleep")], [["recv", 120], ["sleep", 0]])
+
+    def test_a_connection_lost_after_the_send_waits_out_the_rest_of_the_wait_before_it_is_the_deadline_passing(self):
+        # The add-on's handler keeps running when the socket drops, and writes no lease after its deadline:
+        # not before, so the child waits out the wait first.
+        with self.assertRaises(deploy_common.DeadlinePassed):
+            self.call("acquire", "drop", deadline=90)
+        self.assertEqual(self.sleeps(), [118])
+        # A send that fails may already have delivered the request, so it waits the whole wait.
+        self.calls.unlink()
+        with self.assertRaises(deploy_common.DeadlinePassed):
+            self.call("acquire", "send-fails", deadline=90)
+        self.assertEqual(self.sleeps(), [120])
+
+    def test_native_itself_says_nothing_about_a_deadline_that_leaves_no_room_in_the_wait(self):
+        # The callers refuse such a request first; NATIVE does not trust them. With no room between
+        # deadline and wait, no answer proves nothing, so it prints no marker and does not wait.
+        self.script.write_text(json.dumps(["silence"]))
+        request = dict(self.request, method="acquire", wait=120, deadline=120)
+        result = self.d.execute(self.argv, input=json.dumps(request))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("deadlinePassed", result.stdout)
+        self.assertEqual(self.sleeps(), [])
+
+    def test_an_answer_with_an_error_is_never_the_deadline_passing(self):
+        # The answered-error line must stay last: the handler returned, and it was the busy answer.
+        with self.assertRaises(deploy_common.Answered) as caught:
+            self.call("acquire", {"id": 1, "error": self.BUSY}, deadline=90)
+        self.assertEqual(caught.exception.error, self.BUSY)
+        self.assertEqual(self.sleeps(), [])
+
+    def test_a_failure_before_the_send_is_not_sent_even_with_a_deadline(self):
+        # Nothing reached the add-on and nothing is waited out.
+        with self.assertRaises(deploy_common.NotSent):
+            self.d.maintenance_rpc(self.argv, dict(self.request, key="wrong-key", method="acquire", deadline=90))
+        self.assertFalse(self.calls.exists())
+
+    def test_a_failed_child_is_the_deadline_passing_only_when_the_request_had_one_and_its_last_line_is_exactly_the_marker(self):
+        bad = ('{"deadlinePassed": false}', '{"deadlinePassed": true, "unsent": true}', '{"deadlinePassed": 1}', '"deadlinePassed"', "deadlinePassed")
+        for stdout in bad:
+            with self.subTest(stdout=stdout):
+                child = executable(self.host.root / "child", f"import sys; print({stdout!r}); sys.exit(1)")
+                with self.assertRaises(RuntimeError) as caught:
+                    self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire", deadline=90))
+                self.assertNotIsInstance(caught.exception, deploy_common.DeadlinePassed)
+        # Anything after the marker may be output of a handler that failed some other way.
+        child = executable(self.host.root / "child", "import sys; print('{\"deadlinePassed\": true}'); print('later output'); sys.exit(1)")
+        with self.assertRaises(RuntimeError) as caught:
+            self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire", deadline=90))
+        self.assertNotIsInstance(caught.exception, deploy_common.DeadlinePassed)
+        # The exact marker from a request that sent no deadline proves nothing: no lease was ever bounded.
+        child = executable(self.host.root / "child", "import sys; print('{\"deadlinePassed\": true}'); sys.exit(1)")
+        with self.assertRaises(RuntimeError) as caught:
+            self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire"))
+        self.assertNotIsInstance(caught.exception, deploy_common.DeadlinePassed)
+        with self.assertRaises(deploy_common.DeadlinePassed):
+            self.d.maintenance_rpc([str(child)], dict(self.request, method="acquire", deadline=90))
 
 
 class FenceTests(unittest.TestCase):
@@ -777,6 +1060,30 @@ class ToolWiringTests(unittest.TestCase):
         tree = ast.parse((TOOLS / "deploy-guarded-app-release.py").read_text())
         rpc = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "rpc")
         self.assertEqual(ast.unparse(rpc.body[-1].value.func), "d.maintenance_rpc")
+
+    def test_both_release_tools_hold_one_deadline_and_it_leaves_a_margin_the_add_on_cannot_overrun(self):
+        linux = load_source("scripts/hermes-upgrade-linux.py", "linux_upgrade")
+        compaction = load_source("src/hermes/compaction.py", "compaction_constants")
+        for module in (deploy_common, linux):
+            wait = module.MAINTENANCE_WAIT["acquire"]
+            self.assertEqual((wait, module.DEADLINE_MARGIN, module.ACQUIRE_DEADLINE), (120, 30, 90), module.__name__)
+            # The wait must outlast the deadline by more than one full preempt wait, the longest single step the
+            # add-on bounds, or an answer from a handler that started late could land after the caller gave up.
+            self.assertGreaterEqual(wait - module.ACQUIRE_DEADLINE, compaction.PREEMPT_WAIT)
+            # A handler that started as late as the release's runs its whole deadline after it, so the watch that
+            # follows a confirmed release has to outlast the deadline by a grace, not equal it.
+            self.assertGreater(module.DEADLINE_WATCH_SECONDS, module.ACQUIRE_DEADLINE, module.__name__)
+        self.assertEqual(deploy_common.MAINTENANCE_WAIT, linux.MAINTENANCE_WAIT)
+        # The child's own timeout is the wait plus these 30 s for ticket, socket, close and interpreter start. The
+        # worker's figure is the one that counted all four, and a shorter one here kills a slow-starting child as lost.
+        self.assertEqual((deploy_common.MAINTENANCE_OVERHEAD, linux.MAINTENANCE_OVERHEAD), (30, 30))
+        self.assertEqual(deploy_common.DEADLINE_WATCH_SECONDS, linux.DEADLINE_WATCH_SECONDS)
+
+    def test_the_guarded_tool_passes_the_deadline_to_its_rpc_request(self):
+        tree = ast.parse((TOOLS / "deploy-guarded-app-release.py").read_text())
+        rpc = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "rpc")
+        self.assertEqual([argument.arg for argument in rpc.args.args], ["action", "deadline"])
+        self.assertIn("req['deadline'] = deadline", [ast.unparse(node) for node in ast.walk(rpc) if isinstance(node, ast.Assign)])
 
     def test_staged_recovery_ships_the_shared_module_its_helper_pins(self):
         stage = load_source(".agents/tools/stage-recovery-tools.py", "stage_recovery")

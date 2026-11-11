@@ -62,8 +62,41 @@ ACQUIRE_RETRY_SECONDS = 2
 # chain misses the wait and is held for review like any unanswered acquire. Other actions answer at once.
 MAINTENANCE_WAIT = {"acquire": 120}
 DEFAULT_MAINTENANCE_WAIT = 15
-# Beyond the wait: up to 10 s for the service ticket, 10 s to open the socket and 5 s to close it.
-MAINTENANCE_OVERHEAD = 25
+# The add-on's acquire takes an optional `deadline`, the seconds the caller will wait, counted from the moment its
+# handler starts, and writes no lease after it (src/hermes/extension.py, acquire_lease); an add-on that honors it says
+# `maintenance_deadline: true` in `agent-interface.capabilities`, with an `executor_epoch` naming its process. The
+# deadline is the wait less this margin. The margin covers what the add-on does not bound: the handler starting late,
+# since a request waits for a free thread in Hermes's dispatch pool, and its answer crossing the socket. Its own overrun
+# past the deadline is one 50 ms lock attempt and a 20 ms poll (src/hermes/compaction.py, LOCK_SECONDS, preempt), so
+# 30 s, one full preempt wait, is over 100 times that. 90 s is three full preempt waits, the chain the 120 s wait was
+# sized for, and a longer chain now ends in a refusal, not a held review. The release helper
+# (scripts/hermes-upgrade-linux.py) holds the same values.
+DEADLINE_MARGIN = 30
+ACQUIRE_DEADLINE = MAINTENANCE_WAIT["acquire"] - DEADLINE_MARGIN
+# The clock starts when the handler does, not when the request was sent, and a handler that starts late can write its
+# lease after the wait is over. So an acquire with no answer for the whole wait does not prove there is no lease: a
+# release confirmed at that point proves only that none existed then. The watch rests on the order of Hermes's thread
+# pool, and that order holds for a trip and not for a chain of them. Each request's handler runs on the event loop's
+# default executor, whose work queue is first in, first out: asyncio.to_thread(server.dispatch), or, behind the session
+# authority, asyncio.to_thread(dispatch_legacy) after AuthorityConnection.dispatch, which under profile multiplexing
+# first sends the owner scope's reads to the same executor (tui_gateway/ws.py:387 and :396, gateway/session_authorities.py
+# async_owner_scope), at revision ed1afb0. The maintenance methods are not among the handlers that move to the
+# separate RPC pool. But each connection also makes trips through that executor before its first frame is read:
+# to_thread(start_deferred_mcp_discovery_now) (hermes_cli/web_routers/chat_ws.py:659) and to_thread(server.resolve_skin)
+# (tui_gateway/ws.py:639). The acquire was sent over its own socket at least a full wait before the release, so its handler
+# ordinarily starts first. The release's can overtake it if the pool was blocked for more than that wait and then again, at
+# the wrong moment, for longer than the grace below. The acquire's lease is written no later than the deadline plus
+# the overrun above after its own handler began, so the tool watches for this operation's lease for ACQUIRE_DEADLINE s
+# plus a grace, which covers a handler that starts up to that grace after the release's, and a few threads taking the
+# add-on's maintenance lock in another order (it is only ever held for a file read or write, never across a preempt).
+# It releases again if the lease shows. What remains is a gap longer than the grace, which takes two long blockages of
+# the pool in a row, so it is not impossible: a lease then lands after the exit 75 and the runbook's "A lease that
+# appears after exit `75`" applies. A change of Hermes's dispatch that runs maintenance elsewhere widens it.
+DEADLINE_WATCH_GRACE = 10
+DEADLINE_WATCH_SECONDS = ACQUIRE_DEADLINE + DEADLINE_WATCH_GRACE
+# Beyond the wait: 10 s for the service ticket, 10 s to open the socket, 5 s to close it, and 5 s to start the
+# interpreter, which the release helper's worker budgets as well (scripts/hermes-upgrade-linux.py).
+MAINTENANCE_OVERHEAD = 30
 
 
 class Answered(RuntimeError):
@@ -72,6 +105,12 @@ class Answered(RuntimeError):
     def __init__(self, error):
         super().__init__("Hermes answered maintenance with an error: " + json.dumps(error))
         self.error = error
+
+
+class DeadlinePassed(RuntimeError):
+    """An acquire sent with a deadline got no answer for the whole wait, which is longer than the deadline. The add-on
+    writes no lease after the deadline, which counts from when its handler started: a release is final only after a
+    watch (DEADLINE_WATCH_SECONDS) for a handler that started late."""
 
 
 class NotSent(RuntimeError):
@@ -128,11 +167,15 @@ class Deployment:
         """Run the release helper's NATIVE maintenance RPC (scripts/hermes-upgrade-linux.py).
 
         Returns the add-on's result. Raises Answered when the add-on answered with an error, and
-        NotSent when the service ticket or the connection failed before the request was sent; NATIVE
-        prints each as its last stdout line before it fails. Any other failure, such as a timeout or
-        a dropped socket, raises as before: no answer arrived, so the handler may still be running.
+        NotSent when the service ticket or the connection failed before the request was sent, and
+        DeadlinePassed when a request that carries a ``deadline`` got no answer for the whole wait;
+        NATIVE prints each as its last stdout line before it fails. Any other failure, such as a
+        timeout of the child itself, raises as before: no answer arrived, so the handler may still be running.
         """
         wait = MAINTENANCE_WAIT.get(request["method"], DEFAULT_MAINTENANCE_WAIT)
+        deadline = request.get("deadline")
+        if deadline is not None and deadline >= wait:
+            raise ValueError("A deadline must be shorter than the wait for its answer")
         result = self.execute(argv, input=json.dumps(dict(request, wait=wait)), timeout=wait + MAINTENANCE_OVERHEAD)
         if not result.returncode:
             return json.loads(result.stdout)
@@ -145,6 +188,8 @@ class Deployment:
             raise Answered(answer["answeredError"])
         if isinstance(answer, dict) and list(answer) == ["unsent"] and answer["unsent"] is True:
             raise NotSent("Hermes was not asked for maintenance " + request["method"])
+        if deadline is not None and isinstance(answer, dict) and list(answer) == ["deadlinePassed"] and answer["deadlinePassed"] is True:
+            raise DeadlinePassed("Hermes did not answer maintenance " + request["method"] + " within its " + str(deadline) + " s deadline")
         raise RuntimeError("A deployment command failed; private log retained")
 
     def system(self, action, *names):
@@ -187,29 +232,64 @@ class Deployment:
         record = self.gateway_state()
         return type(record.get("active_agents")) is int and record["active_agents"] == 0 and "active_work" in record and record["active_work"] in (None, [])
 
+    def acquire_deadline(self, rpc):
+        """(ACQUIRE_DEADLINE, executor_epoch) when the running add-on says it honors a deadline, else (None, None).
+
+        A read that fails is (None, None) as well: an older add-on is held for review exactly as before, and a
+        dashboard that cannot be asked will fail the acquire the same way. An add-on that names no process epoch
+        cannot be told apart from a restart later, so it gets no deadline either."""
+        try: capabilities = rpc("capabilities")
+        except (RuntimeError, ValueError, subprocess.SubprocessError): return None, None
+        if not isinstance(capabilities, dict) or capabilities.get("maintenance_deadline") is not True: return None, None
+        epoch = capabilities.get("executor_epoch")
+        return (ACQUIRE_DEADLINE, epoch) if isinstance(epoch, str) and epoch else (None, None)
+
+    def same_add_on(self, rpc, epoch):
+        """Whether the add-on that was asked for its capabilities before the acquire is still the process answering.
+
+        A restart between the two can put an add-on that ignores the deadline in its place, and its silence then
+        proves nothing. A read that fails is not the same add-on."""
+        try: capabilities = rpc("capabilities")
+        except (RuntimeError, ValueError, subprocess.SubprocessError): return False
+        return isinstance(capabilities, dict) and capabilities.get("executor_epoch") == epoch
+
+    def late_lease(self):
+        """Whether a lease file appears within DEADLINE_WATCH_SECONDS. It is this operation's lease, or release says
+        otherwise: another operation's answers 409 and ends in a held review."""
+        for _ in range(DEADLINE_WATCH_SECONDS):
+            if os.path.lexists(self.lease): return True
+            time.sleep(1)
+        return os.path.lexists(self.lease)
+
     def acquire_then_stop_app(self, rpc, blocked, previous):
         """Close the app's gate, take the maintenance lease while the app still runs, then stop it.
 
-        ``rpc`` calls the add-on's maintenance RPC through maintenance_rpc. ``blocked`` is this
+        ``rpc(action, deadline=None)`` calls the add-on's maintenance RPC through maintenance_rpc;
+        action ``capabilities`` reads its capabilities. ``blocked`` is this
         operation's blocked update status and ``previous`` the status it replaces. The app refuses
         sends, update checks and installs once the blocked status is written, telling the sender the
         draft is saved, so no one meets Hermes's own refusal. Work that arrived since the caller's
         status check makes acquire refuse here, before anything stops. The busy answer is asked
-        again up to ACQUIRE_ATTEMPTS times, since the app's own poll can hold a reservation.
+        again up to ACQUIRE_ATTEMPTS times, since the app's own poll can hold a reservation. An
+        add-on that says it honors a deadline is sent ACQUIRE_DEADLINE with each attempt.
 
         Raises Refused when nothing changed and nothing can still change: the add-on's busy refusal,
         an answer that fails the checks below, a gateway that counts active work (the add-on does not
-        see Discord turns), or a request that was never sent. A release then proves no lease remains,
-        the saved status is restored and the app never stopped. With no answer the handler may still
+        see Discord turns), a request that was never sent, or no answer for the whole wait of a
+        request that carried a deadline, from an add-on that is still the process asked for its capabilities (the add-on
+        writes no lease after the deadline, and a handler that started late is outwaited, see DEADLINE_WATCH_SECONDS).
+        A release then proves no lease remains, the saved status is restored and the app never stopped. With no answer the handler may still
         be running and write the lease later, so that fails at a fence with the blocked status kept
         for review. Any other failure propagates the same way.
         """
         status = Path(self.c["upgradeStateDir"]) / "status.json"
         self.atomic(status, blocked)
+        # Read before the phase is journaled: asking for capabilities changes nothing and may fail without consequence.
+        deadline, epoch = self.acquire_deadline(rpc)
         self.journal("maintenance-acquiring")
         for attempt in range(1, ACQUIRE_ATTEMPTS + 1):
             try:
-                gate = rpc("acquire")
+                gate = rpc("acquire", deadline=deadline)
             except Answered as answer:
                 # Any other error answer is a configuration or ownership problem, not busy work.
                 if answer.error != BUSY_REFUSAL: raise
@@ -221,6 +301,16 @@ class Deployment:
                 # The add-on never saw the request, so no lease can appear. The release proves it.
                 self.refuse(rpc, status, blocked, previous, unsent,
                             "Hermes could not be reached: the service ticket or the connection failed before the request was sent.")
+            except DeadlinePassed as passed:
+                # The add-on writes no lease after its deadline, but the deadline counts from when its handler started,
+                # which may be late. refuse() releases, then outwaits a late handler (DEADLINE_WATCH_SECONDS). Not
+                # retried: the add-on answered nothing for two minutes. A restart since the capability read puts an
+                # add-on there that may ignore the deadline, so that is held for review like any lost answer.
+                if not self.same_add_on(rpc, epoch):
+                    with contextlib.suppress(Exception): rpc("release")
+                    raise Fence("Hermes answered maintenance acquire") from passed
+                self.refuse(rpc, status, blocked, previous, passed,
+                            "Hermes did not answer the maintenance request within its deadline, so none was granted.")
             except Exception as lost:
                 # An acquire that would succeed preempts compactions before it writes, so a lost answer can mean the
                 # handler is still running. Release removes a lease it already wrote, never one it
@@ -251,6 +341,11 @@ class Deployment:
         released = rpc("release")
         fence(released["active"] is False, "refused: maintenance released")
         fence(not os.path.lexists(self.lease), "refused: no maintenance lease remains")
+        if isinstance(refusal, DeadlinePassed) and self.late_lease():
+            # The handler started late and wrote its lease after the release. It has returned, so a second release is final.
+            released = rpc("release")
+            fence(released["active"] is False, "refused: maintenance released after a late lease")
+            fence(not os.path.lexists(self.lease), "refused: no maintenance lease remains after a late lease")
         # The app still runs, but holding the update worker's lock keeps it from writing a
         # new status. One it wrote anyway is left as found for review.
         fence(status.read_bytes() == blocked, "refused: update status is still this operation's blocked status")
