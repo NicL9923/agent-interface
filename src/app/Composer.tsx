@@ -21,17 +21,20 @@ import { imeKey } from "./ime";
 import { sendsOnKey, useEnterSends } from "./enter-key";
 import { CHECKING_CONNECTION, NOT_SENT_CHECKING, WAITING_FOR_CONNECTION } from "./use-conversation";
 
-/** Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. */
+/**
+ * Stops the open assistant's current response. The composer's Stop button and Cmd+. share it. Each names the run the
+ * person was shown, so the server stops that run and refuses when it is no longer the one running.
+ */
 export function useStopResponse(botId: string, report: (message: string) => void) {
   const [stopping, setStopping] = useState(false);
   // A late answer belongs to the assistant it stopped, so it is dropped once another one is open.
   const shown = useRef<string | null>(botId);
   useEffect(() => { shown.current = botId; return () => { shown.current = null; }; }, [botId]);
   useEffect(() => setStopping(false), [botId]);
-  const stop = useCallback(() => {
+  const stop = useCallback((runId?: string) => {
     const target = botId;
     setStopping(true);
-    void request("POST /bots/:id/stop", { params: { id: target } })
+    void request("POST /bots/:id/stop", { params: { id: target }, body: runId ? { runId } : {} })
       .catch(error => { if (shown.current === target) report(error.message); })
       .finally(() => { if (shown.current === target) setStopping(false); });
   }, [botId, report]);
