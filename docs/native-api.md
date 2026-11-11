@@ -708,7 +708,7 @@ did with the message's turn, when the add-on's answer carries one:
 | --- | --- | --- |
 | `started` | started the message's turn | the assistant thinking until Hermes reports the turn |
 | `queued` | put it in its busy queue behind running work; it may merge it into a queued prompt or drop it as a copy of the running one | as for a message that starts a turn |
-| `joined` | put it into the running turn | nothing more, as for `steered: true`; Hermes's copy does not carry `steered` |
+| `joined` | put it into the running turn | nothing more, as for `steered: true`; the saved copy carries `steered: true` once the add-on has bound it to its row, after the turn it joined completes, and until then, or when it cannot bind it, it carries none |
 | `none` | a typed stop phrase ended Hermes's voice chat; nothing was admitted or saved | no thinking; remove the sent message, put its text and files back in the draft as for a refused message, and show the receipt's `message` |
 | `unknown` | answered in a way neither the add-on nor this server knows | as for a message that starts a turn; never take it for `started` |
 

@@ -463,13 +463,82 @@ class TurnBindingTests(unittest.TestCase):
             receipt_answer = hermes.methods["agent-interface.receipt"]("lookup", {"request_id": "alice-1"})["result"]["receipt"]
             self.assertIsNone(receipt_answer["userRowId"])
 
-    def test_a_send_hermes_redirected_into_another_clients_turn_stays_unbound(self):
+    def test_a_send_hermes_redirected_into_another_clients_turn_is_bound_to_its_row_and_marked_a_steer(self):
         with TurnHermes(busy="redirected") as hermes:
             hermes.races.append(lambda: hermes.other_client("Book the dentist"))
             self.assertEqual(hermes.send("alice-1", "Make it Tuesday")["status"], "accepted")
-            bob = hermes.finish("Book the dentist")
+            # Nothing is bound while the turn runs: Hermes has not said which rows it wrote.
             self.assertIsNone(hermes.bound("alice-1"))
-            self.assertEqual(hermes.shown(), [(bob.row, "Book the dentist", None, None), (hermes.row_of("Make it Tuesday"), "Make it Tuesday", None, None)])
+            bob = hermes.finish("Book the dentist")
+            tuesday = hermes.row_of("Make it Tuesday")
+            # Bob's own prompt is not hers, and every device reads the mark from the row.
+            self.assertEqual(hermes.shown(), [(bob.row, "Book the dentist", None, None), (tuesday, "Make it Tuesday", "alice-1", "alice")])
+            self.assertEqual(hermes.bound("alice-1"), tuesday)
+            self.assertEqual([row.get("app_steering") for row in hermes.open()["messages"] if row["role"] == "user"], [None, True])
+
+    def test_a_joined_send_whose_turn_never_delivered_it_stays_unbound_beside_a_prompt_with_its_words(self):
+        with TurnHermes(busy="redirected") as hermes:
+            hermes.races.append(lambda: hermes.other_client("Book the dentist"))
+            hermes.send("alice-1", "Book the dentist")
+            # The turn ends without a tool batch, and Hermes runs the correction as the next prompt, outside its rows.
+            hermes.turn("Book the dentist").consume_steers = False
+            bob = hermes.finish("Book the dentist")
+            followup = hermes.finish("Book the dentist", nth=1)
+            self.assertEqual(hermes.shown(), [(bob.row, "Book the dentist", None, None), (followup.row, "Book the dentist", None, None)])
+            self.assertIsNone(hermes.bound("alice-1"))
+            self.assertNotIn(True, [row.get("app_steering") for row in hermes.open()["messages"]])
+
+    def test_a_steer_into_a_joined_sends_turn_with_the_same_words_binds_neither(self):
+        with TurnHermes(busy="redirected") as hermes:
+            hermes.races.append(lambda: hermes.other_client("Book the dentist"))
+            hermes.send("alice-1", "Same words")
+            # The joined send is now the open task, so Kim's next send steers into it.
+            self.assertTrue(hermes.send("kim-1", "Same words", sender="kim")["steering"])
+            hermes.finish("Book the dentist")
+            hermes.open()
+            self.assertEqual((hermes.bound("alice-1"), hermes.bound("kim-1")), (None, None))
+
+    def test_a_joined_send_binds_nothing_when_its_turn_reports_no_usable_rows(self):
+        for name, report in (("no rows", lambda turn: setattr(turn, "report_rows", False)), ("not a list", lambda turn: setattr(turn, "row_ids", "whole")),
+                             ("no prompt row", lambda turn: setattr(turn, "report_row", False))):
+            with self.subTest(name), TurnHermes(busy="redirected") as hermes:
+                hermes.races.append(lambda hermes=hermes: hermes.other_client("Book the dentist"))
+                hermes.send("alice-1", "Make it Tuesday")
+                report(hermes.turn("Book the dentist"))
+                hermes.finish("Book the dentist")
+                self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+                self.assertIsNone(hermes.bound("alice-1"))
+
+    def test_a_joined_send_binds_nothing_from_a_completion_that_names_no_prompt_row_to_leave_out(self):
+        with TurnHermes(busy="redirected") as hermes:
+            hermes.races.append(lambda: hermes.other_client("Book the dentist"))
+            hermes.send("alice-1", "Make it Tuesday")
+            turn = hermes.turn("Book the dentist")
+            hermes.tool_batch(turn)
+            # A completion that lists the correction's row without the turn's prompt row cannot say which rows are
+            # the turn's own, and the next completion is of no turn the send joined.
+            turn.early.append(("sid", {"row_ids": [hermes.row_of("Make it Tuesday")]}))
+            hermes.finish("Book the dentist")
+            self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+            self.assertIsNone(hermes.bound("alice-1"))
+
+    def test_a_send_answered_joined_after_its_turn_ended_is_not_bound_to_a_later_turn(self):
+        with TurnHermes(busy="redirected") as hermes:
+            # Hermes answers "redirected" for a turn that ended before the add-on looked: the session is idle,
+            # so no completion to come is the one the send joined.
+            native = hermes.server.handle_request
+            def answer(request):
+                if request["method"] != "prompt.submit":
+                    return native(request)
+                hermes.session.setdefault("corrections", []).append(request["params"]["text"])
+                return hermes.server._ok(request["id"], {"status": "redirected"})
+            hermes.server.handle_request = answer
+            self.assertEqual(hermes.send("alice-1", "Make it Tuesday")["turn"], "joined")
+            hermes.server.handle_request = native
+            hermes.other_client("Book the dentist")
+            hermes.finish("Book the dentist")
+            self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+            self.assertIsNone(hermes.bound("alice-1"))
 
     def test_a_new_task_that_starts_at_once_keeps_the_row_hermes_named(self):
         with TurnHermes() as hermes:
@@ -767,7 +836,7 @@ class TurnBindingTests(unittest.TestCase):
             self.assertIsNone(hermes.bound("alice-1"))
             self.assertEqual(hermes.shown(), [(first.row, image_text("", [PHOTO["path"]]), None, None), (desktop.row, image_text("", ["/desktop/scan.png"]), None, None)])
 
-    def test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row(self):
+    def test_a_new_task_hermes_queued_says_so_and_is_bound_to_no_row_and_one_it_joined_is_bound_as_a_steer(self):
         # Hermes queues an image send whatever its busy mode, and binds it to no row either.
         for busy, turn, attachments in (("queued", "queued", []), ("redirected", "joined", []), ("redirected", "queued", [PHOTO])):
             with self.subTest(busy=busy, images=bool(attachments)), TurnHermes(busy=busy) as hermes:
@@ -777,8 +846,12 @@ class TurnBindingTests(unittest.TestCase):
                 hermes.finish("Book the dentist")
                 if turn == "queued":
                     hermes.finish("Make it Tuesday")
-                self.assertIsNone(hermes.bound("alice-1"))
-                self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+                    self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, None])
+                    self.assertIsNone(hermes.bound("alice-1"))
+                    self.assertNotIn(True, [row.get("app_steering") for row in hermes.open()["messages"]])
+                else:
+                    self.assertEqual([request for _, _, request, _ in hermes.shown()], [None, "alice-1"])
+                    self.assertEqual(hermes.bound("alice-1"), hermes.row_of("Make it Tuesday"))
 
     def test_a_typed_stop_takes_back_its_photo_and_leaves_one_staged_before_it(self):
         # Hermes answers the stop before it reads the session, so the photo staged for it would wait for the next turn.
