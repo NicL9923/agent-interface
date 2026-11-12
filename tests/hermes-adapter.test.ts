@@ -2034,14 +2034,16 @@ describe('Hermes conversation and roster read costs', () => {
     await runtime.status();
     snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}];
     snapshot.app_timing = {wait: 1.5, activate: 20, total: 25, 'bad;name': 3, decorate: 'slow'};
+    snapshot.app_cache = {decorated: 0, pieces: 12, reused: 11, emptied: 0, fill: -1, 'x"y': 1};
     const first: ReadTiming = {}, second: ReadTiming = {};
     const [read, joined] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}, timing: first}), runtime.conversation('shared', {window: {turns: 20}, timing: second})]);
-    expect(first).toEqual({shared: false, hermes: expect.any(Number), addon: {wait: 1.5, activate: 20, total: 25}});
+    expect(first).toEqual({shared: false, hermes: expect.any(Number), addon: {wait: 1.5, activate: 20, total: 25}, caches: {decorated: 0, pieces: 12, reused: 11, emptied: 0}});
     // The second reader joined the first read, so it reports no Hermes time of its own.
     expect(second).toEqual({shared: true});
     expect(joined).toEqual(read);
-    expect(JSON.stringify(read)).not.toMatch(/timing|activate/);
+    expect(JSON.stringify(read)).not.toMatch(/timing|activate|reused/);
     delete snapshot.app_timing;
+    delete snapshot.app_cache;
     hermesChanged();
     const older: ReadTiming = {};
     await runtime.conversation('shared', {window: {turns: 20}, timing: older});

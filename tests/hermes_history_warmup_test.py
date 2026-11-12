@@ -200,7 +200,11 @@ class FirstOpenTests(unittest.TestCase):
         with WarmHermes() as hermes:
             turns = chat(hermes, 3)
             photo = hermes.add("user", "u9", "Look ![photo]")["_row_id"]
-            first = hermes.answer()
+            first = hermes.open()
+            first.pop("app_timing")
+            # With no warm-up to adopt, the resume projects every piece.
+            counts = first.pop("app_cache")
+            self.assertEqual((counts["warm"], counts["reused"]), (0, 0))
             self.assertEqual(hermes.projected(), set().union(*turns, {photo}))
             # The first open shows images as every later one does.
             self.assertIn("Look ![photo]", [m.get("text") for m in first["messages"]])
@@ -213,8 +217,12 @@ class FirstOpenTests(unittest.TestCase):
             hermes.send("default", 1)
             self.assertTrue(hermes.bridge.warm(*hermes.target()))
             hermes.projected()
-            value = hermes.answer()
+            value = hermes.open()
+            value.pop("app_timing")
+            counts = value.pop("app_cache")
             self.assertEqual(hermes.projected(), set())
+            # The open says it adopted the warm-up and reused every piece.
+            self.assertEqual((counts["warm"], counts["decorated"], counts["reused"]), (1, 0, counts["pieces"]))
             self.assertEqual(hermes.bridge.warm_caches, {})
             self.assertEqual(value, hermes.whole())
             hermes.projected()
@@ -228,7 +236,7 @@ class FirstOpenTests(unittest.TestCase):
             self.assertTrue(hermes.bridge.warm(*hermes.target()))
             # A compaction moved the chat to a new tip before anyone opened it.
             hermes.resolved = hermes.session["session_key"] = "stored-2"
-            hermes.answer()
+            self.assertEqual(hermes.open()["app_cache"]["warm"], 0)
             self.assertEqual(hermes.bridge.warm_caches, {})
 
     def test_the_first_open_parses_no_tool_record_the_warm_up_parsed(self):
