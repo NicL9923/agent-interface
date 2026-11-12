@@ -3,11 +3,11 @@ import type { Conversation } from '../src/shared/types.js';
 import Fastify from 'fastify';
 import cookie from '@fastify/cookie';
 import { randomUUID } from 'node:crypto';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installAuth } from '../src/server/auth.js';
 import { Store } from '../src/server/store.js';
 import { loadConfig } from '../src/server/config.js';
-import { installExperienceRoutes } from '../src/server/experience.js';
+import { installExperienceRoutes, TODAY_LATE_MS, TODAY_WAIT_MS } from '../src/server/experience.js';
 import { installEtags } from '../src/server/etag.js';
 import { fakeRuntime, signIn } from "./helpers/server.js";
 import { errorHandler } from "../src/server/http-error.js";
@@ -79,11 +79,81 @@ it('builds a recap from a recent window and its earlier file context, reading ev
   s.conversation.mockImplementation(async (id: string, options?: { history?: false; window?: { turns?: number } }) =>
     (id === 'offline' ? Promise.reject(new Error('offline')) : options?.window ? windowed : full) as never);
   const ranch = async (headers: typeof s.first) => (await s.app.inject({ url: '/api/today', headers })).json().items.find((item: { botId: string }) => item.botId === 'ranch');
+  const asked = () => s.conversation.mock.calls.filter(([id]) => id === 'ranch').map(call => (call as unknown[])[1]);
   expect(await ranch(s.first)).toMatchObject({ files: [{ name: 'early.pdf' }], latestMessage: { id: 'reply' } });
-  expect(s.conversation.mock.calls.filter(call => (call as unknown[])[1] === undefined)).toHaveLength(0);
-  // Activity alone fills the window, so the whole history is read for the latest reply.
+  // The last two turns: earlier files come from the window's context.
+  expect(asked()).toEqual([{ window: { turns: 2 } }]);
+  // Activity alone fills the window, so a longer one is read, and the whole history for the latest reply.
   windowed = { ...windowed, messages: [{ id: 'mine', role: 'user', text: 'Status?', createdAt: at }] };
   expect((await ranch(s.second)).latestMessage.id).toBe('first');
+  expect(asked().slice(1)).toEqual([{ window: { turns: 2 } }, { window: { turns: 20 } }, undefined]);
+});
+describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  /** Holds every history read of `ranch` until the test answers it, and counts them. */
+  function holdRanch(s: Awaited<ReturnType<typeof setup>>) {
+    const answer = s.conversation.getMockImplementation()!;
+    const held: (() => void)[] = [];
+    s.conversation.mockImplementation((id: string, options?: { history?: false }) => id !== 'ranch' ? answer(id) : new Promise(resolve => { held.push(() => void answer(id).then(value => resolve({ ...value, ...options?.history === false ? { messages: [] } : {} }))); }));
+    return { held, reads: () => s.conversation.mock.calls.filter(([id]) => id === 'ranch').length };
+  }
+  const today = async (s: Awaited<ReturnType<typeof setup>>) => {
+    const response = s.app.inject({ url: '/api/today', headers: s.first });
+    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
+    return (await response).json();
+  };
+  const ranch = (overview: { items: { botId: string }[] }) => overview.items.find(item => item.botId === 'ranch') as Record<string, unknown>;
+
+  it('is answered without, as unchecked, and the next Today takes its read instead of reading again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const s = await setup();
+    const hold = holdRanch(s);
+    const first = await today(s);
+    expect(ranch(first)).toEqual({ botId: 'ranch', botName: 'Ranch', activity: { state: 'idle' }, approvals: [], attention: [], files: [], pending: true });
+    // Another assistant's failure is still its own error, and both are unchecked.
+    expect(first.unavailableBots).toEqual(['ranch', 'offline']);
+    hold.held.shift()!();
+    const next = await s.app.inject({ url: '/api/today', headers: s.first });
+    expect(ranch(next.json())).toMatchObject({ activity: { state: 'blocked' }, approvals: [{ id: 'pending' }], files: [{ name: 'plan.pdf' }] });
+    expect(ranch(next.json())).not.toHaveProperty('pending');
+    expect(next.json().unavailableBots).toEqual(['offline']);
+    expect(hold.reads()).toBe(1);
+  });
+
+  it('keeps the files and reply of the same recap it saved, with the roster\'s activity', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const s = await setup();
+    const lastMessage = { text: 'Done', at: new Date(Date.now() - 60_000).toISOString() };
+    s.runtime.listBots = vi.fn(async () => [botFixture({ id: 'ranch', name: 'Ranch', activity: 'working', lastMessage })]);
+    const answer = s.conversation.getMockImplementation()!;
+    s.conversation.mockImplementation(async (id: string) => ({ ...await answer(id), activity: { state: 'done' } }));
+    expect(ranch(await today(s))).toMatchObject({ files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
+    holdRanch(s);
+    // The settled recap is reused, but even its light read of the current state is slow.
+    expect(ranch(await today(s))).toMatchObject({ activity: { state: 'working' }, approvals: [], pending: true, files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
+    // Another recap, here for another start, shows none of it.
+    const since = new Date(Date.now() - 3_600_000).toISOString();
+    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
+    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
+    expect(ranch((await response).json())).toMatchObject({ pending: true, files: [] });
+    expect(ranch((await response).json())).not.toHaveProperty('latestMessage');
+  });
+
+  it('is read again for another recap, or once its answer is TODAY_LATE_MS old', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const s = await setup();
+    const hold = holdRanch(s);
+    await today(s);
+    hold.held.shift()!();
+    await vi.advanceTimersByTimeAsync(TODAY_LATE_MS);
+    await today(s);
+    expect(hold.reads()).toBe(2);
+    const since = new Date(Date.now() - 3_600_000).toISOString();
+    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
+    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
+    await response;
+    expect(hold.reads()).toBe(3);
+  });
 });
 it('shows the latest reply on Today, never a progress line that came after it', async () => {
   const s = await setup();

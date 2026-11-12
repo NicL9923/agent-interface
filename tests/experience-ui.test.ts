@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { api, ApiError, write } from "../src/client-api";
-import { TodayPanel } from "../src/components/TodayPanel";
+import { TODAY_RECHECK_MS, TodayPanel } from "../src/components/TodayPanel";
 import { MemoryPanel, memoryDraftSize } from "../src/components/MemoryPanel";
 import { ReplyCards } from "../src/components/ReplyCards";
 import { MessageMarkdown } from "../src/components/MessageMarkdown";
@@ -79,6 +79,34 @@ it("leads with each request, distinguishes secure requests and lists an active a
   await act(async () => requests[1].click());
   expect(onOpen).toHaveBeenCalledWith("secure");
 });
+it("names an assistant the server is still checking, claims nothing about its requests, and asks again until it is checked", async () => {
+  vi.useFakeTimers();
+  try {
+    const base = { generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false, since: "2026-10-01T02:00:00Z", events: [] };
+    const waiting: TodayOverview = { ...base, unavailableBots: ["patch"], items: [
+      { botId: "patch", botName: "Patch", activity: { state: "idle" }, approvals: [], attention: [], files: [], pending: true }] };
+    const checked: TodayOverview = { ...base, unavailableBots: [], items: [
+      { botId: "patch", botName: "Patch", activity: { state: "waiting" }, approvals: [{ id: "a1", title: "Run the backup", detail: "Approve?", status: "pending" }], attention: [], files: [] }] };
+    vi.mocked(api).mockResolvedValue(waiting);
+    await render(createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }));
+    expect(container.textContent).toContain("Still checking Patch.");
+    expect(container.textContent).toContain("No requests in checked assistants");
+    expect(container.textContent).not.toContain("Couldn't check");
+    const reads = () => vi.mocked(api).mock.calls.filter(([path]) => String(path).startsWith("/today")).length;
+    expect(reads()).toBe(1);
+    // An unchanged answer is still pending, so it asks again.
+    await act(async () => { await vi.advanceTimersByTimeAsync(TODAY_RECHECK_MS); });
+    expect(reads()).toBe(2);
+    vi.mocked(api).mockResolvedValue(checked);
+    await act(async () => { await vi.advanceTimersByTimeAsync(TODAY_RECHECK_MS); });
+    expect(reads()).toBe(3);
+    expect(container.textContent).not.toContain("Still checking");
+    expect(container.textContent).toContain("Run the backup");
+    await act(async () => { await vi.advanceTimersByTimeAsync(TODAY_RECHECK_MS * 3); });
+    expect(reads()).toBe(3);
+  } finally { vi.useRealTimers(); }
+});
+
 it("keeps disconnected assistants named and opens their conversation to reconnect", async () => {
   vi.mocked(api).mockResolvedValue({ generatedAt: "2026-10-02T02:00:00Z", frontier: "0", hasMore: false,
     since: "2026-10-01T02:00:00Z", unavailableBots: ["ranch"], events: [], items: [
