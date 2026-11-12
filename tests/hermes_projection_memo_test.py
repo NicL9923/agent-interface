@@ -211,6 +211,23 @@ class EquivalenceTests(unittest.TestCase):
             self.assertIn("fr:read", texts)
             self.assertIn("Both read. [image]", texts)
 
+    def test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not(self):
+        # Production on November 12: a resume projects with the profile home as a Path and every later activation with
+        # the string Hermes stored, so each chat's second open after a restart projected all of its pieces again.
+        with ProjectingHermes() as hermes:
+            turns(hermes)
+            hermes.kwargs["profile_home"] = Path(hermes.home.name)
+            hermes.answer()
+            hermes.projected()
+            hermes.kwargs["profile_home"] = hermes.home.name + "/"
+            hermes.answer()
+            self.assertEqual(hermes.projected(), set())
+            other = tempfile.TemporaryDirectory()
+            self.addCleanup(other.cleanup)
+            hermes.kwargs["profile_home"] = other.name
+            hermes.answer()
+            self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+
     def test_without_readable_redaction_state_every_open_projects_every_row(self):
         with ProjectingHermes() as hermes:
             turns(hermes)
