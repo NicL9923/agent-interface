@@ -1,7 +1,8 @@
 # Should this app own its agent runtime?
 
-Assessment requested September 30, 2026. This is a recommendation, not a decision
-to replace Hermes. The implementation continues to use the pinned Hermes owner.
+Assessment requested September 30, 2026. It was a recommendation; on November 12 Nicolas
+decided to replace Hermes by wrapping agent harnesses, and [RuntimePlan.md](RuntimePlan.md)
+is the plan. Hermes remains the runtime until that plan retires it.
 
 ## Recommendation
 
@@ -88,7 +89,7 @@ memory or conversations. See the
 and [user guide](https://learn.chatgpt.com/docs/sign-in-with-chatgpt).
 
 Claude requires a distinction between a personally authenticated CLI and a
-product offering subscription login. Anthropic's June 16 notice says the proposed
+product offering subscription login. Anthropic's June 15 notice says the proposed
 SDK billing change was paused, so SDK and `claude -p` usage still draws from
 subscription limits. Its SDK documentation separately restricts third-party
 products offering claude.ai login without prior approval. See the
