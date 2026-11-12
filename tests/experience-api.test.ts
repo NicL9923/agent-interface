@@ -98,7 +98,7 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     return { held, reads: () => s.conversation.mock.calls.filter(([id]) => id === 'ranch').length };
   }
   const today = async (s: Awaited<ReturnType<typeof setup>>) => {
-    const response = s.app.inject({ url: '/api/today', headers: s.first });
+    const response = s.app.inject({ url: '/api/today?pending=1', headers: s.first });
     await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
     return (await response).json();
   };
@@ -133,10 +133,32 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     expect(ranch(await today(s))).toMatchObject({ activity: { state: 'working' }, approvals: [], pending: true, files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
     // Another recap, here for another start, shows none of it.
     const since = new Date(Date.now() - 3_600_000).toISOString();
-    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
+    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}&pending=1`, headers: s.first });
     await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
     expect(ranch((await response).json())).toMatchObject({ pending: true, files: [] });
     expect(ranch((await response).json())).not.toHaveProperty('latestMessage');
+  });
+
+  it('waits for every assistant when the client does not ask for pending answers, as an installed iOS build', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const s = await setup();
+    const hold = holdRanch(s);
+    let answered = false;
+    const response = s.app.inject({ url: '/api/today', headers: s.first }).then(value => { answered = true; return value; });
+    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS * 5);
+    expect(answered).toBe(false);
+    hold.held.shift()!();
+    const overview = (await response).json();
+    expect(ranch(overview)).toMatchObject({ activity: { state: 'blocked' }, files: [{ name: 'plan.pdf' }] });
+    expect(ranch(overview)).not.toHaveProperty('pending');
+    expect(overview.unavailableBots).toEqual(['offline']);
+  });
+
+  it('refuses a pending value other than 1', async () => {
+    const s = await setup();
+    const response = await s.app.inject({ url: '/api/today?pending=yes', headers: s.first });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().details.map((detail: { path: string[] }) => detail.path)).toEqual([['pending']]);
   });
 
   it('is read again for another recap, or once its answer is TODAY_LATE_MS old', async () => {
@@ -149,7 +171,7 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     await today(s);
     expect(hold.reads()).toBe(2);
     const since = new Date(Date.now() - 3_600_000).toISOString();
-    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}`, headers: s.first });
+    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}&pending=1`, headers: s.first });
     await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
     await response;
     expect(hold.reads()).toBe(3);

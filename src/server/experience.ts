@@ -88,7 +88,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "GET /today", {}, async (req, _, reply) => {
     const userId = signedIn(req).id;
     const now = new Date();
-    const query = z.object({ since: iso.optional() }).strict().parse(req.query);
+    // `pending=1`: answer after TODAY_WAIT_MS with slow assistants marked pending. A client that does not ask, such as
+    // an installed iOS build, would show a pending assistant as one it could not check, so it gets every answer.
+    const query = z.object({ since: iso.optional(), pending: z.literal("1").optional() }).strict().parse(req.query);
     // Before a first catch-up the recap covers a day, starting on a whole minute so polls within it can revalidate.
     const since = new Date(query.since ?? store.todaySeen(userId) ?? Math.floor((now.getTime() - 86400000) / 60_000) * 60_000).toISOString();
     if (Date.parse(since) > now.getTime() + 60_000) throw httpError(400, 'The recap start cannot be in the future');
@@ -110,7 +112,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const names = hidden.length ? await roster.names() : undefined;
     const privacy = JSON.stringify([privacyVersion, hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()])]);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), TODAY_WAIT_MS); });
+    const deadline = new Promise<undefined>(resolve => { if (query.pending) timer = setTimeout(() => resolve(undefined), TODAY_WAIT_MS); });
     const check = async (bot: { id: string }, events: typeof page.events, unreadRuns: string[], key: string, cacheKey: string): Promise<Check> => {
       // An unchanged roster preview means no new message, so a settled assistant's recap is
       // reused and only its current state is read. History is read again after it changes.

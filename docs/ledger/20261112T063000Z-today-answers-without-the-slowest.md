@@ -77,3 +77,11 @@ Each mutation by hand, restored after:
 
 `npx vitest run`: 211 files, 3879 tests passed; typecheck and lint pass. The full battery runs once for the branch.
 Not exercised: real Hermes, production, and iOS.
+
+## Installed iOS builds
+
+Merged into the consolidated branch, the pending answer became opt-in. The iOS app ignores `pending` and shows such an
+assistant as one it could not check, so `GET /today` answers early only with `pending=1`, which the web panel sends.
+Without it, Today waits for every assistant as before, still reading 2 turns each and taking a check another Today
+started. `tests/experience-api.test.ts` "waits for every assistant when the client does not ask for pending answers"
+fails with the deadline applied to every request; "refuses a pending value other than 1" names the `pending` field.

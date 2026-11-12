@@ -165,7 +165,7 @@ export interface DirectRoute {
 }
 
 export interface ApiRoutes {
-  "GET /today": { query: { since?: string }; response: TodayOverview };
+  "GET /today": { query: { since?: string; pending?: "1" }; response: TodayOverview };
   "PUT /today/seen": { body: { seenAt: string; frontier: string }; response: Ok };
   "GET /search": { query: { q: string; botId?: string }; response: { hits: SearchHit[]; unavailableBots: string[] } };
   "GET /bots/:botId/history/:sessionId": { query: { offset?: number; messageId?: string }; response: HistoryPage };

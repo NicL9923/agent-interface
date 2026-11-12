@@ -28,7 +28,7 @@ export const TODAY_RECHECK_MS = 2_000;
 export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string, routineId?: string) => void }) {
   // A 304 keeps generatedAt, so record when this client last confirmed the overview.
   const [checkedAt, setCheckedAt] = useState("");
-  const today = useResource(routeUrl("GET /today", {}), { load: (_, signal) => request("GET /today", { signal }), deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
+  const today = useResource(routeUrl("GET /today", {}), { load: (_, signal) => request("GET /today", { query: { pending: "1" }, signal }), deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
   const { data: overview, loading } = today;
   const seen = useAction();
   const error = seen.error || today.error;
