@@ -18,7 +18,8 @@ its memo emptied, or adopted the warm-up's projection.
   - `pieces` and `reused`: the projection's pieces and how many the memo reused, when the open projected.
   - `emptied`: how often the shared budget has emptied that session's memo while it held pieces.
   - `fill`: the percentage of the budget every memo keeps after the open.
-  - `warm`: 1 on a resume that adopted the warm-up's projection, 0 on a resume that did not.
+  - `warm`: on the first open's resume after a restart, 1 when it adopted the warm-up's projection, 0 when it did
+    not. A chat that had to be created, or lost the title race to another writer, reports no `warm`.
 - The app server passes the plain, non-negative counts into `Server-Timing` as
   `addon-cache;desc="decorated=0 pieces=12 reused=11 ..."`, so `measure-chat-open.mjs` prints them unchanged.
   An older add-on sends none, and the header then has no `addon-cache`.
@@ -37,6 +38,20 @@ its memo emptied, or adopted the warm-up's projection.
 | reuse not reported | failed: test_an_open_reports_what_its_caches_did (exit 1) |
 | fill ignores memos | failed: test_an_open_reports_what_its_caches_did (exit 1) |
 | resume counts dropped by later counts | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
+
+After review, the decorated-hit case moved to `CacheCountTests`, whose fixture projects through the memo, because the
+journal test's fixture never does and so could not catch a leftover report. Same tool, `CacheCountTests` alone,
+baseline passed:
+
+| Mutation | Result |
+| --- | --- |
+| an open keeps the last projection's report | failed: test_an_open_reports_what_its_caches_did (exit 1) |
+
+## Review
+
+Claude Opus 5.5 reviewed `1bb1378f`; GPT-6.1 Sol and Grok were unavailable, and Nicolas approved Claude reviewers for
+this thread. No blockers or majors. Fixed: the decorated-hit assertion could not fail (moved, above), and the docs
+said every read carries all counts, while a resume that created the chat reports no `warm`.
 
 TypeScript, by hand, each restored from a copy afterwards:
 

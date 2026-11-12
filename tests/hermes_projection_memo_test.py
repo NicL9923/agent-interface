@@ -274,6 +274,12 @@ class CacheCountTests(unittest.TestCase):
             turns(hermes)
             first = hermes.open()["app_cache"]
             self.assertEqual((first["decorated"], first["pieces"], first["reused"], first["emptied"]), (0, 3, 0, 0))
+            # With the turn over, an open fills the decorated history, which answers the next one. That open projected
+            # nothing, so it carries no pieces, not the last projection's.
+            hermes.session["running"] = False
+            self.assertEqual(hermes.open()["app_cache"]["reused"], 3)
+            self.assertEqual(set(hermes.open()["app_cache"]), {"decorated", "emptied", "fill"})
+            hermes.session["running"] = True
             hermes.add("user", "u5", "Again?")
             grown = hermes.open()["app_cache"]
             self.assertEqual((grown["decorated"], grown["pieces"], grown["reused"]), (0, 4, 3))
