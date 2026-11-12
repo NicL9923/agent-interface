@@ -57,6 +57,8 @@ export function readTimingHeader(timing: ReadTiming, runtime: number, total: num
     ...(timing.shared !== undefined ? [`cache;desc=${timing.shared ? "shared" : "miss"}`] : []),
     ...(timing.hermes !== undefined ? [metric("hermes", timing.hermes)] : []),
     ...Object.entries(timing.addon ?? {}).map(([phase, ms]) => metric(`addon-${phase}`, ms)),
+    // Counts, not durations: whether the decorated history answered, the memo's pieces and reuse, and the budget.
+    ...(timing.caches ? [`addon-cache;desc="${Object.entries(timing.caches).map(([name, count]) => `${name}=${count}`).join(" ")}"`] : []),
     // Outside the add-on's handler: native pool queueing, serialization and the socket.
     ...(timing.hermes !== undefined && timing.addon?.total !== undefined ? [metric("transit", Math.max(0, timing.hermes - timing.addon.total))] : []),
     metric("runtime", runtime),

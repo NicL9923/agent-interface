@@ -344,9 +344,12 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
         ...(read.history === false ? {omit_messages: true} : read.window ? {window: read.window.before ? {...read.window, start: read.window.before} : read.window} : {})});
       if (timing) {
         timing.hermes = (timing.hermes ?? 0) + performance.now() - started;
-        // An older add-on reports nothing. Only plain phase names reach a header.
-        const phases = Object.entries(value.app_timing ?? {}).filter(([name, ms]) => /^[a-z]{1,20}$/.test(name) && typeof ms === 'number' && Number.isFinite(ms) && ms >= 0);
+        // An older add-on reports nothing. Only plain names with non-negative numbers reach a header.
+        const plain = (reported: unknown) => Object.entries(reported && typeof reported === 'object' ? reported : {})
+          .filter(([name, value]) => /^[a-z]{1,20}$/.test(name) && typeof value === 'number' && Number.isFinite(value) && value >= 0);
+        const phases = plain(value.app_timing), caches = plain(value.app_cache);
         if (phases.length) timing.addon = Object.fromEntries(phases) as Record<string, number>;
+        if (caches.length) timing.caches = Object.fromEntries(caches) as Record<string, number>;
       }
     } finally {
       if (!observe) {

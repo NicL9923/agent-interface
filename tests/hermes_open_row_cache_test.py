@@ -142,9 +142,10 @@ class TranscriptHermes(FakeHermes):
         return self
 
     def answer(self):
-        """An open's result without its timings, which differ between any two opens."""
+        """An open's result without its timings and cache counts, which differ between any two opens."""
         value = self.open()
         value.pop("app_timing")
+        value.pop("app_cache")
         return value
 
 

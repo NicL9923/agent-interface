@@ -394,6 +394,8 @@ export interface ReadTiming {
   hermes?: number;
   /** The add-on's own phases, when it reports them. */
   addon?: Record<string, number>;
+  /** What the add-on's caches did for this open, as counts rather than milliseconds, when it reports them. */
+  caches?: Record<string, number>;
   /** Whether the read joined another reader's read instead of asking Hermes. */
   shared?: boolean;
 }

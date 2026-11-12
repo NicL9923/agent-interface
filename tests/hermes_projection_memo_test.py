@@ -268,6 +268,26 @@ class BudgetTests(unittest.TestCase):
             self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
 
 
+class CacheCountTests(unittest.TestCase):
+    def test_an_open_reports_what_its_caches_did(self):
+        with ProjectingHermes() as hermes:
+            turns(hermes)
+            first = hermes.open()["app_cache"]
+            self.assertEqual((first["decorated"], first["pieces"], first["reused"], first["emptied"]), (0, 3, 0, 0))
+            hermes.add("user", "u5", "Again?")
+            grown = hermes.open()["app_cache"]
+            self.assertEqual((grown["decorated"], grown["pieces"], grown["reused"]), (0, 4, 3))
+            memo = hermes.bridge.row_caches["sid"].projections
+            # Another chat's projection fills the budget this memo shares, so the shared budget empties this one.
+            with patch.object(extension, "PROJECTION_BUDGET", 2 * memo.size):
+                self.assertEqual(hermes.bridge.projection_budget.fill(), 50)
+                other = extension.ProjectionMemo(hermes.bridge.projection_budget)
+                other.project([{"role": "user", "content": "x" * memo.size, "_row_id": 1}], lambda rows: ([], []), dict, "context")
+                hermes.add("user", "u6", "Still there?")
+                emptied = hermes.open()["app_cache"]
+                self.assertEqual((emptied["pieces"], emptied["reused"], emptied["emptied"]), (5, 0, 1))
+
+
 class SharedBudgetTests(unittest.TestCase):
     """Every session's memo keeps its pieces within one gateway budget; the memo used least recently empties first."""
 
@@ -306,6 +326,11 @@ class SharedBudgetTests(unittest.TestCase):
         self.assertEqual(first.project(ranch, self.project, dict, "context")[0], self.project(ranch)[0])
         self.assertEqual(len(self.projected), 2 * len(ranch))
         self.assertEqual((first.size, second.size, third.size), (whole, 0, whole))
+        # A memo already empty is passed over, and only one that held pieces counts as emptied.
+        fourth = extension.ProjectionMemo(shared)
+        fourth.project(fence, self.project, dict, "context")
+        self.assertEqual((first.size, second.size, third.size, fourth.size), (whole, 0, 0, whole))
+        self.assertEqual((first.emptied, second.emptied, third.emptied), (1, 1, 1))
 
     def test_kept_projections_and_tool_rows_count_toward_the_budget(self):
         ranch = self.chat("ranch")

@@ -96,7 +96,11 @@ other value, pings are `data: ping` every 25 seconds, as before, so the iOS app 
 older clients see the same stream.
 Conversation reads carry a `Server-Timing` header that splits the time between the
 Hermes read, the add-on's phases and this server. It is diagnostic only and never part
-of the body or its ETag.
+of the body or its ETag. A read that opened Hermes also carries `addon-cache`, whose
+description holds counts rather than durations: `decorated=1` when the decorated history
+answered, `pieces` and `reused` for a projection, how often the shared budget has
+`emptied` that chat's projection memo, the budget's `fill` percentage, and on the first
+open after a restart `warm=1` when it adopted the warm-up's projection.
 
 `POST /api/bots/:id/messages` and `/steer` answer with `Server-Timing` too. Each
 metric is a duration in milliseconds:

@@ -716,6 +716,9 @@ class OpenTests(unittest.TestCase):
             hermes.journal.db.set_trace_callback(None)
             self.assertEqual(hit["messages"], expected["messages"])
             self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            # The open says the decorated history answered it, and counts no projection it did not make.
+            self.assertEqual(hit["app_cache"]["decorated"], 1)
+            self.assertNotIn("pieces", hit["app_cache"])
             self.assertFalse(any("FROM tools" in sql or "row_id IN" in sql for sql in seen))
             # Only this assistant's receipts and tools are decorated history: another assistant's writes and events keep it.
             def receipt(profile, request_id, db=hermes.journal.db):

@@ -844,6 +844,11 @@ class ProjectionBudget:
     def budget(self):
         return PROJECTION_BUDGET if self.fixed is None else self.fixed
 
+    def fill(self):
+        """The percentage of the budget every memo keeps together, for an open's ``app_cache``."""
+        with self.lock:
+            return round(100 * sum(memo.size for memo in self.memos) / self.budget)
+
     def room(self, memo):
         """Characters ``memo`` may keep without emptying another memo."""
         with self.lock:
@@ -869,6 +874,7 @@ class ProjectionBudget:
                 if total <= self.budget:
                     break
                 total -= other.size
+                other.emptied += bool(other.size)
                 other.pieces, other.size = {}, 0
                 emptied.append(other)
         for other in emptied:
@@ -894,13 +900,14 @@ class ProjectionMemo:
     projection the warm-up stops partway also keeps the pieces it held before, as far as they fit; a stale one only
     misses, because reuse needs equal rows, until the next finished projection drops it.
 
-    Callers hold the session's profile lock. ``report`` says what the last projection did, for shadow mode.
-    ``shared`` is the gateway's ProjectionBudget; another memo's projection may empty this one between opens.
+    Callers hold the session's profile lock. ``report`` says what the last projection did, for shadow mode and
+    an open's ``app_cache``. ``shared`` is the gateway's ProjectionBudget; another memo's projection may empty this
+    one between opens, and ``emptied`` counts the times it emptied one that held pieces.
     """
 
     def __init__(self, shared=None):
         self.shared = ProjectionBudget() if shared is None else shared
-        self.context, self.pieces, self.size, self.report, self.used, self.full = None, {}, 0, None, 0, False
+        self.context, self.pieces, self.size, self.report, self.used, self.full, self.emptied = None, {}, 0, None, 0, False, 0
         # Runs when the shared budget empties this memo; the warm-up's drops the cache nobody adopted.
         self.on_empty = None
 
@@ -1974,7 +1981,8 @@ class Bridge:
                 # projects images as every later open's activation does, so its pieces are theirs.
                 scope = saved["resolved_id"]
                 with self.cache_lock:
-                    rows = self.warm_caches.pop((profile, scope), None) or RowCache(scope, self.projection_budget)
+                    warm = self.warm_caches.pop((profile, scope), None)
+                    rows = warm or RowCache(scope, self.projection_budget)
                     # A warm-up of an earlier tip of this chat is never adopted.
                     for key in [key for key in self.warm_caches if key[0] == profile]:
                         del self.warm_caches[key]
@@ -1985,6 +1993,7 @@ class Bridge:
                     value = self.native("session.resume", {"session_id": scope, "profile": profile, "close_on_disconnect": False})
                 finally:
                     self.projecting.reset(token)
+                value["app_cache"] = {"warm": int(warm is not None)}
                 # row_cache replaces it if the resume landed on another stored session.
                 with self.cache_lock:
                     self.row_caches[value["session_id"]] = rows
@@ -2359,6 +2368,8 @@ class Bridge:
         value["app_tool_calls"] = self.unrepresented_tool_calls(session, value.get("messages", []))
         if cached is None and rows.projections.report is not None and os.environ.get(PROJECTION_SHADOW) == "1":
             value["app_projection_shadow"] = rows.projections.report
+        if not omit:
+            value["app_cache"] = {**value.get("app_cache", {}), **self.cache_counts(rows, cached)}
         if "messages" in value:
             # Each open merged into this one (see route) cuts its own window from the same history.
             merged = self.open_windows.get()
@@ -2371,6 +2382,19 @@ class Bridge:
                 merged["answers"] = answers
         phases["window"] += time.perf_counter() - mark
         return server._ok(rid, value)
+
+    def cache_counts(self, rows, cached):
+        """What an open found in its caches, as plain counts: whether the decorated history answered it, and for one
+        that projected, its pieces and how many the memo reused. ``emptied`` is how often the shared budget has
+        emptied this session's memo, and ``fill`` the percentage of that budget every memo keeps after this open.
+        A resume adds ``warm``, 1 when it adopted the warm-up's projection.
+        """
+        counts = {"decorated": int(cached is not None)}
+        # Activation clears the report first, so it holds only a projection this open made.
+        report = rows.projections.report
+        if report is not None:
+            counts.update(pieces=report["segments"], reused=report["reused"])
+        return {**counts, "emptied": rows.projections.emptied, "fill": self.projection_budget.fill()}
 
     @staticmethod
     def windowed(messages, sid, window):
