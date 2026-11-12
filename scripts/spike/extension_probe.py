@@ -152,7 +152,8 @@ async def main(args):
     first_id = "spike-first-" + str(time.time_ns())
     first = await send(first_id, "PROBE_TOOL first")
     duplicate = await send(first_id, "PROBE_TOOL first")
-    assert first == duplicate and first["status"] == "accepted"
+    # A fresh admission adds its own app_timing; a replay answers what the journal saved, without timings.
+    assert first["status"] == "accepted" and {k: v for k, v in first.items() if k != "app_timing"} == duplicate, (first, duplicate)
     snapshot = await settled(c)
     assert sum(x.get("app_request_id") == first_id for x in snapshot["messages"]) == 1
     assert snapshot["canonical_stored_session_id"] == saved
