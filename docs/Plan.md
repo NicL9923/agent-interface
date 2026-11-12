@@ -152,11 +152,12 @@ assume that published examples grant asset reuse rights.
 - Record the tested Hermes version, detect capabilities, and keep a small
   compatibility suite and rollback path. Do not alter shared infrastructure
   through ordinary bot configuration.
-- Human group chats and additional agent runtimes remain out of scope.
+- Human group chats remain out of scope.
 
 Nicolas also requested an assessment of replacing Hermes. The
-[runtime assessment](HarnessAssessment.md) records that research. It does not
-authorize a runtime replacement in this implementation.
+[runtime assessment](HarnessAssessment.md) records that research. On November 12 he
+decided to replace Hermes by wrapping agent harnesses; [RuntimePlan.md](RuntimePlan.md)
+is the plan.
 
 ## Unresolved integration risks
 
