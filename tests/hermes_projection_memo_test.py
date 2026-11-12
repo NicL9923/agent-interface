@@ -245,8 +245,10 @@ class BudgetTests(unittest.TestCase):
     def test_a_history_beyond_the_budget_keeps_its_first_pieces_and_projects_the_rest(self):
         with ProjectingHermes() as hermes:
             first, second, third, fourth = turns(hermes)
-            memo = None
-            with patch.object(extension, "PROJECTION_BUDGET", sum(extension.text_size(row) for row in first + second)):
+            # What the first two pieces keep: their rows, projections and tool rows.
+            hermes.answer()
+            kept = [entry[3] for entry in hermes.bridge.row_caches["sid"].projections.pieces.values()]
+            with patch.object(extension, "PROJECTION_BUDGET", kept[0] + kept[1]):
                 hermes.bridge.row_caches.clear()
                 value = hermes.answer()
                 memo = hermes.bridge.row_caches["sid"].projections
@@ -264,6 +266,57 @@ class BudgetTests(unittest.TestCase):
             hermes.session["session_key"] = "stored-2"
             hermes.answer()
             self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+
+
+class SharedBudgetTests(unittest.TestCase):
+    """Every session's memo keeps its pieces within one gateway budget; the memo used least recently empties first."""
+
+    @staticmethod
+    def chat(name, count=3):
+        rows = [row for turn in range(count) for row in ({"role": "user", "content": f"{name} asks {turn}"}, {"role": "assistant", "content": f"{name} answers {turn}"})]
+        return [{**row, "_row_id": index + 1} for index, row in enumerate(rows)]
+
+    def setUp(self):
+        self.projected = []
+        patcher = patch.object(extension, "PIECE_ROWS", 1)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def project(self, rows):
+        self.projected.extend(row["content"] for row in rows)
+        return [{"role": row["role"], "text": row["content"].upper()} for row in rows], [(("call", row["content"]), None, row["content"]) for row in rows]
+
+    def kept(self, memo, history):
+        """Characters a memo holding all of ``history`` keeps: input rows, projections and tool rows."""
+        memo.project(history, self.project, dict, "context")
+        return memo.size
+
+    def test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget(self):
+        ranch, fence, barns = self.chat("ranch"), self.chat("fence"), self.chat("barns")
+        whole = self.kept(extension.ProjectionMemo(extension.ProjectionBudget()), ranch)
+        shared = extension.ProjectionBudget(budget=2 * whole + whole // 2)
+        first, second, third = (extension.ProjectionMemo(shared) for _ in range(3))
+        first.project(ranch, self.project, dict, "context")
+        second.project(fence, self.project, dict, "context")
+        self.assertEqual((first.size, second.size), (whole, whole))
+        third.project(barns, self.project, dict, "context")
+        self.assertEqual((first.size, second.size, third.size), (0, whole, whole))
+        # Used again, the emptied memo projects its history anew, and the one now used least recently empties.
+        self.projected.clear()
+        self.assertEqual(first.project(ranch, self.project, dict, "context")[0], self.project(ranch)[0])
+        self.assertEqual(len(self.projected), 2 * len(ranch))
+        self.assertEqual((first.size, second.size, third.size), (whole, 0, whole))
+
+    def test_kept_projections_and_tool_rows_count_toward_the_budget(self):
+        ranch = self.chat("ranch")
+        # Rows and projections fit exactly, so only counting the tool rows too leaves pieces out.
+        without_tools = extension.text_size(ranch) + extension.text_size(self.project(ranch)[0])
+        memo = extension.ProjectionMemo(extension.ProjectionBudget(budget=without_tools))
+        memo.project(ranch, self.project, dict, "context")
+        self.assertLessEqual(memo.size, without_tools)
+        self.projected.clear()
+        memo.project(ranch, self.project, dict, "context")
+        self.assertGreater(len(self.projected), 0)
 
 
 class ShadowTests(unittest.TestCase):

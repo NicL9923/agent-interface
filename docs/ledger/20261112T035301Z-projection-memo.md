@@ -101,3 +101,24 @@ reuses pieces. `scripts/spike/compaction_probe.py` asserts the same after Hermes
 A middle-row edit is not expressed there: no RPC edits a middle row, and writing the disposable `state.db` directly
 would bypass Hermes's own writer, its read pool and `display_identity`, a state Hermes never produces. The unit
 tests cover it. Not run: release qualification and the running gateway.
+
+## One budget for the gateway
+
+Review of the consolidated branch found the 128 million character budget applied per canonical session, and counted
+only input rows: at about 1.8 bytes per character, three to five long chats could keep 0.5 to 1 GB in the Hermes
+process for as long as their sessions stayed canonical. `ProjectionBudget` now holds one budget of 192 million
+characters for every memo in the gateway, counting each kept piece's input rows, projection and tool rows
+(`text_size` now counts tuples). After each projection the memos used least recently empty until the total fits.
+
+`python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_projection_memo_test.py`:
+
+| Mutation | Result |
+| --- | --- |
+| no shared charge | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
+| most recently used empties first | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
+| rows only counted | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1) |
+| tuples not counted | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1) |
+
+A first version of the tests let three of these survive: two memos cannot tell least from most recently used, and
+fixture rows without row IDs collided on the memo's cheap key and re-projected whatever the budget. The tests use
+three memos and rows with IDs. A guard that kept the projecting memo from emptying itself was unreachable and is gone.

@@ -716,11 +716,11 @@ class RowCache:
     nothing that reads them may change them; a response gets copies.
     """
 
-    def __init__(self, scope):
+    def __init__(self, scope, projections=None):
         self.scope = scope
         self.tool_results, self.tool_records = {}, {}
         self.journal = None
-        self.projections = ProjectionMemo()
+        self.projections = ProjectionMemo(projections)
 
     @staticmethod
     def keep(table, key, value):
@@ -744,7 +744,7 @@ def text_size(value):
         return len(value)
     if type(value) is dict:
         return sum(len(key) if type(key) is str else 0 for key in value) + sum(text_size(item) for item in value.values())
-    if type(value) is list:
+    if type(value) in (list, tuple):
         return sum(text_size(item) for item in value)
     return 0
 
@@ -817,13 +817,43 @@ def project_rows(native, display, history, kwargs):
     return messages, tool_rows
 
 
-# Characters of raw rows one canonical session's ProjectionMemo keeps, counted by text_size. The longest chat seen,
-# 8,016 rows, needs 62 million, and its memo held about 110 MB. A history beyond this keeps its first pieces and
-# projects the rest every open.
-PROJECTION_BUDGET = 128_000_000
+# Characters every ProjectionMemo in the gateway keeps together, counted by text_size over each kept piece's input
+# rows, projection and tool rows. The longest chat seen, 8,016 rows, has 62 million characters of input rows alone,
+# and its memo held about 110 MB. One memo may use all of it; a history beyond it keeps its first pieces and projects
+# the rest every open. When several chats' memos pass it, the one used least recently empties (ProjectionBudget).
+PROJECTION_BUDGET = 192_000_000
 # Set to 1 to project each app open's history whole as well, answer with the whole projection, and log where the two
 # differ. docs/Hosting.md has the switch. Release qualification runs with it on.
 PROJECTION_SHADOW = "HERMES_AGENT_INTERFACE_PROJECTION_SHADOW"
+
+
+class ProjectionBudget:
+    """The characters every ProjectionMemo of one gateway keeps, together.
+
+    A memo lives as long as its session is canonical, so without a shared budget each long chat ever opened would
+    keep up to the whole budget for the life of the gateway. After each projection the memos used least recently
+    empty until the total fits; the memo that just projected keeps its pieces.
+    """
+
+    def __init__(self, budget=None):
+        self.fixed, self.lock, self.memos, self.uses = budget, threading.Lock(), weakref.WeakSet(), 0
+
+    @property
+    def budget(self):
+        return PROJECTION_BUDGET if self.fixed is None else self.fixed
+
+    def charge(self, memo):
+        with self.lock:
+            self.uses += 1
+            memo.used = self.uses
+            self.memos.add(memo)
+            total = sum(other.size for other in self.memos)
+            # Never the memo that just projected: it is used last, and alone it never keeps more than the budget.
+            for other in sorted(self.memos, key=lambda other: other.used):
+                if total <= self.budget:
+                    break
+                total -= other.size
+                other.pieces, other.size = {}, 0
 
 
 class ProjectionMemo:
@@ -843,11 +873,16 @@ class ProjectionMemo:
     until their rows reach ``budget`` characters, so pieces a rewrite left behind never accumulate.
 
     Callers hold the session's profile lock. ``report`` says what the last projection did, for shadow mode.
+    ``shared`` is the gateway's ProjectionBudget; another memo's projection may empty this one between opens.
     """
 
-    def __init__(self, budget=None):
-        self.budget = PROJECTION_BUDGET if budget is None else budget
-        self.context, self.pieces, self.size, self.report = None, {}, 0, None
+    def __init__(self, shared=None):
+        self.shared = ProjectionBudget() if shared is None else shared
+        self.context, self.pieces, self.size, self.report, self.used = None, {}, 0, None, 0
+
+    @property
+    def budget(self):
+        return self.shared.budget
 
     @staticmethod
     def key(piece):
@@ -879,7 +914,8 @@ class ProjectionMemo:
             else:
                 rows = self.snapshot(piece)
                 projected, piece_tools = project(rows)
-                entry = (rows, detached(projected), piece_tools, text_size(rows))
+                kept_projection = detached(projected)
+                entry = (rows, kept_projection, piece_tools, text_size(rows) + text_size(kept_projection) + text_size(piece_tools))
             if size + entry[3] <= self.budget and key not in kept:
                 kept[key] = entry
                 size += entry[3]
@@ -887,6 +923,7 @@ class ProjectionMemo:
             tool_rows.extend(entry[2])
             inputs.append(entry[0])
         self.pieces, self.size = kept, size
+        self.shared.charge(self)
         self.report = {"segments": len(cuts), "reused": reused, "difference": None, "tool_difference": None}
         if shadow:
             whole, whole_tools = project([row for rows in inputs for row in rows])
@@ -1030,6 +1067,8 @@ class Bridge:
         # RowCache per canonical session ID, pruned with the decorated cache. ``projecting`` is
         # the one this thread's native activation may use while it projects history.
         self.row_caches = {}
+        # Every session's projection memo keeps its pieces within this one budget.
+        self.projection_budget = ProjectionBudget()
         self.projecting = contextvars.ContextVar("agent_interface_projecting", default=None)
         # While a queued open runs for every open merged into it: {"windows": each one's window, in
         # arrival order, "answers": each one's (rows, cut), which open_locked fills}. See route.
@@ -1796,7 +1835,7 @@ class Bridge:
         with self.cache_lock:
             rows = self.row_caches.get(sid)
             if rows is None or rows.scope != scope:
-                rows = self.row_caches[sid] = RowCache(scope)
+                rows = self.row_caches[sid] = RowCache(scope, self.projection_budget)
             return rows
 
     def activate(self, profile, omit, skip_cache):
