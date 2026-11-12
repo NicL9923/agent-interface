@@ -132,19 +132,22 @@ extension AppStore {
   /// A failure is reported but does not mark the server unavailable, because the loaded conversation is
   /// still current.
   func loadEarlier() async {
-    guard let id = selectedBotId, api != nil, !loadingEarlier,
+    // An open-at-message read in flight owns the window: a page read before it lands would move the
+    // window start above the message that was asked for, and drop that read.
+    guard let id = selectedBotId, api != nil, !loadingEarlier, requestedWindow == nil,
       let first = conversation?.messages.first?.id, (conversation?.earlier ?? 0) > 0
     else { return }
     loadingEarlier = true
     defer { loadingEarlier = false }
-    await readEarlier(of: id, before: first, whole: false)
+    if await readEarlier(of: id, before: first, whole: false) { _ = await readEarlier(of: id, before: first, whole: true) }
   }
   /// One read of the page before `first`. `whole` asks the old way, `start=` that message, which answers
-  /// everything from there to the newest message and replaces the view.
-  private func readEarlier(of id: String, before first: String, whole: Bool) async {
-    guard let api else { return }
+  /// everything from there to the newest message and replaces the view. Answers true when the page cannot
+  /// go in front of the view and should be read whole instead.
+  private func readEarlier(of id: String, before first: String, whole: Bool) async -> Bool {
+    guard let api else { return false }
     let selectedGeneration = selectionGeneration
-    let requestedWindow = windowGeneration
+    let windowAtStart = windowGeneration
     conversationReads += 1
     let read = conversationReads
     conversationReadsInFlight += 1
@@ -153,18 +156,17 @@ extension AppStore {
       let anchor = APIClient.component(first)
       let query = whole ? "start=\(anchor)&turns=\(Self.historyPageTurns)" : "before=\(anchor)&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
-      guard selectedGeneration == selectionGeneration else { return }
+      guard selectedGeneration == selectionGeneration else { return false }
+      // The window was moved while this loaded, as by opening at a message: the answer is for the window
+      // before it, and the person's request wins.
+      guard windowAtStart == windowGeneration else { return false }
       if !whole, value.before == first {
-        // The window was moved while the page loaded, as by opening at a message: this page is for the
-        // window before it, and the person's request wins.
-        guard requestedWindow == windowGeneration else { return }
         // Only the page's messages and files go in front of the message. The view keeps its own live
         // state, draft and version, which a newer read may have moved on since this one began.
         guard conversation?.botId == id, let merged = conversation?.prepending(value, before: first) else {
           // The view no longer starts at that message, as after a turn that replaced everything: read
           // the page whole, with everything after it.
-          await readEarlier(of: id, before: first, whole: true)
-          return
+          return true
         }
         windowGeneration += 1
         historyStarts[id] = value.messages.first?.id ?? first
@@ -174,7 +176,7 @@ extension AppStore {
         // A read asked before the window moved is dropped when it answers, with whatever newer turns it
         // carried, so the whole window is read again.
         if conversationReadsInFlight > 1 { await refreshConversation() }
-        return
+        return false
       }
       // A whole read, or an answer that does not name the message because the history lost it: the
       // latest page, which replaces the view as any read does.
@@ -184,14 +186,17 @@ extension AppStore {
         // A newer read landed while this page loaded. Keep the wider window, but read it fresh
         // instead of showing this older snapshot of the recent turns.
         await refreshConversation()
-        return
+        return false
       }
       appliedConversationRead = read
       hearReplies(in: value, botId: id)
       apply(value, botId: id)
+      // Moving the window dropped any read asked before it, with whatever newer turns it carried.
+      if conversationReadsInFlight > 1 { await refreshConversation() }
     } catch is CancellationError {} catch {
       if selectedGeneration == selectionGeneration { report(error) }
     }
+    return false
   }
   /// Every file the open conversation knows, oldest first, with where it came from. Listed once per
   /// change of its inputs, not on every render of the header that counts them.

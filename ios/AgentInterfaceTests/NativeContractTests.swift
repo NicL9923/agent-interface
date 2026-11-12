@@ -1811,6 +1811,60 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30), "Its answer is for the window before the page")
     }
 
+    func testNoPageIsReadWhileAnOpenAtMessageReadOwnsTheWindow() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m31")
+        // Find opens at an older message: the window moved, and the read for it has not landed yet.
+        server.holdNext(path)
+        let opening = Task { await value.openConversation(botId: "bot", atMessage: "m05") }
+        try await server.waitForHeld(path)
+        let reads = server.conversationQueries.count
+        await value.loadEarlier()
+        XCTAssertEqual(server.conversationQueries.count, reads, "The earlier edge showing meanwhile asks for nothing")
+        server.release(path); await opening.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(5...50), "The opened message stays in the window")
+        XCTAssertEqual(value.focusedMessage?.messageId, "m05")
+    }
+
+    func testALostMessageAnswerForAWindowThatMovedIsDroppedAndAReadItOutranIsRepeated() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        // m31 is gone from the history, so the page before it answers the latest page without `before`.
+        server.serveHistory(ids(1...30) + ids(101...150))
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        await value.openConversation(botId: "bot", atMessage: "m05")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05")
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05", "The answer for the window before the open does not replace it")
+        XCTAssertEqual(server.conversationQueries.last, "start=m05")
+    }
+
+    func testALostMessageAnswerRepeatsTheReadItDroppedWhenTheWindowMoves() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.serveHistory(ids(101...130))
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // A change notice's read, asked after the page, which the page's window move drops when it answers.
+        server.holdNext(path)
+        let poll = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m111")
+        XCTAssertEqual(server.conversationQueries.last, "start=m111", "The window the answer moved is read again")
+        server.release(path); await poll.value
+    }
+
     func testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let path = "/api/bots/bot/conversation"
