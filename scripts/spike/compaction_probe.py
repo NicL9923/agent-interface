@@ -13,7 +13,7 @@ import os
 import time
 import urllib.request
 from pathlib import Path
-from extension_probe import Client, settled
+from extension_probe import Client, projection_matches, settled
 from guard import verify_target
 
 PROFILE = "default"
@@ -165,6 +165,8 @@ async def main():
     after = visible(await c.call("agent-interface.open", profile=PROFILE))
     changed = [(index, b, a) for index, (b, a) in enumerate(zip(before, after)) if b != a]
     assert after == before, f"In-place compaction changed the app's view: {len(before)} -> {len(after)} rows, first changes {[(i, b[:2], str(b[2])[:40], a[:2], str(a[2])[:40]) for i, b, a in changed[:6]]}"
+    # Compaction stored every kept row again under a new ID: the memo projects them anew and matches the whole projection.
+    evidence["checks"]["projection_memo_after_compaction"] = await projection_matches(c, PROFILE)
     window = await c.call("agent-interface.open", profile=PROFILE, window={"start": anchor, "turns": 1})
     assert any(m.get("app_request_id") == anchor for m in window["messages"]), "Talk's anchored read must still find its request"
     receipt, _, _ = await send(c, sid, f"after-{time.time_ns()}", "PROBE after compaction")

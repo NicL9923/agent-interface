@@ -194,6 +194,8 @@ approvals:
         env.pop("HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION", None)
     env.pop("HERMES_AGENT_INTERFACE_QUALIFICATION_FILE", None)
     env["HERMES_AGENT_INTERFACE_TOKEN"] = token
+    # Every open that projects history also projects it whole; the probes assert the memoized projection matched.
+    env["HERMES_AGENT_INTERFACE_PROJECTION_SHADOW"] = "1"
     env["HERMES_AGENT_INTERFACE_MAINTENANCE_FILE"] = str(home / "runtime" / "agent-interface-maintenance.json")
     # Keep production API secrets out of this process and every tool it can spawn.
     for key in list(env):

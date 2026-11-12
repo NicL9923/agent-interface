@@ -692,12 +692,193 @@ class RowCache:
         self.scope = scope
         self.tool_results, self.tool_records = {}, {}
         self.journal = None
+        self.projections = ProjectionMemo()
 
     @staticmethod
     def keep(table, key, value):
         table[key] = value
         while len(table) > ROW_CACHE_LIMIT:
             del table[next(iter(table))]
+
+
+def file_stamp(path):
+    """What changes when a file is replaced or written: device, inode, times and size. None for a missing file."""
+    try:
+        info = path.stat()
+        return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
+    except FileNotFoundError:
+        return None
+
+
+def text_size(value):
+    """The characters of every string in a JSON value, keys included."""
+    if type(value) is str:
+        return len(value)
+    if type(value) is dict:
+        return sum(len(key) if type(key) is str else 0 for key in value) + sum(text_size(item) for item in value.values())
+    if type(value) is list:
+        return sum(text_size(item) for item in value)
+    return 0
+
+
+# Rows each piece of a memoized history holds at least, but the last. Hermes reads the profile's configuration once
+# per projection that holds commentary, so a 8,016-row chat cut at every safe turn (394 pieces) projected 23% slower
+# than whole; at 64 rows (86 pieces) it is no slower, and an open still projects only its last piece again.
+PIECE_ROWS = 64
+
+
+def projection_cuts(history, display, least=None):
+    """Where Hermes's history projection can be cut so that each piece projects alone exactly as it does in the whole.
+
+    ``_history_to_messages`` (tui_gateway/session_history.py:297 at ed1afb0) carries one thing from row to row:
+    ``tool_call_args``, the name and arguments of each call an assistant row's ``tool_calls`` named, by call ID. A
+    tool row reads the last such entry before it, so a model that reuses a call ID reads its latest call. The rest of
+    the projection, commentary included, looks at one row or message at a time. A cut is safe where no tool row after
+    it reads an entry made before it. Rows are cut only at user rows, so pieces follow turns and repeat between opens,
+    but a user row is never taken to start a turn: a steer is a user row in the middle of a tool batch, and a hidden
+    assistant row still names calls that later rows read. Each row is seen as Hermes sees it, after ``display``,
+    its compaction projection. A piece holds at least ``least`` rows (PIECE_ROWS), but the last; cuts are taken
+    from the start, so rows added at the end never move an earlier cut. Returns the index each piece starts at, the
+    first 0. A call that is not a mapping, or an ID that cannot be a key, raises here what Hermes's own projection of
+    that row raises.
+    """
+    least = PIECE_ROWS if least is None else least
+    last, blocked, users = {}, [0] * (len(history) + 1), []
+    for index, row in enumerate(history):
+        if not isinstance(row, dict):
+            continue
+        if row.get("role") == "user":
+            users.append(index)
+        shown = display(row)
+        if not isinstance(shown, dict):
+            continue
+        if shown.get("role") == "assistant" and shown.get("tool_calls"):
+            for call in shown["tool_calls"]:
+                if call.get("id", "") and call.get("function", {}).get("name"):
+                    last[call.get("id", "")] = index
+        elif shown.get("role") == "tool":
+            source = last.get(shown.get("tool_call_id") or "")
+            if source is not None:
+                # No cut in source + 1 .. index: this row would lose the call it reads.
+                blocked[source + 1] += 1
+                blocked[index + 1] -= 1
+    cuts, covered, users = [0], 0, set(users)
+    for index in range(len(history)):
+        covered += blocked[index]
+        if index - cuts[-1] >= least and covered == 0 and index in users:
+            cuts.append(index)
+    return cuts
+
+
+def project_rows(native, display, history, kwargs):
+    """Hermes's projection of ``history``, and what the add-on reads from each of its tool rows.
+
+    Returns (messages, tool rows): each visible tool row as ((its call ID, its time), its row ID, its
+    content), in history order. Native compaction and hidden scaffolding stay hidden. A model can reuse a
+    call ID later, so a tool row is known by its call ID and native time together.
+    """
+    messages, tool_rows = native(history, **kwargs), []
+    for row in history:
+        if not isinstance(row, dict) or row.get("role") != "tool":
+            continue
+        visible = native([row], **kwargs)
+        projected = display(row)
+        if not visible or not isinstance(projected, dict):
+            continue
+        tool_rows.append(((visible[0].get("tool_call_id"), visible[0].get("timestamp")), projected.get("_row_id"), projected.get("content")))
+    return messages, tool_rows
+
+
+# Characters of raw rows one canonical session's ProjectionMemo keeps, counted by text_size. The longest chat seen,
+# 8,016 rows, needs 62 million, and its memo held about 110 MB. A history beyond this keeps its first pieces and
+# projects the rest every open.
+PROJECTION_BUDGET = 128_000_000
+# Set to 1 to project each app open's history whole as well, answer with the whole projection, and log where the two
+# differ. docs/Hosting.md has the switch. Release qualification runs with it on.
+PROJECTION_SHADOW = "HERMES_AGENT_INTERFACE_PROJECTION_SHADOW"
+
+
+class ProjectionMemo:
+    """Hermes's projection of each piece of one canonical session's history, kept between app opens.
+
+    Hermes reads and projects a long chat's whole history on every open, though only its newest turn
+    changes between opens. The history is cut where ``projection_cuts`` says a piece projects alone as it
+    does in the whole, and a piece whose rows equal the rows a kept projection came from reuses it. Rows are
+    fresh dictionaries on every read of the store, so equal content is the only identity they have: a cheap
+    key (row IDs and content lengths) finds the candidate, and full equality decides.
+
+    ``context`` is everything else a projection reads: its keyword arguments, the profile's configuration
+    stamps and native redaction state. Another context empties the memo. Each kept piece holds a copy of its
+    input rows, made before Hermes projects that copy, because live rows change in place (a flush stamps
+    ``_row_id``), and a copy of its projection, because decoration changes the messages it is given. A hit
+    hands out a new copy. After each projection the memo holds exactly the pieces of that history, in order,
+    until their rows reach ``budget`` characters, so pieces a rewrite left behind never accumulate.
+
+    Callers hold the session's profile lock. ``report`` says what the last projection did, for shadow mode.
+    """
+
+    def __init__(self, budget=None):
+        self.budget = PROJECTION_BUDGET if budget is None else budget
+        self.context, self.pieces, self.size, self.report = None, {}, 0, None
+
+    @staticmethod
+    def key(piece):
+        def size(value):
+            return len(value) if type(value) in (str, list) else -1
+        return tuple((row.get("_row_id"), row.get("role"), size(row.get("content"))) if type(row) is dict else (type(row).__name__,) for row in piece)
+
+    @staticmethod
+    def snapshot(piece):
+        # dict.copy() takes each live row whole, so a flush stamping it meanwhile cannot break the copy.
+        return [detached(row.copy()) if type(row) is dict else detached(row) for row in piece]
+
+    def project(self, history, project, display, context, shadow=False):
+        """(messages, tool rows) as ``project`` gives them for the whole ``history``, reusing kept pieces.
+
+        ``project(rows)`` is Hermes's projection of ``rows`` with project_rows; ``display`` its compaction projection.
+        """
+        cuts = projection_cuts(history, display)
+        if context != self.context:
+            self.context, self.pieces, self.size = context, {}, 0
+        kept, size, messages, tool_rows, inputs, reused = {}, 0, [], [], [], 0
+        for start, end in zip(cuts, cuts[1:] + [len(history)]):
+            piece = history[start:end]
+            key = self.key(piece)
+            entry = self.pieces.get(key)
+            if entry is not None and entry[0] == piece:
+                reused += 1
+                projected = detached(entry[1])
+            else:
+                rows = self.snapshot(piece)
+                projected, piece_tools = project(rows)
+                entry = (rows, detached(projected), piece_tools, text_size(rows))
+            if size + entry[3] <= self.budget and key not in kept:
+                kept[key] = entry
+                size += entry[3]
+            messages.extend(projected)
+            tool_rows.extend(entry[2])
+            inputs.append(entry[0])
+        self.pieces, self.size = kept, size
+        self.report = {"segments": len(cuts), "reused": reused, "difference": None, "tool_difference": None}
+        if shadow:
+            whole, whole_tools = project([row for rows in inputs for row in rows])
+            self.report["difference"] = first_difference(messages, whole)
+            self.report["tool_difference"] = first_difference(tool_rows, whole_tools)
+            if self.report["difference"] is not None or self.report["tool_difference"] is not None:
+                logging.getLogger(__name__).warning(
+                    "A memoized history projection differed from the whole one at message %s and tool row %s of %d messages "
+                    "in %d pieces; answered with the whole one", self.report["difference"], self.report["tool_difference"],
+                    len(whole), len(cuts))
+                return whole, whole_tools
+        return messages, tool_rows
+
+
+def first_difference(left, right):
+    """The first index where two lists differ, the shorter one's length when one extends the other, or None."""
+    for index, (a, b) in enumerate(zip(left, right)):
+        if a != b:
+            return index
+    return None if len(left) == len(right) else min(len(left), len(right))
 
 
 # Hermes labels every shell command in a history each time it projects one, and its shell parser walks each
@@ -1095,34 +1276,44 @@ class Bridge:
     def detailed_history(self, history, **kwargs):
         # Keep the canonical native projection, adding only details present in its
         # original tool rows. The compact native view otherwise omits most outputs.
-        messages = self.native_history(history, **kwargs)
-        # Only an app open's own activation has a cache; other native readers parse every row.
+        # Only an app open's own activation has caches; other native readers, such as
+        # experience.py's, project and parse every row.
         rows = self.projecting.get()
-        tool_rows = {}
-        for row in history:
-            if not isinstance(row, dict) or row.get("role") != "tool":
-                continue
-            # Native compaction and hidden scaffolding must stay hidden. A model
-            # can reuse a call ID later, so identity also includes native time.
-            visible = self.native_history([row], **kwargs)
-            projected = self.server.project_compaction_message_for_display(row)
-            if not visible or not isinstance(projected, dict):
-                continue
-            key = (visible[0].get("tool_call_id"), visible[0].get("timestamp"))
-            tool_rows.setdefault(key, []).append(projected)
+        display = self.server.project_compaction_message_for_display
+        project = lambda part: project_rows(self.native_history, display, part, kwargs)
+        context = self.projection_context(kwargs) if rows is not None else None
+        if context is None:
+            messages, tool_rows = project(history)
+        else:
+            messages, tool_rows = rows.projections.project(history, project, display, context, os.environ.get(PROJECTION_SHADOW) == "1")
+        found = {}
+        for key, row_id, content in tool_rows:
+            found.setdefault(key, collections.deque()).append((row_id, content))
         for message in messages:
             if message.get("role") != "tool":
                 continue
-            matches = tool_rows.get((message.get("tool_call_id"), message.get("timestamp"))) or []
+            matches = found.get((message.get("tool_call_id"), message.get("timestamp")))
             if not matches:
                 continue
-            raw = matches.pop(0)
-            if raw.get("_row_id") is not None:
-                message["row_id"] = raw["_row_id"]
-            result = raw.get("content")
+            row_id, result = matches.popleft()
+            if row_id is not None:
+                message["row_id"] = row_id
             if result is not None:
-                message["app_tool_result"] = self.tool_result(result, raw.get("_row_id"), rows)
+                message["app_tool_result"] = self.tool_result(result, row_id, rows)
         return messages
+
+    def projection_context(self, kwargs):
+        """What a history projection reads besides its rows, for ProjectionMemo; None when it cannot be known.
+
+        Hermes projects commentary under the profile's configuration and redaction, and labels tools in the
+        configured display language, read from the home that is current while it projects.
+        """
+        redaction = redaction_state()
+        if redaction is None:
+            return None
+        homes = {Path(home) for home in (kwargs.get("profile_home"), self.get_hermes_home()) if home}
+        configs = tuple(sorted((str(home), file_stamp(home / "config.yaml")) for home in homes))
+        return tuple(sorted((name, repr(value)) for name, value in kwargs.items())), configs, redaction
 
     @staticmethod
     def tool_result(content, row_id, rows):
@@ -1554,17 +1745,11 @@ class Bridge:
             home = Path(session.get("profile_home") or self.get_hermes_home())
         db = self.server._get_db() if not session.get("profile_home") and hasattr(self.server, "_get_db") else None
         db_path = Path(getattr(db, "db_path", home / "state.db"))
-        def stamp(path):
-            try:
-                info = path.stat()
-                return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
-            except FileNotFoundError:
-                return None
         # Like the native change watcher, observe both DB and WAL: another native
         # connection can commit a display lineage without changing the warm history.
         # File replacement, checkpoint and profile commentary configuration invalidate too.
         # Vault secrets and plugin patterns registered at runtime redact native commentary.
-        return memory, tuple(stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml")), redaction_state()
+        return memory, tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml")), redaction_state()
 
     def row_cache(self, sid, session):
         """The canonical session's RowCache, a new one when its stored session changed.
@@ -1609,6 +1794,7 @@ class Bridge:
                         cached = entry[2]
                         # Eviction keeps the most recently read histories; lifetime counts from the fill.
                         decorated[sid] = (*entry[:4], time.monotonic())
+            rows.projections.report = None
             token = self.projecting.set(rows)
             try:
                 value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
@@ -1961,7 +2147,6 @@ class Bridge:
         # Callers that need only the session, its run state and open requests skip the
         # native history read. A first open still resumes with history.
         omit = params.get("omit_messages") is True
-        window = params.get("window") if isinstance(params.get("window"), dict) and not omit else None
         mark = time.perf_counter()
         activated = self.activate(profile, omit, params.get("_skip_cache"))
         if activated is None:
@@ -2002,16 +2187,26 @@ class Bridge:
         phases["decorate"] += time.perf_counter() - mark
         mark = time.perf_counter()
         value["app_tool_calls"] = self.unrepresented_tool_calls(session, value.get("messages", []))
-        if window is not None:
-            value["messages"], cut = history_window(value.get("messages", []), sid, window.get("start"), window.get("turns", 0))
+        if cached is None and rows.projections.report is not None and os.environ.get(PROJECTION_SHADOW) == "1":
+            value["app_projection_shadow"] = rows.projections.report
+        if "messages" in value:
+            value["messages"], cut = self.windowed(value["messages"], sid, None if omit else params.get("window"))
             if cut:
                 value["app_window"] = cut
-        # The caches hold these rows and their parsed results for later opens. Only the rows that
-        # leave are copied, after the window has cut a long chat down to them.
-        if "messages" in value:
-            value["messages"] = detached(value["messages"])
         phases["window"] += time.perf_counter() - mark
         return server._ok(rid, value)
+
+    @staticmethod
+    def windowed(messages, sid, window):
+        """(rows, cut) for one open's ``window``; cut is None when the whole history goes.
+
+        The caches hold these rows and their parsed results for later opens. Only the rows that
+        leave are copied, after the window has cut a long chat down to them.
+        """
+        cut = None
+        if isinstance(window, dict):
+            messages, cut = history_window(messages, sid, window.get("start"), window.get("turns", 0))
+        return detached(messages), cut
 
     def open_canonical(self, profile):
         # A live, prepared canonical session needs no lock, so a send never waits behind a
