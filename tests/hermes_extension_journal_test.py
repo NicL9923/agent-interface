@@ -1113,8 +1113,8 @@ class CanonicalOpenTests(unittest.TestCase):
             {"role": "user", "row_id": 10, "text": "Summarize\n@file:\"/srv/report.pdf\"", "timestamp": 100},
             {"role": "tool", "row_id": 11, "tool_call_id": "read", "name": "read_file", "args": {"path": "report.pdf"}, "app_tool_result": {"pages": 3}},
             {"role": "tool", "row_id": 12, "tool_call_id": "shell", "name": "terminal", "args": {}, "app_tool_result": {"exit_code": 0}},
-            # A native correction persisted after admission, without an admission row ID.
-            {"role": "user", "row_id": 13, "text": "Shorter please", "timestamp": 101},
+            # A steer Hermes delivered mid-turn, typed a steer and without an admission row ID.
+            {"role": "user", "row_id": 13, "text": "Shorter please", "timestamp": 101, "display_kind": "steer"},
             {"role": "assistant", "row_id": 14, "text": "Summary", "timestamp": 102},
             {"role": "user", "row_id": 20, "text": image_text("", ["/srv/photo.png"]), "timestamp": 200},
             {"role": "tool", "row_id": 21, "tool_call_id": "read", "name": "read_file", "args": {"path": "other.pdf"}, "app_tool_result": {"pages": 3}},
@@ -1126,8 +1126,8 @@ class CanonicalOpenTests(unittest.TestCase):
             db = hermes.journal.db
             with db:
                 receipt(db, "first", 10, 1, text="Summarize\n@file:\"/srv/report.pdf\"", attachments=[report], actor="kimberly")
-                # The root's turn finished and reported its committed rows, the correction's among them.
-                db.execute("UPDATE receipts SET turn_rows='[10, 11, 12, 13, 14]' WHERE request_id='first'")
+                # The root's turn finished and reported its committed rows, which leave the steer's row out.
+                db.execute("UPDATE receipts SET turn_rows='[10, 11, 12, 14]' WHERE request_id='first'")
                 receipt(db, "steer", None, 2, run_id="first", text="Shorter please", steering=1)
                 receipt(db, "photo", 20, 3, attachments=[photo])
                 # Another profile's row IDs belong to its own state database.

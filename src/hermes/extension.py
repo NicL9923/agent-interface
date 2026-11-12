@@ -1268,9 +1268,9 @@ class Bridge:
         Every other completion, such as another client's turn, a queued or redirected send's
         neighbor, a resumed turn or a goal continuation, binds nothing.
 
-        The same completion lists every committed row of the turn (``persisted_turn.row_ids``),
-        kept as the receipt's turn: a steer is bound later only to a row inside it. A value that is
-        not a list of row IDs keeps no turn.
+        The same completion lists the turn's committed rows (``persisted_turn.row_ids``), kept as the
+        receipt's turn: a steer is bound later only to a row within its span. A value that is not a list
+        of row IDs keeps no turn.
         """
         claim = self.turn_claim.get()
         if claim is None or claim["sid"] != sid or claim["used"]:
@@ -1289,9 +1289,10 @@ class Bridge:
         """Keep the rows of the turn that just completed with each send Hermes put into it.
 
         A send answered ``steered`` or ``redirected`` joined the turn running when its answer came, which can be
-        another client's, so no receipt holds that turn's rows. The completion's committed rows, without the turn's own
-        prompt row, are kept as the send's ``turn_rows``, and bind_steers binds it by the steer rule. A completion that
-        reports no rows, or no prompt row to leave out, keeps none.
+        another client's, so no receipt holds that turn's rows. The completion's committed rows are kept as the send's
+        ``turn_rows`` with the turn's own prompt row first, which bind_steers reads as the start of the turn's span and
+        never binds, and bind_steers binds the send by the steer rule. A completion that reports no rows, or no prompt
+        row, keeps none.
         """
         with self.joined_lock:
             requests = self.joined.pop(sid, None)
@@ -1301,7 +1302,7 @@ class Bridge:
             return
         with self.journal.lock, self.journal.db:
             self.journal.db.execute("UPDATE receipts SET turn_rows=? WHERE request_id IN (SELECT value FROM json_each(?))",
-                                    (json.dumps([row for row in extent if row != prompt]), json.dumps(requests)))
+                                    (json.dumps([prompt, *(row for row in extent if row != prompt)]), json.dumps(requests)))
 
     def record_live_tool(self, sid, session, kind, payload):
         """Keep a running or finished tool call for polls until its history row appears."""
@@ -1751,27 +1752,34 @@ class Bridge:
         """Bind each unbound steer whose row can only be its own.
 
         Hermes answers session.steer with no row and no request ID, and writes the steer later as
-        a user row holding its words, beside any other client's correction with the same words
-        (``tui_gateway/methods_session_interrupt.py:114-130`` and ``agent/agent_runtime_helpers.py:3668-3703``
-        at ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn
-        has finished and reported its committed rows (``turn_rows``, kept by bind_turn_row), and
-        only when exactly one user row inside those rows holds its words and was not saved more
-        than a second before the steer was sent, no receipt holds that row, and no other receipt
-        of the run, bound or not, sent the same words. The second is the slack between the
-        add-on's clock at the receipt and Hermes's at the row, as before this rule. A row whose
-        time cannot be read or compared binds nothing.
+        a user row holding its words, typed ``display_kind`` ``steer``, beside any other client's
+        correction with the same words (``tui_gateway/methods_session_interrupt.py:114-130``,
+        ``agent/agent_runtime_helpers.py:3668-3703`` and ``agent/prompt_builder.py:583-592`` at
+        ``ed1afb0``). Words alone are no evidence. A steer is bound only once its root's turn has
+        finished and reported its committed rows (``turn_rows``, kept by bind_turn_row). Those leave
+        the steer's own row out: Hermes reports only rows whose message carries a committed row ID,
+        and the steer's is appended mid-turn without one (``agent/persisted_turn_receipt.py:40``),
+        as release qualification against real Hermes saw on 2026-11-12. So the turn bounds a span,
+        from its lowest row to its highest, and a steer is bound only when exactly one user row in
+        that span holds its words and is typed a steer, that row was not saved more than a second
+        before the steer was sent, no receipt holds that row, and no other receipt of the run,
+        bound or not, sent the same words. The second is the slack between the add-on's clock at
+        the receipt and Hermes's at the row, as before this rule. A row whose time cannot be read or
+        compared binds nothing.
 
         A send Hermes put into the running turn instead of starting its own (admission turn ``joined``)
         is bound by the same rule, with itself as the root: ``keep_joined_turn`` keeps the rows of the turn
-        it joined, less that turn's own prompt row, as its ``turn_rows``. A later send into that turn
-        steers into the joined send's run, so the rule's guard on words of one run covers both.
-        Anything else leaves it unbound and its row shows unattributed. Known limit: a native
-        client's identical words in the same turn, saved after the steer was sent or within that
-        second, can still take the steer's place, because Hermes names no steer's row
-        (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
+        it joined, that turn's own prompt row first, as its ``turn_rows``. That prompt row starts the span
+        and is never a candidate. The row need not be typed a steer: a redirect Hermes takes during a model
+        request is written as a plain user row (``agent/conversation_loop.py:324-354`` at ``ed1afb0``), and
+        one during tool execution as a steer. A later send into that turn steers into the joined send's run,
+        so the rule's guard on words of one run covers both. Anything else leaves it unbound and its row
+        shows unattributed. Known limit: a native client's identical words in the same turn, saved after
+        the steer was sent or within that second, can still take the steer's place, because Hermes names
+        no steer's row (docs/HermesCapabilityMatrix.md). Callers hold journal.lock.
         """
         journal = self.journal
-        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND (steer.steering=1 OR steer.run_id=steer.request_id AND " + JOINED % "steer." + ") AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
+        steers = journal.db.execute("SELECT steer.request_id,steer.input_text,steer.run_id,root.turn_rows,steer.created,steer.steering=1 FROM receipts steer JOIN receipts root ON root.request_id=steer.run_id WHERE steer.profile=? AND steer.stored_session=? AND (steer.steering=1 OR steer.run_id=steer.request_id AND " + JOINED % "steer." + ") AND steer.status='accepted' AND steer.row_id IS NULL AND root.turn_rows IS NOT NULL", (profile, stored)).fetchall()
         def saved(row_id):
             # When Hermes saved the row, read as main reads it: float() of its time, and a missing or
             # zero one as now. None for a time that cannot be read or compared, which binds nothing.
@@ -1781,16 +1789,19 @@ class Bridge:
             except (TypeError, ValueError, OverflowError):
                 return None
             return at if math.isfinite(at) else None
-        for request_id, text, run_id, extent, sent in steers:
+        for request_id, text, run_id, extent, sent, steering in steers:
             try:
                 extent = turn_extent(json.loads(extent))
             except ValueError:
                 continue
-            if extent is None:
+            if not extent:
                 continue
-            extent = set(extent)
+            # The span of the turn's rows, which leave a delivered steer's row out. A joined send's are
+            # kept with the turn's own prompt row first, which is never its row.
+            low, high, prompt = min(extent), max(extent), None if steering else extent[0]
             found = [message["row_id"] for message in messages if message.get("role") == "user" and type(message.get("row_id")) is int
-                     and message["row_id"] in extent and message.get("text") == text]
+                     and low <= message["row_id"] <= high and message["row_id"] != prompt and message.get("text") == text
+                     and (not steering or message.get("display_kind") == "steer")]
             # The root's own row is held by the root's receipt, so the second test also excludes it.
             if len(found) != 1 or (at := saved(found[0])) is None or sent > at + 1 or journal.db.execute("SELECT 1 FROM receipts WHERE profile=? AND (row_id=? OR (COALESCE(run_id,request_id)=? AND input_text=? AND request_id<>?)) LIMIT 1", (profile, found[0], run_id, text, request_id)).fetchone():
                 continue
