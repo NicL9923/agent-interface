@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResponseCache, request } from "../src/client-api";
+import { firstPage, firstQuery } from "../src/app/conversation-page";
 import { savedThemeKey, signInHintKey } from "../src/app/storage";
 import { STARTUP_READ_VERSION } from "../src/startup-read";
 
@@ -17,7 +18,9 @@ let answers: (() => Promise<Response>)[];
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const bootstrap = { user: { id: "one" }, bots: [] };
 const leanBootstrap = () => request("GET /bootstrap", { query: { roster: "lean" } });
-const startup = () => window.__wildbotsStartup as { version: number; path: string; abort(): void } | undefined;
+type Read = { path: string; abort(): void };
+const startup = () => window.__wildbotsStartup as { version: number; reads: Read[] } | undefined;
+const paths = () => startup()?.reads.map(read => read.path);
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
@@ -52,7 +55,7 @@ describe("the read boot.js starts", () => {
     // Everything the server sees: method, cookie, cache mode and headers. api() sends none on a GET it has no copy of.
     const sent = ({ init }: Call) => ({ method: init.method ?? "GET", credentials: init.credentials, cache: init.cache, headers: [...new Headers(init.headers)] });
     expect(sent(early)).toEqual(sent(own));
-    expect(startup()?.path).toBe(LEAN);
+    expect(paths()).toEqual([LEAN]);
   });
 
   it("answers the app's first bootstrap, so the page reads it once", async () => {
@@ -110,18 +113,23 @@ describe("the read boot.js starts", () => {
     runBoot();
     await request("GET /bootstrap");
     expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`, "/api/bootstrap"]);
-    expect(startup()?.path).toBe(LEAN);
+    expect(paths()).toEqual([LEAN]);
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
     expect(calls).toHaveLength(2);
   });
 
-  it.each([
-    ["a version from the future", (read: Record<string, unknown>) => ({ ...read, version: STARTUP_READ_VERSION + 1 })],
-    ["no response", (read: Record<string, unknown>) => ({ ...read, response: undefined })],
-    ["a path that is not text", (read: Record<string, unknown>) => ({ ...read, path: 1 })],
+  type Startup = { version: number; epoch: string; reads: object[] };
+  it.each<[string, (startup: Startup) => unknown]>([
+    ["a version from the future", startup => ({ ...startup, version: STARTUP_READ_VERSION + 1 })],
+    ["a read with no response", startup => ({ ...startup, reads: [{ ...startup.reads[0], response: undefined }] })],
+    ["a read whose path is not text", startup => ({ ...startup, reads: [{ ...startup.reads[0], path: 1 }] })],
+    ["a read with no way to abort it, beside a good one", startup => ({ ...startup, reads: [...startup.reads, { path: "/groups", response: Promise.resolve(json({})) }] })],
+    ["reads that are not a list", startup => ({ ...startup, reads: startup.reads[0] })],
+    // An older release's boot.js left one read, with its own abort.
+    ["the shape an older release left", startup => ({ version: STARTUP_READ_VERSION - 1, ...startup.reads[0] })],
   ])("is dropped, and aborted, when it has %s", async (_name, change) => {
     const abort = vi.fn();
-    window.__wildbotsStartup = change({ version: STARTUP_READ_VERSION, path: LEAN, response: Promise.resolve(json({ user: { id: "stale" } })), abort });
+    window.__wildbotsStartup = change({ version: STARTUP_READ_VERSION, epoch: "", reads: [{ path: LEAN, response: Promise.resolve(json({ user: { id: "stale" } })), abort }] });
     answers.push(async () => json(bootstrap));
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
     expect(abort).toHaveBeenCalled();
@@ -138,7 +146,7 @@ describe("the read boot.js starts", () => {
   it("is dropped when the account changes before the app asks for it", async () => {
     answers.push(() => new Promise<Response>(() => {}));
     runBoot();
-    const abort = vi.spyOn(startup()!, "abort");
+    const abort = vi.spyOn(startup()!.reads[0], "abort");
     clearResponseCache();
     expect(abort).toHaveBeenCalled();
     answers.push(async () => json(bootstrap));
@@ -158,6 +166,70 @@ describe("the read boot.js starts", () => {
     await failure;
     expect(signal?.aborted).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  describe("for a linked chat", () => {
+    const linked = (url = "/?bot=ranch", bots = ["ranch"]) => {
+      localStorage.setItem(signInHintKey, JSON.stringify({ until: NOW + 60_000, user: "one", bots }));
+      history.replaceState(null, "", url);
+    };
+    const chatPage = () => request("GET /bots/:id/conversation", { params: { id: "ranch" }, query: firstQuery });
+    const page = { botId: "ranch", messages: [], approvals: [], files: [], activity: { state: "idle" } };
+    afterEach(() => { history.replaceState(null, "", "/"); vi.restoreAllMocks(); });
+
+    it("reads the chat's first page beside bootstrap, at the path the bundle reads it, and each is taken once on its own", async () => {
+      linked();
+      answers.push(async () => json(bootstrap), async () => json(page));
+      runBoot();
+      expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`, `/api${firstPage("ranch")}`]);
+      await expect(chatPage()).resolves.toEqual(page);
+      expect(paths()).toEqual([LEAN]);
+      await expect(leanBootstrap()).resolves.toEqual(bootstrap);
+      expect(startup()).toBeUndefined();
+      expect(calls).toHaveLength(2);
+    });
+
+    it.each<[string, () => void]>([
+      ["a hidden page, which reads no chat ahead", () => vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")],
+      ["an offline browser", () => vi.spyOn(navigator, "onLine", "get").mockReturnValue(false)],
+      ["a chat this browser's sign-in does not list", () => linked("/?bot=ranch", ["home"])],
+      ["a link to one message", () => linked("/?bot=ranch&message=ranch-1")],
+    ])("reads bootstrap alone for %s", (_name, arrange) => {
+      linked();
+      arrange();
+      answers.push(async () => json(bootstrap));
+      runBoot();
+      expect(paths()).toEqual([LEAN]);
+    });
+
+    it("is dropped with bootstrap's when the account changes before the app asks for either", async () => {
+      linked();
+      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      runBoot();
+      const signals = calls.map(call => call.init.signal!);
+      clearResponseCache();
+      expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
+      expect(startup()).toBeUndefined();
+    });
+
+    it("is not taken under another account record, and nor is bootstrap's", async () => {
+      linked();
+      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      runBoot();
+      localStorage.setItem("agent-interface:auth-epoch", JSON.stringify({ id: "elsewhere", at: NOW, user: "two" }));
+      answers.push(async () => json(page));
+      await expect(chatPage()).resolves.toEqual(page);
+      expect(calls.map(call => call.init.signal!.aborted)).toEqual([true, true, false]);
+      expect(startup()).toBeUndefined();
+    });
+
+    it("lets both go after a minute when no bundle asks for them", async () => {
+      linked();
+      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      runBoot();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect([startup(), calls.map(call => call.init.signal!.aborted)]).toEqual([undefined, [true, true]]);
+    });
   });
 
   it("lets go after a minute when no bundle asks for it", async () => {

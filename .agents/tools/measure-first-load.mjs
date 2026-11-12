@@ -3,7 +3,7 @@
 // (e2e/server.ts) with a slow phone's network and CPU. Run `npm run build` first; the server must not be
 // running, since this starts it on the e2e port.
 //
-//   node .agents/tools/measure-first-load.mjs [--runs 7] [--json out.json] [--theme dark|light|system] [--only cold,warm,worker]
+//   node .agents/tools/measure-first-load.mjs [--runs 7] [--json out.json] [--theme dark|light|system] [--only cold,warm,worker] [--chat ID]
 //     [--compare main=/path/to/client,branch=/path/to/client --rounds 3] [--seed N]
 //     [--browser-cores 0-7] [--server-cores 8-11] [--max-load N] [--allow-busy]
 //
@@ -21,12 +21,17 @@
 // and reloads home in three ways: with no service worker and no HTTP cache (a first visit), with no
 // service worker and a warm HTTP cache, and opened by the service worker's cached shell. For each it
 // reports the median across runs of, in milliseconds from navigation start:
-// - bootstrap sent / answered: the /api/bootstrap resource entry's requestStart and responseEnd
+// - bootstrap issued / sent / answered: the /api/bootstrap resource entry's startTime, when the page
+//   asked for it, requestStart, when it left once a connection was free (the e2e server speaks HTTP/1.1,
+//   so Chromium's six connections a host queue it behind the bundle's files), and responseEnd
 // - first paint: the paint entry `first-paint`
 // - theme: the first time <html data-theme> holds the chosen theme
 // - roster: the frame after the first assistant's row is in the rail
 // - layout shift: the largest load's summed layout-shift score (CLS's measure), up to 800 ms after
 //   bootstrap answered
+// With --chat ID it reloads that chat's address (`/?bot=ID`) instead of home, as a notification link
+// opens it, and also reports chat issued / sent / answered for the first conversation read, and how many
+// conversation reads the load made.
 // The marks are set by an init script with performance.mark, so they come from the page's own clock.
 // Each figure is reported as the median with its quartiles and the number of loads.
 import { spawn, spawnSync } from 'node:child_process';
@@ -63,6 +68,7 @@ const jsonOut = option('--json');
 // The theme the member chooses. Dark on a light system shows a late theme as a light flash.
 const chosenTheme = option('--theme', 'dark');
 const only = option('--only');
+const chat = option('--chat');
 const { port } = await import('../../e2e/ports.ts').catch(() => ({ port: 4173 }));
 const origin = `http://127.0.0.1:${port}`;
 // Chrome DevTools' "Slow 4G" preset, a phone on a fair connection.
@@ -102,8 +108,14 @@ const collect = () => {
   const at = (name) => performance.getEntriesByName(name)[0]?.startTime ?? null;
   const boots = performance.getEntriesByType('resource').filter(entry => new URL(entry.name).pathname === '/api/bootstrap');
   const first = boots[0];
+  const chats = performance.getEntriesByType('resource').filter(entry => /^\/api\/bots\/[^/]+\/conversation$/.test(new URL(entry.name).pathname));
   return {
+    chatRequests: chats.length,
+    chatIssued: chats[0]?.startTime ?? null,
+    chatSent: chats[0] ? chats[0].requestStart || chats[0].startTime : null,
+    chatAnswered: chats[0]?.responseEnd || null,
     bootstrapRequests: boots.length,
+    bootstrapIssued: first?.startTime ?? null,
     bootstrapSent: first ? first.requestStart || first.startTime : null,
     bootstrapAnswered: first ? first.responseEnd : null,
     firstPaint: performance.getEntriesByType('paint').find(entry => entry.name === 'first-paint')?.startTime ?? null,
@@ -161,7 +173,10 @@ async function scenario(_name, { serviceWorker, httpCache }) {
     // Two loads under the worker, so the shell, its code and any note about it are settled.
     await page.reload(); await page.locator('.bot-rail').getByText('Ranch Hand').first().waitFor();
   }
-  await page.reload(); await page.locator('.bot-rail').getByText('Ranch Hand').first().waitFor();
+  // A chat opens from its address, as a notification link does, after one load that leaves its sign-in hint.
+  if (chat) await page.goto(`/?bot=${encodeURIComponent(chat)}`);
+  else await page.reload();
+  await page.locator('.bot-rail').getByText('Ranch Hand').first().waitFor();
   await page.addInitScript(`window.__chosenTheme = ${JSON.stringify(chosenTheme)};`);
   await page.addInitScript(instrument);
   const cdp = await context.newCDPSession(page);
@@ -171,11 +186,14 @@ async function scenario(_name, { serviceWorker, httpCache }) {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_SLOWDOWN });
   const samples = [];
   for (let run = 0; run < runs; run++) {
-    await page.reload({ waitUntil: 'load' });
+    // The app may take the chat out of the address once it shows, so each load names it again.
+    if (chat) await page.goto(`/?bot=${encodeURIComponent(chat)}`, { waitUntil: 'load' });
+    else await page.reload({ waitUntil: 'load' });
     await page.waitForFunction(() => performance.getEntriesByName('roster-painted').length > 0, null, { timeout: 60_000 });
     // Past bootstrap's answer and the group catalog's, so a swap's layout shift and a late duplicate
     // bootstrap, if any, are counted.
     await page.waitForFunction(() => performance.getEntriesByType('resource').some(entry => new URL(entry.name).pathname === '/api/bootstrap' && entry.responseEnd > 0));
+    if (chat) await page.waitForFunction(() => performance.getEntriesByType('resource').some(entry => new URL(entry.name).pathname.endsWith('/conversation') && entry.responseEnd > 0), null, { timeout: 60_000 });
     await page.waitForTimeout(800);
     const sample = await page.evaluate(collect);
     sample.controlled = await page.evaluate(() => navigator.serviceWorker?.controller !== null && navigator.serviceWorker?.controller !== undefined);
@@ -185,7 +203,7 @@ async function scenario(_name, { serviceWorker, httpCache }) {
   return samples;
 }
 
-const keys = ['bootstrapSent', 'bootstrapAnswered', 'firstPaint', 'themeApplied', 'rosterPainted', 'lightFlashMs'];
+const keys = ['bootstrapIssued', 'bootstrapSent', 'bootstrapAnswered', ...chat ? ['chatIssued', 'chatSent', 'chatAnswered'] : [], 'firstPaint', 'themeApplied', 'rosterPainted', 'lightFlashMs'];
 // How long a light page showed before the chosen theme, taking each load on its own.
 const withFlash = (samples) => samples.map(sample => ({ ...sample,
   lightFlashMs: sample.themeApplied === null || sample.firstPaint === null ? null : Math.max(0, sample.themeApplied - sample.firstPaint) }));
@@ -193,6 +211,7 @@ const maxShift = (samples) => Math.max(...samples.map(sample => sample.layoutShi
 function summarize(samples) {
   const summary = Object.fromEntries(keys.map(key => [key, spread(samples.map(sample => sample[key]))]));
   summary.bootstrapRequests = Math.max(...samples.map(sample => sample.bootstrapRequests));
+  if (chat) summary.chatRequests = Math.max(...samples.map(sample => sample.chatRequests));
   summary.layoutShiftMax = maxShift(samples);
   summary.controlled = samples.every(sample => sample.controlled);
   summary.shell = samples[0]?.shell;
