@@ -14,6 +14,31 @@ import XCTest
     XCTAssertEqual(patch.applying(to: conversation), conversation)
   }
 
+  private func conversation(_ ids: [String], files: [String] = [], earlier: Int? = nil, earlierFiles: Int? = nil, draft: String = "") throws -> Conversation {
+    let messages = ids.map { #"{"id":"\#($0)","role":"user","text":"\#($0)"}"# }.joined(separator: ",")
+    let refs = files.map { #"{"id":"\#($0)","name":"\#($0).txt","mime":"text/plain"}"# }.joined(separator: ",")
+    var json = #"{"botId":"bot","messages":[\#(messages)],"activity":{"state":"thinking","runId":"run"},"approvals":[],"files":[\#(refs)],"draft":{"text":"\#(draft)","attachments":[]}"#
+    if let earlier { json += #","earlier":\#(earlier)"# }
+    if let earlierFiles { json += #","earlierFiles":\#(earlierFiles)"# }
+    return try JSONDecoder().decode(Conversation.self, from: Data((json + "}").utf8))
+  }
+
+  func testAnEarlierPageGoesInFrontOfTheViewAndLeavesItsLiveStateAlone() throws {
+    let view = try conversation(["p2", "p3"], files: ["f2"], earlier: 4, earlierFiles: 2, draft: "Unsent")
+    let page = try conversation(["p0", "p1"], files: ["f0", "f2"], earlier: 0, earlierFiles: 0)
+    let shown = try XCTUnwrap(view.prepending(page, before: "p2"))
+    XCTAssertEqual(shown.messages.map(\.id), ["p0", "p1", "p2", "p3"])
+    XCTAssertEqual(shown.files.map(\.id), ["f0", "f2"], "Each file once, the page's first")
+    XCTAssertEqual(shown.earlier, 0); XCTAssertEqual(shown.earlierFiles, 0)
+    XCTAssertEqual(shown.draft?.text, "Unsent"); XCTAssertEqual(shown.activity.runId, "run")
+  }
+
+  func testAnEarlierPageDropsWhateverTheViewHoldsBeforeItsMessageAndPlacesNothingWithoutIt() throws {
+    let view = try conversation(["p1", "p2", "p3"])
+    XCTAssertEqual(view.prepending(try conversation(["p1"]), before: "p2")?.messages.map(\.id), ["p1", "p2", "p3"], "The page holds what the view had before p2")
+    XCTAssertNil(view.prepending(try conversation(["p0"]), before: "p9"), "The view no longer holds that message")
+  }
+
   private func sentence(_ state: ActivityState, _ detail: String? = nil, lost: Bool = false) -> String {
     ActivitySentence.text(name: "Ranch hand", state: state, detail: detail, connectionLost: lost)
   }

@@ -1791,6 +1791,44 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.conversationQueries.last, "start=m111", "The window then starts at the page's first message")
     }
 
+    func testAReadAskedBeforeAPageCannotShrinkTheWindowEvenWhenTheReadAfterThePageFails() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // A poll asked after the page began, for the window the page is about to move, answers last.
+        server.holdNext(path)
+        let poll = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.failConversation()
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30))
+        server.failConversation(false)
+        server.release(path); await poll.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30), "Its answer is for the window before the page")
+    }
+
+    func testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m31")
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // Opening at an older message starts the window there, while the page for the old one is still loading.
+        await value.openConversation(botId: "bot", atMessage: "m05")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05")
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(5...50), "The page for the old window is not mixed into the one asked for")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m05")
+    }
+
     func testALostMessagePageAnsweringAfterANewerReadIsReadFreshInsteadOfShown() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         let path = "/api/bots/bot/conversation"

@@ -144,6 +144,7 @@ extension AppStore {
   private func readEarlier(of id: String, before first: String, whole: Bool) async {
     guard let api else { return }
     let selectedGeneration = selectionGeneration
+    let requestedWindow = windowGeneration
     conversationReads += 1
     let read = conversationReads
     conversationReadsInFlight += 1
@@ -154,6 +155,9 @@ extension AppStore {
       let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
       if !whole, value.before == first {
+        // The window was moved while the page loaded, as by opening at a message: this page is for the
+        // window before it, and the person's request wins.
+        guard requestedWindow == windowGeneration else { return }
         // Only the page's messages and files go in front of the message. The view keeps its own live
         // state, draft and version, which a newer read may have moved on since this one began.
         guard conversation?.botId == id, let merged = conversation?.prepending(value, before: first) else {
