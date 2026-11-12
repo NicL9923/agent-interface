@@ -50,7 +50,7 @@ beforeEach(() => {
     if (path === '/groups') return catalog as T;
     if (path === '/groups/supper') return { room, driver_status: { working: false, blocked: false, pending_actions: [] } } as T;
     if (path.startsWith('/groups/supper/log?')) return { events: [], cursor: 0, has_more: false } as T;
-    if (path === '/today') return { generatedAt: '2026-11-10T15:00:00Z', frontier: '0', hasMore: false, since: '2026-11-10T00:00:00Z', unavailableBots: [], items: [], events: [] } as T;
+    if (path === '/today?pending=1') return { generatedAt: '2026-11-10T15:00:00Z', frontier: '0', hasMore: false, since: '2026-11-10T00:00:00Z', unavailableBots: [], items: [], events: [] } as T;
     unexpected.push(`GET ${path}`);
     throw new Error(`This test serves no GET ${path}`);
   });

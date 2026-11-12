@@ -6,6 +6,7 @@ import type { Message, Runtime } from "../shared/types.js";
 import type { VoiceAudio, VoiceTranscript } from "../shared/voice.js";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, VOICE_MIMES } from "../shared/voice.js";
 import { signedIn } from "./auth.js";
+import { readMessage } from "./conversation-view.js";
 import { httpError } from "./http-error.js";
 
 type VoiceRuntime = Runtime & {
@@ -30,7 +31,8 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
     if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "This assistant is no longer available.");
   };
   const readableReply = async (req: FastifyRequest, botId: string, messageId: string) => {
-    const raw = (await runtime.conversation(botId)).messages.find(item => item.id === messageId && isConversationReply(item));
+    const found = await readMessage(runtime, botId, messageId);
+    const raw = found && isConversationReply(found) ? found : undefined;
     const message = raw && (options.redact ? await options.redact(raw, signedIn(req).id) : raw);
     if (!message || !isConversationReply(message) || !message.text.trim()) throw httpError(404, "Choose a completed assistant reply to listen to.");
     return message;

@@ -413,7 +413,18 @@ describe("authentication and household state", () => {
     const extended = await read("?start=p10&turns=20");
     expect(extended.messages[0].id).toBe("p0");
     expect(extended.earlier).toBe(0);
+    // An earlier page: only the turns before a message the client holds.
+    const before = await read("?before=p10&turns=2");
+    expect(before.messages.map((message: Message) => message.id)).toEqual(["p8", "a8", "p9", "a9"]);
+    expect(before).toMatchObject({ before: "p10", earlier: 16 });
+    // Without a size, an earlier page is a whole page, never an empty one.
+    const page10 = await read("?before=p10");
+    expect(page10.messages.map((message: Message) => message.id)).toEqual(Array.from({ length: 10 }, (_, n) => [`p${n}`, `a${n}`]).flat());
+    expect(page10).toMatchObject({ before: "p10", earlier: 0 });
     expect((await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one })).statusCode).toBe(400);
+    const both = await app.inject({ url: "/api/bots/shared/conversation?start=p1&before=p10", headers: one });
+    expect(both.statusCode).toBe(400);
+    expect(both.json().details).toEqual([expect.objectContaining({ message: expect.stringContaining("from a start or before a message, not both") })]);
     await app.close();
   });
   it("sends signed file references only for the window and lists earlier ones on demand", async () => {
@@ -455,22 +466,31 @@ describe("authentication and household state", () => {
     ]).flat();
     // The add-on's cut, as src/hermes/extension.py history_window makes it.
     const cut = (window: NonNullable<ConversationOptions["window"]>) => {
-      const { earlier } = historyWindow(messages, window);
-      if (!earlier || messages[earlier].role !== "user") return undefined;
+      const { earlier } = historyWindow(messages, { start: window.before ?? window.start, turns: window.turns });
+      // A page before a message ends there, and says so, even when it reaches the first turn.
+      const end = window.before ? messages.findIndex(message => message.id === window.before) : -1;
+      if (!earlier && end < 0) return undefined;
       const kept = new Set<number>(); let prompt: number | undefined;
       messages.slice(0, earlier).forEach((message, index) => {
         if (message.role === "user") prompt = index;
         if (message.files?.length) { kept.add(index); if (message.role === "assistant" && prompt !== undefined) kept.add(prompt); }
       });
-      return { earlier, context: [...kept].sort((a, b) => a - b).map(index => messages[index]) };
+      // A start inside a turn keeps the prompt its replies answer.
+      if (messages[earlier].role !== "user" && prompt !== undefined) kept.add(prompt);
+      return { earlier, context: [...kept].sort((a, b) => a - b).map(index => messages[index]), end: end < 0 ? messages.length : end,
+        ...(end >= 0 ? { before: window.before } : {}) };
     };
     const full = { ...conversation, messages, files: messages.flatMap(message => message.files ?? []) };
     const answers = async (runtime: Runtime) => {
       const { app } = await createApp(config(), runtime, { background: false });
       const one = await login(app);
       const bodies = [];
-      for (const query of ["?turns=20", "?start=p10&turns=20", "?start=p15", "?start=a12", "?turns=40", "?start=gone"])
+      for (const query of ["?turns=20", "?start=p10&turns=20", "?start=p15", "?start=a12", "?turns=40", "?start=gone",
+        "?before=p15&turns=5", "?before=a12&turns=3", "?before=p2&turns=20", "?before=gone&turns=5"])
         bodies.push((await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json());
+      // Earlier files read a window too, and list the same files.
+      for (const query of ["?before=p10", "?before=a12", "?before=gone", ""])
+        bodies.push((await app.inject({ url: `/api/bots/shared/files${query}`, headers: one })).json());
       await app.close();
       return bodies;
     };
@@ -481,12 +501,30 @@ describe("authentication and household state", () => {
       const window = options?.window && cut(options.window);
       if (!window) return full;
       windows++;
-      const shown = messages.slice(window.earlier);
-      return { ...conversation, messages: shown, window, files: [...window.context, ...shown].flatMap(message => message.files ?? []) };
+      const { end, ...cutWindow } = window;
+      const shown = messages.slice(window.earlier, end);
+      return { ...conversation, messages: shown, window: cutWindow, files: [...window.context, ...shown].flatMap(message => message.files ?? []) };
     };
     expect(await answers(fake.runtime)).toEqual(ownCut);
-    expect(windows).toBe(3);
+    expect(windows).toBe(12);
     expect(ownCut[0].earlierFiles).toBeGreaterThan(0);
+    const ids = (body: { messages: Message[] }) => body.messages.map(message => message.id);
+    // Only the turns before the message: the client holds it and everything after.
+    expect(ownCut[6]).toMatchObject({ before: "p15", earlier: 20 });
+    expect(ids(ownCut[6])).toEqual(["p10", "a10", "p11", "a11", "p12", "a12", "p13", "a13", "p14", "a14"]);
+    // Its own files, and those only earlier messages carry: a0's f0, which a27 passes on, the client may not hold yet.
+    expect(ownCut[6].files.map((file: { id: string }) => file.id)).toEqual(["f12"]);
+    expect(ownCut[6].earlierFiles).toBe(5);
+    expect(ids(ownCut[7])).toEqual(["p10", "a10", "p11", "a11", "p12"]);
+    expect(ownCut[7]).toMatchObject({ before: "a12", earlier: 20 });
+    expect(ownCut[8]).toMatchObject({ before: "p2", earlier: 0, earlierFiles: 0 });
+    // f0 once, though the whole history carries it twice.
+    expect(ownCut[8].files.map((file: { id: string }) => file.id)).toEqual(["f0"]);
+    expect(ids(ownCut[8])).toEqual(["p0", "a0", "p1", "a1"]);
+    // A message the history lost: the latest page, which says it is not a page before anything.
+    expect(ownCut[9]).not.toHaveProperty("before");
+    expect(ids(ownCut[9])).toEqual(ids(ownCut[0]));
+    expect(ownCut[10].messages.length).toBeGreaterThan(0);
   });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {

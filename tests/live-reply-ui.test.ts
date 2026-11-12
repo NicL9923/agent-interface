@@ -54,7 +54,11 @@ beforeEach(() => {
     const url = new URL(input, location.origin);
     const call = `${init.method ?? "GET"} ${url.pathname.replace(/^\/api/, "")}`;
     if (call === "GET /bootstrap") return respond(bootstrap);
-    if (call === "GET /bots/home/conversation") return respond(server);
+    if (call === "GET /bots/home/conversation") {
+      // A page before a message holds only what comes before it, as the server answers it.
+      const before = url.searchParams.get("before"), at = before ? server.messages.findIndex(message => message.id === before) : -1;
+      return respond(at >= 0 ? { ...server, messages: server.messages.slice(0, at), earlier: 0, before } : server);
+    }
     const empty: Record<string, unknown> = {
       "GET /auth/config": { localDevAuth: true },
       "GET /groups": { supported: false, canSend: false, rooms: [], reason: "Not in this test." },

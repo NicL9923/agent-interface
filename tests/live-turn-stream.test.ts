@@ -229,6 +229,34 @@ describe("?inflight=3 turn streams", () => {
     });
   });
 
+  it("keeps growth coming at the last read's version while the server's turn read after a tool is on its way", async () => {
+    const s = await setup();
+    midTurn(s);
+    const events = await stream(s, s.one);
+    await s.get(s.one);
+    s.hermes.frame("message.delta", { text: "Looking." });
+    await events.until(() => events.turns().length === 1);
+    const [first] = events.turns();
+    s.hermes.holdOpens = true;
+    s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }));
+    s.hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+    s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+    await events.until(() => s.hermes.held.length === 1);
+    s.hermes.frame("message.delta", { text: "Found it." });
+    await events.until(() => events.deltas().some(delta => delta.appendText?.includes("Found")));
+    // Growth on the reply the client holds, which has no row for the segment yet, so what follows the tool starts a paragraph.
+    expect(events.deltas().map(delta => delta.appendText ?? "").join("")).toBe("\n\nFound it.");
+    expect(events.deltas().at(-1)!.toolCalls).toEqual([expect.objectContaining({ id: "t1", status: "completed" })]);
+    expect(events.turns()).toHaveLength(1);
+    s.hermes.held[0].release();
+    await events.until(() => events.turns().length === 2);
+    const second = events.turns()[1];
+    expect(compareVersions(second.version, first.version)).toBeGreaterThan(0);
+    expect(second.messages.map(message => message.text)).toEqual(["Check the barn", "Looking."]);
+    expect(second.message.text).toBe("Found it.");
+    await events.close();
+  });
+
   it("keeps growth as deltas across a write's change notice, and stops reading turns once the stream closes", async () => {
     const s = await setup();
     midTurn(s);

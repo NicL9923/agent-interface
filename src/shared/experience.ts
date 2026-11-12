@@ -11,6 +11,11 @@ export interface TodayItem {
   latestMessage?: Pick<Message, 'id' | 'text' | 'createdAt' | 'files'>;
   files: FileRef[];
   error?: string;
+  /**
+   * The assistant's read had not finished when Today answered: its activity is the roster's, it has no requests yet, and
+   * its files and reply are those of the same recap when one was saved. It is also in `unavailableBots`. Ask again soon.
+   */
+  pending?: true;
 }
 export interface TodayOverview {
   generatedAt: string;

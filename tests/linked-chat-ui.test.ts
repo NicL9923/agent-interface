@@ -133,12 +133,20 @@ const answerBootstrap = (value: Bootstrap | Answer) =>
 const answerChat = (botId: string, value: Conversation | Answer, index = -1) =>
   "status" in value ? answer(conversationReplies[botId]?.at(index), undefined, value) : answer(conversationReplies[botId]?.at(index), value);
 
-describe("a link that names a chat", () => {
+// boot.js starts the chat's read by the same rules before the bundle has downloaded, and the bundle takes it.
+describe.each([["as the bundle starts", false], ["from boot.js, before the bundle", true]])("a link that names a chat, read %s", (_how, early) => {
+  const open = async (url: string) => {
+    history.replaceState(null, "", url);
+    if (early) runBoot();
+    await act(async () => root.render(createElement(App)));
+  };
+
   it("reads the chat while bootstrap is on its way, and the chat shows that same read", async () => {
     saveHint({ until: NOW + 60_000, user: "one", bots: ["home", "ranch"] });
     await open("/?bot=ranch");
     expect(calls).toContain("GET /bootstrap?roster=lean");
     expect(conversationReads()).toEqual(["GET /bots/ranch/conversation?turns=20"]);
+    expect(bootstrapReads()).toHaveLength(1);
     await answerChat("ranch", page("ranch", "The north gate is latched."));
     await answerBootstrap(bootstrap);
     expect(transcript()).toContain("The north gate is latched.");
@@ -242,6 +250,7 @@ describe("a link that names a chat", () => {
     ["a record whose chats are not a list of IDs", { until: NOW + 60_000, user: "one", bots: "ranch" }, "/?bot=ranch"],
     ["a link to a message, which opens around it instead", { until: NOW + 60_000, user: "one", bots: ["ranch"] }, "/?bot=ranch&message=ranch-1"],
     ["a link to Today", { until: NOW + 60_000, user: "one", bots: ["ranch"] }, "/?bot=ranch&view=today"],
+    ["a link to a group chat", { until: NOW + 60_000, user: "one", bots: ["ranch"] }, "/?bot=ranch&view=group&room=barn"],
   ])("waits for bootstrap with %s", async (_name, stored, url) => {
     if (stored !== undefined) saveHint(stored);
     await open(url);
@@ -330,7 +339,20 @@ describe("what this browser remembers about its sign-in", () => {
   });
 });
 
-describe("the bootstrap boot.js started before the bundle", () => {
+describe("the reads boot.js started before the bundle", () => {
+  it("starts a linked chat's read before the bundle runs, and the chat shows it without reading again", async () => {
+    saveHint({ until: NOW + 60_000, user: "one", bots: ["ranch"] });
+    history.replaceState(null, "", "/?bot=ranch");
+    runBoot();
+    expect(calls).toEqual(["GET /bootstrap?roster=lean", "GET /bots/ranch/conversation?turns=20"]);
+    await act(async () => root.render(createElement(App)));
+    await answerChat("ranch", page("ranch", "Early words."));
+    await answerBootstrap(bootstrap);
+    expect(transcript()).toContain("Early words.");
+    expect(conversationReads()).toHaveLength(1);
+    expect(bootstrapReads()).toHaveLength(1);
+  });
+
   const rail = () => container.querySelector(".bot-rail")?.textContent ?? "";
 
   it("is the page's only bootstrap read on a normal load", async () => {

@@ -104,6 +104,15 @@ describe("avatar animation loop", () => {
     }
   });
 
+  it("samples a shape once however many avatars draw it", async () => {
+    // Each sampling is 72 calls into the browser's path geometry, the main cost of a phone opening home.
+    const sample = vi.spyOn(SVGElement.prototype as unknown as { getPointAtLength: (length: number) => DOMPoint }, "getPointAtLength");
+    await act(async () => root.render(createElement("div", null,
+      ...Array.from({ length: 20 }, (_, index) => createElement(Avatar, { key: index, state: "idle", size: 40, name: "Hay shed" })))));
+    await advance(0.5);
+    expect(sample.mock.calls.length).toBeLessThanOrEqual(72);
+  });
+
   it("draws several working avatars from one frame callback", async () => {
     await act(async () => root.render(createElement("div", null,
       createElement(Avatar, { state: "working", size: 64, name: "Ranch hand" }),

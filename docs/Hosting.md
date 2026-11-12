@@ -472,6 +472,28 @@ as `idle_compaction_seconds`, and 0 when it is off. Hermes's own
 `compression.idle_compact_after_seconds` stays 0: it compacts at the start of the next
 turn, so a person would wait for it.
 
+## History projection memo
+
+An app open reads the assistant's whole history from Hermes, and Hermes projects every row for
+display. During a turn the decorated-history cache is off, so a long chat paid that projection on
+every open. The add-on cuts the history where Hermes's projection carries nothing across, at user
+rows no later tool row reads a call from before, and keeps each piece's projection for the next open.
+A piece whose rows, configuration, redaction state and projection arguments are unchanged reuses its
+projection; only changed and new pieces are projected again. Each canonical session keeps up to 128
+million characters of rows (`PROJECTION_BUDGET` in `src/hermes/extension.py`), and a new stored session
+starts empty. The longest chat measured, 8,016 rows, needs 62 million characters, about 110 MB of
+the gateway's memory. Without readable redaction state nothing is kept.
+
+Shadow mode projects each open's history whole as well, answers with the whole projection, and logs a
+warning with the first message and tool row where the memoized projection differed. Each open that
+projected history also reports `app_projection_shadow`: pieces, pieces reused, and the two differences.
+Release qualification runs with it on (`scripts/spike/run.py`). To turn it on in production, add this
+to the dashboard's environment and restart it; it doubles the projection cost of every open:
+
+```sh
+HERMES_AGENT_INTERFACE_PROJECTION_SHADOW=1    # off unless exactly 1
+```
+
 ## Hermes upgrades and activity
 
 PR #3 is merged and deployed. Web and iOS have an administrator update flow with

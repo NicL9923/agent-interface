@@ -26,7 +26,7 @@ beforeEach(() => {
   vi.mocked(api).mockImplementation(async (path: string) => path === "/groups" ? { supported: true, canSend: true, rooms: [room] }
     : path.includes("/log") ? { events: [], cursor: 0, has_more: false }
     : path.startsWith("/groups/") ? { room, driver_status: { working: false, blocked: false, pending_actions: [] } }
-    : path === "/today" ? { generatedAt: "2026-10-14T12:00:00Z", frontier: "0", hasMore: false, since: "2026-10-14T00:00:00Z", unavailableBots: [], items: [], events: [] }
+    : path === "/today?pending=1" ? { generatedAt: "2026-10-14T12:00:00Z", frontier: "0", hasMore: false, since: "2026-10-14T00:00:00Z", unavailableBots: [], items: [], events: [] }
     : { requestId: "run", status: "accepted" });
   ({ root } = mountRoot());
 });
@@ -39,7 +39,7 @@ const reads = (match: (path: string) => boolean) => vi.mocked(api).mock.calls.fi
 
 describe("background polls in a hidden tab", () => {
   it.each<[string, () => ReactElement, (path: string) => boolean, number]>([
-    ["Today", () => createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }), path => path === "/today", 30_000],
+    ["Today", () => createElement(TodayPanel, { bootstrap, onOpen: vi.fn() }), path => path === "/today?pending=1", 30_000],
     ["an open group room", () => createElement(GroupRoomView, { bootstrap, roomId: "room", canSend: true, onChanged: vi.fn() }), path => path === "/groups/room", GROUP_FALLBACK_POLL_MS],
     ["a routine run", () => createElement(RoutineEnhancements, { routine: { id: "r1", botId: "ranch", name: "Morning", schedule: "0 7 * * *", prompt: "Report", enabled: true }, userId: "one" }),
       path => path === "/routines/r1/runs/run", 5_000],

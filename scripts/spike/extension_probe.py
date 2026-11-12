@@ -59,6 +59,23 @@ async def settled(client, profile="spike"):
     raise AssertionError("Hermes did not settle")
 
 
+async def projection_matches(client, profile="spike"):
+    """Two opens past the decorated cache: each memoized history projection equals a whole one, and the second reuses pieces.
+
+    run.py starts the add-on with HERMES_AGENT_INTERFACE_PROJECTION_SHADOW=1, so every open that projects history also
+    projects it whole and reports the first message and tool row where the two differ (docs/Hosting.md).
+    """
+    reports = []
+    for _ in range(2):
+        value = await client.call("agent-interface.open", profile=profile, _skip_cache=True)
+        report = value.get("app_projection_shadow")
+        assert report is not None, "Run the add-on with HERMES_AGENT_INTERFACE_PROJECTION_SHADOW=1"
+        assert report["difference"] is None and report["tool_difference"] is None, report
+        reports.append(report)
+    assert reports[-1]["reused"] > 0, reports
+    return reports[-1]
+
+
 async def request(client, method):
     for _ in range(100):
         snapshot = await client.call("agent-interface.open", profile="spike")
@@ -171,6 +188,8 @@ async def main(args):
     assert second["runId"] != first["runId"]
     await settled(c)
     evidence["checks"]["sequential_task_identity"] = {"distinct_runs": True, "same_canonical_conversation": True}
+    # Two appended turns with real tool calls: the kept pieces still project as the whole history does.
+    evidence["checks"]["projection_memo_after_appends"] = await projection_matches(c)
     third_id = "spike-guided-" + str(time.time_ns())
     await send(third_id, "PROBE_SLOW_TOOL steering")
     steering_id = third_id + "-guidance"
@@ -230,6 +249,8 @@ async def main(args):
     assert next_receipt["status"]=="accepted"
     await settled(c)
     evidence["checks"]["image_preparation_failure"]={"definite_rejected_receipt":True,"partially_staged_images_cleared":True,"next_native_admission_accepted":True}
+    # Steering, approvals, clarification, files and images appended since: the kept pieces still match.
+    evidence["checks"]["projection_memo_after_more_turns"] = await projection_matches(c)
     before = await c.call("agent-interface.discover", cursor="0")
     again = await c.call("agent-interface.discover", cursor=before["cursor"])
     assert not again["events"]

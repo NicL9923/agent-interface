@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
-import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
+import { filesBefore, HISTORY_PAGE_TURNS, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt, TurnEvent } from "../shared/types.js";
@@ -148,12 +148,16 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   app.addHook("onClose", async () => { unwatchTurns?.(); timings.close(); });
   apiRoute(app, "GET /bots/:id/conversation", {}, async (req, _body, reply) => {
     const started = performance.now(), timing: ReadTiming = {};
-    // Without a window, as for the native app, the whole history is returned.
+    // Without a window, as for the native app, the whole history is returned. `before` asks for an earlier page only.
     const window = z.object({
       start: z.string().min(1).max(512).optional(),
       turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
-    }).parse(req.query);
-    const windowed = window.start !== undefined || window.turns !== undefined;
+      before: z.string().min(1).max(512).optional(),
+    }).refine(value => value.start === undefined || value.before === undefined, { message: "Ask for a window from a start or before a message, not both." })
+      // An earlier page without a size is a page, not an empty window.
+      .transform(value => value.before !== undefined && value.turns === undefined ? { ...value, turns: HISTORY_PAGE_TURNS } : value)
+      .parse(req.query);
+    const windowed = window.start !== undefined || window.turns !== undefined || window.before !== undefined;
     const readAt = Date.now();
     const { window: cut, requestSessionId, ...result } = await runtime.conversation(req.params.id, windowed ? { window, timing } : { timing });
     const read = performance.now() - started;
@@ -170,15 +174,30 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     result.attention = nameRequesters(result.attention, userId => store.getUser(userId)?.name);
     const visibleFileIds = new Set(shown.flatMap(message => message.files ?? []).map(file => file.id));
     result.files = result.files?.filter(file => !originalFileIds.has(file.id) || visibleFileIds.has(file.id));
-    let earlier: number | undefined, earlierFiles: number | undefined;
+    let earlier: number | undefined, earlierFiles: number | undefined, before: string | undefined;
+    // Where the window starts among the shown messages, and the messages its files are counted over.
+    let from = context.length, counted = shown;
     result.messages = shown.slice(context.length);
-    if (cut) {
-      earlier = cut.earlier;
-      // Signed file references scale with the window too. The rest load on demand.
-      ({ files: result.files, earlierFiles } = windowFiles(shown, context.length, result.files));
-    } else if (windowed) {
-      ({ messages: result.messages, earlier } = historyWindow(shown, window));
-      ({ files: result.files, earlierFiles } = windowFiles(shown, earlier, result.files));
+    if (cut) earlier = cut.earlier;
+    else if (windowed) {
+      ({ messages: result.messages, earlier } = historyWindow(shown, { start: window.before ?? window.start, turns: window.turns }));
+      from = earlier;
+    }
+    // An earlier page ends just before the message the client holds: where it is, or where the runtime already ended it.
+    // A message the history no longer has leaves the latest page, as for an unknown start.
+    if (window.before !== undefined) {
+      const end = result.messages.findIndex(message => message.id === window.before);
+      if (end >= 0 || cut?.before === window.before) {
+        before = window.before;
+        if (end >= 0) { result.messages = result.messages.slice(0, end); counted = shown.slice(0, from + end); }
+      }
+    }
+    // Signed file references scale with the window too. The rest load on demand.
+    if (cut || windowed) ({ files: result.files, earlierFiles } = windowFiles(counted, from, result.files));
+    // A page's own files, each once: the client holds those of everything after it.
+    if (before !== undefined) {
+      const own = new Set(result.messages.flatMap(message => message.files ?? []).map(file => file.id));
+      result.files = result.files?.filter(file => own.delete(file.id));
     }
     // Retry stays settled on every device once anyone retried this failure.
     const claims = result.activity.state === "failed" ? store.retryClaims(req.params.id, result.activity.runId ?? "") : [];
@@ -189,6 +208,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       ...result,
       ...(retry ? { retry: { ...retry.receipt, retryOf: retry.retryOf } } : {}),
       ...(earlier !== undefined ? { earlier, earlierFiles } : {}),
+      ...(before !== undefined ? { before } : {}),
       draft: store.draft(signedIn(req).id, req.params.id),
       readPosition: store.personal(
         "read_positions",
@@ -201,7 +221,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "GET /bots/:id/files", {}, async req => {
     const { before } = z.object({ before: z.string().min(1).max(512).optional() }).parse(req.query);
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return filesBefore((await runtime.conversation(req.params.id)).messages.map(redact.message), before);
+    // A window that starts at `before` holds, as its context, every earlier message with files; without `before`, the
+    // latest page's context and messages hold all of them. A runtime that does not cut answers the whole history.
+    const read = await runtime.conversation(req.params.id, { window: before ? { start: before } : { turns: HISTORY_PAGE_TURNS } });
+    return filesBefore([...read.window?.context ?? [], ...read.messages].map(redact.message), before);
   });
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.

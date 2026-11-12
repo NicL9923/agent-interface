@@ -2,7 +2,7 @@ import { apiRoute } from "./api-route.js";
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { signedIn } from './auth.js';
-import type { FileRef, Message, Runtime } from '../shared/types.js';
+import type { Activity, Approval, AttentionRequest, FileRef, Message, Runtime } from '../shared/types.js';
 import type { ExperienceRequest, ExperienceResult, TodayItem, TodayOverview } from '../shared/experience.js';
 import { replyCardsFromText, validReplyCardState } from '../shared/reply-cards.js';
 import { routinePresets } from '../shared/routine-presets.js';
@@ -13,12 +13,13 @@ import { markdownPlain } from '../shared/plain-text.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
+import { readMessage } from './conversation-view.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
 import { assertDeliveryPrivate } from './collaboration.js';
 import { routineTargets } from './delivery-targets.js';
 import { serialDelivery } from './routine-delivery.js';
-import { mapLimit } from './concurrency.js';
+import { limiter } from './concurrency.js';
 const target = z.enum(['memory', 'user']);
 const revision = z.string().regex(/^[a-f0-9]{64}$/);
 const iso = z.string().datetime({ offset: true });
@@ -39,8 +40,18 @@ export async function assertRoutineEditable(runtime: Runtime, store: Store, rout
 }
 /** Hermes may change history without a roster preview change, as another client can. A recap is read again after this long. */
 const RECAP_MS = 5 * 60_000;
+/**
+ * How long Today waits for an assistant's read before answering without it. One long chat's cold read took 8.4 s on
+ * production and held every other assistant's answer. Its read goes on, and the next Today, which the web asks for
+ * soon after, takes its answer.
+ */
+export const TODAY_WAIT_MS = 2_000;
+/** How long a read that finished after Today answered still answers the next Today, as new as a fresh read would be. */
+export const TODAY_LATE_MS = 5_000;
 const settled = (activity: { state: string; runId?: string }) => !activity.runId && !['thinking', 'working', 'waiting', 'blocked'].includes(activity.state);
 type Recap = { latest?: Pick<Message, 'id' | 'text' | 'createdAt' | 'files'>; files: FileRef[]; eventFiles: [string, FileRef[]][] };
+/** One assistant's check for Today: its current state and recap. */
+type Check = { activity: Activity; approvals: Approval[]; attention?: AttentionRequest[]; recap: Recap };
 const uniqueFiles = (files: FileRef[]) => [...new Map(files.map(file => [file.id, file])).values()];
 /** What Today shows from an assistant's redacted history: its latest reply and the files of unread work. */
 function summarize(messages: Message[], events: { id: string; runId?: string }[], unreadRuns: Set<string>, since: string): Recap {
@@ -56,6 +67,11 @@ function summarize(messages: Message[], events: { id: string; runId?: string }[]
 export async function installExperienceRoutes(app: FastifyInstance, runtime: Runtime, store: Store, roster = new Roster(runtime)) {
   // Each person's latest Today recap per assistant, from its last full history read.
   const recaps = new Map<string, { key: string; at: number; recap: Recap }>();
+  // Each person's check per assistant that a Today started, until a Today takes its answer. One that outlasted
+  // TODAY_WAIT_MS stays for the next Today with the same recap key; `done` is when it finished.
+  const checks = new Map<string, { key: string; value: Promise<Check>; done?: number }>();
+  // At most four assistants are read at once across every Today; the next starts as soon as one finishes.
+  const reading = limiter(4);
   const bot = async (botId: string) => {
     if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   };
@@ -67,7 +83,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   apiRoute(app, "GET /today", {}, async (req, _, reply) => {
     const userId = signedIn(req).id;
     const now = new Date();
-    const query = z.object({ since: iso.optional() }).strict().parse(req.query);
+    // `pending=1`: answer after TODAY_WAIT_MS with slow assistants marked pending. A client that does not ask, such as
+    // an installed iOS build, would show a pending assistant as one it could not check, so it gets every answer.
+    const query = z.object({ since: iso.optional(), pending: z.literal("1").optional() }).strict().parse(req.query);
     // Before a first catch-up the recap covers a day, starting on a whole minute so polls within it can revalidate.
     const since = new Date(query.since ?? store.todaySeen(userId) ?? Math.floor((now.getTime() - 86400000) / 60_000) * 60_000).toISOString();
     if (Date.parse(since) > now.getTime() + 60_000) throw httpError(400, 'The recap start cannot be in the future');
@@ -88,40 +106,61 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const hidden = store.privateBots().filter(row => row.ownerId !== userId).map(row => row.botId).sort();
     const names = hidden.length ? await roster.names() : undefined;
     const privacy = JSON.stringify([privacyVersion, hidden.map(botId => [botId, [...names?.get(botId) ?? []].sort()])]);
-    // At most four assistants are read at once; the next starts as soon as one finishes.
-    const items: TodayItem[] = await mapLimit(bots, 4, async (bot): Promise<TodayItem> => {
-      try {
-        const events = page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId);
-        const unreadRuns = [...new Set(events.map(event => event.runId!))].sort();
-        // An unchanged roster preview means no new message, so a settled assistant's recap is
-        // reused and only its current state is read. History is read again after it changes.
-        const key = JSON.stringify([bot.sessionId, bot.lastMessage, since, unreadRuns, events.map(event => event.id), privacy]);
-        const cacheKey = `${userId}\0${bot.id}`;
-        const cached = recaps.get(cacheKey);
-        const reusable = cached?.key === key && Date.now() - cached.at < RECAP_MS ? cached.recap : undefined;
-        const state = reusable && await runtime.conversation(bot.id, { history: false });
-        let read, recap;
-        if (reusable && state && settled(state.activity)) [read, recap] = [state, reusable];
-        else {
-          // A recent window is enough: its context holds every earlier message with files, and the
-          // latest reply is almost always in it. Reading whole histories made Today outlast its timeout.
-          read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
-          if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
-          const messages = [...read.window?.context ?? [], ...read.messages];
-          recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);
-          if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
-          else recaps.delete(cacheKey);
-        }
-        for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
-        return { botId: bot.id, botName: bot.name, activity: read.activity,
-          approvals: read.approvals.filter(approval => approval.status === 'pending'),
-          attention: nameRequesters(read.attention, userId => store.getUser(userId)?.name) ?? [],
-          ...(recap.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}),
-          files: recap.files };
-      } catch {
-        return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<undefined>(resolve => { if (query.pending) timer = setTimeout(() => resolve(undefined), TODAY_WAIT_MS); });
+    const check = async (bot: { id: string }, events: typeof page.events, unreadRuns: string[], key: string, cacheKey: string): Promise<Check> => {
+      // An unchanged roster preview means no new message, so a settled assistant's recap is
+      // reused and only its current state is read. History is read again after it changes.
+      const cached = recaps.get(cacheKey);
+      const reusable = cached?.key === key && Date.now() - cached.at < RECAP_MS ? cached.recap : undefined;
+      const state = reusable && await runtime.conversation(bot.id, { history: false });
+      if (reusable && state && settled(state.activity)) return { ...state, recap: reusable };
+      // A recent window is enough: its context holds every earlier message with files. Only a window without a reply
+      // reads the whole history. The latest page is the window a chat opens with, so a Today beside an open chat shares
+      // its read; a smaller window would not be smaller, since a window without a start is always a whole page.
+      let read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
+      if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
+      const messages = [...read.window?.context ?? [], ...read.messages];
+      const recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);
+      if (settled(read.activity) && store.privacyVersion === privacyVersion) recaps.set(cacheKey, { key, at: Date.now(), recap });
+      else recaps.delete(cacheKey);
+      return { ...read, recap };
+    };
+    const items: TodayItem[] = await Promise.all(bots.map(async (bot): Promise<TodayItem> => {
+      const events = page.events.filter(event => event.botId === bot.id && event.kind === 'completed' && event.runId);
+      const unreadRuns = [...new Set(events.map(event => event.runId!))].sort();
+      const key = JSON.stringify([bot.sessionId, bot.lastMessage, since, unreadRuns, events.map(event => event.id), privacy]);
+      const cacheKey = `${userId}\0${bot.id}`;
+      // A check another Today started for the same recap is taken while on its way or just finished; otherwise a new one.
+      let entry = checks.get(cacheKey);
+      if (!entry || entry.key !== key || entry.done !== undefined && Date.now() - entry.done >= TODAY_LATE_MS) {
+        const started = { key, value: reading(() => check(bot, events, unreadRuns, key, cacheKey)) } as NonNullable<typeof entry>;
+        started.value.then(() => { started.done = Date.now(); }, () => { if (checks.get(cacheKey) === started) checks.delete(cacheKey); });
+        checks.set(cacheKey, entry = started);
       }
-    });
+      const taken = entry;
+      const answer = await Promise.race([taken.value.then(value => ({ value }), () => ({ value: undefined })), deadline]);
+      if (!answer) {
+        // Not yet read: the roster's activity, and the files and reply of this same recap when one was saved. It is
+        // listed as unchecked too, so a client that does not know `pending` says its state is unknown.
+        const cached = recaps.get(cacheKey);
+        const recap = cached?.key === key ? cached.recap : undefined;
+        return { botId: bot.id, botName: bot.name, activity: { state: bot.activity }, approvals: [], attention: [], pending: true,
+          ...(recap?.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}), files: recap?.files ?? [] };
+      }
+      if (checks.get(cacheKey) === taken) checks.delete(cacheKey);
+      if (!answer.value)
+        return { botId: bot.id, botName: bot.name, activity: { state: 'disconnected' as const }, approvals: [], attention: [], files: [], error: 'Could not read this Hermes conversation. Open it to reconnect.' };
+      const { activity, approvals, attention, recap } = answer.value;
+      for (const [eventId, files] of recap.eventFiles) eventFiles.set(eventId, files);
+      return { botId: bot.id, botName: bot.name, activity,
+        approvals: approvals.filter(approval => approval.status === 'pending'),
+        attention: nameRequesters(attention, userId => store.getUser(userId)?.name) ?? [],
+        ...(recap.latest ? { latestMessage: { ...recap.latest, text: redact.text(recap.latest.text) } } : {}),
+        files: recap.files };
+    }));
+    clearTimeout(timer);
+    for (const key of checks.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) checks.delete(key);
     for (const key of recaps.keys()) if (key.startsWith(`${userId}\0`) && !bots.some(bot => key === `${userId}\0${bot.id}`)) recaps.delete(key);
     const ids = new Set(bots.map(bot => bot.id));
     // Check-ins run every few hours and usually say nothing, so they are not scheduled work to show.
@@ -131,7 +170,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const content = { since, frontier: page.frontier, hasMore: page.hasMore, items,
       // Today shows each result as one plain line on web and iOS, so a reply's Markdown becomes its words.
       events: page.events.filter(event => ids.has(event.botId)).map(event => ({ ...event, ...(event.body ? { body: markdownPlain(event.body) } : {}), ...(eventFiles.has(event.id) ? { files: eventFiles.get(event.id) } : {}) })).sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt)),
-      unavailableBots: items.filter(item => item.error).map(item => item.botId) };
+      unavailableBots: items.filter(item => item.error || item.pending).map(item => item.botId) };
     // The check time alone never makes Today new, so an unchanged recap revalidates as 304 and the
     // client keeps the body it holds, with the time that content was generated.
     reply.header('ETag', contentEtag([upcoming, content]));
@@ -195,7 +234,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const params = z.object({ id, messageId: id, cardId: id }).parse(req.params);
     await bot(params.id);
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    const message = (await runtime.conversation(params.id)).messages.map(redact.message).find(message => message.id === params.messageId && isConversationReply(message));
+    const found = await readMessage(runtime, params.id, params.messageId);
+    const message = found && [redact.message(found)].find(isConversationReply);
     const card = message && replyCardsFromText(message.text).find(card => card.id === params.cardId);
     if (!card) throw httpError(404, 'This interactive reply is no longer in the Hermes conversation');
     const userId = signedIn(req).id;

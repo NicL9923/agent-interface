@@ -70,7 +70,7 @@ beforeEach(async () => {
       "GET /bootstrap?roster=lean": signedIn,
       "GET /groups": { supported: false, canSend: false, rooms: [], reason: "Not in this test." },
       "GET /routines": [],
-      "GET /today": { generatedAt: "2026-11-09T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-08T15:00:00Z", items: [], events: [], unavailableBots: [] },
+      "GET /today?pending=1": { generatedAt: "2026-11-09T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-08T15:00:00Z", items: [], events: [], unavailableBots: [] },
       "GET /usage/accounts": { accounts: [], unavailableBots: [] },
       "GET /mac/devices": { available: false, reason: "Not in this test.", devices: [] },
     };

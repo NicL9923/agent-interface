@@ -1,5 +1,5 @@
 import { routeUrl } from "../shared/api";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { request } from "../client-api";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
@@ -22,10 +22,13 @@ function attentionCopy(item: TodayItem) {
   return { title: item.activity.detail || stateLabels[item.activity.state], reason: stateLabels[item.activity.state], action: failed ? "View error" : "Review", failed };
 }
 
+/** How soon Today asks again while an assistant's read had not finished when the server answered. */
+export const TODAY_RECHECK_MS = 2_000;
+
 export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen: (botId: string, routineId?: string) => void }) {
   // A 304 keeps generatedAt, so record when this client last confirmed the overview.
   const [checkedAt, setCheckedAt] = useState("");
-  const today = useResource(routeUrl("GET /today", {}), { load: (_, signal) => request("GET /today", { signal }), deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
+  const today = useResource(routeUrl("GET /today", {}), { load: (_, signal) => request("GET /today", { query: { pending: "1" }, signal }), deps: [bootstrap.user.id], pollMs: 30_000, onData: () => setCheckedAt(new Date().toISOString()) });
   const { data: overview, loading } = today;
   const seen = useAction();
   const error = seen.error || today.error;
@@ -41,7 +44,17 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
     await today.reload();
   });
   const files = items.filter(item => item.files.length);
-  const unchecked = overview?.unavailableBots.filter(id => !items.some(item => item.botId === id && item.error)) || [];
+  // The server answers without an assistant whose read is slow and lists it as unchecked; that read goes on, so Today asks again soon.
+  const pending = items.filter(item => item.pending);
+  const unchecked = overview?.unavailableBots.filter(id => !items.some(item => item.botId === id && (item.error || item.pending))) || [];
+  const reload = today.reload;
+  // Until none is pending: an answer that is still pending can come back unchanged, as a 304 that keeps this overview.
+  const waiting = !!overview?.items.some(item => item.pending);
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(() => void reload(), TODAY_RECHECK_MS);
+    return () => clearInterval(timer);
+  }, [waiting, reload]);
   return <div className="today-panel"><div className="today-content">
     <div className="today-status">
       <p className="muted today-timestamp" role={overview ? undefined : "status"} title="Updates every 30 seconds">{overview ? <>Checked <When value={checkedAt || overview.generatedAt} inline /></> : loading ? "Checking your assistants..." : "Today is unavailable right now."}</p>
@@ -94,6 +107,7 @@ export function TodayPanel({ bootstrap, onOpen }: { bootstrap: Bootstrap; onOpen
       </section>}
       {!!files.length && <section className="today-section" aria-labelledby="today-files-title"><h3 id="today-files-title">Recent files</h3>{files.map(item => <button className="today-row" type="button" key={item.botId} onClick={() => onOpen(item.botId)}>
         {avatar(item.botId, item.botName)}<span className="today-row-copy"><span className="today-file-list">{item.files.slice(-3).map(file => <span className="today-file" key={file.id}><Icon name="file" size={14} />{file.name}</span>)}</span><small>{item.botName}</small></span><Icon name="chevron" size={16} /></button>)}</section>}
+      {pending.length > 0 && <p role="status" className="capability-note">Still checking {pending.map(item => item.botName).join(", ")}.</p>}
       {unchecked.length > 0 && <p role="status" className="capability-note">Couldn't check {unchecked.length} assistant{unchecked.length === 1 ? "" : "s"}. Their current activity is unknown.</p>}
     </>}
   </div></div>;

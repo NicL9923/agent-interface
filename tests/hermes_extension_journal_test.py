@@ -9,6 +9,7 @@ import contextlib
 import contextvars
 import json
 import re
+import sqlite3
 import stat
 import sys
 import tempfile
@@ -65,13 +66,17 @@ class FakeGateway:
         self.transport = types.SimpleNamespace(bind_transport=bound.set, current_transport=bound.get)
         self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
                         "tui_gateway.transport": self.transport, "agent": types.ModuleType("agent"), "agent.redact": self.redact}
+        # The shell summary helpers the add-on keeps answers for (see hermes_shell_summary_test.py).
+        self.modules["agent"].display = types.SimpleNamespace(_split_shell_compound=lambda text: [text], _clean_shell_segment=str,
+                                                              _shell_head_word=str, _is_shell_boundary_echo=lambda text: False)
 
     def __enter__(self):
         self.patches = [patch.dict(sys.modules, self.modules), patch.dict("os.environ", self.environment)]
         for item in self.patches:
             item.start()
         self.directory = tempfile.TemporaryDirectory()
-        self.journal = self.start(self.journal_path or Path(self.directory.name) / "agent-interface.db")
+        self.journal_file = self.journal_path or Path(self.directory.name) / "agent-interface.db"
+        self.journal = self.start(self.journal_file)
         return self
 
     def start(self, path):
@@ -268,8 +273,8 @@ class EventBodyTests(unittest.TestCase):
 
 class HistoryWindowTests(unittest.TestCase):
     """extension.history_window must cut exactly where src/shared/history.ts historyWindow does."""
-    def cut(self, rows, start=None, turns=0):
-        kept, window = extension.history_window(rows, "sid", start, turns)
+    def cut(self, rows, start=None, turns=0, before=None):
+        kept, window = extension.history_window(rows, "sid", start, turns, before)
         return [row.get("app_index") for row in kept], window
 
     def test_latest_page_keeps_twenty_turns_and_only_needed_earlier_rows(self):
@@ -284,11 +289,44 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertEqual(self.cut(rows, start="31", turns=2)[1], {"earlier": 26, "context": 0})
         self.assertEqual(self.cut(rows, start="missing")[1]["earlier"], 10)
 
-    def test_nothing_is_cut_at_the_start_or_mid_turn(self):
-        rows = turns(25)
-        self.assertEqual(self.cut(rows, start="1"), ([None] * 50, None))
-        self.assertIsNone(self.cut(rows, start="32")[1])
+    def test_nothing_is_cut_at_the_start(self):
+        self.assertEqual(self.cut(turns(25), start="1"), ([None] * 50, None))
         self.assertIsNone(self.cut(turns(5))[1])
+
+    def test_a_start_inside_a_turn_cuts_there_and_keeps_the_prompt_its_replies_answer(self):
+        # Row 32 is the reply to turn 15's prompt, row 31, as a turn read names a turn whose prompt is hidden.
+        rows = turns(25, files={3})
+        indexes, window = self.cut(rows, start="32")
+        self.assertEqual(window, {"earlier": 31, "context": 3})
+        self.assertEqual(indexes, [6, 7, 30] + list(range(31, 50)))
+        # A start inside the first turn has no prompt before it to keep.
+        rows = [{"row_id": 1, "role": "assistant", "text": "greeting"}, {"row_id": 2, "role": "assistant", "text": "more"}] + turns(3)
+        self.assertEqual(self.cut(rows, start="2"), ([1, 2, 3, 4, 5, 6, 7], {"earlier": 1, "context": 0}))
+
+    def test_a_page_before_a_row_ends_there_and_says_so(self):
+        rows = turns(25, files={3, 20})
+        indexes, window = self.cut(rows, before="31", turns=2)
+        # Turns 13 and 14 only: nothing from row 31 on, not even turn 20's reply, which carries a file.
+        self.assertEqual(window, {"earlier": 26, "context": 2, "before": "31"})
+        self.assertEqual(indexes, [6, 7, 26, 27, 28, 29])
+        # It counts back from `before`, never from a start sent beside it.
+        self.assertEqual(self.cut(rows, start="41", turns=2, before="31"), (indexes, window))
+        # A page that reaches the first turn still ends there, so the window names it.
+        self.assertEqual(self.cut(rows, before="5", turns=20), ([0, 1, 2, 3], {"earlier": 0, "context": 0, "before": "5"}))
+        self.assertEqual(self.cut(rows, before="31", turns=0)[0], [6, 7])
+
+    def test_an_open_ends_a_page_where_the_server_asks(self):
+        # As the server asks: `start` too, which an older add-on cuts from.
+        with FakeGateway(turns(25)) as hermes:
+            value = hermes.open(window={"start": "31", "turns": 2, "before": "31"})
+        self.assertEqual(value["app_window"], {"earlier": 26, "context": 0, "before": "31"})
+        self.assertEqual([row["row_id"] for row in value["messages"]], list(range(27, 31)))
+
+    def test_a_page_before_a_row_the_history_lost_is_the_latest_page(self):
+        rows = turns(25)
+        self.assertEqual(self.cut(rows, before="gone"), self.cut(rows))
+        self.assertEqual(self.cut(rows, before="gone", start="31", turns=2), self.cut(rows, start="31", turns=2))
+        self.assertEqual(self.cut(turns(5), before=7), self.cut(turns(5)))
 
     def test_hidden_rows_and_positional_ids_follow_the_app(self):
         rows = turns(25)
@@ -679,7 +717,25 @@ class OpenTests(unittest.TestCase):
             self.assertEqual(hit["messages"], expected["messages"])
             self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
             self.assertFalse(any("FROM tools" in sql or "row_id IN" in sql for sql in seen))
+            # Only this assistant's receipts and tools are decorated history: another assistant's writes and events keep it.
+            def receipt(profile, request_id, db=hermes.journal.db):
+                with db:
+                    db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES(?,?,?,?,?,?,?,?)",
+                               (request_id, "d", profile, "sid", "member", "e", "accepted", 0))
+            receipt("other", "elsewhere")
             hermes.journal.event("default", "sid", "completed", "Result")
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO tools(profile,stored_session,tool_id,result) VALUES(?,?,?,?)", ("default", "sid", "call", "{}"))
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            # Another connection's write counts too, as from the dashboard's process.
+            other = sqlite3.connect(hermes.journal_file)
+            receipt("default", "from-another-process", other)
+            other.close()
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
             hermes.open()
@@ -702,6 +758,32 @@ class OpenTests(unittest.TestCase):
             session["history"][-1] = {"role":"assistant", "text":"Replacement"}
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = extension.Journal(Path(directory) / "agent-interface.db")
+            db = journal.db
+            with db:
+                db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES('r','d','a','s','m','e','accepted',0)")
+                db.execute("INSERT INTO tools(id,profile,stored_session,tool_id,result) VALUES(1,'a','s','t','{}')")
+            for statement, moved in (
+                ("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES('r2','d','a','s','m','e','accepted',0)", {"a": 1}),
+                ("UPDATE receipts SET row_id=7 WHERE request_id='r'", {"a": 1}),
+                ("DELETE FROM receipts WHERE request_id='r2'", {"a": 1}),
+                ("INSERT INTO tools(profile,stored_session,tool_id,result) VALUES('a','s','t2','{}')", {"a": 1}),
+                ("UPDATE tools SET artifacts='[]' WHERE id=1", {"a": 1}),
+                ("DELETE FROM tools WHERE tool_id='t2'", {"a": 1}),
+                # A row that moves to another profile changes both histories.
+                ("UPDATE receipts SET profile='b' WHERE request_id='r'", {"a": 1, "b": 1}),
+                ("INSERT INTO events(profile,session_id,kind,title,occurred,epoch) VALUES('a','s','completed','Done',0,'e')", {}),
+                ("INSERT INTO interruptions(profile,stored_session,request_id,created) VALUES('a','s','r',0)", {}),
+            ):
+                with self.subTest(statement=statement):
+                    before = {profile: journal.version(profile) for profile in "ab"}
+                    with db:
+                        db.execute(statement)
+                    self.assertEqual({profile: journal.version(profile) - before[profile] for profile in "ab"}, {"a": 0, "b": 0, **moved})
+            db.close()
 
     def test_one_assistants_slow_open_never_holds_up_anothers(self):
         with ProfilesGateway() as hermes:
@@ -1338,6 +1420,20 @@ class GatedHermes(PooledHermes):
         self.server.dispatch({"id": rid, "method": "agent-interface.open", "params": {"profile": "slow", **params}}, replies)
 
 
+class WindowedHermes(GatedHermes):
+    """GatedHermes whose slow assistant's history is 25 turns, row IDs 1 to 50."""
+    def __init__(self):
+        super().__init__()
+        gated = self.server.handle_request
+        def handle(request):
+            response = gated(request)
+            params = request.get("params") or {}
+            if request["method"] in ("session.activate", "session.resume") and "result" in response and params.get("omit_messages") is not True:
+                response["result"]["messages"] = turns(25)
+            return response
+        self.server.handle_request = handle
+
+
 class ReadMergeTests(unittest.TestCase):
     def test_identical_opens_waiting_behind_a_running_one_share_one_computation(self):
         with GatedHermes() as hermes:
@@ -1357,24 +1453,51 @@ class ReadMergeTests(unittest.TestCase):
             self.assertEqual(hermes.settled(), 0)
 
     def test_a_request_arriving_after_its_twin_started_gets_its_own_computation(self):
-        with GatedHermes() as hermes:
+        for name, window in {"same parameters": {}, "another window": {"window": {"turns": 5}}}.items():
+            with self.subTest(name), GatedHermes() as hermes:
+                replies = Replies()
+                hermes.open("running", replies)
+                self.assertTrue(hermes.activations(1))
+                hermes.open("a", replies)
+                hermes.release(0)
+                self.assertTrue(hermes.activations(2))
+                # The running read may already have read what this request needs to see changed.
+                hermes.open("b", replies, **window)
+                hermes.release(1)
+                self.assertTrue(hermes.activations(3))
+                hermes.release(2)
+                self.assertTrue(replies.wait("a", "b"))
+                self.assertEqual(len(hermes.gates), 3)
+
+    def test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut(self):
+        with WindowedHermes() as hermes:
             replies = Replies()
             hermes.open("running", replies)
             self.assertTrue(hermes.activations(1))
-            hermes.open("a", replies)
+            # The server's turn read after a tool event, a client's page, and a read of everything.
+            hermes.open("turn", replies, window={"start": "32"})
+            hermes.open("page", replies, window={"turns": 20})
+            hermes.open("whole", replies)
             hermes.release(0)
             self.assertTrue(hermes.activations(2))
-            # The running read may already have read what this request needs to see changed.
-            hermes.open("b", replies)
             hermes.release(1)
-            self.assertTrue(hermes.activations(3))
-            hermes.release(2)
-            self.assertTrue(replies.wait("a", "b"))
-            self.assertEqual(len(hermes.gates), 3)
+            self.assertTrue(replies.wait("running", "turn", "page", "whole"))
+            self.assertEqual(len(hermes.gates), 2)
+            answers = {rid: replies.answers[rid]["result"] for rid in ("turn", "page", "whole")}
+            # The turn read keeps row 31, the prompt its replies answer, before its window.
+            self.assertEqual([m["row_id"] for m in answers["turn"]["messages"]], list(range(31, 51)))
+            self.assertEqual(answers["turn"]["app_window"], {"earlier": 31, "context": 1})
+            self.assertEqual([m["row_id"] for m in answers["page"]["messages"]], list(range(11, 51)))
+            self.assertEqual(answers["page"]["app_window"], {"earlier": 10, "context": 0})
+            self.assertEqual([m["row_id"] for m in answers["whole"]["messages"]], list(range(1, 51)))
+            self.assertNotIn("app_window", answers["whole"])
+            self.assertEqual({rid: replies.answers[rid]["id"] for rid in answers}, {rid: rid for rid in answers})
+            self.assertEqual(hermes.settled(), 0)
 
     def test_waiting_opens_merge_only_with_the_same_parameters_connection_and_method(self):
         cases = {
-            "parameters": lambda hermes, replies: (hermes.open("a", replies, window={"turns": 20}), hermes.open("b", replies, window={"turns": 10})),
+            # An open without history never answers one that asked for it, whatever their windows.
+            "parameters": lambda hermes, replies: (hermes.open("a", replies, omit_messages=True), hermes.open("b", replies, window={"turns": 10})),
             # Native activation binds the session to its caller's connection.
             "connection": lambda hermes, replies: (hermes.open("a", replies), hermes.open("b", other)),
         }

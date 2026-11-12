@@ -97,7 +97,7 @@ beforeEach(() => {
       "GET /auth/config": { localDevAuth: true },
       "GET /usage/accounts": { accounts: [], unavailableBots: [] },
       "GET /mac/devices": { available: false, reason: "Not in this test.", devices: [] },
-      "GET /today": { generatedAt: "2026-11-10T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-10T00:00:00Z", items: [], events: [], unavailableBots: [] },
+      "GET /today?pending=1": { generatedAt: "2026-11-10T15:00:00Z", frontier: "0", hasMore: false, since: "2026-11-10T00:00:00Z", items: [], events: [], unavailableBots: [] },
     };
     if (call in empty) return respond(200, empty[call]);
     if (/^GET \/bots\/[^/]+\/(draft|routine-runs)$/.test(call)) return respond(200, call.endsWith("draft") ? null : { runs: [], unavailable: [] });
@@ -377,7 +377,7 @@ describe("using the saved home before bootstrap answers", () => {
     expect(mainLandmark()?.textContent).toContain("Connecting to your household");
     // The person opens on their default assistant; Today, chosen there, wins.
     await answer("GET /bootstrap?roster=lean", 200, one);
-    expect(calls.indexOf("GET /today")).toBeGreaterThan(calls.indexOf("GET /bootstrap?roster=lean"));
+    expect(calls.indexOf("GET /today?pending=1")).toBeGreaterThan(calls.indexOf("GET /bootstrap?roster=lean"));
     expect(new URLSearchParams(location.search).get("view")).toBe("today");
   });
 
