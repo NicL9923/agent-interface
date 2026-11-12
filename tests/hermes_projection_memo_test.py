@@ -219,9 +219,11 @@ class EquivalenceTests(unittest.TestCase):
             hermes.kwargs["profile_home"] = Path(hermes.home.name)
             hermes.answer()
             hermes.projected()
-            hermes.kwargs["profile_home"] = hermes.home.name + "/"
-            hermes.answer()
-            self.assertEqual(hermes.projected(), set())
+            # The string Hermes stores, then the same home spelled with a trailing slash.
+            for home in (hermes.home.name, hermes.home.name + "/"):
+                hermes.kwargs["profile_home"] = home
+                hermes.answer()
+                self.assertEqual(hermes.projected(), set())
             other = tempfile.TemporaryDirectory()
             self.addCleanup(other.cleanup)
             hermes.kwargs["profile_home"] = other.name
