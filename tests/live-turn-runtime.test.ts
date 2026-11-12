@@ -402,6 +402,44 @@ describe("turn reads for streams that follow turns", () => {
   });
 });
 
+describe("an earlier page", () => {
+  /** Ten settled turns, rows 1 to 20, before what `midTurn` adds. */
+  const settled = () => Array.from({ length: 10 }, (_, turn) => [row(turn * 2 + 1, "user", `Post ${turn}?`), row(turn * 2 + 2, "assistant", `Post ${turn} set.`)]).flat();
+
+  it("ends just before the message the client holds, with no live reply, and stores nothing live replies are built on", async () => {
+    midTurn();
+    hermes.history = [...settled(), ...hermes.history.map((saved, index) => ({ ...saved, row_id: 21 + index }))];
+    hermes.inflight.assistant = "Looking";
+    const page = await runtime.conversation("shared", { window: { before: "13", turns: 2 } });
+    expect(page.messages.map(message => message.id)).toEqual(["9", "10", "11", "12"]);
+    expect(page.window).toMatchObject({ earlier: 8, before: "13" });
+    // An older add-on, which knows no `before`, still cuts from the same place.
+    expect(hermes.opens().at(-1)!.params.window).toEqual({ before: "13", start: "13", turns: 2 });
+    runtime.followTurns!("shared", () => {});
+    hermes.frame("message.delta", { text: " in the barn" });
+    expect(runtime.turn!("shared")).toBeUndefined();
+    expect(runtime.inflight!("shared")).toBeUndefined();
+    // The page names no turn start, so the next turn read reads the latest page.
+    hermes.frame("tool.complete", { tool_id: "t1" });
+    await vi.waitFor(() => expect(runtime.turn!("shared")).toBeDefined());
+    expect(hermes.opens().at(-1)!.params.window).toEqual({ turns: 1 });
+  });
+
+  it("is never shared with a later read from its first message, which must reach the newest", async () => {
+    hermes.history = settled();
+    // Connecting and the first open change the conversation, so sharing starts after.
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    // A read from a message is shared with the read that started there, until something changes.
+    const latest = await runtime.conversation("shared", { window: { turns: 2 } });
+    await runtime.conversation("shared", { window: { start: latest.messages[0].id } });
+    expect(hermes.opens()).toHaveLength(2);
+    const page = await runtime.conversation("shared", { window: { before: "13", turns: 2 } });
+    const from = await runtime.conversation("shared", { window: { start: page.messages[0].id } });
+    expect(from.messages.map(message => message.id)).toEqual(Array.from({ length: 12 }, (_, index) => String(index + 9)));
+    expect(hermes.opens()).toHaveLength(4);
+  });
+});
+
 describe("the live reply's saved text", () => {
   // Hermes names the native turn's prompt before it saved it. No saved row matches, so the boundary falls back to the last
   // prompt, as on main, and the earlier native turn's "Checked." under the same app run is stripped from this turn's live

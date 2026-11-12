@@ -340,7 +340,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     try {
       const started = performance.now();
       value = await rpc('agent-interface.open', {profile: botId,
-        ...(read.history === false ? {omit_messages: true} : read.window ? {window: read.window} : {})});
+        // An add-on that knows `before` ends the window there; an older one cuts from `start` to the end, and the server ends it.
+        ...(read.history === false ? {omit_messages: true} : read.window ? {window: read.window.before ? {...read.window, start: read.window.before} : read.window} : {})});
       if (timing) {
         timing.hermes = (timing.hermes ?? 0) + performance.now() - started;
         // An older add-on reports nothing. Only plain phase names reach a header.
@@ -548,8 +549,10 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     if (active && owned && typeof inflight.reasoning === 'string' &&
         (!owned.reasoning || inflight.reasoning.startsWith(owned.reasoning) || inflight.reasoning.endsWith(owned.reasoning)))
       owned.reasoning = inflight.reasoning;
+    // An earlier page holds no running turn, so it gets no live reply and stores nothing live replies are built on.
+    const bounded = typeof options.window?.before === 'string';
     const tail = inflightMessage(value, rows, state);
-    if (tail.text || tail.reasoning) rows.push(tail);
+    if (!bounded && (tail.text || tail.reasoning)) rows.push(tail);
     if (!active && owned) {
       owned.text = '';
       owned.reasoning = '';
@@ -576,14 +579,14 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     if (fresh) toTurnWatchers(watcher => watcher.run(sid, botId, typeof value.app_run_id === 'string' ? value.app_run_id : undefined, !!value.info?.running));
     // Hermes returns a window's earlier rows first: those the app needs for files and origins.
     const cut = value.app_window && Number.isInteger(value.app_window.earlier) && Number.isInteger(value.app_window.context)
-      ? value.app_window as {earlier: number; context: number}
+      ? value.app_window as {earlier: number; context: number; before?: unknown}
       : undefined;
     const shown = withMessageOrigins(rows);
     // Hermes counted the window's context in history rows, and a row can show as several messages.
     const contextEnd = cut ? starts[cut.context] ?? savedRows : 0;
     // Live patches need only the last prompt and its persisted assistant segments, and `?inflight=3`
     // streams the running turn's saved messages, never a second retained copy of an older client's full transcript.
-    if (options.history !== false && fresh) {
+    if (options.history !== false && fresh && !bounded) {
       // One boundary, the native turn's prompt, for the turn's rows, the snapshot's rows and what the live reply leaves out.
       const prompt = nativePrompt(inflight), startedAt = nativeStartedAt(inflight);
       const saved = turnRows(shown, prompt, `${sid}-inflight`, contextEnd, !!cut, startedAt);
@@ -607,7 +610,8 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
       sessionId: value.canonical_stored_session_id ?? value.stored_session_id ?? value.info?.stored_session_id ?? sid,
       requestSessionId: sid,
       messages: cut ? shown.slice(contextEnd) : shown,
-      ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, contextEnd)}} : {}),
+      ...(cut ? {window: {earlier: cut.earlier, context: shown.slice(0, contextEnd),
+        ...(bounded && cut.before === options.window!.before ? {before: options.window!.before} : {})}} : {}),
       activity: {state: value.app_interruption ? 'interrupted' : attention.length ? 'blocked' : activity, detail, runId},
       toolCalls: active ? toolCalls : [],
       approvals,
@@ -1019,8 +1023,9 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
           return;
         }
         // A reader polls next from its window's first message, which is this same read until something changes.
+        // An earlier page leaves out everything after it, so it is never that read.
         const first = value.messages[0]?.id;
-        if (first && options.window && generationOf(botId) === generation) sharedReads.set(botId + '\0' + JSON.stringify({start: first}), entry);
+        if (first && options.window && !options.window.before && generationOf(botId) === generation) sharedReads.set(botId + '\0' + JSON.stringify({start: first}), entry);
       }, () => { if (sharedReads.get(key) === entry) sharedReads.delete(key); });
       return entry.value.then(copy);
     },

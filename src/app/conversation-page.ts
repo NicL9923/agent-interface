@@ -8,6 +8,19 @@ export const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
 export const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
 
 type Page = ApiResponse<"GET /bots/:id/conversation">;
+
+/**
+ * The view with an earlier page in front of the message it was read `before`, or undefined when the view no longer holds
+ * that message. Only the page's messages, files and earlier counts are taken: everything else, such as live state, the
+ * version and the draft, stays as the view's own reads left it. Files keep conversation order, each once.
+ */
+export function prependPage<V extends Pick<Page, "messages" | "files" | "earlier" | "earlierFiles">>(view: V, page: Page, before: string): V | undefined {
+  const at = view.messages.findIndex(message => message.id === before);
+  if (at < 0) return undefined;
+  const known = new Set(view.files.map(file => file.id));
+  const files = [...page.files.filter(file => !known.has(file.id)), ...view.files];
+  return { ...view, messages: [...page.messages, ...view.messages.slice(at)], files, earlier: page.earlier, earlierFiles: page.earlierFiles };
+}
 /** A page read this recently is as good as a new one for the click that follows the hover. */
 const FRESH_MS = 5_000;
 /** The server serializes some reads, so a sweep across a list never queues more than this. */

@@ -11,16 +11,18 @@ const PAGE_TURNS = 20;
  * The add-on's history window, ported from `history_window` in src/hermes/extension.py, so a windowed open
  * here returns what Hermes would: the rows from the window's first prompt on, earlier rows only when they
  * carry files, every row with its position among visible rows, and all rows when the cut would start at
- * the first row or mid-turn.
+ * the first row or mid-turn. A window `before` a row ends there and says so.
  */
-export function historyWindow(messages: Row[], sid: string, start?: string, turns = 0): { rows: Row[]; cut?: { earlier: number; context: number } } {
+export function historyWindow(messages: Row[], sid: string, start?: string, turns = 0, before?: string): { rows: Row[]; cut?: { earlier: number; context: number; before?: string } } {
   const visible = messages.filter(row => row.display_kind !== "hidden");
   const identity = (index: number) => String(visible[index].app_request_id ?? visible[index].row_id ?? `${sid}-${index}`);
-  let end = typeof start === "string" && start ? visible.findIndex((_, index) => identity(index) === start) : -1;
+  const position = (name?: string) => typeof name === "string" && name ? visible.findIndex((_, index) => identity(index) === name) : -1;
+  const bound = position(before);
+  let end = bound >= 0 ? bound : position(start);
   if (end < 0) { end = visible.length; turns = Math.max(turns, PAGE_TURNS); }
   let first = end;
   while (first > 0 && turns > 0) if (visible[--first].role === "user") turns--;
-  if (first === 0 || visible[first].role !== "user") return { rows: messages };
+  if (bound < 0 && (first === 0 || visible[first].role !== "user")) return { rows: messages };
   const kept = new Set<number>();
   let prompt: number | undefined;
   for (let index = 0; index < first; index++) {
@@ -32,8 +34,9 @@ export function historyWindow(messages: Row[], sid: string, start?: string, turn
       if (row.role === "assistant" && prompt !== undefined) kept.add(prompt);
     }
   }
-  const indexes = [...[...kept].sort((a, b) => a - b), ...Array.from({ length: visible.length - first }, (_, offset) => first + offset)];
-  return { rows: indexes.map(index => ({ ...visible[index], app_index: index })), cut: { earlier: first, context: kept.size } };
+  const last = bound >= 0 ? bound : visible.length;
+  const indexes = [...[...kept].sort((a, b) => a - b), ...Array.from({ length: last - first }, (_, offset) => first + offset)];
+  return { rows: indexes.map(index => ({ ...visible[index], app_index: index })), cut: { earlier: first, context: kept.size, ...(bound >= 0 ? { before } : {}) } };
 }
 
 /**
@@ -71,7 +74,7 @@ export function fakeHermes() {
     drop() { hermes.sockets.at(-1)!.close(); },
   };
   const answerOpen = (params: Row): Row => {
-    const window = params.window && !params.omit_messages ? historyWindow(hermes.history, sid, params.window.start, params.window.turns) : undefined;
+    const window = params.window && !params.omit_messages ? historyWindow(hermes.history, sid, params.window.start, params.window.turns, params.window.before) : undefined;
     return structuredClone({
       session_id: sid, canonical_stored_session_id: "stored-one", info: { running: hermes.running },
       ...(hermes.runId ? { app_run_id: hermes.runId } : {}), inflight: hermes.inflight, open_requests: hermes.openRequests,

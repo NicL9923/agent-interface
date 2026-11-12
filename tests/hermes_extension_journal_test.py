@@ -273,8 +273,8 @@ class EventBodyTests(unittest.TestCase):
 
 class HistoryWindowTests(unittest.TestCase):
     """extension.history_window must cut exactly where src/shared/history.ts historyWindow does."""
-    def cut(self, rows, start=None, turns=0):
-        kept, window = extension.history_window(rows, "sid", start, turns)
+    def cut(self, rows, start=None, turns=0, before=None):
+        kept, window = extension.history_window(rows, "sid", start, turns, before)
         return [row.get("app_index") for row in kept], window
 
     def test_latest_page_keeps_twenty_turns_and_only_needed_earlier_rows(self):
@@ -302,6 +302,31 @@ class HistoryWindowTests(unittest.TestCase):
         # A start inside the first turn has no prompt before it to keep.
         rows = [{"row_id": 1, "role": "assistant", "text": "greeting"}, {"row_id": 2, "role": "assistant", "text": "more"}] + turns(3)
         self.assertEqual(self.cut(rows, start="2"), ([1, 2, 3, 4, 5, 6, 7], {"earlier": 1, "context": 0}))
+
+    def test_a_page_before_a_row_ends_there_and_says_so(self):
+        rows = turns(25, files={3, 20})
+        indexes, window = self.cut(rows, before="31", turns=2)
+        # Turns 13 and 14 only: nothing from row 31 on, not even turn 20's reply, which carries a file.
+        self.assertEqual(window, {"earlier": 26, "context": 2, "before": "31"})
+        self.assertEqual(indexes, [6, 7, 26, 27, 28, 29])
+        # It counts back from `before`, never from a start sent beside it.
+        self.assertEqual(self.cut(rows, start="41", turns=2, before="31"), (indexes, window))
+        # A page that reaches the first turn still ends there, so the window names it.
+        self.assertEqual(self.cut(rows, before="5", turns=20), ([0, 1, 2, 3], {"earlier": 0, "context": 0, "before": "5"}))
+        self.assertEqual(self.cut(rows, before="31", turns=0)[0], [6, 7])
+
+    def test_an_open_ends_a_page_where_the_server_asks(self):
+        # As the server asks: `start` too, which an older add-on cuts from.
+        with FakeGateway(turns(25)) as hermes:
+            value = hermes.open(window={"start": "31", "turns": 2, "before": "31"})
+        self.assertEqual(value["app_window"], {"earlier": 26, "context": 0, "before": "31"})
+        self.assertEqual([row["row_id"] for row in value["messages"]], list(range(27, 31)))
+
+    def test_a_page_before_a_row_the_history_lost_is_the_latest_page(self):
+        rows = turns(25)
+        self.assertEqual(self.cut(rows, before="gone"), self.cut(rows))
+        self.assertEqual(self.cut(rows, before="gone", start="31", turns=2), self.cut(rows, start="31", turns=2))
+        self.assertEqual(self.cut(turns(5), before=7), self.cut(turns(5)))
 
     def test_hidden_rows_and_positional_ids_follow_the_app(self):
         rows = turns(25)

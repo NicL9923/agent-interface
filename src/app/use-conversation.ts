@@ -11,7 +11,7 @@ import type { ReplyWatch } from "./reply-announcement";
 import type { SavedConversation } from "./storage";
 import { DRAFT_EVENT, type DraftNotice } from "./use-draft";
 import { chatStream, LIVE_POLL_MS, reportStream, streamUp } from "./stream-health";
-import { firstPage, firstQuery, prefetchedFirstPage, type PageQuery } from "./conversation-page";
+import { firstPage, firstQuery, prefetchedFirstPage, prependPage, type PageQuery } from "./conversation-page";
 import { ANCHOR_GAP, afterIntent, atTrueEnd, distanceToEnd, endReserve, scrollIntent } from "./scroll-follow";
 import type { Intent, ScrollMode } from "./scroll-follow";
 import { clearMessageParam, initialMessage } from "./view";
@@ -236,6 +236,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       grace = setTimeout(() => { grace = undefined; if (live) setDisconnectedFor(botId); }, DISCONNECT_GRACE_MS);
     };
     let loading = false, again = false, more = false, gone = false, lastRead = 0;
+    // An earlier page that could not go in front of what the view holds is read again with everything after it.
+    let wholeEarlier = false;
     let firstConversation = true;
     let watch: ReplyWatch = {};
     let announced = 0;
@@ -246,12 +248,14 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
       if (loading) { again = true; return; }
       loading = true;
       const generation = navigation, asked = asks;
-      const earlierPage = more;
+      const earlierPage = more, whole = wholeEarlier;
       more = false;
+      wholeEarlier = false;
       if (!start && mode.current !== "follow") start = cachedStart;
       const fromStart = !!start;
+      // An earlier page reads only the turns before the oldest message held, which go in front of it.
       const query: PageQuery = start
-        ? { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
+        ? earlierPage && !whole ? { before: start, turns: HISTORY_PAGE_TURNS } : { start, turns: earlierPage ? HISTORY_PAGE_TURNS : undefined }
         : earlierPage ? { turns: HISTORY_PAGE_TURNS * 2 } : firstQuery;
       try {
         // Every load asks, even for another window, so the first one uses up a link's startup read.
@@ -271,6 +275,21 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
         if (generation !== navigation) {
           again = true;
           if (earlierPage) more = true;
+          return;
+        }
+        if (query.before !== undefined && result.before === query.before) {
+          const before = query.before;
+          const prepend = (held: SavedConversation | null) => held?.botId === botId ? prependPage(held, result, before) : undefined;
+          // What the view holds no longer starts at that message, as after a turn that replaced everything: read the page whole.
+          if (!prepend(current.current)) {
+            wholeEarlier = more = again = true;
+            return;
+          }
+          start = result.messages[0]?.id ?? start;
+          holdPlace();
+          setConversation(previous => prepend(previous) ?? previous);
+          readOk();
+          setEarlier({ loading: false, failed: false });
           return;
         }
         // The latest page can slide past the cached message a reader scrolled to meanwhile.
