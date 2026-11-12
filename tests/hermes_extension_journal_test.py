@@ -1395,6 +1395,20 @@ class GatedHermes(PooledHermes):
         self.server.dispatch({"id": rid, "method": "agent-interface.open", "params": {"profile": "slow", **params}}, replies)
 
 
+class WindowedHermes(GatedHermes):
+    """GatedHermes whose slow assistant's history is 25 turns, row IDs 1 to 50."""
+    def __init__(self):
+        super().__init__()
+        gated = self.server.handle_request
+        def handle(request):
+            response = gated(request)
+            params = request.get("params") or {}
+            if request["method"] in ("session.activate", "session.resume") and "result" in response and params.get("omit_messages") is not True:
+                response["result"]["messages"] = turns(25)
+            return response
+        self.server.handle_request = handle
+
+
 class ReadMergeTests(unittest.TestCase):
     def test_identical_opens_waiting_behind_a_running_one_share_one_computation(self):
         with GatedHermes() as hermes:
@@ -1414,24 +1428,51 @@ class ReadMergeTests(unittest.TestCase):
             self.assertEqual(hermes.settled(), 0)
 
     def test_a_request_arriving_after_its_twin_started_gets_its_own_computation(self):
-        with GatedHermes() as hermes:
+        for name, window in {"same parameters": {}, "another window": {"window": {"turns": 5}}}.items():
+            with self.subTest(name), GatedHermes() as hermes:
+                replies = Replies()
+                hermes.open("running", replies)
+                self.assertTrue(hermes.activations(1))
+                hermes.open("a", replies)
+                hermes.release(0)
+                self.assertTrue(hermes.activations(2))
+                # The running read may already have read what this request needs to see changed.
+                hermes.open("b", replies, **window)
+                hermes.release(1)
+                self.assertTrue(hermes.activations(3))
+                hermes.release(2)
+                self.assertTrue(replies.wait("a", "b"))
+                self.assertEqual(len(hermes.gates), 3)
+
+    def test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut(self):
+        with WindowedHermes() as hermes:
             replies = Replies()
             hermes.open("running", replies)
             self.assertTrue(hermes.activations(1))
-            hermes.open("a", replies)
+            # The server's turn read after a tool event, a client's page, and a read of everything.
+            hermes.open("turn", replies, window={"start": "32"})
+            hermes.open("page", replies, window={"turns": 20})
+            hermes.open("whole", replies)
             hermes.release(0)
             self.assertTrue(hermes.activations(2))
-            # The running read may already have read what this request needs to see changed.
-            hermes.open("b", replies)
             hermes.release(1)
-            self.assertTrue(hermes.activations(3))
-            hermes.release(2)
-            self.assertTrue(replies.wait("a", "b"))
-            self.assertEqual(len(hermes.gates), 3)
+            self.assertTrue(replies.wait("running", "turn", "page", "whole"))
+            self.assertEqual(len(hermes.gates), 2)
+            answers = {rid: replies.answers[rid]["result"] for rid in ("turn", "page", "whole")}
+            # The turn read keeps row 31, the prompt its replies answer, before its window.
+            self.assertEqual([m["row_id"] for m in answers["turn"]["messages"]], list(range(31, 51)))
+            self.assertEqual(answers["turn"]["app_window"], {"earlier": 31, "context": 1})
+            self.assertEqual([m["row_id"] for m in answers["page"]["messages"]], list(range(11, 51)))
+            self.assertEqual(answers["page"]["app_window"], {"earlier": 10, "context": 0})
+            self.assertEqual([m["row_id"] for m in answers["whole"]["messages"]], list(range(1, 51)))
+            self.assertNotIn("app_window", answers["whole"])
+            self.assertEqual({rid: replies.answers[rid]["id"] for rid in answers}, {rid: rid for rid in answers})
+            self.assertEqual(hermes.settled(), 0)
 
     def test_waiting_opens_merge_only_with_the_same_parameters_connection_and_method(self):
         cases = {
-            "parameters": lambda hermes, replies: (hermes.open("a", replies, window={"turns": 20}), hermes.open("b", replies, window={"turns": 10})),
+            # An open without history never answers one that asked for it, whatever their windows.
+            "parameters": lambda hermes, replies: (hermes.open("a", replies, omit_messages=True), hermes.open("b", replies, window={"turns": 10})),
             # Native activation binds the session to its caller's connection.
             "connection": lambda hermes, replies: (hermes.open("a", replies), hermes.open("b", other)),
         }

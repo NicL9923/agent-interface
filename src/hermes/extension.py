@@ -436,7 +436,7 @@ class LaneQueue:
     Waiting work holds no thread, so one slow assistant can take at most one worker
     and never any of Hermes's native RPC pool, which its long handlers need. A request
     whose ``merge`` key equals that of a job still waiting in its lane joins that job,
-    and one run answers both. A job takes no one once it starts, so every request is
+    and one run answers both; ``run`` gets every merged request, to answer each its own way. A job takes no one once it starts, so every request is
     answered by a computation that began after it arrived.
     """
 
@@ -508,6 +508,23 @@ class Reservation:
                     self.unlist()
         if not held:
             logging.getLogger(__name__).error("An admission reservation was released twice; the second release was ignored", stack_info=True)
+
+
+def window_of(request):
+    """The ``window`` an open asked for, or None."""
+    params = request.get("params")
+    return params.get("window") if isinstance(params, dict) else None
+
+
+def own_window(response, merged, index):
+    """The merged open's response with the ``index``-th request's own window, as open_locked cut it for each."""
+    if merged is None or merged["answers"] is None or not isinstance(response, dict) or not isinstance(response.get("result"), dict):
+        return response
+    result = {key: value for key, value in response["result"].items() if key != "app_window"}
+    result["messages"], cut = merged["answers"][index]
+    if cut:
+        result["app_window"] = cut
+    return {**response, "result": result}
 
 
 def answered(response, rid, queued):
@@ -614,9 +631,11 @@ QUEUED_SENDS = frozenset({"agent-interface.submit"})
 # Methods whose lane is the requested assistant's; the rest share one lane per method.
 PROFILE_LANES = frozenset({"agent-interface.open", "agent-interface.submit"})
 # Queued reads whose waiting requests may share one computation when their connection and
-# parameters are identical. Each answer depends only on its parameters and state read after
-# every merged request arrived, and the effects are idempotent: an open activates the session
-# and binds receipts to rows; discovery records each routine run once, by its unique event key.
+# parameters are identical, except an open's ``window``: opens that differ only there share one
+# activation and decoration, and each answer is cut to its own window, the last step of an open.
+# Each answer depends only on its parameters and state read after every merged request arrived,
+# and the effects are idempotent: an open activates the session and binds receipts to rows;
+# discovery records each routine run once, by its unique event key.
 MERGED_READS = frozenset({"agent-interface.open", "agent-interface.discover"})
 # Distinct assistants read at once; a busy assistant's later reads wait without a thread.
 READ_WORKERS = 4
@@ -1003,6 +1022,9 @@ class Bridge:
         # the one this thread's native activation may use while it projects history.
         self.row_caches = {}
         self.projecting = contextvars.ContextVar("agent_interface_projecting", default=None)
+        # While a queued open runs for every open merged into it: {"windows": each one's window, in
+        # arrival order, "answers": each one's (rows, cut), which open_locked fills}. See route.
+        self.open_windows = contextvars.ContextVar("agent_interface_open_windows", default=None)
         self.settlement = {}
         self.discovery_lock = threading.RLock()
         self.routine_scans = {}
@@ -1217,6 +1239,8 @@ class Bridge:
             if send is not None:
                 with self.sends_in_flight_lock:
                     send[1] = "admitting"
+            merged = {"windows": [window_of(each) for each, *_ in requests], "answers": None} if method == "agent-interface.open" else None
+            token = self.open_windows.set(merged)
             try:
                 # Native activation and admission attach the session to the transport bound here,
                 # the caller's, which every merged request shares.
@@ -1225,11 +1249,12 @@ class Bridge:
                     response = self.original_handle(request)
                 except Exception as exc:
                     response = server._err(request["id"], -32000, f"handler error: {exc}")
-                for each, arrival, _ in requests:
-                    reply = answered(response, each["id"], started - arrival)
+                for index, (each, arrival, _) in enumerate(requests):
+                    reply = answered(own_window(response, merged, index), each["id"], started - arrival)
                     if reply is not None:
                         transport.write(reply)
             finally:
+                self.open_windows.reset(token)
                 for *_, held in requests:
                     held.release()
         # A profile that is not a name still gets its handler's answer, from a lane of its own.
@@ -1238,7 +1263,9 @@ class Bridge:
         if method in MERGED_READS:
             try:
                 # Native activation binds the session to its caller's connection, so only one connection's requests merge.
-                merge = (id(transport), json.dumps(request.get("params"), sort_keys=True))
+                # Opens that differ only in their window share one activation; each answer is cut to its own window.
+                merged_params = {key: value for key, value in params.items() if key != "window"} if method == "agent-interface.open" and isinstance(request.get("params"), dict) else request.get("params")
+                merge = (id(transport), json.dumps(merged_params, sort_keys=True))
             except (TypeError, ValueError):
                 merge = None
         try:
@@ -2190,9 +2217,15 @@ class Bridge:
         if cached is None and rows.projections.report is not None and os.environ.get(PROJECTION_SHADOW) == "1":
             value["app_projection_shadow"] = rows.projections.report
         if "messages" in value:
-            value["messages"], cut = self.windowed(value["messages"], sid, None if omit else params.get("window"))
+            # Each open merged into this one (see route) cuts its own window from the same history.
+            merged = self.open_windows.get()
+            windows = merged["windows"] if merged is not None else [params.get("window")]
+            answers = [self.windowed(value["messages"], sid, None if omit else window) for window in windows]
+            value["messages"], cut = answers[0]
             if cut:
                 value["app_window"] = cut
+            if merged is not None:
+                merged["answers"] = answers
         phases["window"] += time.perf_counter() - mark
         return server._ok(rid, value)
 
