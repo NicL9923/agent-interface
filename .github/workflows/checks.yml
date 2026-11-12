@@ -72,6 +72,28 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+  release-archive:
+    # The host builds from archive-release.py's tarball, not a checkout. A file the build reads and
+    # the archive leaves out fails here instead of in a production release.
+    name: Release archive builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Build from the release archive, as the host does
+        run: |
+          python3 .agents/tools/archive-release.py "$RUNNER_TEMP/release.tar.gz"
+          mkdir "$RUNNER_TEMP/release"
+          tar -xzf "$RUNNER_TEMP/release.tar.gz" -C "$RUNNER_TEMP/release"
+          cd "$RUNNER_TEMP/release"
+          npm ci
+          npm run build
   python:
     # Runs once, on the Python the Hermes host runs (scripts/spike/requirements.lock.txt).
     name: Python 3.14.7
