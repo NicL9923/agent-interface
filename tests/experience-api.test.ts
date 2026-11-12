@@ -81,12 +81,12 @@ it('builds a recap from a recent window and its earlier file context, reading ev
   const ranch = async (headers: typeof s.first) => (await s.app.inject({ url: '/api/today', headers })).json().items.find((item: { botId: string }) => item.botId === 'ranch');
   const asked = () => s.conversation.mock.calls.filter(([id]) => id === 'ranch').map(call => (call as unknown[])[1]);
   expect(await ranch(s.first)).toMatchObject({ files: [{ name: 'early.pdf' }], latestMessage: { id: 'reply' } });
-  // The last two turns: earlier files come from the window's context.
-  expect(asked()).toEqual([{ window: { turns: 2 } }]);
-  // Activity alone fills the window, so a longer one is read, and the whole history for the latest reply.
+  // The page a chat opens with, which an open chat's read shares: earlier files come from the window's context.
+  expect(asked()).toEqual([{ window: { turns: 20 } }]);
+  // A window with no reply reads the whole history for the latest one.
   windowed = { ...windowed, messages: [{ id: 'mine', role: 'user', text: 'Status?', createdAt: at }] };
   expect((await ranch(s.second)).latestMessage.id).toBe('first');
-  expect(asked().slice(1)).toEqual([{ window: { turns: 2 } }, { window: { turns: 20 } }, undefined]);
+  expect(asked().slice(1)).toEqual([{ window: { turns: 20 } }, undefined]);
 });
 describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
   afterEach(() => { vi.useRealTimers(); });

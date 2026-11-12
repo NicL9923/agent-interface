@@ -47,4 +47,9 @@ describe("limiter", () => {
     finish.get(2)![0](); finish.get(3)![0]();
     expect(await Promise.all([calls[0], calls[2], calls[3]])).toEqual([0, 2, 3]);
   });
+  it("frees the slot of a call that throws before it returns a promise", async () => {
+    const gate = limiter(1);
+    await expect(gate(() => { throw new Error("thrown at once"); })).rejects.toThrow("thrown at once");
+    await expect(gate(async () => "next")).resolves.toBe("next");
+  });
 });

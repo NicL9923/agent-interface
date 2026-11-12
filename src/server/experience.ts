@@ -48,11 +48,6 @@ const RECAP_MS = 5 * 60_000;
 export const TODAY_WAIT_MS = 2_000;
 /** How long a read that finished after Today answered still answers the next Today, as new as a fresh read would be. */
 export const TODAY_LATE_MS = 5_000;
-/**
- * Turns read for a recap. Its latest reply is almost always in the last two, and the add-on's window context holds every
- * earlier message with files, which is all a recap needs from them, so a longer window only costs time.
- */
-const RECAP_TURNS = 2;
 const settled = (activity: { state: string; runId?: string }) => !activity.runId && !['thinking', 'working', 'waiting', 'blocked'].includes(activity.state);
 type Recap = { latest?: Pick<Message, 'id' | 'text' | 'createdAt' | 'files'>; files: FileRef[]; eventFiles: [string, FileRef[]][] };
 /** One assistant's check for Today: its current state and recap. */
@@ -121,9 +116,9 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
       const state = reusable && await runtime.conversation(bot.id, { history: false });
       if (reusable && state && settled(state.activity)) return { ...state, recap: reusable };
       // A recent window is enough: its context holds every earlier message with files. Only a window without a reply
-      // reads further back for one, and the whole history last. Reading whole histories made Today outlast its timeout.
-      let read = await runtime.conversation(bot.id, { window: { turns: RECAP_TURNS } });
-      if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
+      // reads the whole history. The latest page is the window a chat opens with, so a Today beside an open chat shares
+      // its read; a smaller window would not be smaller, since a window without a start is always a whole page.
+      let read = await runtime.conversation(bot.id, { window: { turns: HISTORY_PAGE_TURNS } });
       if (read.window?.earlier && !read.messages.some(isConversationReply)) read = await runtime.conversation(bot.id);
       const messages = [...read.window?.context ?? [], ...read.messages];
       const recap = summarize(messages.map(redact.message), events, new Set(unreadRuns), since);

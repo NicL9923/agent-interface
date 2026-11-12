@@ -85,3 +85,12 @@ assistant as one it could not check, so `GET /today` answers early only with `pe
 Without it, Today waits for every assistant as before, still reading 2 turns each and taking a check another Today
 started. `tests/experience-api.test.ts` "waits for every assistant when the client does not ask for pending answers"
 fails with the deadline applied to every request; "refuses a pending value other than 1" names the `pending` field.
+
+## Correction: the 2-turn window read 20
+
+Review of the consolidated branch found that a window without a start is always at least a page: the add-on
+(`history_window`, `max(turns, PAGE_TURNS)`) and `historyWindow` in `src/shared/history.ts` both widen it to 20 turns. So
+`{turns: 2}` read 20 turns, the middle 20-turn fallback read the same window again, and the different window key kept
+Today from sharing the 3-second read of an open chat's first page. The recap now reads the latest page, then the whole
+history only when that page has no reply. The test asserting `{turns: 2}` passed against a fake runtime that honored it.
+The early answer with `pending=1` is unchanged and is what made Today faster.

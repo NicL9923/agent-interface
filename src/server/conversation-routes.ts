@@ -154,6 +154,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       turns: z.coerce.number().int().min(0).max(MAX_HISTORY_TURNS).optional(),
       before: z.string().min(1).max(512).optional(),
     }).refine(value => value.start === undefined || value.before === undefined, { message: "Ask for a window from a start or before a message, not both." })
+      // An earlier page without a size is a page, not an empty window.
+      .transform(value => value.before !== undefined && value.turns === undefined ? { ...value, turns: HISTORY_PAGE_TURNS } : value)
       .parse(req.query);
     const windowed = window.start !== undefined || window.turns !== undefined || window.before !== undefined;
     const readAt = Date.now();

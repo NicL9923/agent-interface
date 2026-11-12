@@ -30,6 +30,30 @@ async function released(count: number) {
 }
 
 describe("turn reads for streams that follow turns", () => {
+  // A routine's or an auto-continue's prompt is hidden, so the turn's first saved message is a reply. The add-on cuts the
+  // turn read there, keeping the prompt before it for origins, instead of answering the whole history.
+  it("reads a turn whose prompt is hidden from its first reply, as a cut window", async () => {
+    hermes.history = [row(1, "user", "Fence?", { app_run_id: "run-1", timestamp: 100 }), row(2, "assistant", "Fixed.", { app_run_id: "run-1", timestamp: 101 }),
+      row(3, "user", "Check the herd.", { display_kind: "hidden", app_run_id: "run-2", timestamp: 200 })];
+    // Hermes says when the turn started, so its first saved message is the reply, not the last shown prompt.
+    Object.assign(hermes, { running: true, runId: "run-2", inflight: { user: "Check the herd.", assistant: "", started_at: 200 } });
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    const followed = vi.fn();
+    runtime.followTurns!("shared", followed);
+    hermes.history.push(row(4, "assistant", "Counting.", { app_run_id: "run-2", timestamp: 201 }));
+    hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+    hermes.frame("tool.complete", { tool_id: "t1", name: "terminal", result: "ok" });
+    await vi.waitFor(() => expect(followed).toHaveBeenCalledTimes(1));
+    // That read found the reply; the next tool's read starts there.
+    hermes.frame("tool.start", { tool_id: "t2", name: "terminal" });
+    hermes.frame("tool.complete", { tool_id: "t2", name: "terminal", result: "ok" });
+    await vi.waitFor(() => expect(followed).toHaveBeenCalledTimes(2));
+    expect(hermes.opens().at(-1)!.params.window).toEqual({ start: "4" });
+    // A cut window holds no message just before the turn, so the event names none; a client that does not hold the
+    // reply yet reads once to place it, as for any turn that starts its window.
+    expect(runtime.turn!("shared")!.turn).toEqual({ messages: [expect.objectContaining({ id: "4", text: "Counting." })] });
+  });
+
   it("reads the turn itself after a structural frame, once for every follower, from the turn's first message", async () => {
     midTurn();
     await runtime.conversation("shared", { window: { turns: 20 } });

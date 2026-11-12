@@ -417,6 +417,10 @@ describe("authentication and household state", () => {
     const before = await read("?before=p10&turns=2");
     expect(before.messages.map((message: Message) => message.id)).toEqual(["p8", "a8", "p9", "a9"]);
     expect(before).toMatchObject({ before: "p10", earlier: 16 });
+    // Without a size, an earlier page is a whole page, never an empty one.
+    const page10 = await read("?before=p10");
+    expect(page10.messages.map((message: Message) => message.id)).toEqual(Array.from({ length: 10 }, (_, n) => [`p${n}`, `a${n}`]).flat());
+    expect(page10).toMatchObject({ before: "p10", earlier: 0 });
     expect((await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one })).statusCode).toBe(400);
     const both = await app.inject({ url: "/api/bots/shared/conversation?start=p1&before=p10", headers: one });
     expect(both.statusCode).toBe(400);

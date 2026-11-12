@@ -25,7 +25,13 @@ export function limiter(limit: number) {
   const queue: (() => void)[] = [];
   const next = () => { running--; queue.shift()?.(); };
   return <R>(fn: () => Promise<R>): Promise<R> => new Promise<R>((resolve, reject) => {
-    const run = () => { running++; fn().then(resolve, reject).finally(next); };
+    // A call that throws before it returns a promise still frees its slot.
+    const run = () => {
+      running++;
+      let called: Promise<R>;
+      try { called = fn(); } catch (error) { called = Promise.reject(error); }
+      called.then(resolve, reject).finally(next);
+    };
     if (running < Math.max(1, limit)) run(); else queue.push(run);
   });
 }
