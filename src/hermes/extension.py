@@ -1473,7 +1473,14 @@ class Bridge:
             return None
         homes = {Path(home) for home in (kwargs.get("profile_home"), self.get_hermes_home()) if home}
         configs = tuple(sorted((str(home), file_stamp(home / "config.yaml")) for home in homes))
-        return tuple(sorted((name, repr(value)) for name, value in kwargs.items())), configs, redaction
+
+        def argument(name, value):
+            # A resume projects with the profile home as a Path, then stores it on the session as a string, which every
+            # later activation projects with (tui_gateway/methods_session.py). One home is one context either way.
+            if name == "profile_home" and isinstance(value, (str, os.PathLike)):
+                return str(Path(value))
+            return repr(value)
+        return tuple(sorted((name, argument(name, value)) for name, value in kwargs.items())), configs, redaction
 
     @staticmethod
     def tool_result(content, row_id, rows):
