@@ -479,10 +479,32 @@ display. During a turn the decorated-history cache is off, so a long chat paid t
 every open. The add-on cuts the history where Hermes's projection carries nothing across, at user
 rows no later tool row reads a call from before, and keeps each piece's projection for the next open.
 A piece whose rows, configuration, redaction state and projection arguments are unchanged reuses its
-projection; only changed and new pieces are projected again. Each canonical session keeps up to 128
-million characters of rows (`PROJECTION_BUDGET` in `src/hermes/extension.py`), and a new stored session
-starts empty. The longest chat measured, 8,016 rows, needs 62 million characters, about 110 MB of
-the gateway's memory. Without readable redaction state nothing is kept.
+projection; only changed and new pieces are projected again. Every memo in the gateway keeps its pieces
+within one budget of 192 million characters of rows, projections and tool rows (`PROJECTION_BUDGET` in
+`src/hermes/extension.py`); when they pass it, the memo used least recently empties. A new stored session
+starts empty. The longest chat measured, 8,021 rows, keeps 114 million characters, about 110 MB of the
+gateway's memory. Without readable redaction state nothing is kept.
+
+A restart empties every memo. The first open after one resumes the session through its memo, with image
+URLs as every later open projects them, so the second open reuses what the first projected. A background
+warm-up also starts two seconds after the add-on installs. It reads the canonical "Bot Chat" of the six
+assistants with the most recent app sends, read-only from each profile's `state.db`, and projects each into
+the memo its first open adopts, with that chat's journal tool records parsed. It works a piece at a time
+under the assistant's open lock, and lets go whenever an open, an app request or send, or a native turn or
+queued input appears, keeping what it did; the open takes over from there. A routine or bot delivery
+counts as an open. It never takes room another memo holds and stops at the first chat that does not fit.
+Its memos rank below every memo an open used, so they empty first, and a warmed chat nobody opened is
+dropped whole once its memo empties. An assistant whose store cannot be read is skipped. It logs one line
+with counts and seconds, and per skipped assistant its name and the exception type, never history. On the longest chat this cut the first open's add-on work from 7.5 s to 1.6 s
+(`docs/ledger/20261112T161203Z-history-warm-up.md`). A Hermes without the reads it needs
+(`SessionDB.get_messages_as_conversation` with compacted rows, `get_session_by_title`,
+`get_compression_tip`, `hermes_cli.profiles.get_profile_dir`, its compaction display projection or
+readable redaction state) logs one warning naming them and warms nothing. To turn it off, set this in
+`shared/hermes-service.env` and restart the gateway:
+
+```sh
+HERMES_AGENT_INTERFACE_WARM_HISTORY=0    # off; anything else, or unset, is on
+```
 
 Shadow mode projects each open's history whole as well, answers with the whole projection, and logs a
 warning with the first message and tool row where the memoized projection differed. Each open that
