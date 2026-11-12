@@ -229,12 +229,14 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
             let window = Self.window(history, query: query)
             body["messages"] = window.ids.map { (id: String) -> [String: Any] in messageBody(id) }
             body["earlier"] = window.earlier
+            // A page before a message names it, as the app server does; a message the history lost does not.
+            if let before = window.before { body["before"] = before }
             var shown = Set<String>(), before = Set<String>(), files: [[String: Any]] = []
             for (index, id) in history.enumerated() {
                 for file in lock.withLock({ fileOwners[id] ?? [] }) {
-                    if index >= window.earlier {
+                    if index >= window.earlier && index < window.earlier + window.ids.count {
                         if shown.insert(file).inserted { files.append(fileBody(file)) }
-                    } else { before.insert(file) }
+                    } else if index < window.earlier { before.insert(file) }
                 }
             }
             body["files"] = files
@@ -268,20 +270,27 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         }
         return Self.json(["messages": messages])
     }
-    /// Mirrors the app server's `historyWindow` for a history where every message starts a turn.
-    private static func window(_ ids: [String], query: String?) -> (ids: [String], earlier: Int) {
-        guard let query else { return (ids, 0) }
+    /// Mirrors the app server's `historyWindow` for a history where every message starts a turn. `before` is
+    /// the page that ends just before that message, named in the answer, or the latest page when it is lost.
+    private static func window(_ ids: [String], query: String?) -> (ids: [String], earlier: Int, before: String?) {
+        guard let query else { return (ids, 0, nil) }
         let items: [URLQueryItem] = URLComponents(string: "?" + query)?.queryItems ?? []
         var start: String?
+        var before: String?
         var turns = 0
         for item in items {
             if item.name == "start" { start = item.value }
+            if item.name == "before" { before = item.value }
             if item.name == "turns", let value = item.value, let count = Int(value) { turns = count }
         }
         var end = ids.count
-        if let start, let index = ids.firstIndex(of: start) { end = index } else { turns = max(turns, 20) }
+        var named: String?
+        if let before, let index = ids.firstIndex(of: before) { end = index; named = before }
+        else if let start, let index = ids.firstIndex(of: start) { end = index }
+        else { turns = max(turns, 20) }
         let from: Int = max(0, end - turns)
-        return (Array(ids[from...]), from)
+        // A page stops at its message; a window from a start runs to the newest message.
+        return (Array(ids[from..<(named == nil ? ids.count : end)]), from, named)
     }
     /// Makes the conversation answer with these message IDs, windowed by each request's query.
     /// The reader starts at the latest message.
@@ -1302,8 +1311,10 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(server.conversationQueries, ["turns=20"])
         XCTAssertEqual(value.conversation?.messages.first?.id, "m11"); XCTAssertEqual(value.conversation?.earlier, 10)
         await value.loadEarlier()
-        XCTAssertEqual(server.conversationQueries.last, "start=m11&turns=20")
-        XCTAssertEqual(value.conversation?.messages.count, 30)
+        XCTAssertEqual(server.conversationQueries.last, "before=m11&turns=20", "An earlier page reads only the turns before the first loaded message")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30), "The page goes in front of what is loaded")
+        XCTAssertEqual(value.conversation?.earlier, 0)
+        XCTAssertEqual(value.conversationCache["bot"], value.conversation, "The saved copy holds the page too")
         await value.refreshConversation()
         XCTAssertEqual(server.conversationQueries.last, "start=m01", "Polling keeps the loaded window")
         let requests = server.conversationQueries.count
@@ -1337,6 +1348,7 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await server.waitForHeld(path)
         await value.loadEarlier()
         XCTAssertEqual(value.conversation?.messages.count, 30)
+        XCTAssertEqual(server.conversationQueries.last, "start=m01", "The poll the page outran is dropped, so the window is read again")
         server.release(path); await poll.value
         XCTAssertEqual(value.conversation?.messages.count, 30, "The late response asked for the narrower window")
         await value.refreshConversation()
@@ -1757,9 +1769,169 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         try await server.waitForDelayed(path)
         server.serveHistory(ids(1...31))
         await value.refreshConversation()
+        let reads = server.conversationQueries.count
         server.releaseResponse(path); await earlier.value
-        XCTAssertEqual(value.conversation?.messages.first?.id, "m01", "The wider window is kept")
-        XCTAssertEqual(value.conversation?.messages.last?.id, "m31", "The newer turn is not undone by the older page")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...31), "The page goes in front of the newer view, which an older snapshot must not undo")
+        XCTAssertEqual(server.conversationQueries.count, reads, "No read overtook the page, so none follows it")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m01", "Later reads cover the whole loaded window")
+    }
+
+    func testAnEarlierPageNamedForALostMessageReplacesTheViewWithTheLatestPage() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        // The history was replaced: m11 is gone, so the server answers the latest page without `before`.
+        server.serveHistory(ids(101...130))
+        await value.loadEarlier()
+        XCTAssertEqual(server.conversationQueries.last, "before=m11&turns=20")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(111...130), "An answer that does not name the message is the latest page, not an earlier one")
+        XCTAssertEqual(value.conversation?.earlier, 10)
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m111", "The window then starts at the page's first message")
+    }
+
+    func testAReadAskedBeforeAPageCannotShrinkTheWindowEvenWhenTheReadAfterThePageFails() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // A poll asked after the page began, for the window the page is about to move, answers last.
+        server.holdNext(path)
+        let poll = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.failConversation()
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30))
+        server.failConversation(false)
+        server.release(path); await poll.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30), "Its answer is for the window before the page")
+    }
+
+    func testNoPageIsReadWhileAnOpenAtMessageReadOwnsTheWindow() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m31")
+        // Find opens at an older message: the window moved, and the read for it has not landed yet.
+        server.holdNext(path)
+        let opening = Task { await value.openConversation(botId: "bot", atMessage: "m05") }
+        try await server.waitForHeld(path)
+        let reads = server.conversationQueries.count
+        await value.loadEarlier()
+        XCTAssertEqual(server.conversationQueries.count, reads, "The earlier edge showing meanwhile asks for nothing")
+        server.release(path); await opening.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(5...50), "The opened message stays in the window")
+        XCTAssertEqual(value.focusedMessage?.messageId, "m05")
+    }
+
+    func testALostMessageAnswerForAWindowThatMovedIsDroppedAndAReadItOutranIsRepeated() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        // m31 is gone from the history, so the page before it answers the latest page without `before`.
+        server.serveHistory(ids(1...30) + ids(101...150))
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        await value.openConversation(botId: "bot", atMessage: "m05")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05")
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05", "The answer for the window before the open does not replace it")
+        XCTAssertEqual(server.conversationQueries.last, "start=m05")
+    }
+
+    func testALostMessageAnswerRepeatsTheReadItDroppedWhenTheWindowMoves() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.serveHistory(ids(101...130))
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // A change notice's read, asked after the page, which the page's window move drops when it answers.
+        server.holdNext(path)
+        let poll = Task { await value.refreshConversation() }
+        try await server.waitForHeld(path)
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m111")
+        XCTAssertEqual(server.conversationQueries.last, "start=m111", "The window the answer moved is read again")
+        server.release(path); await poll.value
+    }
+
+    func testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...50))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m31")
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // Opening at an older message starts the window there, while the page for the old one is still loading.
+        await value.openConversation(botId: "bot", atMessage: "m05")
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m05")
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(5...50), "The page for the old window is not mixed into the one asked for")
+        await value.refreshConversation()
+        XCTAssertEqual(server.conversationQueries.last, "start=m05")
+    }
+
+    func testALostMessagePageAnsweringAfterANewerReadIsReadFreshInsteadOfShown() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.serveHistory(ids(101...130))
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // A newer read shows one more turn before the page's older snapshot of the latest turns answers.
+        server.serveHistory(ids(101...131))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.last?.id, "m131")
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(111...131), "The older snapshot must not undo the newer turn")
+        XCTAssertEqual(server.conversationQueries.last, "start=m111", "The window the page moved is read fresh")
+    }
+
+    func testAnEarlierPageIsReadWholeWhenTheViewNoLongerHoldsItsMessage() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let path = "/api/bots/bot/conversation"
+        server.serveHistory(ids(1...30))
+        await value.refreshConversation()
+        server.delayResponse(path)
+        let earlier = Task { await value.loadEarlier() }
+        try await server.waitForDelayed(path)
+        // Another history takes the view over while the page loads, and then the first one is current again.
+        server.serveHistory(ids(101...130))
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.messages.first?.id, "m111")
+        server.serveHistory(ids(1...30))
+        server.releaseResponse(path); await earlier.value
+        XCTAssertEqual(Array(server.conversationQueries.suffix(3)), ["before=m11&turns=20", "start=m11", "start=m11&turns=20"],
+            "The page, the read that took the view over, then the page again the old way")
+        XCTAssertEqual(value.conversation?.messages.map(\.id), ids(1...30), "The whole read replaces the view instead of mixing histories")
+        XCTAssertEqual(value.conversation?.earlier, 0)
+    }
+
+    func testAnEarlierPageCountsFilesFromItsStartAndKeepsEachFileOnce() async throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        server.serveHistory(ids(1...50))
+        // x.txt is in the page and again in a later message the view holds.
+        server.serveFiles(["m02": ["old.txt"], "m05": ["older.txt"], "m12": ["x.txt"], "m15": ["page.txt"], "m33": ["new.txt"], "m35": ["x.txt"]])
+        await value.refreshConversation()
+        XCTAssertEqual(value.conversation?.earlierFiles, 3, "old, older and page.txt exist only before the latest page")
+        XCTAssertEqual(value.conversation?.files.map(\.id), ["new.txt", "x.txt"])
+        await value.loadEarlier()
+        XCTAssertEqual(value.conversation?.files.map(\.id), ["page.txt", "new.txt", "x.txt"], "The page's own files join once, in front")
+        XCTAssertEqual(value.conversation?.earlierFiles, 2, "Counted from the page's start")
     }
 
     func testWithoutAStreamTheConversationIsPolledEveryPass() async throws {
