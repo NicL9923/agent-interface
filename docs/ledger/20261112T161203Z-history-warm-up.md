@@ -138,3 +138,60 @@ decrement of the open counter left out, which hangs the warm-up rather than fail
 Not exercised: the running gateway, release qualification, and the warm-up's effect on a live turn's latency. The
 measurement ran the warm-up alone; on the gateway it waits while any turn runs, and Hermes's display read, about
 1.2 s for `patch`, runs between checks and cannot step aside midway.
+
+## Review fixes
+
+An independent review of PR #375 (Claude Opus 5.5, fresh context; GPT-6.1 Sol and Grok were out of usage and
+Nicolas approved Claude reviewers) found no correctness bug and five issues, all fixed on the same branch:
+
+1. **A warm-up's charge ranked as recently used.** An open of A, then the warm-up filling B, then an open of an
+   unwarmed C emptied A. `ProjectionBudget.charge` now takes `background`: the warm-up's charges, its stops
+   included, rank below every memo an open used, until an open adopts the cache and charges it as an open.
+2. **Unadopted warm caches stayed in memory.** Their tool results and journal records sat outside the budget.
+   When the budget empties a warmed memo nobody adopted, its `on_empty` drops the whole cache. A profile's other
+   warm caches, such as one of a tip a compaction replaced, are dropped when its first open resumes. The callback
+   holds the cache weakly: a strong one made a reference cycle that kept a dropped cache's size in the budget.
+3. **Deliveries did not make the warm-up step aside.** `open_canonical` took the profile's lock before
+   `open_bot` counted the open. Both now count from before they wait for the lock (`Bridge.opening`).
+4. **Unpaused steps.** The warm-up no longer decorates through `detailed_history`, which parsed every tool row
+   at once. It projects through the memo itself and parses tool rows 256 a step (`WARM_STEP`, shared with
+   journal records). The memo now pauses before every piece, reused ones included. Still unpaused: the cut
+   computation once per pass and Hermes's display read.
+5. **Older Hermes and failures.** The seam check now requires `SessionDB(db_path, read_only)`. A profile whose
+   store cannot be read, or whose warm-up raises, is logged by name and exception type and skipped; the others
+   are warmed. An unreachable redaction guard inside `warm` was removed: the seam check already requires
+   readable redaction state.
+
+The first open's image URLs were accepted by the orchestrating agent as a consistency fix, and Nicolas was told.
+
+`python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_history_warmup_test.py`:
+
+| Mutation | Result |
+| --- | --- |
+| a warm-up's charge ranks as an open's | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
+| a projection's charge never in the background | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
+| a stopped projection's charge never in the background | failed: test_a_warm_up_waiting_out_a_turn_still_empties_first (exit 1) |
+| the warm-up projects as an open | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
+| an emptied memo tells nobody | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
+| an emptied warm cache is kept | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
+| a warm cache keeps itself alive | failed: test_a_warm_up_that_stepped_aside_still_fits_what_it_kept_before (exit 1) |
+| an earlier tip's warm-up is kept | failed: test_a_warm_up_of_an_earlier_tip_is_dropped_when_the_chat_goes_live (exit 1) |
+| a delivery waits for its lock uncounted | failed: test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice (exit 1) |
+| a pause only before pieces projected anew | failed: test_a_pause_comes_before_every_piece_reused_or_not (exit 1) |
+| tool rows parsed without stepping aside | failed: test_tool_row_parsing_steps_aside_too (exit 1) |
+| tool rows not warmed | failed: test_tool_row_parsing_steps_aside_too (exit 1) |
+| a store that opens only writable is not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| one assistant's failure stops the warm-up | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1) |
+| one store that cannot be read stops the targets | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1) |
+
+The stopped-charge mutant first survived; the new test holds the warm-up in a turn while another open charges. Its
+first version hung the mutant run, because a failed assertion left the turn running; it now ends the turn in
+`finally`. Five earlier mutants whose lines the refactor moved were run again and failed as before: memo keeps
+nothing when a pause stops it, a pause never yields, a full budget never stops a pause, warm-up keeps up to the
+whole budget, and memo ignores the limit.
+
+The production measurement above predates these fixes. They change only when the warm-up pauses and what it keeps,
+not what it projects or parses.
+
+With the fixes, the same fingerprint scope is `sha256:171b1c373dc139e2bedfa91506d2976cc344240a846bfe2206a7a74bf6e2e7bd`. `.agents/tools/check-all` passed all seven checks again:
+211 test files with 3,883 tests, 55 e2e tests and 52 Python test files.

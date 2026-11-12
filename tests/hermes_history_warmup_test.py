@@ -30,8 +30,10 @@ class Chat:
         self.rows, self.tip, self.row = rows, tip, {"id": "root"} if row is None else row
 
 
-def session_db(hermes, signature=True):
-    """Hermes's SessionDB over the fake's chats. Only the reads the warm-up makes exist, and only read-only."""
+def session_db(hermes, signature=True, read_only=True):
+    """Hermes's SessionDB over the fake's chats. Only the reads the warm-up makes exist, and only read-only.
+
+    A chat whose row is an exception raises it from the title lookup, as a damaged store would."""
 
     class SessionDB:
         def __init__(self, db_path, read_only=False):
@@ -40,6 +42,8 @@ def session_db(hermes, signature=True):
             self.chat = hermes.chats[Path(db_path)]
 
         def get_session_by_title(self, title):
+            if isinstance(self.chat.row, Exception):
+                raise self.chat.row
             return self.chat.row if title == "Bot Chat" else None
 
         def get_compression_tip(self, session_id):
@@ -57,6 +61,11 @@ def session_db(hermes, signature=True):
         def close(self):
             pass
 
+    if not read_only:
+        # An older Hermes whose store opens only writable.
+        def __init__(self, db_path=None):
+            raise AssertionError("never opened")
+        SessionDB.__init__ = __init__
     if not signature:
         def get_messages_as_conversation(self, session_id, include_ancestors=False, include_row_ids=False):
             raise AssertionError("never read without compacted rows")
@@ -76,7 +85,7 @@ class WarmHermes(ProjectingHermes):
         super().__init__()
         self.environment[extension.WARM_SETTING] = "0"
         self.session["running"] = False
-        self.reads, self.on_read, self.on_project, self.hold = 0, None, None, None
+        self.reads, self.on_read, self.on_project, self.hold, self.resolved = 0, None, None, None, "stored"
         self.calls = []
         self.root = tempfile.TemporaryDirectory()
         self.launch = Path(self.store_path).parent
@@ -92,7 +101,7 @@ class WarmHermes(ProjectingHermes):
             method, params = request["method"], request.get("params") or {}
             self.native_calls.append((method, dict(params)))
             if method == "profiles.list":
-                return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": "stored"}}]})
+                return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": self.resolved}}]})
             if method == "session.resume" and self.hold is not None:
                 self.entered.set()
                 self.hold.wait(5)
@@ -212,6 +221,16 @@ class FirstOpenTests(unittest.TestCase):
             hermes.answer()
             self.assertEqual(hermes.projected(), set())
 
+    def test_a_warm_up_of_an_earlier_tip_is_dropped_when_the_chat_goes_live(self):
+        with WarmHermes() as hermes:
+            chat(hermes, 2)
+            hermes.send("default", 1)
+            self.assertTrue(hermes.bridge.warm(*hermes.target()))
+            # A compaction moved the chat to a new tip before anyone opened it.
+            hermes.resolved = hermes.session["session_key"] = "stored-2"
+            hermes.answer()
+            self.assertEqual(hermes.bridge.warm_caches, {})
+
     def test_the_first_open_parses_no_tool_record_the_warm_up_parsed(self):
         with WarmHermes() as hermes:
             user = hermes.add("user", "u1", "Check the pump")
@@ -225,7 +244,7 @@ class FirstOpenTests(unittest.TestCase):
                 # Another stored session's record is not this chat's.
                 hermes.journal.db.execute("INSERT INTO tools(profile,stored_session,run_id,tool_id,result,artifacts,detail) "
                                           "VALUES('default','stored-2','run','c4','{}','[]',NULL)")
-            with patch.object(extension, "WARM_RECORDS", 2):
+            with patch.object(extension, "WARM_STEP", 2):
                 self.assertTrue(hermes.bridge.warm(*hermes.target()))
             records = hermes.bridge.warm_caches["default", "stored"].tool_records
             self.assertEqual(sorted(record[0]["ok"] for record in records.values()), ["c1", "c2", "c3"])
@@ -238,25 +257,38 @@ class FirstOpenTests(unittest.TestCase):
 
 class SteppingAsideTests(unittest.TestCase):
     def test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice(self):
+        callers = {"an app open": lambda hermes: hermes.answer(),
+                   # A routine or bot delivery to an assistant that is not live yet.
+                   "a delivery": lambda hermes: hermes.bridge.open_canonical("default")}
+        for name, caller in callers.items():
+            with self.subTest(name):
+                self.open_arrives(caller)
+
+    def open_arrives(self, caller):
         with WarmHermes() as hermes:
             turns = chat(hermes, 6)
             hermes.send("default", 1)
             answers = []
-            opener = threading.Thread(target=lambda: answers.append(hermes.answer()), name="opener")
+            opener = threading.Thread(target=lambda: answers.append(caller(hermes)), name="opener")
 
             def arrive(ids):
                 # While the warm-up projects the third piece, an open asks for the same chat and waits for its lock.
                 if turns[2] <= set(ids) and not opener.is_alive() and not answers:
                     opener.start()
+                    # Counted while it waits for the lock the warm-up holds.
                     until(lambda: hermes.bridge.opens == 1)
             hermes.on_project = arrive
             self.assertTrue(hermes.bridge.warm(*hermes.target()))
             opener.join(5)
             warmed, opened = hermes.projected_by(threading.current_thread().name), hermes.projected_by("opener")
             self.assertEqual(warmed, set().union(*turns[:3]))
-            self.assertEqual(opened, set().union(*turns[3:]))
+            self.assertEqual(opened - warmed, set().union(*turns[3:]))
+            self.assertEqual(opened & warmed, set())
             hermes.on_project = None
-            self.assertEqual(answers[0], hermes.whole())
+            if isinstance(answers[0], dict):
+                self.assertEqual(answers[0], hermes.whole())
+            else:
+                self.assertEqual(answers[0], "sid")
             self.assertEqual(hermes.bridge.warm_caches, {})
 
     def test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing(self):
@@ -358,6 +390,30 @@ class SteppingAsideTests(unittest.TestCase):
                     stop()
                     until(lambda: not bridge.live_work())
 
+    def test_tool_row_parsing_steps_aside_too(self):
+        with WarmHermes() as hermes, patch.object(extension, "WARM_STEP", 1):
+            hermes.send("default", 1)
+            last = set()
+            for turn in range(3):
+                user = hermes.add("user", f"u{turn}", f"Run {turn}")
+                hermes.add("assistant", f"a{turn}", "", tool_calls=[call(f"c{turn}", "terminal")])
+                last = {user["_row_id"], hermes.add("tool", f"t{turn}", json.dumps({"turn": turn}), tool_call_id=f"c{turn}")["_row_id"]}
+
+            def turn_starts(ids):
+                # A turn starts as the last piece is projected, and runs until the test ends it.
+                if last <= set(ids):
+                    hermes.session["running"] = True
+            hermes.on_project = turn_starts
+            warmer = threading.Thread(target=hermes.bridge.warm, args=hermes.target(), name="warmer")
+            warmer.start()
+            until(lambda: hermes.session["running"])
+            time.sleep(0.05)
+            self.assertEqual(len(hermes.bridge.warm_caches["default", "stored"].tool_results), 0)
+            hermes.on_project = None
+            hermes.session["running"] = False
+            warmer.join(5)
+            self.assertEqual(len(hermes.bridge.warm_caches["default", "stored"].tool_results), 3)
+
     def test_record_parsing_steps_aside_too(self):
         with WarmHermes() as hermes:
             chat(hermes, 1)
@@ -375,7 +431,7 @@ class SteppingAsideTests(unittest.TestCase):
                     hermes.session["running"] = True
                     threading.Timer(0.02, hermes.session.__setitem__, ("running", False)).start()
             hermes.journal.db.set_trace_callback(trace)
-            with patch.object(extension, "WARM_RECORDS", 1):
+            with patch.object(extension, "WARM_STEP", 1):
                 self.assertTrue(hermes.bridge.warm(*hermes.target()))
             hermes.journal.db.set_trace_callback(None)
             self.assertEqual(len(listed), 2)
@@ -439,6 +495,79 @@ class BudgetTests(unittest.TestCase):
             self.assertEqual(hermes.reads, 2)
 
 
+class RankTests(unittest.TestCase):
+    @staticmethod
+    def memo(budget, name, background=False):
+        rows = [{"role": "user", "content": f"{name} " * 30, "_row_id": 1}]
+        memo = extension.ProjectionMemo(budget)
+        memo.project(rows, lambda part: ([{"text": row["content"]} for row in part], []), dict, "context", background=background)
+        return memo
+
+    def test_a_warmed_memo_empties_before_any_memo_an_open_used(self):
+        size = self.memo(extension.ProjectionBudget(), "ranch").size
+        budget = extension.ProjectionBudget(budget=2 * size)
+        opened = self.memo(budget, "ranch")
+        warmed = self.memo(budget, "fence", background=True)
+        # A chat opened later, nobody having opened the warmed one: it empties, not the one an open used first.
+        self.memo(budget, "barns")
+        self.assertEqual((opened.size, warmed.size), (size, 0))
+
+    def test_a_warmed_cache_the_budget_empties_is_forgotten(self):
+        with WarmHermes() as hermes:
+            chat(hermes, 2)
+            hermes.send("default", 1)
+            bridge = hermes.bridge
+            self.assertTrue(bridge.warm(*hermes.target()))
+            warmed = bridge.warm_caches.pop(("default", "stored")).projections.size
+            ranch, barns = (self.memo(extension.ProjectionBudget(), name).size for name in ("ranch", "barns"))
+            # Room for any two of the three chats. Ranch is opened, then the warm-up runs, then barns is opened.
+            bridge.projection_budget.fixed = ranch + warmed + barns - 1
+            opened = self.memo(bridge.projection_budget, "ranch")
+            self.assertTrue(bridge.warm(*hermes.target()))
+            self.assertEqual(bridge.warm_caches["default", "stored"].projections.size, warmed)
+            self.memo(bridge.projection_budget, "barns")
+            self.assertEqual(opened.size, ranch)
+            self.assertEqual(bridge.warm_caches, {})
+
+    def test_a_warm_up_waiting_out_a_turn_still_empties_first(self):
+        with WarmHermes() as hermes:
+            turns = chat(hermes, 4)
+            hermes.send("default", 1)
+            bridge = hermes.bridge
+            ranch, barns = (self.memo(extension.ProjectionBudget(), name).size for name in ("ranch", "barns"))
+            opened = self.memo(bridge.projection_budget, "ranch")
+
+            def turn_starts(ids):
+                # A turn starts as the second piece is projected, and runs until the test ends it.
+                if turns[1] <= set(ids):
+                    hermes.session["running"] = True
+            hermes.on_project = turn_starts
+            warmer = threading.Thread(target=bridge.warm, args=hermes.target(), name="warmer")
+            warmer.start()
+            try:
+                # The warm-up stopped and kept the pieces before the turn.
+                until(lambda: ("default", "stored") in bridge.warm_caches and bridge.warm_caches["default", "stored"].projections.size)
+                kept = bridge.warm_caches["default", "stored"].projections.size
+                bridge.projection_budget.fixed = ranch + kept + barns - 1
+                self.memo(bridge.projection_budget, "barns")
+                self.assertEqual(opened.size, ranch)
+                self.assertNotIn(("default", "stored"), bridge.warm_caches)
+            finally:
+                hermes.on_project = None
+                hermes.session["running"] = False
+                warmer.join(5)
+
+    def test_a_pause_comes_before_every_piece_reused_or_not(self):
+        rows = [{"role": "user" if index % 2 == 0 else "assistant", "content": str(index), "_row_id": index + 1} for index in range(6)]
+        memo = extension.ProjectionMemo(extension.ProjectionBudget())
+        with patch.object(extension, "PIECE_ROWS", 1):
+            for _ in range(2):
+                pauses = []
+                memo.project(rows, lambda part: ([{"text": row["content"]} for row in part], []), dict, "context", pause=pauses.append)
+                self.assertEqual(pauses, [False, False, False])
+        self.assertEqual(memo.report["reused"], 3)
+
+
 class TargetTests(unittest.TestCase):
     def test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk(self):
         with WarmHermes() as hermes:
@@ -472,6 +601,8 @@ class StartTests(unittest.TestCase):
         cases = {
             "hermes_state.SessionDB": lambda hermes: hermes.modules.__setitem__("hermes_state", None),
             "SessionDB.get_compression_tip": lambda hermes: delattr(hermes.modules["hermes_state"].SessionDB, "get_compression_tip"),
+            "SessionDB(db_path, read_only)":
+                lambda hermes: setattr(hermes.modules["hermes_state"], "SessionDB", session_db(hermes, read_only=False)),
             "SessionDB.get_messages_as_conversation(include_compacted)":
                 lambda hermes: setattr(hermes.modules["hermes_state"], "SessionDB", session_db(hermes, signature=False)),
             "hermes_cli.profiles.get_profile_dir": lambda hermes: hermes.modules.__setitem__("hermes_cli.profiles", None),
@@ -506,18 +637,22 @@ class StartTests(unittest.TestCase):
             self.assertIn("warmed 1 of 1 assistants", logs.output[-1])
             self.assertIn(("default", "stored"), hermes.bridge.warm_caches)
 
-    def test_a_failed_warm_up_logs_no_history(self):
-        with WarmHermes() as hermes:
-            hermes.send("default", 1)
-
-            def read():
-                raise ValueError("The token is hunter2")
-            hermes.on_read = read
-            with self.assertLogs(extension.__name__, logging.WARNING) as logs:
-                hermes.bridge.warm_histories()
-            self.assertIn("History warm-up stopped after 0 of 1 assistants: ValueError", logs.output[0])
-            self.assertNotIn("hunter2", "\n".join(logs.output))
-
+    def test_an_assistant_that_fails_is_skipped_and_logs_no_history(self):
+        def read():
+            raise ValueError("The token is hunter2")
+        failures = {"its store read": Chat(read, tip="ranch-stored"),
+                    "its title lookup": Chat([], row=ValueError("The token is hunter2"))}
+        for name, ranch in failures.items():
+            with self.subTest(name), WarmHermes() as hermes:
+                chat(hermes, 2)
+                hermes.send("default", 1)
+                hermes.profile("ranch", ranch, created=2)
+                with self.assertLogs(extension.__name__, logging.INFO) as logs:
+                    hermes.bridge.warm_histories()
+                self.assertIn("History warm-up skipped ranch: ValueError", logs.output[0])
+                self.assertIn("warmed 1 of", logs.output[-1])
+                self.assertIn(("default", "stored"), hermes.bridge.warm_caches)
+                self.assertNotIn("hunter2", "\n".join(logs.output))
 
 if __name__ == "__main__":
     unittest.main()
