@@ -70,3 +70,28 @@ final test set (`db3dc9f2`), where the baseline run of those 13 tests passed fir
 No physical device and no real Hermes. The Debug fixture and the mock server mirror the app server's `before` answer; the real
 answer is covered by the server tests in #373. A page's own `earlierFiles` can count a file a later loaded message passes on again,
 as for the web; the next read of the whole window corrects it.
+
+## Review follow-up
+
+A Claude Opus 5.5 review of `53c4f450` found nothing serious in the page path, the seam, `earlierFiles`, the cache or the newer-read
+change, and two defects in `loadEarlier` that were already on `main`. Both are fixed in `3d3b0b73`.
+
+1. A page could cut an open-at-message window. Opening at an older message bumps the window and starts its read; the earlier edge
+   showing meanwhile called `loadEarlier`, whose page captured the bumped window, passed the moved-window guard, and moved the window
+   start above the message, dropping the open read. `loadEarlier` now returns while `requestedWindow` is set.
+2. The lost-message and whole answers bumped `windowGeneration` without checking it and without repeating the reads that bump dropped.
+   They now drop an answer for a window that moved, and read the window again when another read was in flight. The whole fallback
+   moved out of the recursion into `loadEarlier`, so its own read is not counted as "another read in flight".
+
+Each line was broken by hand alone at `3d3b0b73` and the page tests ran (`NativeContractTests`, `ConversationParityTests`), after a
+passing baseline of the same set:
+
+| Broken line | Result |
+| --- | --- |
+| `requestedWindow == nil` removed from the `loadEarlier` guard | red: `testNoPageIsReadWhileAnOpenAtMessageReadOwnsTheWindow` |
+| `windowAtStart == windowGeneration` guard removed | red: `testALostMessageAnswerForAWindowThatMovedIsDroppedAndAReadItOutranIsRepeated`, `testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded` |
+| refresh after a lost-message `apply` removed | red: `testALostMessageAnswerRepeatsTheReadItDroppedWhenTheWindowMoves` |
+
+Final run: `validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests -only-testing:AgentInterfaceUITests/ParityFlowTests/testLongChatOpensAtLatestPagesEarlierAndJumpsBack`
+at `3d3b0b73`, validated inputs `2963e3ffa16d89872eca93a65d3cd1f351e1d52a74a0262d5074b9c7049dd046`: 799 unit tests passed (2 skipped),
+and the long-chat paging UI test passed. The rest of the UI suite was not rerun; the run before this follow-up is above.
