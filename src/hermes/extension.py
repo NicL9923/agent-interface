@@ -25,6 +25,7 @@ import re
 import mimetypes
 import subprocess
 import importlib.util
+import inspect
 import hmac
 import sys
 from pathlib import Path
@@ -842,6 +843,11 @@ class ProjectionBudget:
     def budget(self):
         return PROJECTION_BUDGET if self.fixed is None else self.fixed
 
+    def room(self, memo):
+        """Characters ``memo`` may keep without emptying another memo."""
+        with self.lock:
+            return self.budget - sum(other.size for other in self.memos if other is not memo)
+
     def charge(self, memo):
         with self.lock:
             self.uses += 1
@@ -878,7 +884,7 @@ class ProjectionMemo:
 
     def __init__(self, shared=None):
         self.shared = ProjectionBudget() if shared is None else shared
-        self.context, self.pieces, self.size, self.report, self.used = None, {}, 0, None, 0
+        self.context, self.pieces, self.size, self.report, self.used, self.full = None, {}, 0, None, 0, False
 
     @property
     def budget(self):
@@ -895,15 +901,20 @@ class ProjectionMemo:
         # dict.copy() takes each live row whole, so a flush stamping it meanwhile cannot break the copy.
         return [detached(row.copy()) if type(row) is dict else detached(row) for row in piece]
 
-    def project(self, history, project, display, context, shadow=False):
+    def project(self, history, project, display, context, shadow=False, pause=None, limit=None):
         """(messages, tool rows) as ``project`` gives them for the whole ``history``, reusing kept pieces.
 
         ``project(rows)`` is Hermes's projection of ``rows`` with project_rows; ``display`` its compaction projection.
+        ``pause(full)`` runs before each piece is projected anew, ``full`` once a piece did not fit, and may raise to
+        stop: the memo then keeps the pieces before that one, which a later projection of the history reuses.
+        ``limit`` is the characters this projection may keep, the shared budget when None. ``full`` says afterwards
+        whether a piece did not fit.
         """
+        limit = self.budget if limit is None else limit
         cuts = projection_cuts(history, display)
         if context != self.context:
             self.context, self.pieces, self.size = context, {}, 0
-        kept, size, messages, tool_rows, inputs, reused = {}, 0, [], [], [], 0
+        kept, size, messages, tool_rows, inputs, reused, full = {}, 0, [], [], [], 0, False
         for start, end in zip(cuts, cuts[1:] + [len(history)]):
             piece = history[start:end]
             key = self.key(piece)
@@ -912,17 +923,27 @@ class ProjectionMemo:
                 reused += 1
                 projected = detached(entry[1])
             else:
+                if pause is not None:
+                    try:
+                        pause(full)
+                    except BaseException:
+                        self.pieces, self.size, self.full = kept, size, full
+                        self.shared.charge(self)
+                        raise
                 rows = self.snapshot(piece)
                 projected, piece_tools = project(rows)
                 kept_projection = detached(projected)
                 entry = (rows, kept_projection, piece_tools, text_size(rows) + text_size(kept_projection) + text_size(piece_tools))
-            if size + entry[3] <= self.budget and key not in kept:
-                kept[key] = entry
-                size += entry[3]
+            if key not in kept:
+                if size + entry[3] <= limit:
+                    kept[key] = entry
+                    size += entry[3]
+                else:
+                    full = True
             messages.extend(projected)
             tool_rows.extend(entry[2])
             inputs.append(entry[0])
-        self.pieces, self.size = kept, size
+        self.pieces, self.size, self.full = kept, size, full
         self.shared.charge(self)
         self.report = {"segments": len(cuts), "reused": reused, "difference": None, "tool_difference": None}
         if shadow:
@@ -1009,6 +1030,31 @@ def memoize_shell_summary(display):
         # Hermes renamed or removed them. Opens still work, at the speed they had before the memo.
         logging.getLogger(__name__).warning("Hermes's shell summary has no %s; long chats open without its memo", ", ".join(missing))
 
+# A gateway restart empties every memo, and the first opens of a long chat after it paid the whole projection: 10.9 s
+# for a 8,800-row chat on November 12. After the add-on installs, a background thread projects the canonical history of
+# the assistants the app used most recently into the memo their first open adopts. Set to 0 to turn it off.
+WARM_SETTING = "HERMES_AGENT_INTERFACE_WARM_HISTORY"
+# Assistants warmed per start, most recent app send first. The shared budget bounds what their memos keep.
+WARM_PROFILES = 6
+# Seconds after install before warming starts, so Hermes finishes starting first.
+WARM_DELAY = 2
+# Seconds the warm-up sleeps before each piece it projects, so live threads take the interpreter between pieces.
+WARM_PAUSE = 0.005
+# Seconds between looks while live work runs.
+WARM_POLL = 0.25
+# Journal tool records the warm-up parses per step under the journal's lock. Parsing all 4,131 of the longest chat's
+# took 0.44 s, most of a cold open's attribution (0.81 s against 0.05 s warm).
+WARM_RECORDS = 256
+
+
+class WarmupYield(Exception):
+    """Live work arrived: the warm-up let go of the profile, keeping the pieces it projected."""
+
+
+class WarmupFull(Exception):
+    """The gateway's projection budget has no room left for warmed pieces."""
+
+
 # Methods a held maintenance lease still admits: status, history and discovery reads.
 # Session marks that count as work to maintenance, besides app sends that hold a lane.
 BUSY_MARKS = ("running", "queued_prompt", "queued_prompts", "pending_steer", "_auto_continue_scheduled")
@@ -1070,6 +1116,12 @@ class Bridge:
         # Every session's projection memo keeps its pieces within this one budget.
         self.projection_budget = ProjectionBudget()
         self.projecting = contextvars.ContextVar("agent_interface_projecting", default=None)
+        # (profile, stored session ID) -> the RowCache the history warm-up filled, until an open's resume adopts it. cache_lock;
+        # its memo changes only under the profile's lock. ``warming`` holds the warm-up's ProjectionMemo.project options.
+        self.warm_caches = {}
+        self.warming = contextvars.ContextVar("agent_interface_warming", default=None)
+        # Opens running or waiting for their profile's lock, from every caller; the warm-up steps aside for them.
+        self.opens, self.opens_lock = 0, threading.Lock()
         # While a queued open runs for every open merged into it: {"windows": each one's window, in
         # arrival order, "answers": each one's (rows, cut), which open_locked fills}. See route.
         self.open_windows = contextvars.ContextVar("agent_interface_open_windows", default=None)
@@ -1353,14 +1405,15 @@ class Bridge:
         # original tool rows. The compact native view otherwise omits most outputs.
         # Only an app open's own activation has caches; other native readers, such as
         # experience.py's, project and parse every row.
-        rows = self.projecting.get()
+        rows, warming = self.projecting.get(), self.warming.get()
         display = self.server.project_compaction_message_for_display
         project = lambda part: project_rows(self.native_history, display, part, kwargs)
         context = self.projection_context(kwargs) if rows is not None else None
         if context is None:
             messages, tool_rows = project(history)
         else:
-            messages, tool_rows = rows.projections.project(history, project, display, context, os.environ.get(PROJECTION_SHADOW) == "1")
+            shadow = warming is None and os.environ.get(PROJECTION_SHADOW) == "1"
+            messages, tool_rows = rows.projections.project(history, project, display, context, shadow, **(warming or {}))
         found = {}
         for key, row_id, content in tool_rows:
             found.setdefault(key, collections.deque()).append((row_id, content))
@@ -1892,7 +1945,20 @@ class Bridge:
                 return None
             saved = bot.get("canonical_session")
             if saved:
-                value = self.native("session.resume", {"session_id": saved["resolved_id"], "profile": profile, "close_on_disconnect": False, "inline_images": False})
+                # The resume projects through the memo the warm-up filled, or a new one, which later opens keep. It
+                # projects images as every later open's activation does, so its pieces are theirs.
+                scope = saved["resolved_id"]
+                with self.cache_lock:
+                    rows = self.warm_caches.pop((profile, scope), None) or RowCache(scope, self.projection_budget)
+                rows.projections.report = None
+                token = self.projecting.set(rows)
+                try:
+                    value = self.native("session.resume", {"session_id": scope, "profile": profile, "close_on_disconnect": False})
+                finally:
+                    self.projecting.reset(token)
+                # row_cache replaces it if the resume landed on another stored session.
+                with self.cache_lock:
+                    self.row_caches[value["session_id"]] = rows
             else:
                 value = self.native("session.create", {"profile": profile, "title": "Bot Chat", "hidden": True, "follow_profile_config": True, "close_on_disconnect": False})
                 try:
@@ -2208,9 +2274,15 @@ class Bridge:
         """
         started = time.perf_counter()
         phases = dict.fromkeys(("wait", "activate", "decorate", "window"), 0.0)
-        with self.profile_lock(params.get("profile", "default")):
-            phases["wait"] = time.perf_counter() - started
-            response = self.open_locked(rid, params, phases)
+        with self.opens_lock:
+            self.opens += 1
+        try:
+            with self.profile_lock(params.get("profile", "default")):
+                phases["wait"] = time.perf_counter() - started
+                response = self.open_locked(rid, params, phases)
+        finally:
+            with self.opens_lock:
+                self.opens -= 1
         if "result" in response:
             phases["total"] = time.perf_counter() - started
             response["result"]["app_timing"] = {name: round(seconds * 1000, 1) for name, seconds in phases.items()}
@@ -2300,6 +2372,194 @@ class Bridge:
                 return self.canonical[profile]
             response = self.open_bot("agent-interface-delivery", {"profile": profile})
         return None if "error" in response else response["result"]["session_id"]
+
+    # History warm-up: after a restart, each recent assistant's first open finds its history projected.
+
+    def warm_seams(self):
+        """What the warm-up reads in Hermes that this Hermes lacks, by name; empty when it has everything."""
+        missing = []
+        try:
+            from hermes_state import SessionDB
+        except ImportError:
+            SessionDB = None
+            missing.append("hermes_state.SessionDB")
+        if SessionDB is not None:
+            for name in ("get_session_by_title", "get_compression_tip"):
+                if not callable(getattr(SessionDB, name, None)):
+                    missing.append("SessionDB." + name)
+            try:
+                parameters = inspect.signature(SessionDB.get_messages_as_conversation).parameters
+            except (AttributeError, TypeError, ValueError):
+                parameters = {}
+            # Without compacted rows the read is not the history an open projects.
+            if not {"include_ancestors", "include_row_ids", "include_compacted"} <= set(parameters):
+                missing.append("SessionDB.get_messages_as_conversation(include_compacted)")
+        try:
+            from hermes_cli.profiles import get_profile_dir  # noqa: F401
+        except ImportError:
+            missing.append("hermes_cli.profiles.get_profile_dir")
+        if not callable(getattr(self.server, "project_compaction_message_for_display", None)):
+            missing.append("project_compaction_message_for_display")
+        if redaction_state() is None:
+            missing.append("agent.redact's registries")
+        return missing
+
+    def start_warmup(self, delay=WARM_DELAY):
+        """Starts the warm-up thread, unless it is turned off or this Hermes lacks what it reads. Returns the thread."""
+        log = logging.getLogger(__name__)
+        if os.environ.get(WARM_SETTING, "").strip() == "0":
+            log.info("History warm-up is off (%s=0)", WARM_SETTING)
+            return None
+        missing = self.warm_seams()
+        if missing:
+            log.warning("Hermes has no %s; chats open without warmed history after a restart", ", ".join(missing))
+            return None
+        thread = threading.Thread(target=self.warm_histories, args=(delay,), name="agent-interface-warmup", daemon=True)
+        thread.start()
+        return thread
+
+    def warm_histories(self, delay=0):
+        """Warms each target in turn until the projection budget is full. Logs no history, only counts and timings."""
+        log = logging.getLogger(__name__)
+        time.sleep(delay)
+        started, warmed, targets = time.perf_counter(), 0, []
+        try:
+            targets = self.warm_targets()
+            for profile, store, stored, kwargs in targets:
+                if not self.warm(profile, store, stored, kwargs):
+                    break
+                warmed += 1
+        except Exception as exc:
+            # The type only: a message could quote a row.
+            log.warning("History warm-up stopped after %d of %d assistants: %s", warmed, len(targets), type(exc).__name__)
+            return
+        log.info("History warm-up warmed %d of %d assistants in %.1f s", warmed, len(targets), time.perf_counter() - started)
+
+    def warm_targets(self):
+        """(profile, store, stored session, projection arguments) for the canonical chat of each assistant the app sent
+        to most recently, most recent first, at most WARM_PROFILES, as an open's resume would project it.
+
+        The stored session is the "Bot Chat" titled session's compression tip, which ``profiles.list`` names. The
+        projection arguments are those of Hermes's resume and activation: the profile's home, None for the home the
+        gateway runs in, as ``_profile_home`` gives it, and image URLs.
+        """
+        from hermes_state import SessionDB
+        from hermes_cli.profiles import get_profile_dir
+        with self.journal.lock:
+            profiles = [row[0] for row in self.journal.db.execute(
+                "SELECT profile FROM receipts GROUP BY profile ORDER BY MAX(created) DESC LIMIT ?", (WARM_PROFILES,))]
+        launch = Path(getattr(self.server, "_hermes_home", None) or self.get_hermes_home()).resolve()
+        targets = []
+        for profile in profiles:
+            try:
+                home = Path(get_profile_dir(profile))
+            except ValueError:
+                continue
+            store = home / "state.db"
+            if not store.is_file() or store.stat().st_size == 0:
+                continue
+            db = SessionDB(db_path=store, read_only=True)
+            try:
+                row = db.get_session_by_title("Bot Chat")
+                if not row or row.get("archived"):
+                    continue
+                stored = db.get_compression_tip(row["id"]) or row["id"]
+            finally:
+                db.close()
+            kwargs = {"profile_home": None if home.resolve() == launch else home, "image_urls": True}
+            targets.append((profile, store, stored, kwargs))
+        return targets
+
+    @staticmethod
+    def warm_read(store, stored):
+        """The canonical chat's display history as an open reads it: ancestors, row IDs and compacted rows."""
+        from hermes_state import SessionDB
+        db = SessionDB(db_path=store, read_only=True)
+        try:
+            return db.get_messages_as_conversation(stored, include_ancestors=True, include_row_ids=True, include_compacted=True)
+        finally:
+            db.close()
+
+    def live_work(self):
+        """Whether an open, an app read or send, or a native turn or its queued input is running or waiting."""
+        with self.opens_lock:
+            if self.opens:
+                return True
+        for lanes in (self.reads, self.sends):
+            with lanes.lock:
+                if lanes.queues:
+                    return True
+        with self.sends_in_flight_lock:
+            if self.sends_in_flight:
+                return True
+        return any(isinstance(session, dict) and any(session.get(key) for key in BUSY_MARKS)
+                   for session in self.server._sessions.copy().values())
+
+    def warm(self, profile, store, stored, kwargs):
+        """Projects one assistant's canonical history into the RowCache its first open adopts, then parses its journal
+        tool records into the same cache.
+
+        Runs only while nothing else does, step by step, under the profile's lock, the one every open takes, so an
+        open never uses the same cache at once. Before each step, a piece or WARM_RECORDS records, it sleeps, and when
+        live work has arrived it lets go of the lock, keeping what it did, and starts over once the gateway is quiet:
+        an open in the meantime adopts the cache and does only the rest. The history is read again only when the store
+        changed. Returns False when the projection budget has no room left, True otherwise, including when an open made
+        the chat live first, since that open's cache is its own.
+        """
+        history = stamp = None
+        while True:
+            while self.live_work():
+                time.sleep(WARM_POLL)
+            if self.canonical.get(profile) in self.server._sessions:
+                return True
+            files = (file_stamp(store), file_stamp(store.with_name(store.name + "-wal")))
+            if history is None or files != stamp:
+                history, stamp = self.warm_read(store, stored), files
+            lock = self.profile_lock(profile)
+            if not lock.acquire(blocking=False):
+                time.sleep(WARM_POLL)
+                continue
+            try:
+                if self.canonical.get(profile) in self.server._sessions:
+                    return True
+                with self.cache_lock:
+                    rows = self.warm_caches.get((profile, stored))
+                    if rows is None:
+                        rows = self.warm_caches[profile, stored] = RowCache(stored, self.projection_budget)
+                room = self.projection_budget.room(rows.projections)
+
+                def pause(full):
+                    if full:
+                        raise WarmupFull
+                    time.sleep(WARM_PAUSE)
+                    if self.live_work():
+                        raise WarmupYield
+                tokens = self.projecting.set(rows), self.warming.set({"pause": pause, "limit": room})
+                try:
+                    self.detailed_history(history, **kwargs)
+                    self.warm_tool_records(profile, stored, rows, pause)
+                except WarmupYield:
+                    continue
+                except WarmupFull:
+                    return False
+                finally:
+                    self.warming.reset(tokens[1])
+                    self.projecting.reset(tokens[0])
+                return not rows.projections.full
+            finally:
+                lock.release()
+
+    def warm_tool_records(self, profile, stored, rows, pause):
+        """Parses the stored session's journal tool records into ``rows``, the newest last, a step at a time."""
+        with self.journal.lock:
+            ids = [row[0] for row in self.journal.db.execute(
+                "SELECT id FROM tools WHERE profile=? AND stored_session=? ORDER BY id", (profile, stored))][-ROW_CACHE_LIMIT:]
+        for start in range(0, len(ids), WARM_RECORDS):
+            step = [record_id for record_id in ids[start:start + WARM_RECORDS] if record_id not in rows.tool_records]
+            if step:
+                pause(False)
+                with self.journal.lock:
+                    self.tool_records(step, rows)
 
     # Admission: one durable receipt per app request, before native execution.
 
@@ -2805,6 +3065,7 @@ def install(path=None):
     bridge.install_automation()
     if bridge.compaction.enabled:
         bridge.compaction.start()
+    bridge.start_warmup()
     return journal
 
 if __name__ == "__main__":
