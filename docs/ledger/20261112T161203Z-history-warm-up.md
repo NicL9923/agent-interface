@@ -228,3 +228,15 @@ warm-up: a turn starts as it reads a history grown by one turn, and its retry pr
 
 Fingerprint `sha256:e7c03b46cded8a8f96e4495d040d97bc0d85b4f2ef4e937144f1c7d5fa7496be` over the same scope. `.agents/tools/check-all` passed all seven checks: 211 test files with
 3,883 tests, 55 e2e tests and 52 Python test files.
+
+## Second re-review (cba4708a)
+
+A fresh Claude Opus 5.5 review of `cba4708a` found nothing serious. Its one finding: the warm-up's check for a
+finished projection compared the cache and the history but not the projection context, so a configuration or
+redaction change while it stood aside left the memo projected under the old context and the assistant counted as
+warmed. Output stayed correct, since an adopting open empties a memo of another context, but that open paid full cost.
+The check now compares the context too, and the `ProjectionMemo` docstring says what a stopped pass keeps.
+
+| Mutation | Result |
+| --- | --- |
+| src/hermes/extension.py: ' or projected[3] != context:' | failed: test_a_redaction_change_while_the_warm_up_stood_aside_projects_again (exit 1) |

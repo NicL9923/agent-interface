@@ -414,6 +414,30 @@ class SteppingAsideTests(unittest.TestCase):
             warmer.join(5)
             self.assertEqual(len(hermes.bridge.warm_caches["default", "stored"].tool_results), 3)
 
+    def test_a_redaction_change_while_the_warm_up_stood_aside_projects_again(self):
+        with WarmHermes() as hermes:
+            hermes.send("default", 1)
+            user = hermes.add("user", "u0", "Run 0")
+            hermes.add("assistant", "a0", "", tool_calls=[call("c0", "terminal")])
+            last = {user["_row_id"], hermes.add("tool", "t0", json.dumps({"turn": 0}), tool_call_id="c0")["_row_id"]}
+
+            def turn_starts(ids):
+                # A turn starts as the last piece is projected; while it runs, a new value is redacted.
+                if last <= set(ids):
+                    hermes.on_project = None
+                    hermes.session["running"] = True
+            hermes.on_project = turn_starts
+            warmer = threading.Thread(target=hermes.bridge.warm, args=hermes.target(), name="warmer")
+            warmer.start()
+            until(lambda: hermes.session["running"])
+            first = len(hermes.calls)
+            hermes.redact._VAULT_REDACTION_VALUES["/home/default"] = {"fixture-redacted": None}
+            hermes.session["running"] = False
+            warmer.join(5)
+            # The projection under the old redaction is not kept as finished: the warm-up projects again under the new one.
+            self.assertGreater(len(hermes.calls), first)
+            self.assertEqual(hermes.bridge.warm_caches["default", "stored"].projections.context[2], extension.redaction_state())
+
     def test_record_parsing_steps_aside_too(self):
         with WarmHermes() as hermes:
             chat(hermes, 1)

@@ -889,8 +889,10 @@ class ProjectionMemo:
     stamps and native redaction state. Another context empties the memo. Each kept piece holds a copy of its
     input rows, made before Hermes projects that copy, because live rows change in place (a flush stamps
     ``_row_id``), and a copy of its projection, because decoration changes the messages it is given. A hit
-    hands out a new copy. After each projection the memo holds exactly the pieces of that history, in order,
-    until their rows reach ``budget`` characters, so pieces a rewrite left behind never accumulate.
+    hands out a new copy. After each finished projection the memo holds exactly the pieces of that history, in
+    order, until their rows reach ``budget`` characters, so pieces a rewrite left behind never accumulate. A
+    projection the warm-up stops partway also keeps the pieces it held before, as far as they fit; a stale one only
+    misses, because reuse needs equal rows, until the next finished projection drops it.
 
     Callers hold the session's profile lock. ``report`` says what the last projection did, for shadow mode.
     ``shared`` is the gateway's ProjectionBudget; another memo's projection may empty this one between opens.
@@ -2596,9 +2598,11 @@ class Bridge:
                     if self.live_work():
                         raise WarmupYield
                 try:
-                    if projected is None or projected[0] is not rows or projected[1] is not history:
+                    # A finished projection is reused only for the same cache, history and context: a configuration
+                    # or redaction change while the warm-up stood aside projects again.
+                    if projected is None or projected[0] is not rows or projected[1] is not history or projected[3] != context:
                         _, tool_rows = rows.projections.project(history, project, display, context, pause=pause, limit=room, background=True)
-                        projected = (rows, history, tool_rows)
+                        projected = (rows, history, tool_rows, context)
                     self.warm_tool_results(projected[2], rows, pause)
                     self.warm_tool_records(profile, stored, rows, pause)
                 except WarmupYield:
