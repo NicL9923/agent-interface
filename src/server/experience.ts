@@ -13,6 +13,7 @@ import { markdownPlain } from '../shared/plain-text.js';
 import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
+import { readMessage } from './conversation-view.js';
 import { httpError } from './http-error.js';
 import { id } from './schemas.js';
 import { assertDeliveryPrivate } from './collaboration.js';
@@ -195,7 +196,8 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     const params = z.object({ id, messageId: id, cardId: id }).parse(req.params);
     await bot(params.id);
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    const message = (await runtime.conversation(params.id)).messages.map(redact.message).find(message => message.id === params.messageId && isConversationReply(message));
+    const found = await readMessage(runtime, params.id, params.messageId);
+    const message = found && [redact.message(found)].find(isConversationReply);
     const card = message && replyCardsFromText(message.text).find(card => card.id === params.cardId);
     if (!card) throw httpError(404, 'This interactive reply is no longer in the Hermes conversation');
     const userId = signedIn(req).id;

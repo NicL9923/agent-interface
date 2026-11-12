@@ -331,7 +331,7 @@ describe("conversation state", () => {
         expect(container.textContent).not.toContain("barn. Fou");
         expect(stop()).toBeNull();
       });
-      it("drops the first read when a newer boot's turn asked for another before it was answered", async () => {
+      it("shows the first read, then lets the read a newer boot's turn asked for decide", async () => {
         const answer = holdNextRead();
         conversation = bootA();
         await render();
@@ -426,6 +426,22 @@ describe("conversation state", () => {
           : await new Promise<Conversation>(resolve => waiting.push(resolve)) as T);
         return { held: () => waiting.length, answer: async (value: Conversation) => { await act(async () => waiting.shift()!(value)); await advance(0); } };
       }
+      // Opening attaches Hermes's socket to the session, whose frames send a change notice while the first read is on its way.
+      it("shows an opened chat's first read at once while the read a change notice asked for follows", async () => {
+        const reads = holdReads();
+        await render();
+        expect(reads.held()).toBe(1);
+        await act(async () => FakeEventSource.notifyAll());
+        await advance(0);
+        await reads.answer(at("z:1:4", "Found"));
+        expect(container.textContent).toContain("Looking in the barn.");
+        expect(container.textContent).toContain("Found");
+        // The notice's read is asked once the first is answered, and still decides what shows.
+        expect(reads.held()).toBe(1);
+        await reads.answer(at("z:1:5", "Found it"));
+        expect(container.textContent).toContain("Found it");
+        expect(reads.held()).toBe(0);
+      });
       it("takes an older read from the view's boot, and drops one from another boot once a newer read is asked", async () => {
         conversation = at("z:1:4", "Found");
         await render();

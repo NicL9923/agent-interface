@@ -190,22 +190,36 @@ function useReducedMotion(force?: boolean) {
   return system || !!force;
 }
 
-function sampledPath(path: string) {
+type Points = readonly (readonly number[])[];
+/**
+ * Each shape's samples, kept by path. Sampling walks the path 72 times in the browser's geometry code: every
+ * avatar on a page did it twice as it mounted, which took 2 to 3 s of a phone's main thread opening home. A
+ * shape's samples never change. The avatar editor makes a new shape per change, so the oldest go past the cap.
+ */
+const samples = new Map<string, Points>();
+const SAMPLED_SHAPES = 256;
+function sampledPath(path: string): Points {
+  const kept = samples.get(path);
+  if (kept) return kept;
   const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
   node.setAttribute("d", path);
   const length = node.getTotalLength();
-  return Array.from({ length: 72 }, (_, i) => {
+  const points = Array.from({ length: 72 }, (_, i) => {
     const p = node.getPointAtLength((length * i) / 72);
     return [p.x, p.y];
   });
+  samples.set(path, points);
+  if (samples.size > SAMPLED_SHAPES) samples.delete(samples.keys().next().value!);
+  return points;
 }
 function useShapeTransition(desired: string, reduce: boolean) {
-  const points = useRef<number[][] | null>(null);
+  const points = useRef<Points | null>(null);
   if (!points.current) points.current = sampledPath(desired);
   const [path, setPath] = useState(desired);
   useEffect(() => {
     const target = sampledPath(desired);
-    if (reduce) {
+    // A mounting avatar already shows its shape: there is nothing to move between.
+    if (reduce || points.current === target) {
       points.current = target;
       setPath(desired);
       return;

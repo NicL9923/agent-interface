@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
-import { filesBefore, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
+import { filesBefore, HISTORY_PAGE_TURNS, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
 import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt, TurnEvent } from "../shared/types.js";
@@ -201,7 +201,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "GET /bots/:id/files", {}, async req => {
     const { before } = z.object({ before: z.string().min(1).max(512).optional() }).parse(req.query);
     const redact = await redactAgents(store, roster, signedIn(req).id);
-    return filesBefore((await runtime.conversation(req.params.id)).messages.map(redact.message), before);
+    // A window that starts at `before` holds, as its context, every earlier message with files; without `before`, the
+    // latest page's context and messages hold all of them. A runtime that does not cut answers the whole history.
+    const read = await runtime.conversation(req.params.id, { window: before ? { start: before } : { turns: HISTORY_PAGE_TURNS } });
+    return filesBefore([...read.window?.context ?? [], ...read.messages].map(redact.message), before);
   });
   // Change notices for one conversation, so open chats refetch instead of polling. Sign-in
   // and assistant access are the conversation read's own hooks; each notice rechecks the session.

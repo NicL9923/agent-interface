@@ -456,12 +456,14 @@ describe("authentication and household state", () => {
     // The add-on's cut, as src/hermes/extension.py history_window makes it.
     const cut = (window: NonNullable<ConversationOptions["window"]>) => {
       const { earlier } = historyWindow(messages, window);
-      if (!earlier || messages[earlier].role !== "user") return undefined;
+      if (!earlier) return undefined;
       const kept = new Set<number>(); let prompt: number | undefined;
       messages.slice(0, earlier).forEach((message, index) => {
         if (message.role === "user") prompt = index;
         if (message.files?.length) { kept.add(index); if (message.role === "assistant" && prompt !== undefined) kept.add(prompt); }
       });
+      // A start inside a turn keeps the prompt its replies answer.
+      if (messages[earlier].role !== "user" && prompt !== undefined) kept.add(prompt);
       return { earlier, context: [...kept].sort((a, b) => a - b).map(index => messages[index]) };
     };
     const full = { ...conversation, messages, files: messages.flatMap(message => message.files ?? []) };
@@ -471,6 +473,9 @@ describe("authentication and household state", () => {
       const bodies = [];
       for (const query of ["?turns=20", "?start=p10&turns=20", "?start=p15", "?start=a12", "?turns=40", "?start=gone"])
         bodies.push((await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json());
+      // Earlier files read a window too, and list the same files.
+      for (const query of ["?before=p10", "?before=a12", "?before=gone", ""])
+        bodies.push((await app.inject({ url: `/api/bots/shared/files${query}`, headers: one })).json());
       await app.close();
       return bodies;
     };
@@ -485,8 +490,9 @@ describe("authentication and household state", () => {
       return { ...conversation, messages: shown, window, files: [...window.context, ...shown].flatMap(message => message.files ?? []) };
     };
     expect(await answers(fake.runtime)).toEqual(ownCut);
-    expect(windows).toBe(3);
+    expect(windows).toBe(8);
     expect(ownCut[0].earlierFiles).toBeGreaterThan(0);
+    expect(ownCut[6].messages.length).toBeGreaterThan(0);
   });
   it("keeps personal drafts and read positions separate while bots stay shared", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {

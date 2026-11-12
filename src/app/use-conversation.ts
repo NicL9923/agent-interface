@@ -188,7 +188,9 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     // Which server process's state the view shows. Versions from two processes never compare, so the view shows one at a
     // time, and only a read the view asked for decides which: the newest read asked wins, whichever process answers it.
     // - A read answered after a newer one was asked, by another process than the current one, is dropped. The newer read
-    //   is already asked, so dropping it asks nothing.
+    //   is already asked, so dropping it asks nothing. Before any read is taken there is no current process, so the first
+    //   answer shows at once and the newer read follows it. Opening a chat attaches Hermes's socket to its session, whose
+    //   frames ask that newer read on every open, so dropping the first answer made each open wait for two reads in a row.
     // - A turn event from another process never decides it. It waits as `pending` and asks one read, which any later
     //   such turns share. The first read taken that set out after it settles it: the turn goes on top only when that read
     //   is from the turn's process and older than the turn, and is dropped otherwise. A turn already held from the read's
@@ -260,8 +262,8 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
           ?? await request("GET /bots/:id/conversation", { params: { id: botId }, query });
         if (!live) return;
         const from = versionBoot(result.version);
-        // Another process answered, and a newer read is already asked: that one decides.
-        if (from && from !== boot && asked < asks) {
+        // Another process than the one shown answered, and a newer read is already asked: that one decides.
+        if (from && boot !== undefined && from !== boot && asked < asks) {
           if (earlierPage) more = true;
           return;
         }

@@ -109,6 +109,21 @@ def source_state():
     return actual, patch_hash
 
 
+def _profile_version_triggers(table):
+    bump = "INSERT INTO profile_versions(profile,version) VALUES({}.profile,1) ON CONFLICT(profile) DO UPDATE SET version=version+1;"
+    return f"""
+    CREATE TRIGGER IF NOT EXISTS {table}_version_insert AFTER INSERT ON {table} BEGIN {bump.format("new")} END;
+    CREATE TRIGGER IF NOT EXISTS {table}_version_delete AFTER DELETE ON {table} BEGIN {bump.format("old")} END;
+    CREATE TRIGGER IF NOT EXISTS {table}_version_update AFTER UPDATE ON {table} BEGIN {bump.format("new")} END;
+    CREATE TRIGGER IF NOT EXISTS {table}_version_moved AFTER UPDATE OF profile ON {table} WHEN old.profile IS NOT new.profile
+        BEGIN {bump.format("old")} END;"""
+
+
+# Journal.version: the tables a decorated history reads, counted per profile.
+PROFILE_VERSION_SCHEMA = "CREATE TABLE IF NOT EXISTS profile_versions(profile TEXT PRIMARY KEY, version INTEGER NOT NULL);" + "".join(
+    _profile_version_triggers(table) for table in ("receipts", "tools"))
+
+
 class Journal:
     def __init__(self, path):
         self.epoch = uuid.uuid4().hex
@@ -152,6 +167,7 @@ class Journal:
         self.db.execute("CREATE INDEX IF NOT EXISTS receipts_row ON receipts(row_id)")
         self.db.execute("CREATE INDEX IF NOT EXISTS tools_call ON tools(profile,stored_session,tool_id,run_id)")
         self.db.execute("CREATE INDEX IF NOT EXISTS events_session ON events(profile,session_id)")
+        self.db.executescript(PROFILE_VERSION_SCHEMA)
         self.db.execute("CREATE INDEX IF NOT EXISTS events_run ON events(run_id)")
         with self.db:
             for request_id, profile, sid, stored in self.db.execute("SELECT COALESCE(run_id,request_id),profile,session_id,stored_session FROM receipts WHERE terminal=0 AND status IN ('accepted','uncertain')").fetchall():
@@ -160,11 +176,15 @@ class Journal:
                     self.db.execute("INSERT OR REPLACE INTO interruptions(profile,stored_session,request_id,created) VALUES(?,?,?,?)", (profile, stored, request_id, time.time()))
             self.db.execute("UPDATE receipts SET status='interrupted',terminal=1 WHERE terminal=0 AND status IN ('accepted','uncertain')")
 
-    @property
-    def mutation(self):
-        # SQLite counts every row mutation, including cursor/executemany writes in sibling
-        # add-ons. A rollback may invalidate unnecessarily, but can never reuse stale rows.
-        return getattr(self.db, "total_changes", None)
+    def version(self, profile):
+        """How many times the profile's receipts and tools have changed, the journal rows its decorated history reads.
+
+        Counted by triggers, so every writer counts, sibling add-ons and other processes included, and a write for
+        one assistant never invalidates another's history. A rollback may invalidate unnecessarily, but can never
+        reuse stale rows.
+        """
+        row = self.db.execute("SELECT version FROM profile_versions WHERE profile=?", (profile,)).fetchone()
+        return row[0] if row else 0
 
     def has_event(self, event_key):
         with self.lock:
@@ -271,7 +291,12 @@ def history_window(messages, sid, start=None, turns=0):
     when the app still needs them: those carrying files, for its earlier-file count, and
     the prompt each such reply answers, for its origin. Each returned row carries its
     position among visible rows, so positional IDs stay the same. ``window`` is None,
-    and every row is returned, when nothing is cut or the cut would start mid-turn.
+    and every row is returned, when nothing is cut.
+
+    A window that names a row inside a turn starts there, as historyWindow does. The server's
+    turn read names a turn's first saved message, which for a turn whose prompt is hidden,
+    such as a routine's or an auto-continue, is a reply. The prompt before that row is kept,
+    so its replies take the origin the whole history gives them.
     """
     visible = [row for row in messages if row.get("display_kind") != "hidden"]
     def identity(index):
@@ -289,7 +314,7 @@ def history_window(messages, sid, start=None, turns=0):
         first -= 1
         if visible[first].get("role") == "user":
             turns -= 1
-    if first == 0 or visible[first].get("role") != "user":
+    if first == 0:
         return messages, None
     kept, prompt = set(), None
     for index in range(first):
@@ -301,6 +326,8 @@ def history_window(messages, sid, start=None, turns=0):
             kept.add(index)
             if row.get("role") == "assistant" and prompt is not None:
                 kept.add(prompt)
+    if visible[first].get("role") != "user" and prompt is not None:
+        kept.add(prompt)
     rows = [dict(visible[index], app_index=index) for index in sorted(kept) + list(range(first, len(visible)))]
     return rows, {"earlier": first, "context": len(kept)}
 
@@ -629,7 +656,7 @@ def admission_turn(result):
     return ADMISSION_TURN.get(status, "unknown")
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
-# Decorated history is keyed on exact history identity, journal mutation and native
+# Decorated history is keyed on exact history identity, the profile's journal version and native
 # redaction state; the lifetime only bounds what an identity collision could serve.
 # Without readable redaction state, the earlier short lifetime still applies.
 DECORATED_TTL = 600
@@ -644,7 +671,7 @@ class RowCache:
 
     The decorated-history cache misses for the whole of a turn, so an open during a turn reads
     these instead of redoing work that grows with the transcript. Each table answers only
-    from its own key; none depends on redaction state or the journal mutation count.
+    from its own key; none depends on redaction state or the journal version.
 
     ``tool_results``: a tool row ID -> (its content, that content parsed). Hermes's proactive
     prune rewrites a row's content under the same ID, so a hit needs the same content.
@@ -671,6 +698,70 @@ class RowCache:
         table[key] = value
         while len(table) > ROW_CACHE_LIMIT:
             del table[next(iter(table))]
+
+
+# Hermes labels every shell command in a history each time it projects one, and its shell parser walks each
+# command character by character several times. A coding assistant's chat with 2,400 commands spent about 4 of
+# the 6 seconds of every open there. These helpers are pure functions of one string that only
+# summarize_shell_command calls, so their answers are kept. summarize_shell_command itself stays native:
+# it translates with the profile's language.
+SHELL_SUMMARY_HELPERS = ("_split_shell_compound", "_clean_shell_segment", "_shell_head_word", "_is_shell_boundary_echo")
+# Characters of keys and answers each helper keeps. That 2,400-command chat needs about 2 million for the largest.
+SHELL_SUMMARY_BUDGET = 4_000_000
+
+
+class TextMemo:
+    """A pure function of one string, answering repeated strings from memory within a character budget.
+
+    The least recently used answers go first. A list answer is kept as a tuple and returned as a new list,
+    so a caller that changes its copy never changes a later answer. Anything but a string, and a string too
+    long to keep, goes to the function every time.
+    """
+
+    def __init__(self, native, budget=SHELL_SUMMARY_BUDGET):
+        self.native, self.budget = native, budget
+        self.kept, self.size, self.lock = collections.OrderedDict(), 0, threading.Lock()
+
+    @staticmethod
+    def chars(text, value):
+        items = value if type(value) is tuple else (value,)
+        return len(text) + sum(len(item) for item in items if type(item) is str)
+
+    def __call__(self, text):
+        if type(text) is not str or len(text) > self.budget // 16:
+            return self.native(text)
+        with self.lock:
+            hit = self.kept.get(text)
+            if hit is not None:
+                self.kept.move_to_end(text)
+        if hit is None:
+            value = self.native(text)
+            hit = (True, tuple(value)) if type(value) is list else (False, value)
+            with self.lock:
+                if text not in self.kept:
+                    self.kept[text] = hit
+                    self.size += self.chars(text, hit[1])
+                    while self.size > self.budget:
+                        old, (_, answer) = self.kept.popitem(last=False)
+                        self.size -= self.chars(old, answer)
+        listed, value = hit
+        return list(value) if listed else value
+
+
+def memoize_shell_summary(display):
+    """Keeps Hermes's shell-summary helpers' answers. See SHELL_SUMMARY_HELPERS. Installing twice wraps nothing again."""
+    missing = []
+    for name in SHELL_SUMMARY_HELPERS:
+        native = getattr(display, name, None)
+        if isinstance(native, TextMemo):
+            continue
+        if not callable(native):
+            missing.append(name)
+            continue
+        setattr(display, name, TextMemo(native))
+    if missing:
+        # Hermes renamed or removed them. Opens still work, at the speed they had before the memo.
+        logging.getLogger(__name__).warning("Hermes's shell summary has no %s; long chats open without its memo", ", ".join(missing))
 
 # Methods a held maintenance lease still admits: status, history and discovery reads.
 # Session marks that count as work to maintenance, besides app sends that hold a lane.
@@ -1420,6 +1511,12 @@ class Bridge:
         server = self.server
         self.native_history = server._history_to_messages
         server._history_to_messages = self.detailed_history
+        try:
+            from agent import display
+        except ImportError:
+            logging.getLogger(__name__).warning("Hermes has no agent.display; long chats open without the shell summary memo")
+        else:
+            memoize_shell_summary(display)
         self.install_inline_guidance()
         self.install_turn_claims()
         self.native_write = server.write_json
@@ -1504,7 +1601,7 @@ class Bridge:
             rows = self.row_cache(sid, server._sessions[sid])
             identity = None if omit else self.history_identity(server._sessions[sid])
             with journal.lock:
-                mutation = journal.mutation
+                mutation = journal.version(profile)
                 with self.cache_lock:
                     entry = decorated.get(sid)
                     lifetime = DECORATED_TTL if identity is not None and identity[-1] is not None else UNTRACKED_REDACTION_TTL
@@ -1517,7 +1614,7 @@ class Bridge:
                 value = self.native("session.activate", {"session_id": sid, "profile": profile, **({"omit_messages": True} if omit or cached is not None else {})})
                 # Native activation takes its own snapshot. Never combine cached history with
                 # a live payload that crossed a history or journal mutation.
-                if cached is not None and (self.history_identity(server._sessions[sid]) != identity or entry[1] != journal.mutation):
+                if cached is not None and (self.history_identity(server._sessions[sid]) != identity or entry[1] != journal.version(profile)):
                     cached = None
                     identity = self.history_identity(server._sessions[sid])
                     value = self.native("session.activate", {"session_id": sid, "profile": profile})
@@ -1686,7 +1783,7 @@ class Bridge:
     def attribute(self, profile, sid, value, rows=None):
         """Bind app receipts, files and tool details to native history rows.
 
-        Returns (messages, journal mutation after binding). App attribution follows
+        Returns (messages, the profile's journal version after binding). App attribution follows
         Hermes's durable row identity, never a rewritten body. Read each journal table once
         per poll, not once per message. The only binding made here is a steer's, from these
         rows and the journal alone, so a later read of the same rows and journal binds
@@ -1746,7 +1843,7 @@ class Bridge:
                     detail = tool[2]
                     if len(recorded) == 1 and isinstance(detail, dict) and detail.get("name") == message.get("name") and tool[3] == (message.get("args") or {}):
                         message["app_tool_call"] = detail
-        return messages, journal.mutation
+        return messages, journal.version(profile)
 
     def bind_steers(self, profile, stored, messages):
         """Bind each unbound steer whose row can only be its own.
@@ -1887,17 +1984,17 @@ class Bridge:
         # Never acquire history_lock while holding journal.lock: native flushes
         # emit frames under history_lock and the frame hook needs journal.lock.
         after = self.history_identity(session) if not omit else None
-        if cached is not None and (after != identity or mutation != journal.mutation):
+        if cached is not None and (after != identity or mutation != journal.version(profile)):
             phases["decorate"] += time.perf_counter() - mark
             return self.open_locked(rid, {**params, "_skip_cache": True}, phases)
         with journal.lock:
             if cached is None:
                 cache = self.decorated
                 with self.cache_lock:
-                    if not omit and identity is not None and after == identity and mutation == bound_mutation == journal.mutation:
+                    if not omit and identity is not None and after == identity and mutation == bound_mutation == journal.version(profile):
                         # Full binding preserves cursor identities and earlier file context.
                         now = time.monotonic()
-                        cache[sid] = (identity, journal.mutation, messages, now, now)
+                        cache[sid] = (identity, bound_mutation, messages, now, now)
                         while len(cache) > DECORATED_LIMIT:
                             del cache[min(cache, key=lambda key: cache[key][4])]
                     else:

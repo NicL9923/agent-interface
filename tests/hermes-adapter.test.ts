@@ -2073,6 +2073,18 @@ describe('Hermes conversation and roster read costs', () => {
     hermesChanged();
     expect((await runtime.conversation('shared', {window: {turns: 20}})).window).toBeUndefined();
   });
+  it('gives a window cut inside a turn the origin of the prompt Hermes kept before it', async () => {
+    // A turn read names a routine turn's first reply; the add-on keeps its scheduled prompt as context.
+    snapshot.app_window = {earlier: 41, context: 1};
+    snapshot.messages = [
+      {role: 'user', text: '[Cron delivery: Feed check]', app_index: 40},
+      {role: 'assistant', text: 'Feed is low in the north barn.', app_index: 41},
+      {role: 'assistant', text: 'Ordered more.', app_index: 42},
+    ];
+    const result = await runtime.conversation('shared', {window: {start: 'live-one-41'}});
+    expect(result.messages.map(message => [message.id, message.origin?.kind])).toEqual([['live-one-41', 'scheduled'], ['live-one-42', 'scheduled']]);
+    expect(result.window!.context.map(message => message.id)).toEqual(['live-one-40']);
+  });
 
   describe('progress lines', () => {
     const turn = (rows: Record<string, any>[]) => { snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}, ...rows]; };

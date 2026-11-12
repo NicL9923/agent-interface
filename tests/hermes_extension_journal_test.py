@@ -9,6 +9,7 @@ import contextlib
 import contextvars
 import json
 import re
+import sqlite3
 import stat
 import sys
 import tempfile
@@ -65,13 +66,17 @@ class FakeGateway:
         self.transport = types.SimpleNamespace(bind_transport=bound.set, current_transport=bound.get)
         self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,
                         "tui_gateway.transport": self.transport, "agent": types.ModuleType("agent"), "agent.redact": self.redact}
+        # The shell summary helpers the add-on keeps answers for (see hermes_shell_summary_test.py).
+        self.modules["agent"].display = types.SimpleNamespace(_split_shell_compound=lambda text: [text], _clean_shell_segment=str,
+                                                              _shell_head_word=str, _is_shell_boundary_echo=lambda text: False)
 
     def __enter__(self):
         self.patches = [patch.dict(sys.modules, self.modules), patch.dict("os.environ", self.environment)]
         for item in self.patches:
             item.start()
         self.directory = tempfile.TemporaryDirectory()
-        self.journal = self.start(self.journal_path or Path(self.directory.name) / "agent-interface.db")
+        self.journal_file = self.journal_path or Path(self.directory.name) / "agent-interface.db"
+        self.journal = self.start(self.journal_file)
         return self
 
     def start(self, path):
@@ -284,11 +289,19 @@ class HistoryWindowTests(unittest.TestCase):
         self.assertEqual(self.cut(rows, start="31", turns=2)[1], {"earlier": 26, "context": 0})
         self.assertEqual(self.cut(rows, start="missing")[1]["earlier"], 10)
 
-    def test_nothing_is_cut_at_the_start_or_mid_turn(self):
-        rows = turns(25)
-        self.assertEqual(self.cut(rows, start="1"), ([None] * 50, None))
-        self.assertIsNone(self.cut(rows, start="32")[1])
+    def test_nothing_is_cut_at_the_start(self):
+        self.assertEqual(self.cut(turns(25), start="1"), ([None] * 50, None))
         self.assertIsNone(self.cut(turns(5))[1])
+
+    def test_a_start_inside_a_turn_cuts_there_and_keeps_the_prompt_its_replies_answer(self):
+        # Row 32 is the reply to turn 15's prompt, row 31, as a turn read names a turn whose prompt is hidden.
+        rows = turns(25, files={3})
+        indexes, window = self.cut(rows, start="32")
+        self.assertEqual(window, {"earlier": 31, "context": 3})
+        self.assertEqual(indexes, [6, 7, 30] + list(range(31, 50)))
+        # A start inside the first turn has no prompt before it to keep.
+        rows = [{"row_id": 1, "role": "assistant", "text": "greeting"}, {"row_id": 2, "role": "assistant", "text": "more"}] + turns(3)
+        self.assertEqual(self.cut(rows, start="2"), ([1, 2, 3, 4, 5, 6, 7], {"earlier": 1, "context": 0}))
 
     def test_hidden_rows_and_positional_ids_follow_the_app(self):
         rows = turns(25)
@@ -679,7 +692,25 @@ class OpenTests(unittest.TestCase):
             self.assertEqual(hit["messages"], expected["messages"])
             self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
             self.assertFalse(any("FROM tools" in sql or "row_id IN" in sql for sql in seen))
+            # Only this assistant's receipts and tools are decorated history: another assistant's writes and events keep it.
+            def receipt(profile, request_id, db=hermes.journal.db):
+                with db:
+                    db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES(?,?,?,?,?,?,?,?)",
+                               (request_id, "d", profile, "sid", "member", "e", "accepted", 0))
+            receipt("other", "elsewhere")
             hermes.journal.event("default", "sid", "completed", "Result")
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            with hermes.journal.db:
+                hermes.journal.db.execute("INSERT INTO tools(profile,stored_session,tool_id,result) VALUES(?,?,?,?)", ("default", "sid", "call", "{}"))
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1]["omit_messages"])
+            # Another connection's write counts too, as from the dashboard's process.
+            other = sqlite3.connect(hermes.journal_file)
+            receipt("default", "from-another-process", other)
+            other.close()
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
             hermes.open()
@@ -702,6 +733,32 @@ class OpenTests(unittest.TestCase):
             session["history"][-1] = {"role":"assistant", "text":"Replacement"}
             hermes.open()
             self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            journal = extension.Journal(Path(directory) / "agent-interface.db")
+            db = journal.db
+            with db:
+                db.execute("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES('r','d','a','s','m','e','accepted',0)")
+                db.execute("INSERT INTO tools(id,profile,stored_session,tool_id,result) VALUES(1,'a','s','t','{}')")
+            for statement, moved in (
+                ("INSERT INTO receipts(request_id,digest,profile,session_id,actor,epoch,status,created) VALUES('r2','d','a','s','m','e','accepted',0)", {"a": 1}),
+                ("UPDATE receipts SET row_id=7 WHERE request_id='r'", {"a": 1}),
+                ("DELETE FROM receipts WHERE request_id='r2'", {"a": 1}),
+                ("INSERT INTO tools(profile,stored_session,tool_id,result) VALUES('a','s','t2','{}')", {"a": 1}),
+                ("UPDATE tools SET artifacts='[]' WHERE id=1", {"a": 1}),
+                ("DELETE FROM tools WHERE tool_id='t2'", {"a": 1}),
+                # A row that moves to another profile changes both histories.
+                ("UPDATE receipts SET profile='b' WHERE request_id='r'", {"a": 1, "b": 1}),
+                ("INSERT INTO events(profile,session_id,kind,title,occurred,epoch) VALUES('a','s','completed','Done',0,'e')", {}),
+                ("INSERT INTO interruptions(profile,stored_session,request_id,created) VALUES('a','s','r',0)", {}),
+            ):
+                with self.subTest(statement=statement):
+                    before = {profile: journal.version(profile) for profile in "ab"}
+                    with db:
+                        db.execute(statement)
+                    self.assertEqual({profile: journal.version(profile) - before[profile] for profile in "ab"}, {"a": 0, "b": 0, **moved})
+            db.close()
 
     def test_one_assistants_slow_open_never_holds_up_anothers(self):
         with ProfilesGateway() as hermes:
