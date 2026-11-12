@@ -1016,4 +1016,5 @@ or configure an Apple account.
 
 The [runtime assessment](docs/HarnessAssessment.md) records the tradeoffs in
 keeping Hermes, replacing it, or wrapping existing executors such as Codex and
-Claude Code. Hermes remains the current execution owner.
+Claude Code. The [runtime plan](docs/RuntimePlan.md) replaces Hermes with wrapped
+harnesses step by step; Hermes remains the execution owner until then.
