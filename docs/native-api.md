@@ -77,7 +77,12 @@ so treat a truncated body as a failed download.
 every file. With `turns` or `start`, it returns that window, `earlier` messages
 before it, and only the window's `files`; `earlierFiles` counts files that only
 earlier messages carry, and `GET /api/bots/:id/files?before=MESSAGE_ID` lists
-those messages with their files. Every read also returns `version`, the
+those messages with their files. `?before=MESSAGE_ID&turns=N` reads an earlier
+page: only the `N` turns before that message, with their own `files`, and `earlier` and
+`earlierFiles` counted from the page's start. The answer then names it in `before`, and
+a client puts the page in front of what it holds. A message the history no longer has
+answers the latest page without `before`, as an unknown `start` does. `before` with
+`start` is a 400. Every read also returns `version`, the
 structural version of the conversation when the read began, which orders it
 against `?inflight=3` turn events (below). `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the
@@ -865,7 +870,7 @@ Web and native clients share these authenticated operations. See
 
 | Method and route | Body or response |
 | --- | --- |
-| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time |
+| `GET /api/today` | Canonical activity, pending decisions, paged recorded events, recent files, `generatedAt`, `frontier` and `hasMore`. The ETag leaves out `generatedAt`, so an unchanged recap answers 304 and the client keeps the body it has; show your own check time. An assistant whose read takes longer than 2 seconds is answered without: its item has `pending: true`, the roster's activity, no requests, and the files and reply of its last recap when nothing changed since; it is listed in `unavailableBots` too. Its read goes on, and a Today asked again within 5 seconds of it finishing takes that answer, so ask again soon |
 | `PUT /api/today/seen` | `{ "seenAt": "LOADED_GENERATED_AT", "frontier": "LOADED_FRONTIER" }`; advances only the returned page |
 | `GET /api/bots/:id/inference`, `PATCH /api/bots/:id/inference` | Per-conversation `{ "reasoning": "none" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra", "speed": "normal" \| "auto" \| "fast" \| "ultrafast" }`. `PATCH` takes either field or both and answers 400 to any other word (Hermes's first-turn-only `cold` is not accepted). `auto` runs Fast for `agent.fast_auto_seconds` (60 unless the profile sets it) at the start of each reply, then Normal. Each change is one Hermes write. Hermes does not check the model for `auto`, so on a model without fast mode Auto runs at Normal speed. It answers 409 with a reason, and leaves the earlier speed in place, when Hermes predates Auto (`This Hermes version does not have Auto speed. Update Hermes to use it.`); `fast` and `ultrafast` answer 409 `Fast speed is not available for this model.` or `Ultrafast speed is not available for this model.` the same way. The answer is the settings as Hermes reports them after the change, read through the live session's status (`config.get` reports Auto as `normal`, and the profile default for a session pinned to Normal). When Hermes reports a word outside these lists the answer is a 5xx with the generic Hermes failure message, and nothing is guessed. |
 | `GET /api/bots/:id/memory` | Native profile scope, document revisions, entries and character limits |

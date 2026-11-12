@@ -283,7 +283,7 @@ def detached(value):
     return value
 
 
-def history_window(messages, sid, start=None, turns=0):
+def history_window(messages, sid, start=None, turns=0, before=None):
     """The app's history window, cut here so earlier rows never cross the socket.
 
     Mirrors historyWindow in src/shared/history.ts over the rows the app shows, with the
@@ -297,6 +297,11 @@ def history_window(messages, sid, start=None, turns=0):
     turn read names a turn's first saved message, which for a turn whose prompt is hidden,
     such as a routine's or an auto-continue, is a reply. The prompt before that row is kept,
     so its replies take the origin the whole history gives them.
+
+    ``before`` names a row the window ends just before, counting ``turns`` back from it in place of
+    ``start``: an earlier page for a client that holds everything from that row on. The window then
+    names it, so the server knows the rows after it were left out. One the history does not hold is
+    ignored.
     """
     visible = [row for row in messages if row.get("display_kind") != "hidden"]
     def identity(index):
@@ -306,7 +311,10 @@ def history_window(messages, sid, start=None, turns=0):
                 return str(row[key])
         return f"{sid}-{index}"
     turns = turns if type(turns) is int and turns >= 0 else 0
-    end = next((index for index in range(len(visible)) if identity(index) == start), -1) if isinstance(start, str) and start else -1
+    def position(name):
+        return next((index for index in range(len(visible)) if identity(index) == name), -1) if isinstance(name, str) and name else -1
+    bound = position(before)
+    end = bound if bound >= 0 else position(start)
     if end < 0:
         end, turns = len(visible), max(turns, PAGE_TURNS)
     first = end
@@ -314,7 +322,7 @@ def history_window(messages, sid, start=None, turns=0):
         first -= 1
         if visible[first].get("role") == "user":
             turns -= 1
-    if first == 0:
+    if first == 0 and bound < 0:
         return messages, None
     kept, prompt = set(), None
     for index in range(first):
@@ -328,8 +336,9 @@ def history_window(messages, sid, start=None, turns=0):
                 kept.add(prompt)
     if visible[first].get("role") != "user" and prompt is not None:
         kept.add(prompt)
-    rows = [dict(visible[index], app_index=index) for index in sorted(kept) + list(range(first, len(visible)))]
-    return rows, {"earlier": first, "context": len(kept)}
+    last = bound if bound >= 0 else len(visible)
+    rows = [dict(visible[index], app_index=index) for index in sorted(kept) + list(range(first, last))]
+    return rows, {"earlier": first, "context": len(kept), **({"before": before} if bound >= 0 else {})}
 
 
 FIRST_CONTACT_NOTE = "[System note: This is the user's very first message ever."
@@ -2238,7 +2247,7 @@ class Bridge:
         """
         cut = None
         if isinstance(window, dict):
-            messages, cut = history_window(messages, sid, window.get("start"), window.get("turns", 0))
+            messages, cut = history_window(messages, sid, window.get("start"), window.get("turns", 0), window.get("before"))
         return detached(messages), cut
 
     def open_canonical(self, profile):

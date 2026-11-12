@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHermesRuntime } from "../src/server/hermes.js";
-import { nativeStartedAt, promptSaved, turnRows, turnStart } from "../src/server/hermes-mapping.js";
+import { nativeStartedAt, promptSaved, turnRows, turnStart, withSeams } from "../src/server/hermes-mapping.js";
 import { compareVersions } from "../src/shared/inflight.js";
 import type { Message, Runtime } from "../src/shared/types.js";
 import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-hermes.js";
@@ -39,17 +39,41 @@ describe("turn reads for streams that follow turns", () => {
     hermes.frame("message.delta", { text: "Looking. " });
     saveSegment(4, "Looking.");
     hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+    const before = runtime.turn!("shared")!;
     hermes.frame("tool.complete", { tool_id: "t1", name: "terminal", result: "ok" });
-    expect(runtime.turn!("shared")).toBeUndefined();
+    // Until the turn read lands, the reply goes on growing at the last read's version, which has no row for the segment
+    // saved before the tool, so the segment stays in the live reply and what follows the tool starts a paragraph.
+    hermes.frame("message.delta", { text: "Found" });
+    expect(runtime.turn!("shared")).toMatchObject({ version: before.version, turn: before.turn, message: { text: "Looking. \n\nFound" },
+      toolCalls: [expect.objectContaining({ id: "t1", status: "completed" })] });
     await vi.waitFor(() => expect(one).toHaveBeenCalledOnce());
     expect(two).toHaveBeenCalledOnce();
     expect(opens()).toEqual([{ turns: 20 }, { start: "req-2" }]);
-    hermes.frame("message.delta", { text: "Found it." });
+    hermes.frame("message.delta", { text: " it." });
     const live = runtime.turn!("shared")!;
+    expect(compareVersions(live.version, before.version)).toBeGreaterThan(0);
     // The saved segment is a row of the turn, so the live reply leaves it out.
     expect(live.turn).toEqual({ messages: [expect.objectContaining({ id: "req-2" }), expect.objectContaining({ id: "4", text: "Looking." })] });
     expect(live.message.text).toBe("Found it.");
     expect(live.toolCalls).toEqual([expect.objectContaining({ id: "t1", status: "completed" })]);
+  });
+
+  // A tool finishing or a progress line saved changes only what a turn event carries; anything else may change what only a read does.
+  it.each<[string, () => void]>([
+    ["the turn ending", () => hermes.frame("message.complete", { status: "complete" })],
+    ["an approval asked", () => hermes.request("approval", "ap-1", { command: "ls" })],
+    ["a frame the runtime does not know", () => hermes.frame("session.info", {})],
+  ])("keeps no live reply on the last read's version past %s, even after a tool finished", async (_, send) => {
+    midTurn();
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    runtime.followTurns!("shared", () => {});
+    hermes.holdOpens = true;
+    hermes.frame("message.delta", { text: "Looking." });
+    hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+    hermes.frame("message.interim", {});
+    expect(runtime.turn!("shared")!.message.text).toBe("Looking.");
+    send();
+    expect(runtime.turn!("shared")).toBeUndefined();
   });
 
   it("reads nothing for an assistant no stream follows, or once the last one stops", async () => {
@@ -378,6 +402,44 @@ describe("turn reads for streams that follow turns", () => {
   });
 });
 
+describe("an earlier page", () => {
+  /** Ten settled turns, rows 1 to 20, before what `midTurn` adds. */
+  const settled = () => Array.from({ length: 10 }, (_, turn) => [row(turn * 2 + 1, "user", `Post ${turn}?`), row(turn * 2 + 2, "assistant", `Post ${turn} set.`)]).flat();
+
+  it("ends just before the message the client holds, with no live reply, and stores nothing live replies are built on", async () => {
+    midTurn();
+    hermes.history = [...settled(), ...hermes.history.map((saved, index) => ({ ...saved, row_id: 21 + index }))];
+    hermes.inflight.assistant = "Looking";
+    const page = await runtime.conversation("shared", { window: { before: "13", turns: 2 } });
+    expect(page.messages.map(message => message.id)).toEqual(["9", "10", "11", "12"]);
+    expect(page.window).toMatchObject({ earlier: 8, before: "13" });
+    // An older add-on, which knows no `before`, still cuts from the same place.
+    expect(hermes.opens().at(-1)!.params.window).toEqual({ before: "13", start: "13", turns: 2 });
+    runtime.followTurns!("shared", () => {});
+    hermes.frame("message.delta", { text: " in the barn" });
+    expect(runtime.turn!("shared")).toBeUndefined();
+    expect(runtime.inflight!("shared")).toBeUndefined();
+    // The page names no turn start, so the next turn read reads the latest page.
+    hermes.frame("tool.complete", { tool_id: "t1" });
+    await vi.waitFor(() => expect(runtime.turn!("shared")).toBeDefined());
+    expect(hermes.opens().at(-1)!.params.window).toEqual({ turns: 1 });
+  });
+
+  it("is never shared with a later read from its first message, which must reach the newest", async () => {
+    hermes.history = settled();
+    // Connecting and the first open change the conversation, so sharing starts after.
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    // A read from a message is shared with the read that started there, until something changes.
+    const latest = await runtime.conversation("shared", { window: { turns: 2 } });
+    await runtime.conversation("shared", { window: { start: latest.messages[0].id } });
+    expect(hermes.opens()).toHaveLength(2);
+    const page = await runtime.conversation("shared", { window: { before: "13", turns: 2 } });
+    const from = await runtime.conversation("shared", { window: { start: page.messages[0].id } });
+    expect(from.messages.map(message => message.id)).toEqual(Array.from({ length: 12 }, (_, index) => String(index + 9)));
+    expect(hermes.opens()).toHaveLength(4);
+  });
+});
+
 describe("the live reply's saved text", () => {
   // Hermes names the native turn's prompt before it saved it. No saved row matches, so the boundary falls back to the last
   // prompt, as on main, and the earlier native turn's "Checked." under the same app run is stripped from this turn's live
@@ -422,6 +484,23 @@ describe("the live reply's saved text", () => {
     Object.assign(hermes, { inflight: { user: reported, assistant: "Read it. Two pages." } });
     const read = await runtime.conversation("shared", { window: { turns: 20 } });
     expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Two pages." });
+  });
+});
+
+describe("withSeams", () => {
+  it("starts a paragraph at each seam text follows, unless a blank line is already there", () => {
+    expect(withSeams("Looking.Found it.", [8])).toBe("Looking.\n\nFound it.");
+    expect(withSeams("A. B. C.", [2, 5])).toBe("A.\n\n B.\n\n C.");
+    expect(withSeams("Looking.\n\nFound.", [8])).toBe("Looking.\n\nFound.");
+    expect(withSeams("Looking.\n \nFound.", [9])).toBe("Looking.\n \nFound.");
+    // One newline is not a paragraph in Markdown.
+    expect(withSeams("Looking.\nFound.", [9])).toBe("Looking.\n\n\nFound.");
+  });
+
+  it("adds nothing at a seam no text follows yet, nor at one outside the text or repeated", () => {
+    expect(withSeams("Looking.", [8])).toBe("Looking.");
+    expect(withSeams("Looking.", [0, 20])).toBe("Looking.");
+    expect(withSeams("AB", [1, 1])).toBe("A\n\nB");
   });
 });
 

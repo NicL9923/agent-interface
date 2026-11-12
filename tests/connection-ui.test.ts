@@ -70,8 +70,9 @@ describe('setup and recovery interface',()=>{
       if(path==='/bootstrap?roster=lean')return boot as T;
       if(!path.startsWith('/bots/shared/conversation?'))return null as T;
       paths.push(path);
-      return (path.includes('turns=20')&&path.includes('start=')||path.includes('start=p0')
-        ?{...conversation,messages:[...turn(0),...turn(1)],earlier:0}:{...conversation,messages:turn(1),earlier:2}) as T;
+      // The page before p1 holds only turn 0, as the server answers it.
+      if(path.includes('before=p1'))return {...conversation,messages:turn(0),earlier:0,before:'p1'} as T;
+      return (path.includes('start=p0')?{...conversation,messages:[...turn(0),...turn(1)],earlier:0}:{...conversation,messages:turn(1),earlier:2}) as T;
     });
     const size=transcriptSize();
     // Messages stack in order 250px apart. The prompt being read sits 50px below the top until
@@ -89,13 +90,38 @@ describe('setup and recovery interface',()=>{
       await scrolled(transcript);
       const earlier=[...container.querySelectorAll('button')].find(button=>button.textContent==='Show earlier messages')!;
       await act(async()=>earlier.click());
-      expect(paths).toContain('/bots/shared/conversation?start=p1&turns=20');
-      expect(container.querySelector('[data-message-id="p0"]')).not.toBeNull();
+      expect(paths).toContain('/bots/shared/conversation?before=p1&turns=20');
+      expect([...container.querySelectorAll('[data-message-id]')].map(item=>(item as HTMLElement).dataset.messageId)).toEqual(['p0','a0','p1','a1']);
       expect(transcript.scrollTop).toBe(800);
       expect(container.textContent).toContain('This is the start of your conversation with Shared.');
       await changed();
       expect(paths.at(-1)).toBe('/bots/shared/conversation?start=p0');
     }finally{size.mockRestore();rects.mockRestore();}
+  });
+
+  it('reads an earlier page whole when what the view holds no longer starts at the message it was asked before',async()=>{
+    const turn=(n:number)=>[{id:`p${n}`,role:'user' as const,text:`Prompt ${n}`},{id:`a${n}`,role:'assistant' as const,text:`Reply ${n}`}];
+    const run={state:'thinking' as const,runId:'run-2'};
+    const paths:string[]=[];let answer!:()=>void;
+    vi.mocked(api).mockImplementation(async <T>(path:string)=>{
+      if(path==='/bootstrap?roster=lean')return boot as T;
+      if(!path.startsWith('/bots/shared/conversation?'))return null as T;
+      paths.push(path);
+      if(path.includes('before=p1'))return await new Promise<T>(resolve=>{answer=()=>resolve({...conversation,messages:turn(0),earlier:0,before:'p1'} as T);});
+      if(path.includes('start=p1&turns=20'))return {...conversation,activity:run,version:'b:1:7',messages:[...turn(0),{id:'p9',role:'user',text:'Prompt 9'}],earlier:0} as T;
+      return {...conversation,activity:run,version:'b:1:5',messages:turn(1),earlier:2} as T;
+    });
+    await renderApp();await advance(0);
+    const earlier=[...container.querySelectorAll('button')].find(button=>button.textContent==='Show earlier messages')!;
+    await act(async()=>earlier.click());
+    // A turn that starts the whole history replaces everything while the page is on its way.
+    const stream=[...FakeEventSource.streams].find(item=>item.url.includes('inflight=3'))!;
+    await act(async()=>stream.emit('turn',JSON.stringify({botId:'shared',version:'b:1:6',after:null,messages:[{id:'p9',role:'user',text:'Prompt 9'}],
+      message:{id:'sid-inflight',role:'assistant',text:''},activity:run,toolCalls:[]})));
+    expect(container.querySelector('[data-message-id="p1"]')).toBeNull();
+    await act(async()=>answer());await advance(0);
+    expect(paths.at(-1)).toBe('/bots/shared/conversation?start=p1&turns=20');
+    expect([...container.querySelectorAll('[data-message-id]')].map(item=>(item as HTMLElement).dataset.messageId)).toEqual(['p0','a0','p9']);
   });
 
   it('keeps the cached message a reader scrolled to when the first refresh has moved past it',async()=>{

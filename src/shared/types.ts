@@ -319,6 +319,8 @@ export interface Conversation {
     earlier: number;
     /** The earlier messages the app still needs: those with files, and the prompts their replies answer. */
     context: Message[];
+    /** The window's `before`, when the runtime ended it just before that message and left out everything after. */
+    before?: string;
   };
   /**
    * The structural version this read reflects, at the least: the runtime's version when the read began.
@@ -372,7 +374,15 @@ export interface TurnEvent extends Inflight, TurnRows {
 }
 export interface ConversationOptions {
   /** The app's history window, cut by the runtime when it can. */
-  window?: { start?: string; turns?: number };
+  window?: {
+    start?: string;
+    turns?: number;
+    /**
+     * Ends the window just before this message, counting `turns` back from it in place of `start`: an earlier page for a
+     * client that holds everything from this message on. Such a read holds no running turn and no live reply.
+     */
+    before?: string;
+  };
   /** false reads current state, approvals and requests without history, as write checks need. */
   history?: false;
   /** Filled by the runtime with how it served this read, for Server-Timing. Never part of the result. */

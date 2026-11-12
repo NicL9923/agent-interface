@@ -177,13 +177,14 @@ describe("live text after a change to the turn's structure", () => {
     }
     // The ledger and the PR quote these figures, so a change that moves them fails here until they are updated.
     // ?inflight=2 is the baseline origin/main measured the same: after each tool its text waits for a throttled
-    // change notice and the client's read. On ?inflight=3 the token right after each frame shows once the server's
-    // own read lands, one Hermes read and a measuring step later, for one more open per structural frame, less the
+    // change notice and the client's read. On ?inflight=3 the token right after a turn's start shows once the server's
+    // own read lands, one Hermes read and a measuring step later. The token after a tool shows at once: the turn keeps
+    // growing at its last read's version while the server reads it again. That is one more open per structural frame, less the
     // client's own read after a tool or a start, which the turn event covers and its change notice no longer asks for
     // (10 and 26 before that, 10 and 18 now: the two-tool turn is too short for the notice throttle to have sent more).
     const expected: Record<string, { ms: number[]; opens: number; ten: number }> = {
       "2": { ms: [105, 445, 745], opens: 6, ten: 14 },
-      "3": { ms: [61, 61, 61], opens: 10, ten: 18 },
+      "3": { ms: [61, 0, 0], opens: 10, ten: 18 },
     };
     for (const mode of modes) {
       const { gaps, opens } = results.get(mode)!;

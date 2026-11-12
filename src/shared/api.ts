@@ -51,6 +51,12 @@ export type ConversationPage = Omit<Conversation, "window" | "requestSessionId">
   /** With a history window: visible messages before it, and files only those messages carry. */
   earlier?: number;
   earlierFiles?: number;
+  /**
+   * Set when the read asked for the page `before` a message and the history still holds it: the messages are only those
+   * before it, with their files, and `earlier` and `earlierFiles` count from the page's start. A client puts them in front
+   * of what it holds. Absent when that message is gone, and the read answers the latest page as for an unknown `start`.
+   */
+  before?: string;
   draft: SavedDraft | null;
   readPosition: ReadPosition | null;
   /**
@@ -246,7 +252,8 @@ export interface ApiRoutes {
   "GET /bots/:id/skills": { response: Skill[] };
   "PUT /bots/:id/skills": { body: { ids: string[] }; response: Ok };
 
-  "GET /bots/:id/conversation": { query: { start?: string; turns?: number }; response: ConversationPage };
+  /** `before` asks for the `turns` turns before a message the client holds, and only those: see `ConversationPage.before`. */
+  "GET /bots/:id/conversation": { query: { start?: string; turns?: number; before?: string }; response: ConversationPage };
   "GET /bots/:id/files": { query: { before?: string }; response: EarlierFiles };
   "POST /bots/:id/messages": { body: MessageRequest; response: SubmissionReceipt };
   "POST /bots/:id/steer": { body: MessageRequest; response: SubmissionReceipt };
