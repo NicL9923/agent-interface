@@ -82,7 +82,7 @@ page: only the `N` turns before that message, with their own `files`, and `earli
 `earlierFiles` counted from the page's start. The answer then names it in `before`, and
 a client puts the page in front of what it holds. A message the history no longer has
 answers the latest page without `before`, as an unknown `start` does. `before` with
-`start` is a 400. Every read also returns `version`, the
+`start` is a 400. The web client and the iOS build that ships `before` read earlier pages this way; older iOS builds keep asking `start=&turns=`, which is still served. Every read also returns `version`, the
 structural version of the conversation when the read began, which orders it
 against `?inflight=3` turn events (below). `GET /api/bots/:id/events` is a server-sent
 event stream for the same readers: each `change` message means the

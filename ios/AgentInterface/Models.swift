@@ -665,6 +665,9 @@ struct Conversation: Codable, Equatable {
   var earlier: Int?
   /// Files only the unloaded earlier turns carry, present when the server windowed the history.
   var earlierFiles: Int?
+  /// The message an earlier page was read before, present only when the server answered `?before=` for it
+  /// (src/shared/api.ts). A message the history lost answers the latest page without it.
+  var before: String?
   var activity: Activity
   var approvals: [Approval]
   var files: [FileRef]
@@ -674,6 +677,19 @@ struct Conversation: Codable, Equatable {
   /// After a failed turn: anyone's retry of it, as the server claimed it, with its current receipt.
   /// Older servers omit it.
   var retry: RetryClaim?
+  /// The view with an earlier page in front of the message it was read `before`, or nil when the view no longer
+  /// holds that message. Only the page's messages, files and earlier counts are taken: live state, the draft and
+  /// the rest stay as the view's own reads left them. Files keep conversation order, each once.
+  func prepending(_ page: Conversation, before id: String) -> Conversation? {
+    guard let at = messages.firstIndex(where: { $0.id == id }) else { return nil }
+    let known = Set(files.map(\.id))
+    var value = self
+    value.messages = page.messages + messages[at...]
+    value.files = page.files.filter { !known.contains($0.id) } + files
+    value.earlier = page.earlier
+    value.earlierFiles = page.earlierFiles
+    return value
+  }
   var activityMessages: [Message] {
     let canonical = messages.filter { $0.isInternalActivity || $0.isToolActivity || $0.toolCall != nil }
     let known = Set(canonical.compactMap { $0.toolCall?.id })

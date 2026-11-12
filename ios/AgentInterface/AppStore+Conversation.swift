@@ -127,23 +127,53 @@ extension AppStore {
       }
     }
   }
-  /// Adds one more page of history above what is loaded. A failure is reported but does not
-  /// mark the server unavailable, because the loaded conversation is still current.
+  /// Adds one more page of history above what is loaded, as the web does: it reads only the turns before
+  /// the first loaded message and puts them in front of it, keeping the live state the view already has.
+  /// A failure is reported but does not mark the server unavailable, because the loaded conversation is
+  /// still current.
   func loadEarlier() async {
-    guard let id = selectedBotId, let api, !loadingEarlier,
+    guard let id = selectedBotId, api != nil, !loadingEarlier,
       let first = conversation?.messages.first?.id, (conversation?.earlier ?? 0) > 0
     else { return }
-    let selectedGeneration = selectionGeneration
     loadingEarlier = true
     defer { loadingEarlier = false }
+    await readEarlier(of: id, before: first, whole: false)
+  }
+  /// One read of the page before `first`. `whole` asks the old way, `start=` that message, which answers
+  /// everything from there to the newest message and replaces the view.
+  private func readEarlier(of id: String, before first: String, whole: Bool) async {
+    guard let api else { return }
+    let selectedGeneration = selectionGeneration
     conversationReads += 1
     let read = conversationReads
     conversationReadsInFlight += 1
     defer { conversationReadsInFlight -= 1 }
     do {
-      let query = "start=\(APIClient.component(first))&turns=\(Self.historyPageTurns)"
+      let anchor = APIClient.component(first)
+      let query = whole ? "start=\(anchor)&turns=\(Self.historyPageTurns)" : "before=\(anchor)&turns=\(Self.historyPageTurns)"
       let value: Conversation = try await api.get(conversationPath(id, query: query))
       guard selectedGeneration == selectionGeneration else { return }
+      if !whole, value.before == first {
+        // Only the page's messages and files go in front of the message. The view keeps its own live
+        // state, draft and version, which a newer read may have moved on since this one began.
+        guard conversation?.botId == id, let merged = conversation?.prepending(value, before: first) else {
+          // The view no longer starts at that message, as after a turn that replaced everything: read
+          // the page whole, with everything after it.
+          await readEarlier(of: id, before: first, whole: true)
+          return
+        }
+        windowGeneration += 1
+        historyStarts[id] = value.messages.first?.id ?? first
+        conversation = merged
+        conversationCache[id] = merged
+        saveOfflineLibrary()
+        // A read asked before the window moved is dropped when it answers, with whatever newer turns it
+        // carried, so the whole window is read again.
+        if conversationReadsInFlight > 1 { await refreshConversation() }
+        return
+      }
+      // A whole read, or an answer that does not name the message because the history lost it: the
+      // latest page, which replaces the view as any read does.
       windowGeneration += 1
       historyStarts[id] = value.messages.first?.id
       guard read > appliedConversationRead else {

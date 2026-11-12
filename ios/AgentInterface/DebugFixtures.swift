@@ -762,15 +762,19 @@
         if ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_LONG_HISTORY"] == "1" {
           // The server's history window (src/shared/history.ts): `start` pins the oldest loaded
           // message, `turns` adds that many turns above it, and no start means the latest page.
+          // `before` reads only the turns before that message, and the answer names it.
           let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
-          let start = query.first { $0.name == "start" }?.value
+          let before = query.first { $0.name == "before" }?.value
+          let start = before ?? query.first { $0.name == "start" }?.value
           var turns = Int(query.first { $0.name == "turns" }?.value ?? "") ?? 0
           var end = start.flatMap { id in Self.messages.firstIndex { $0["id"] as? String == id } } ?? -1
+          let page = before != nil && end >= 0
           if end < 0 { end = Self.messages.count; turns = max(turns, 20) }
           var from = end
           while from > 0 && turns > 0 { from -= 1; if Self.messages[from]["role"] as? String == "user" { turns -= 1 } }
           var window = object as! [String: Any]
-          window["messages"] = Array(Self.messages[from...]); window["earlier"] = from; window["earlierFiles"] = 0
+          window["messages"] = Array(Self.messages[from..<(page ? end : Self.messages.count)]); window["earlier"] = from; window["earlierFiles"] = 0
+          if page { window["before"] = before }
           window["sessionId"] = TranscriptFixtures.longSession
           object = window
         }
