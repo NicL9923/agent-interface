@@ -922,7 +922,8 @@ class ProjectionMemo:
 
         ``project(rows)`` is Hermes's projection of ``rows`` with project_rows; ``display`` its compaction projection.
         ``pause(full)`` runs before each piece, reused or not, ``full`` once a piece did not fit, and may raise to
-        stop: the memo then keeps the pieces before that one, which a later projection of the history reuses.
+        stop: the memo then keeps the pieces before that one and, within ``limit``, the kept pieces this projection
+        had not reached, so a stop during a pass over reused pieces loses none of them.
         ``limit`` is the characters this projection may keep, the shared budget when None. ``full`` says afterwards
         whether a piece did not fit. ``background`` charges the shared budget as ProjectionBudget.charge says.
         """
@@ -937,6 +938,10 @@ class ProjectionMemo:
                 try:
                     pause(full)
                 except BaseException:
+                    for later, entry in self.pieces.items():
+                        if later not in kept and size + entry[3] <= limit:
+                            kept[later] = entry
+                            size += entry[3]
                     self.pieces, self.size, self.full = kept, size, full
                     self.shared.charge(self, background)
                     raise
@@ -2467,6 +2472,10 @@ class Bridge:
             try:
                 if not self.warm(profile, store, stored, kwargs):
                     break
+            except MemoryError:
+                # Out of memory is the gateway's problem, not one assistant's: warm nothing more.
+                log.warning("History warm-up stopped after %d of %d assistants: MemoryError", warmed, len(targets))
+                return
             except Exception as exc:
                 log.warning("History warm-up skipped %s: %s", profile, type(exc).__name__)
                 continue
@@ -2505,6 +2514,8 @@ class Bridge:
                     stored = db.get_compression_tip(row["id"]) or row["id"]
                 finally:
                     db.close()
+            except MemoryError:
+                raise
             except Exception as exc:
                 # One store that cannot be read leaves the others warmed. The type only: a message could quote a row.
                 logging.getLogger(__name__).warning("History warm-up skipped %s: %s", profile, type(exc).__name__)
@@ -2550,7 +2561,9 @@ class Bridge:
         the chat live first, since that open's cache is its own.
         """
         display, project = self.projection_parts(kwargs)
-        history = stamp = None
+        # (cache, history, tool rows) of a pass whose projection finished, so a step after it that yields does not
+        # walk every piece again.
+        history = stamp = projected = None
         while True:
             while self.live_work():
                 time.sleep(WARM_POLL)
@@ -2583,14 +2596,19 @@ class Bridge:
                     if self.live_work():
                         raise WarmupYield
                 try:
-                    _, tool_rows = rows.projections.project(history, project, display, context, pause=pause, limit=room, background=True)
-                    self.warm_tool_results(tool_rows, rows, pause)
+                    if projected is None or projected[0] is not rows or projected[1] is not history:
+                        _, tool_rows = rows.projections.project(history, project, display, context, pause=pause, limit=room, background=True)
+                        projected = (rows, history, tool_rows)
+                    self.warm_tool_results(projected[2], rows, pause)
                     self.warm_tool_records(profile, stored, rows, pause)
                 except WarmupYield:
                     continue
                 except WarmupFull:
                     return False
-                return not rows.projections.full
+                with self.cache_lock:
+                    # Another open's charge emptied the memo meanwhile and dropped the cache: the budget is full.
+                    kept = self.warm_caches.get(key) is rows
+                return kept and not rows.projections.full
             finally:
                 lock.release()
 

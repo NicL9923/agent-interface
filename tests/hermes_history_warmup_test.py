@@ -557,6 +557,65 @@ class RankTests(unittest.TestCase):
                 hermes.session["running"] = False
                 warmer.join(5)
 
+    def test_a_stop_partway_through_reused_pieces_keeps_every_piece(self):
+        # Reproduced in review: six pieces kept, a stop at the second pause of the next pass, one piece left.
+        rows = [{"role": "user" if index % 2 == 0 else "assistant", "content": str(index), "_row_id": index + 1} for index in range(12)]
+        memo, pauses = extension.ProjectionMemo(extension.ProjectionBudget()), []
+
+        def stop_at_second(full):
+            pauses.append(full)
+            if len(pauses) == 2:
+                raise extension.WarmupYield
+        with patch.object(extension, "PIECE_ROWS", 1):
+            memo.project(rows, lambda part: ([{"text": row["content"]} for row in part], []), dict, "context")
+            whole = (dict(memo.pieces), memo.size)
+            with self.assertRaises(extension.WarmupYield):
+                memo.project(rows, lambda part: ([{"text": row["content"]} for row in part], []), dict, "context", pause=stop_at_second)
+        self.assertEqual((memo.pieces, memo.size), whole)
+        # The room shrank since: a stop keeps what fits, in order.
+        pieces = [entry[3] for entry in whole[0].values()]
+        pauses.clear()
+        with patch.object(extension, "PIECE_ROWS", 1), self.assertRaises(extension.WarmupYield):
+            memo.project(rows, lambda part: ([{"text": row["content"]} for row in part], []), dict, "context",
+                         pause=stop_at_second, limit=pieces[0] + pieces[1])
+        self.assertEqual((list(memo.pieces), memo.size), (list(whole[0])[:2], pieces[0] + pieces[1]))
+
+    def test_a_warm_up_stepping_aside_on_a_grown_history_projects_only_what_is_new(self):
+        with WarmHermes() as hermes:
+            chat(hermes, 4)
+            hermes.send("default", 1)
+            self.assertTrue(hermes.bridge.warm(*hermes.target()))
+            new = chat(hermes, 1)[0]
+            hermes.projected()
+
+            def turn_starts():
+                # A turn starts as the warm-up reads the grown history, so it stops before the first reused piece.
+                hermes.on_read = None
+                hermes.session["running"] = True
+                threading.Timer(0.02, hermes.session.__setitem__, ("running", False)).start()
+            hermes.on_read = turn_starts
+            self.assertTrue(hermes.bridge.warm(*hermes.target()))
+            self.assertEqual(hermes.projected(), new)
+
+    def test_a_warm_up_whose_cache_another_open_drops_is_not_counted(self):
+        with WarmHermes() as hermes:
+            chat(hermes, 2)
+            hermes.send("default", 1)
+            with hermes.journal.db:
+                tool(hermes.journal.db, "run", "c1", {"ok": 1})
+            bridge = hermes.bridge
+            barns = self.memo(extension.ProjectionBudget(), "barns").size
+
+            def another_open(statement):
+                # While the warm-up parses records, another chat is opened past the budget.
+                if "SELECT id,result,artifacts,detail FROM tools" in statement:
+                    hermes.journal.db.set_trace_callback(None)
+                    bridge.projection_budget.fixed = bridge.warm_caches["default", "stored"].projections.size + barns - 1
+                    self.memo(bridge.projection_budget, "barns")
+            hermes.journal.db.set_trace_callback(another_open)
+            self.assertFalse(bridge.warm(*hermes.target()))
+            self.assertEqual(bridge.warm_caches, {})
+
     def test_a_pause_comes_before_every_piece_reused_or_not(self):
         rows = [{"role": "user" if index % 2 == 0 else "assistant", "content": str(index), "_row_id": index + 1} for index in range(6)]
         memo = extension.ProjectionMemo(extension.ProjectionBudget())
@@ -653,6 +712,22 @@ class StartTests(unittest.TestCase):
                 self.assertIn("warmed 1 of", logs.output[-1])
                 self.assertIn(("default", "stored"), hermes.bridge.warm_caches)
                 self.assertNotIn("hunter2", "\n".join(logs.output))
+
+    def test_running_out_of_memory_stops_the_warm_up(self):
+        def read():
+            raise MemoryError
+        failures = {"a store read": (Chat(read, tip="ranch-stored"), "History warm-up stopped after 0 of 2 assistants: MemoryError"),
+                    "a title lookup": (Chat([], row=MemoryError()), "History warm-up found no assistants: MemoryError")}
+        for name, (ranch, message) in failures.items():
+            with self.subTest(name), WarmHermes() as hermes:
+                chat(hermes, 2)
+                hermes.send("default", 1)
+                hermes.profile("ranch", ranch, created=2)
+                with self.assertLogs(extension.__name__, logging.WARNING) as logs:
+                    hermes.bridge.warm_histories()
+                self.assertEqual(len(logs.output), 1)
+                self.assertIn(message, logs.output[0])
+                self.assertEqual(hermes.bridge.warm_caches, {})
 
 if __name__ == "__main__":
     unittest.main()

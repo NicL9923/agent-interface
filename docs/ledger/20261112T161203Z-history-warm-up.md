@@ -195,3 +195,36 @@ not what it projects or parses.
 
 With the fixes, the same fingerprint scope is `sha256:171b1c373dc139e2bedfa91506d2976cc344240a846bfe2206a7a74bf6e2e7bd`. `.agents/tools/check-all` passed all seven checks again:
 211 test files with 3,883 tests, 55 e2e tests and 52 Python test files.
+
+## Re-review fixes
+
+A re-review of `62637083` (Claude Opus 5.5, fresh context, scoped to the fix commit) confirmed fixes 1, 2, 3 and 5
+and found a regression from fix 4: with a pause before every piece, a stop during a pass over reused pieces kept
+only the pieces that pass had reached. A warm-up that stepped aside after finishing its projection walked every
+piece again, and an open arriving partway dropped every warmed piece after that point. The reviewer reproduced it:
+six pieces warmed, a stop at the second pause of the next pass, one piece left.
+
+- On a stop the memo keeps the pieces it walked, then the kept pieces it had not reached, in order, within the
+  limit. Its size is recounted.
+- A warm-up that steps aside after its projection finished does not walk the pieces again on its retry, while
+  the cache and the history it read are the same. This changes only how long the retry takes and has no test.
+- `MemoryError` stops the warm-up instead of skipping one assistant, in the loop and in `warm_targets`.
+- If another open's charge empties the warm memo and drops its cache during a step, `warm` returns False: the
+  assistant is not counted, and warming stops as it does on a full budget.
+
+`python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_history_warmup_test.py`:
+
+| Mutation | Result |
+| --- | --- |
+| a stop keeps only the pieces it walked | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1) |
+| a stop keeps unreached pieces past the limit | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1) |
+| a dropped cache counts as warmed | failed: test_a_warm_up_whose_cache_another_open_drops_is_not_counted (exit 1) |
+| out of memory skips one assistant | failed: test_running_out_of_memory_stops_the_warm_up (exit 1) |
+| out of memory skips one store | failed: test_running_out_of_memory_stops_the_warm_up (exit 1) |
+
+The limit mutant first survived; the test now also stops a pass whose limit shrank to two pieces.
+`test_a_warm_up_stepping_aside_on_a_grown_history_projects_only_what_is_new` covers the same stop through a whole
+warm-up: a turn starts as it reads a history grown by one turn, and its retry projects only that turn.
+
+Fingerprint `sha256:e7c03b46cded8a8f96e4495d040d97bc0d85b4f2ef4e937144f1c7d5fa7496be` over the same scope. `.agents/tools/check-all` passed all seven checks: 211 test files with
+3,883 tests, 55 e2e tests and 52 Python test files.
