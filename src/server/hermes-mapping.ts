@@ -36,6 +36,22 @@ export function unseen(live: string | undefined, segments: (string | undefined)[
   const lead = /^\s*/.exec(rest)![0];
   return rest.slice(lead.includes('\n') ? lead.lastIndexOf('\n') + 1 : lead.length);
 }
+/**
+ * Live text with a paragraph break at each seam, an offset where one reply segment ended and the next began, when text
+ * follows it and no blank line is already there. Text before a seam is never changed, so growth after it stays an append.
+ */
+export function withSeams(text: string, seams: number[]): string {
+  let result = '', from = 0;
+  for (const seam of seams) {
+    if (seam <= from || seam >= text.length) continue;
+    result += text.slice(from, seam);
+    from = seam;
+    // No break where the whitespace around the seam already holds a blank line.
+    const gap = /\s*$/.exec(result)![0] + /^\s*/.exec(text.slice(seam))![0];
+    if ((gap.match(/\n/g) ?? []).length < 2) result += '\n\n';
+  }
+  return result + text.slice(from);
+}
 /** End offset in `text` after `segment`'s non-whitespace characters, starting at `from`. */
 function matchedPrefix(text: string, from: number, segment: string): number | undefined {
   let i = from, matched = false;

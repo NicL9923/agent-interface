@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHermesRuntime } from "../src/server/hermes.js";
-import { nativeStartedAt, promptSaved, turnRows, turnStart } from "../src/server/hermes-mapping.js";
+import { nativeStartedAt, promptSaved, turnRows, turnStart, withSeams } from "../src/server/hermes-mapping.js";
 import { compareVersions } from "../src/shared/inflight.js";
 import type { Message, Runtime } from "../src/shared/types.js";
 import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-hermes.js";
@@ -39,17 +39,41 @@ describe("turn reads for streams that follow turns", () => {
     hermes.frame("message.delta", { text: "Looking. " });
     saveSegment(4, "Looking.");
     hermes.frame("tool.start", { tool_id: "t1", name: "terminal" });
+    const before = runtime.turn!("shared")!;
     hermes.frame("tool.complete", { tool_id: "t1", name: "terminal", result: "ok" });
-    expect(runtime.turn!("shared")).toBeUndefined();
+    // Until the turn read lands, the reply goes on growing at the last read's version, which has no row for the segment
+    // saved before the tool, so the segment stays in the live reply and what follows the tool starts a paragraph.
+    hermes.frame("message.delta", { text: "Found" });
+    expect(runtime.turn!("shared")).toMatchObject({ version: before.version, turn: before.turn, message: { text: "Looking. \n\nFound" },
+      toolCalls: [expect.objectContaining({ id: "t1", status: "completed" })] });
     await vi.waitFor(() => expect(one).toHaveBeenCalledOnce());
     expect(two).toHaveBeenCalledOnce();
     expect(opens()).toEqual([{ turns: 20 }, { start: "req-2" }]);
-    hermes.frame("message.delta", { text: "Found it." });
+    hermes.frame("message.delta", { text: " it." });
     const live = runtime.turn!("shared")!;
+    expect(compareVersions(live.version, before.version)).toBeGreaterThan(0);
     // The saved segment is a row of the turn, so the live reply leaves it out.
     expect(live.turn).toEqual({ messages: [expect.objectContaining({ id: "req-2" }), expect.objectContaining({ id: "4", text: "Looking." })] });
     expect(live.message.text).toBe("Found it.");
     expect(live.toolCalls).toEqual([expect.objectContaining({ id: "t1", status: "completed" })]);
+  });
+
+  // A tool finishing or a progress line saved changes only what a turn event carries; anything else may change what only a read does.
+  it.each<[string, () => void]>([
+    ["the turn ending", () => hermes.frame("message.complete", { status: "complete" })],
+    ["an approval asked", () => hermes.request("approval", "ap-1", { command: "ls" })],
+    ["a frame the runtime does not know", () => hermes.frame("session.info", {})],
+  ])("keeps no live reply on the last read's version past %s, even after a tool finished", async (_, send) => {
+    midTurn();
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    runtime.followTurns!("shared", () => {});
+    hermes.holdOpens = true;
+    hermes.frame("message.delta", { text: "Looking." });
+    hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
+    hermes.frame("message.interim", {});
+    expect(runtime.turn!("shared")!.message.text).toBe("Looking.");
+    send();
+    expect(runtime.turn!("shared")).toBeUndefined();
   });
 
   it("reads nothing for an assistant no stream follows, or once the last one stops", async () => {
@@ -422,6 +446,23 @@ describe("the live reply's saved text", () => {
     Object.assign(hermes, { inflight: { user: reported, assistant: "Read it. Two pages." } });
     const read = await runtime.conversation("shared", { window: { turns: 20 } });
     expect(read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "Two pages." });
+  });
+});
+
+describe("withSeams", () => {
+  it("starts a paragraph at each seam text follows, unless a blank line is already there", () => {
+    expect(withSeams("Looking.Found it.", [8])).toBe("Looking.\n\nFound it.");
+    expect(withSeams("A. B. C.", [2, 5])).toBe("A.\n\n B.\n\n C.");
+    expect(withSeams("Looking.\n\nFound.", [8])).toBe("Looking.\n\nFound.");
+    expect(withSeams("Looking.\n \nFound.", [9])).toBe("Looking.\n \nFound.");
+    // One newline is not a paragraph in Markdown.
+    expect(withSeams("Looking.\nFound.", [9])).toBe("Looking.\n\n\nFound.");
+  });
+
+  it("adds nothing at a seam no text follows yet, nor at one outside the text or repeated", () => {
+    expect(withSeams("Looking.", [8])).toBe("Looking.");
+    expect(withSeams("Looking.", [0, 20])).toBe("Looking.");
+    expect(withSeams("AB", [1, 1])).toBe("A\n\nB");
   });
 });
 
