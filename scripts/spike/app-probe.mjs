@@ -551,7 +551,9 @@ try {
     const requestId = randomUUID();
     const payload = {
       requestId,
-      text: "PROBE_SLOW synthetic app proof",
+      // The root runs a tool so its tool batch delivers the second member's steer inside this turn.
+      // A turn with no tool batch runs the steer as its own prompt, which stays unattributed (#310).
+      text: "PROBE_SLOW_TOOL synthetic app proof",
       attachments: uploaded,
     };
     const { data: first } = await call(
