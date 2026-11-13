@@ -63,3 +63,25 @@ passed with the trace in place, then 0 failures in the full run.
 
 Real Hermes, push delivery and a physical phone. The three `127.0.0.2` tests did not pass on this Mac: the alias needs sudo,
 which was not given in this session.
+
+## Today's wait tests on CI
+
+GitHub's Node 26.13.0 job failed once at `d15b2ec4` on a file this branch does not touch:
+`tests/experience-api.test.ts` > "an assistant whose read outlasts TODAY_WAIT_MS" > "is answered without, as unchecked,
+and the next Today takes its read instead of reading again", timed out after 15 s. Its helper started a Today read and
+moved the fake clock by `TODAY_WAIT_MS` at once. The route sets that wait only after sign-in, the roster and the event
+page, which take real I/O, so a clock moved first passes before the wait exists and the read waits forever. The
+installed-iOS case had the reverse fault: moving the clock early could let it pass without the wait ever being tested.
+
+The helper now moves the clock only once the route has asked for `ranch`, which it does after setting its wait
+(`src/server/experience.ts`, the `deadline` before `check`), or once the read has answered without asking. Linux,
+NicolasLaptop: 20 of 20 tests passed in each of three runs, and in 12 of 12 runs with 12 busy loops and four runs at
+once. The old helper also passed 12 of 12 under that load, so the CI failure was not reproduced; the fix removes the
+ordering assumption rather than shortening its odds.
+
+Red runs, by hand on `src/server/experience.ts`, restored after each:
+
+| Mutation | Result |
+| --- | --- |
+| the wait is set without `pending=1` | failed: waits for every assistant when the client does not ask for pending answers, as an installed iOS build |
+| the wait is never set | failed: the three `pending=1` cases, each timing out |
