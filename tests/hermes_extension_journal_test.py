@@ -157,7 +157,8 @@ class ProfilesGateway(FakeGateway):
     """Two assistants with their own canonical sessions; a test can hold either one's native activation."""
     def __init__(self):
         super().__init__([])
-        self.held, self.entered, self.inside, self.peak = {}, {}, {}, {}
+        # Each assistant's event exists before any open starts, so a test can wait on one that has not arrived yet.
+        self.held, self.entered, self.inside, self.peak = {}, {name: threading.Event() for name in ("slow", "fast")}, {}, {}
         server, counting = self.server, threading.Lock()
         def handle(request):
             params = request.get("params") or {}

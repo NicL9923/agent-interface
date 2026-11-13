@@ -1920,6 +1920,11 @@ class Bridge:
                 return (id(rows), len(rows or []), tuple((id(row), row.get("_row_id")) for row in rows or [] if isinstance(row, dict)))
             memory = (session.get("session_key"), session.get("history_version"), rows_identity(prefix), rows_identity(history))
             profile_home = session.get("profile_home")
+        return memory, *self.store_identity(profile_home)
+
+    def store_identity(self, profile_home):
+        """The part of a history identity outside the session: stamps of the store a session with ``profile_home``
+        reads, its WAL and the configuration Hermes projects under, and native redaction state."""
         home = Path(profile_home or self.get_hermes_home())
         db = self.server._get_db() if not profile_home and hasattr(self.server, "_get_db") else None
         db_path = Path(getattr(db, "db_path", home / "state.db"))
@@ -1929,8 +1934,17 @@ class Bridge:
         # as does the configuration of the home Hermes runs in, whose language labels tools.
         # Vault secrets and plugin patterns registered at runtime redact native commentary.
         configs = tuple(sorted((str(path), file_stamp(path)) for path in {home / "config.yaml", Path(self.get_hermes_home()) / "config.yaml"}))
-        return memory, tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"))) + (configs,), redaction_state()
+        return tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"))) + (configs,), redaction_state()
 
+    def profile_store_identity(self, profile):
+        """``store_identity`` for ``profile``'s home as Hermes's resume resolves it, None when this Hermes cannot say."""
+        try:
+            from hermes_cli.profiles import get_profile_dir
+            home = Path(get_profile_dir(profile))
+        except (ImportError, ValueError):
+            return None
+        launch = Path(getattr(self.server, "_hermes_home", None) or self.get_hermes_home()).resolve()
+        return self.store_identity(None if home.resolve() == launch else str(home))
 
     def row_cache(self, sid, session):
         """The canonical session's RowCache, a new one when its stored session changed.
@@ -2009,12 +2023,23 @@ class Bridge:
                         del self.warm_caches[key]
                 rows.projections.on_empty = None
                 rows.projections.report = None
+                # The store as it stood before the resume read it. The session only exists afterwards, so its identity
+                # is taken then, and it counts only if the store, config and redaction did not move meanwhile: then
+                # this open can fill the decorated history and the next one answers from it.
+                before = None if omit else self.profile_store_identity(profile)
                 token = self.projecting.set(rows)
                 try:
                     value = self.native("session.resume", {"session_id": scope, "profile": profile, "close_on_disconnect": False})
                 finally:
                     self.projecting.reset(token)
                 value["app_cache"] = {"warm": int(warm is not None)}
+                session = server._sessions.get(value["session_id"])
+                resumed = self.history_identity(session) if before is not None and session is not None else None
+                if resumed is not None and tuple(resumed[1:]) == tuple(before):
+                    # Hermes's resume never reads the journal; decoration does, after it, and the decorated history is
+                    # kept only if the version decoration read is this one.
+                    with journal.lock:
+                        identity, mutation = resumed, journal.version(profile)
                 # row_cache replaces it if the resume landed on another stored session.
                 with self.cache_lock:
                     self.row_caches[value["session_id"]] = rows

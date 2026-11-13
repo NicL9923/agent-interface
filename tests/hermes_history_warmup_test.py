@@ -208,8 +208,37 @@ class FirstOpenTests(unittest.TestCase):
             self.assertEqual(hermes.projected(), set().union(*turns, {photo}))
             # The first open shows images as every later one does.
             self.assertIn("Look ![photo]", [m.get("text") for m in first["messages"]])
-            self.assertEqual(hermes.answer(), first)
+            second = hermes.open()
+            # The resume filled the decorated history, so the second open reads nothing again.
+            self.assertEqual((second["app_cache"]["decorated"], hermes.native_calls[-1][1].get("omit_messages")), (1, True))
+            self.assertEqual(second["messages"], first["messages"])
             self.assertEqual(hermes.projected(), set())
+
+    def test_a_change_during_the_first_open_leaves_the_second_to_read_again(self):
+        def store_write(hermes):
+            with hermes.store:
+                hermes.store.execute("INSERT INTO messages(session_id,message_uid) VALUES('elsewhere','other-chat')")
+        changes = {
+            "another writer commits to the profile's store": store_write,
+            "a vault value is registered for redaction": lambda hermes: hermes.redact._VAULT_REDACTION_VALUES.update({"/home/default": {"fixture-redacted": None}}),
+        }
+        for name, change in changes.items():
+            with self.subTest(name), WarmHermes() as hermes:
+                # Hermes's home is the one the gateway runs in, whose store the default profile's chat reads.
+                hermes.bridge.get_hermes_home = lambda: str(hermes.launch)
+                chat(hermes, 2)
+                hermes.hold = threading.Event()
+                opener = threading.Thread(target=hermes.open, name="opener")
+                opener.start()
+                self.assertTrue(hermes.entered.wait(5))
+                change(hermes)
+                hermes.hold.set()
+                opener.join(5)
+                hermes.hold = None
+                second = hermes.open()
+                self.assertEqual((second["app_cache"]["decorated"], hermes.native_calls[-1][1].get("omit_messages")), (0, None))
+                # Read again, the history fills the decorated history for the open after.
+                self.assertEqual(hermes.open()["app_cache"]["decorated"], 1)
 
     def test_a_first_open_adopts_the_warmed_history_and_projects_nothing(self):
         with WarmHermes() as hermes:
