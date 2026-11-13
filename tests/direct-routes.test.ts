@@ -10,6 +10,7 @@ import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { directAddresses, loadDirectIdentity, type DirectAddress } from "../src/server/direct-routes.js";
+import { requireSecondLoopback, SECOND_LOOPBACK } from "./helpers/loopback.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const directories: string[] = [];
@@ -150,7 +151,8 @@ describe("direct route listener", () => {
   });
 
   it("lists LAN routes before tailnet routes and none when it is off", async () => {
-    const { directRoutes, setAddresses } = await installation([{ kind: "tailnet", address: "127.0.0.1" }, { kind: "lan", address: "127.0.0.2" }]);
+    await requireSecondLoopback();
+    const { directRoutes, setAddresses } = await installation([{ kind: "tailnet", address: "127.0.0.1" }, { kind: "lan", address: SECOND_LOOPBACK }]);
     expect(directRoutes!.routes().map(route => route.kind)).toEqual(["lan", "tailnet"]);
     setAddresses([]);
     const off = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({ close: async () => {} }), { background: false });
@@ -199,12 +201,13 @@ describe("direct route listener", () => {
   });
 
   it("closes a listener whose address went away and opens one for a new address", async () => {
+    await requireSecondLoopback();
     const { directRoutes, setAddresses } = await installation();
     const [old] = directRoutes!.routes();
-    setAddresses([{ kind: "tailnet", address: "127.0.0.2" }]);
+    setAddresses([{ kind: "tailnet", address: SECOND_LOOPBACK }]);
     await directRoutes!.reconcile();
     const routes = directRoutes!.routes();
-    expect(routes).toEqual([expect.objectContaining({ kind: "tailnet", url: expect.stringContaining("https://127.0.0.2:") })]);
+    expect(routes).toEqual([expect.objectContaining({ kind: "tailnet", url: expect.stringContaining(`https://${SECOND_LOOPBACK}:`) })]);
     const port = Number(new URL(old.url).port);
     await expect(new Promise((resolve, reject) => {
       const socket = connect({ host: "127.0.0.1", port, rejectUnauthorized: false }, () => { socket.end(); resolve("open"); });

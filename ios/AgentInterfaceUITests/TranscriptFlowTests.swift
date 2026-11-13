@@ -67,7 +67,10 @@ import XCTest
     XCTAssertTrue(app.buttons["questionOption-extras-2"].wait(until: "isSelected == true"))
     XCTAssertTrue(app.buttons["questionOption-extras-1"].wait(until: "isSelected == false"))
     XCTAssertFalse(send.isEnabled, "The written question still needs an answer")
-    app.descendants(matching: .any).matching(identifier: "questionAnswer-note").firstMatch.typeWhenFocused("Bring gloves")
+    // The written answer is the card's last field, and the decisions bar over the message box can cover it.
+    let note = app.descendants(matching: .any).matching(identifier: "questionAnswer-note").firstMatch
+    note.revealAboveComposer()
+    note.typeWhenFocused("Bring gloves")
     try capture(app, "question-answered")
     if !send.canTap { app.scrollViews["conversationTranscript"].swipeUp() }
     XCTAssertTrue(send.wait(until: "isEnabled == true"))

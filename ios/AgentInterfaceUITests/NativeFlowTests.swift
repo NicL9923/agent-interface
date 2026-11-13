@@ -188,7 +188,10 @@ import XCTest
     // The dialog's own button: the one that opened it has the same label and stays in the tree behind it.
     let install = app.sheets.buttons["Install update"]
     XCTAssertTrue(install.waitForExistence(timeout: 5)); install.tap()
-    XCTAssertTrue(app.buttons["refreshHermesUpdate"].waitForExistence(timeout: 10))
+    // The form is lazy, and the error's row sits below the version list and the actions, past the fold.
+    let refresh = app.buttons["refreshHermesUpdate"]
+    for _ in 0..<6 { if refresh.waitForExistence(timeout: 1) { break }; app.swipeUp() }
+    XCTAssertTrue(refresh.exists)
     XCTAssertFalse(app.buttons["installHermesUpdate"].isEnabled)
     screenshot(app, "Fixture native uncertain Hermes update")
     app.buttons["refreshHermesUpdate"].tap()
@@ -301,8 +304,9 @@ import XCTest
     XCTAssertTrue(app.staticTexts["The update couldn't finish"].exists)
     XCTAssertTrue(app.buttons["retryHermesUpdate"].exists, "Retry is offered for a failed install")
     XCTAssertEqual(app.descendants(matching: .any)["upgradeStep.Install"].label, "Install: stopped")
-    for _ in 0..<5 { if app.staticTexts["App compatibility"].exists { break }; app.swipeUp() }
-    XCTAssertTrue(app.staticTexts["App compatibility"].exists, "Test details open on their own after a failure")
+    // The failed check is the restart that should have brought Hermes back.
+    for _ in 0..<5 { if app.staticTexts["Restart and verify Hermes"].exists { break }; app.swipeUp() }
+    XCTAssertTrue(app.staticTexts["Restart and verify Hermes"].exists, "Test details open on their own after a failure")
     screenshot(app, "Native failed update recovery fixture")
     app.buttons["restartHermesService"].tap()
     XCTAssertTrue(app.staticTexts["Restart the Hermes service and check the connection? This may briefly disconnect everyone."].waitForExistence(timeout: 5))

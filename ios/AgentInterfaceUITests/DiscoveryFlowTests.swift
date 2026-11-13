@@ -37,13 +37,16 @@ import XCTest
     // The hit opens at its matching reply, below the fold; saving the conversation is at the top.
     let match=app.staticTexts["Fixture saved reply: brisket on Sunday."]
     expectation(for:NSPredicate(format:"hittable == true"),evaluatedWith:match);waitForExpectations(timeout:10)
-    for _ in 0..<20 where !app.buttons["Save conversation"].canTap { app.swipeDown() }
-    XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].exists,app.debugDescription);app.buttons["Save conversation"].tap()
+    // The history toolbar floats over the list's top, and a button scrolled under it still reports hittable,
+    // so a tap there lands on Back to results. Scroll until the button clears the toolbar's last line.
+    let save=app.buttons["Save conversation"],toolbarEnd=app.staticTexts.matching(NSPredicate(format:"label ENDSWITH %@","· Read-only history")).firstMatch
+    for _ in 0..<20 where !(save.canTap && toolbarEnd.exists && save.frame.minY >= toolbarEnd.frame.maxY) { app.swipeDown() }
+    XCTAssertTrue(app.staticTexts["Fixture: five easy dinners."].exists,app.debugDescription);save.tap()
     XCTAssertTrue(app.staticTexts["Saved. Find it in Saved items."].waitForExistence(timeout:5));app.buttons["Back to results"].tap()
     app.buttons["Saved items"].tap();XCTAssertTrue(app.buttons["savedItem-saved-1"].waitForExistence(timeout:5))
-    XCTAssertTrue(app.buttons["savedItem-saved-1"].label.hasSuffix("· Conversation"),app.buttons["savedItem-saved-1"].label);XCTAssertTrue(app.buttons["Remove Saved conversation"].exists)
+    XCTAssertTrue(app.buttons["savedItem-saved-1"].label.contains(" · Conversation · Saved "),app.buttons["savedItem-saved-1"].label);XCTAssertTrue(app.buttons["Remove Saved conversation"].exists)
     app.buttons["Automations"].tap();XCTAssertTrue(app.staticTexts["Morning report"].waitForExistence(timeout:5));XCTAssertTrue(app.buttons["Pause"].exists)
-    XCTAssertTrue(app.buttons["refreshAutomations"].exists);XCTAssertTrue(app.staticTexts["Upcoming work, recent failures and who receives results."].exists)
+    XCTAssertTrue(app.buttons["refreshAutomations"].exists);XCTAssertTrue(app.staticTexts["Upcoming work, recent failures, recipients and 30-day usage."].exists)
     let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Native automation oversight";attachment.lifetime = .keepAlways;add(attachment)
   }
 }

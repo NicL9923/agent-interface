@@ -922,6 +922,25 @@ without `tmux`, shows SKIP locally and fails when `CI=true`.
 `npm run lint:py` runs ruff for undefined names and likely bugs. Install the
 version pinned in `.github/requirements-ci.txt`. CI runs both in its Python job.
 
+The direct-route tests listen on a second loopback address, `127.0.0.2`. Linux has all of
+`127.0.0.0/8`; macOS has only `127.0.0.1` until `sudo ifconfig lo0 alias 127.0.0.2 up`, which
+lasts until a restart. To keep it, run that at boot from a launch daemon:
+
+```sh
+sudo tee /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist >/dev/null <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>dev.agentinterface.loopback-alias</string>
+  <key>ProgramArguments</key><array>
+    <string>/sbin/ifconfig</string><string>lo0</string><string>alias</string><string>127.0.0.2</string><string>up</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+</dict></plist>
+PLIST
+sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist
+```
+
 `npm run test:e2e` runs a short Playwright smoke suite in real Chromium. Run `npm run build`
 first, and `npx playwright install chromium` once per Playwright version. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,

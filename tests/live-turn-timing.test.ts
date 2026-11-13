@@ -14,6 +14,8 @@ import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-her
  */
 const HERMES_MS = 60;
 const STEP_MS = 5;
+/** Event-loop turns a step waits for the server's work after a timer: setImmediate, so each passes a poll for socket data. */
+const SETTLE_TURNS = 20;
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void } }[] = [];
 afterEach(async () => {
@@ -87,14 +89,26 @@ async function measure(mode: string, tools: number) {
   hermes.openDelay = HERMES_MS;
   const start = Date.now();
   const now = () => Date.now() - start;
-  // Steps virtual time, letting sockets deliver and the client's read finish before time moves on,
-  // except while that read waits on Hermes, whose answer is itself a timer.
+  // Lets sockets deliver and the client's read finish, except while that read waits on Hermes, whose answer is
+  // itself a timer. A change notice reaching the client and its read reaching Hermes take several event-loop turns,
+  // and a loaded machine fits fewer of them into a real millisecond, so the turns are counted.
+  const settle = async () => {
+    for (let spin = 0; spin < 200; spin++) {
+      await realDelay(1);
+      for (let turn = 0; turn < SETTLE_TURNS; turn++) await new Promise(resolve => setImmediate(resolve));
+      if (!watching.pending() || hermes.delayed) return;
+    }
+  };
+  // Steps virtual time STEP_MS at a time and one timer at a time, settling after each, so what the server sends
+  // from a timer reaches the client at that timer's time. Advancing a whole step at once left it to a race between
+  // the socket and the rest of the step, which a loaded machine lost by up to a step.
   const until = async (at: number) => {
     while (now() < at) {
-      await vi.advanceTimersByTimeAsync(STEP_MS);
-      for (let spin = 0; spin < 200; spin++) {
-        await realDelay(1);
-        if (!watching.pending() || hermes.delayed) break;
+      let stepped = false;
+      setTimeout(() => { stepped = true; }, STEP_MS);
+      while (!stepped) {
+        await vi.advanceTimersToNextTimerAsync();
+        await settle();
       }
     }
   };
@@ -178,13 +192,15 @@ describe("live text after a change to the turn's structure", () => {
     // The ledger and the PR quote these figures, so a change that moves them fails here until they are updated.
     // ?inflight=2 is the baseline origin/main measured the same: after each tool its text waits for a throttled
     // change notice and the client's read. On ?inflight=3 the token right after a turn's start shows once the server's
-    // own read lands, one Hermes read and a measuring step later. The token after a tool shows at once: the turn keeps
+    // own read lands, one Hermes read later. The token after a tool shows at once: the turn keeps
     // growing at its last read's version while the server reads it again. That is one more open per structural frame, less the
     // client's own read after a tool or a start, which the turn event covers and its change notice no longer asks for
     // (10 and 26 before that, 10 and 18 now: the two-tool turn is too short for the notice throttle to have sent more).
+    // Before the clock moved one timer at a time these read 105, 445, 745 and 61 ms: what Hermes answered mid-step
+    // was counted when the client saw it, at the step's end or, by a race with the socket, a millisecond in.
     const expected: Record<string, { ms: number[]; opens: number; ten: number }> = {
-      "2": { ms: [105, 445, 745], opens: 6, ten: 14 },
-      "3": { ms: [61, 0, 0], opens: 10, ten: 18 },
+      "2": { ms: [100, 440, 740], opens: 6, ten: 14 },
+      "3": { ms: [60, 0, 0], opens: 10, ten: 18 },
     };
     for (const mode of modes) {
       const { gaps, opens } = results.get(mode)!;

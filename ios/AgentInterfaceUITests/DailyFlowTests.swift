@@ -82,7 +82,7 @@ import XCTest
     composer.typeWhenFocused("Keep this draft")
     home(app)
     app.buttons["openToday"].tap()
-    XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Since you were away"].waitForExistence(timeout: 5))
     try capture(app, "daily-today")
     home(app)
     app.buttons["openDiscovery"].tap()

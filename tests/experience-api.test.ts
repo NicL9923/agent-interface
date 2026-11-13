@@ -97,11 +97,20 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     s.conversation.mockImplementation((id: string, options?: { history?: false }) => id !== 'ranch' ? answer(id) : new Promise(resolve => { held.push(() => void answer(id).then(value => resolve({ ...value, ...options?.history === false ? { messages: [] } : {} }))); }));
     return { held, reads: () => s.conversation.mock.calls.filter(([id]) => id === 'ranch').length };
   }
-  const today = async (s: Awaited<ReturnType<typeof setup>>) => {
-    const response = s.app.inject({ url: '/api/today?pending=1', headers: s.first });
-    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
-    return (await response).json();
-  };
+  /**
+   * Starts a Today read and moves the clock `by` once the route has asked for `ranch`, which it does only after it set
+   * its wait, or once it has answered without asking. Sign-in, the roster and the event page take real I/O first, so
+   * on a loaded machine a clock moved at once can pass before the wait exists, and the read then waits forever.
+   */
+  async function read(s: Awaited<ReturnType<typeof setup>>, url: string, by = TODAY_WAIT_MS) {
+    const asked = s.conversation.mock.calls.length;
+    let answered = false;
+    const response = s.app.inject({ url, headers: s.first }).finally(() => { answered = true; });
+    while (!answered && !s.conversation.mock.calls.slice(asked).some(([id]) => id === 'ranch')) await new Promise(resolve => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(by);
+    return { response, answered: () => answered };
+  }
+  const today = async (s: Awaited<ReturnType<typeof setup>>) => (await (await read(s, '/api/today?pending=1')).response).json();
   const ranch = (overview: { items: { botId: string }[] }) => overview.items.find(item => item.botId === 'ranch') as Record<string, unknown>;
 
   it('is answered without, as unchecked, and the next Today takes its read instead of reading again', async () => {
@@ -133,8 +142,7 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     expect(ranch(await today(s))).toMatchObject({ activity: { state: 'working' }, approvals: [], pending: true, files: [{ name: 'plan.pdf' }], latestMessage: { id: 'reply' } });
     // Another recap, here for another start, shows none of it.
     const since = new Date(Date.now() - 3_600_000).toISOString();
-    const response = s.app.inject({ url: `/api/today?since=${encodeURIComponent(since)}&pending=1`, headers: s.first });
-    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS);
+    const { response } = await read(s, `/api/today?since=${encodeURIComponent(since)}&pending=1`);
     expect(ranch((await response).json())).toMatchObject({ pending: true, files: [] });
     expect(ranch((await response).json())).not.toHaveProperty('latestMessage');
   });
@@ -143,10 +151,8 @@ describe('an assistant whose read outlasts TODAY_WAIT_MS', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const s = await setup();
     const hold = holdRanch(s);
-    let answered = false;
-    const response = s.app.inject({ url: '/api/today', headers: s.first }).then(value => { answered = true; return value; });
-    await vi.advanceTimersByTimeAsync(TODAY_WAIT_MS * 5);
-    expect(answered).toBe(false);
+    const { response, answered } = await read(s, '/api/today', TODAY_WAIT_MS * 5);
+    expect(answered()).toBe(false);
     hold.held.shift()!();
     const overview = (await response).json();
     expect(ranch(overview)).toMatchObject({ activity: { state: 'blocked' }, files: [{ name: 'plan.pdf' }] });

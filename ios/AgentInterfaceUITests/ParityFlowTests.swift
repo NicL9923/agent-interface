@@ -175,18 +175,24 @@ import UIKit
   func testAssistantCatalogAndUnsavedChangesAreProtected() throws {
     let app = launch()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 10))
+    // Settings opens on its list of sections: the name is in Profile, the model in Behavior.
     app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
     let name = app.textFields["Name"]
+    XCTAssertTrue(name.wait(until: "enabled == true"))
     name.typeWhenFocused(" edited")
     app.buttons["Close"].tap()
     XCTAssertTrue(app.buttons["Discard changes"].waitForExistence(timeout: 5))
     app.buttons["Discard changes"].tap()
     XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 5))
     app.openAssistantSettings("Ranch hand")
+    app.selectSettingsTab("Profile")
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Name"].value as? String, "Ranch hand")
-    XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
+    app.selectSettingsTab("Behavior")
+    // Only once the Behavior page shows its model row does the catalog's absence mean it starts collapsed.
     scroll(app, to: app.buttons["assistantModel"])
+    XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
     XCTAssertEqual(app.buttons["assistantModel"].label, "configured-model, OpenRouter")
     app.buttons["assistantModel"].tap()
     let search = app.textFields["modelSearch"]
@@ -196,20 +202,22 @@ import UIKit
     try capture("assistant-model-catalog")
   }
   func testComputerRowReportsWhoHasControlAndDisablesWhenUnavailable() throws {
-    for unavailable in [false, true] {
+    // The terminal runs without the desktop, so the row stays open while either works.
+    for (desktopDown, terminalDown) in [(false, false), (true, false), (false, true), (true, true)] {
       let app = XCUIApplication()
       app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
       app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
       app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
       app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
-      if unavailable { app.launchEnvironment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] = "1" }
+      if desktopDown { app.launchEnvironment["AGENT_INTERFACE_UI_COMPUTER_UNAVAILABLE"] = "1" }
+      if terminalDown { app.launchEnvironment["AGENT_INTERFACE_UI_TERMINAL_UNAVAILABLE"] = "1" }
       app.launch()
       XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 10)); app.openSettingsFromProfileMenu()
       let row = app.descendants(matching: .any)["sharedComputer"]
       XCTAssertTrue(row.waitForExistence(timeout: 10))
-      let detail = unavailable ? "The fixture desktop is stopped." : "Ranch hand is using the computer"
+      let detail = desktopDown ? "The fixture desktop is stopped." : "Ranch hand is using the computer"
       expectation(for: NSPredicate(format: "label CONTAINS %@", detail), evaluatedWith: row); waitForExpectations(timeout: 10)
-      XCTAssertEqual(row.isEnabled, !unavailable)
+      XCTAssertEqual(row.isEnabled, !(desktopDown && terminalDown), "desktop down \(desktopDown), terminal down \(terminalDown)")
       app.terminate()
     }
   }
@@ -321,8 +329,9 @@ import UIKit
     let app = launch(home: true)
     XCTAssertTrue(app.buttons["openToday"].waitForExistence(timeout: 10))
     app.buttons["openToday"].tap()
-    XCTAssertTrue(app.staticTexts["Needs your attention"].waitForExistence(timeout: 10))
-    XCTAssertTrue(app.staticTexts["Since you were away"].exists)
+    XCTAssertTrue(app.staticTexts["Since you were away"].waitForExistence(timeout: 10))
+    // The fixture's one assistant is done and asks for nothing, so Today leaves out the empty section.
+    XCTAssertFalse(app.staticTexts["Needs your attention"].exists)
     try capture("today")
     home(app)
     app.buttons["bot.ranch"].tap()
@@ -378,8 +387,9 @@ import UIKit
     // A labelled row switch holds the real control; tapping the row's centre can miss it.
     (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
     expectation(for: NSPredicate(format: "value == %@", "0"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
-    // The explanatory text sits below the fold in a lazy list, so the switch's own label is the check.
-    expectation(for: NSPredicate(format: "label CONTAINS %@", "Disabled"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
+    // The explanatory text sits below the fold in a lazy list, so the switch's own label is the check: its caption
+    // reads On, Off or Blocked.
+    expectation(for: NSPredicate(format: "label CONTAINS %@", "Off"), evaluatedWith: toggle); waitForExpectations(timeout: 10)
   }
   func testNotNowHidesNotificationPromptAndSettingsCanStillEnable() {
     let app = launch(["PUSH"])
