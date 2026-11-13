@@ -881,6 +881,42 @@ class OpenTests(unittest.TestCase):
                     hermes.open()
                 self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
+    def test_the_configuration_of_the_home_hermes_runs_in_ends_a_profiles_decorated_history(self):
+        # Hermes labels tools in the language configured where it runs, not only in the profile's home.
+        with FakeGateway(turns(3)) as hermes, tempfile.TemporaryDirectory() as launch:
+            hermes.bridge.get_hermes_home = lambda: launch
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            (Path(launch) / "config.yaml").write_text("display:\n  language: fr\n")
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_a_stores_version_moves_with_each_commit_another_connection_makes_and_follows_a_replaced_file(self):
+        def commit(path):
+            with contextlib.closing(sqlite3.connect(path)) as other, other:
+                other.execute("INSERT INTO messages DEFAULT VALUES")
+        with FakeGateway(turns(1)) as hermes, tempfile.TemporaryDirectory() as directory:
+            path, replacement = Path(directory) / "state.db", Path(directory) / "restored.db"
+            for store in (path, replacement):
+                with contextlib.closing(sqlite3.connect(store)) as created, created:
+                    created.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY)")
+            first = hermes.bridge.store_version(path)
+            self.assertEqual(hermes.bridge.store_version(path), first)
+            commit(path)
+            second = hermes.bridge.store_version(path)
+            self.assertNotEqual(second, first)
+            self.assertEqual(hermes.bridge.store_version(path), second)
+            # A restore replaces the file. A connection to the old one would never see the new file's commits.
+            replacement.replace(path)
+            restored = hermes.bridge.store_version(path)
+            commit(path)
+            self.assertNotEqual(hermes.bridge.store_version(path), restored)
+            self.assertIsNone(hermes.bridge.store_version(Path(directory) / "missing.db"))
+
     def test_eviction_keeps_the_most_recently_read_histories(self):
         clock = Mock(return_value=100)
         with FakeGateway(turns(1)) as hermes, patch.object(extension.time, "monotonic", clock), patch.object(extension, "DECORATED_LIMIT", 2):

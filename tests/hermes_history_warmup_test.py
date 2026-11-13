@@ -440,6 +440,9 @@ class SteppingAsideTests(unittest.TestCase):
             until(lambda: hermes.session["running"])
             first = len(hermes.calls)
             hermes.redact._VAULT_REDACTION_VALUES["/home/default"] = {"fixture-redacted": None}
+            # The turn runs long enough for the warm-up to see it, as turn_during's does. Ended at once, a loaded machine
+            # could let the warm-up finish under the old redaction without ever standing aside.
+            time.sleep(0.03)
             hermes.session["running"] = False
             warmer.join(5)
             # The projection under the old redaction is not kept as finished: the warm-up projects again under the new one.
