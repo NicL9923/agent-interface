@@ -294,6 +294,41 @@ import XCTest
     XCTAssertFalse(app.switches["mcpServer.existing-calendar"].exists)
   }
 
+  func testLiveActivitiesSwitchStaysOffAfterRelaunchAndDefersToIosSettings() throws {
+    // Set TEST_RUNNER_AGENT_INTERFACE_UI_THEME=dark to capture the dark screenshots.
+    let theme = ProcessInfo.processInfo.environment["AGENT_INTERFACE_UI_THEME"]
+    let app = launch(values: theme.map { ["THEME": $0] } ?? [:])
+    openSettings(app)
+    let toggle = app.switches["liveActivities"]
+    reveal(app, toggle)
+    XCTAssertEqual(toggle.value as? String, "1", "On by default, as before the switch existed")
+    try capture("live-activities-on-\(theme ?? "light")")
+    // A labelled row switch holds the real control; tapping the row's centre can miss it.
+    (toggle.switches.firstMatch.exists ? toggle.switches.firstMatch : toggle).tap()
+    waitFor("value == '0'", toggle)
+
+    app.terminate()
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = nil
+    app.launch()
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))
+    openSettings(app)
+    reveal(app, toggle)
+    XCTAssertEqual(toggle.value as? String, "0", "The switch stays off after a relaunch")
+
+    app.terminate()
+    app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+    app.launchEnvironment["AGENT_INTERFACE_UI_LIVE_ACTIVITIES_OFF_IN_SETTINGS"] = "1"
+    app.launch()
+    XCTAssertTrue(app.buttons["openSettings"].waitForExistence(timeout: 15))
+    openSettings(app)
+    let settingsLink = app.descendants(matching: .any)["liveActivitiesSettings"]
+    reveal(app, settingsLink)
+    XCTAssertEqual(toggle.value as? String, "0", "On in the app, but iOS has them off, so the switch shows off")
+    XCTAssertFalse(toggle.isEnabled)
+    XCTAssertTrue(toggle.label.contains("Off in iOS Settings"), toggle.label)
+    try capture("live-activities-off-in-settings-\(theme ?? "light")")
+  }
+
   func testHermesShowsReleaseDatesWithTheHashAsDetail() throws {
     let app = launch()
     openSettings(app)

@@ -1532,8 +1532,20 @@ Rejected tokens are forgotten and failures back off as for updates.
 The app starts the activity in the foreground after sending a message, or on foreground
 when the state has active rows. It shows a `starting` seed row for the assistant it sent
 to, registers the push token as soon as iOS provides it, and re-registers on every
-foreground. It ends extra activities, ends its activity on sign-out or account change,
-and respects a per-device Live Activities switch in Preferences.
+foreground. It ends extra activities and ends its activity on sign-out or account change.
+
+Settings has a Live Activities switch for the device. It defaults to on and is stored on
+the device, not per account, so it holds through sign-out and a background launch reads
+it before any account loads. Turning it off ends every activity at once, sends
+`DELETE /native/live-activity` for the update tokens of this account's activities and
+`DELETE /native/live-activity/start`, and stops the app starting one after a send or on
+foreground. An activity the server starts by push before that request lands ends
+immediately, and the app sends the start-token removal again. Until the server confirms
+it, each foreground repeats the removal. Turning the switch on registers the
+push-to-start token again; the next send, or a foreground with active rows, starts the
+activity. When iOS Settings has Live Activities off for the app, the switch shows off and
+links to the app's iOS Settings page, and the app removes its start token as before.
+Neither change needs a new server route.
 
 ## Widgets
 
