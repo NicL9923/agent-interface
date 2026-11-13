@@ -190,8 +190,9 @@ import UIKit
     XCTAssertTrue(app.textFields["Name"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.textFields["Name"].value as? String, "Ranch hand")
     app.selectSettingsTab("Behavior")
-    XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
+    // Only once the Behavior page shows its model row does the catalog's absence mean it starts collapsed.
     scroll(app, to: app.buttons["assistantModel"])
+    XCTAssertFalse(app.textFields["modelSearch"].exists, "The catalog opens from the collapsed model row")
     XCTAssertEqual(app.buttons["assistantModel"].label, "configured-model, OpenRouter")
     app.buttons["assistantModel"].tap()
     let search = app.textFields["modelSearch"]
@@ -202,7 +203,7 @@ import UIKit
   }
   func testComputerRowReportsWhoHasControlAndDisablesWhenUnavailable() throws {
     // The terminal runs without the desktop, so the row stays open while either works.
-    for (desktopDown, terminalDown) in [(false, false), (true, false), (true, true)] {
+    for (desktopDown, terminalDown) in [(false, false), (true, false), (false, true), (true, true)] {
       let app = XCUIApplication()
       app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
       app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
