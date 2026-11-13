@@ -18,6 +18,7 @@ import type { Bot, Capabilities, Conversation, FileRef, Message, ModelCatalog, P
 import type { UpgradeStatus } from "../src/shared/upgrades.js";
 import type { ProfileVault } from "../src/shared/vault.js";
 import type { VoiceTranscript } from "../src/shared/voice.js";
+import { requireSecondLoopback, SECOND_LOOPBACK } from "./helpers/loopback.js";
 import type { AutomationOverview as ProfileAutomationOverview, AutomationTask, EventSubscription, SkillContent, SkillDiff } from "../src/shared/automation.js";
 
 // The iOS app decodes these responses. Every optional field the app reads is populated, so a
@@ -292,6 +293,7 @@ function multipart(field: string, name: string, mime: string, body: string) {
 afterEach(() => { vi.useRealTimers(); });
 
 it("keeps the server responses the iOS app decodes in sync with the committed contract fixtures", async () => {
+  await requireSecondLoopback();
   vi.useFakeTimers({ toFake: ["Date"], now: new Date(now) });
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
   config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "dev.agentinterface.ios", privateKeyFile: "unused-by-contract-test", environment: "sandbox" };
@@ -299,7 +301,7 @@ it("keeps the server responses the iOS app decodes in sync with the committed co
   const tlsDirectory = mkdtempSync(join(tmpdir(), "contract-direct-"));
   config.directRoutes = { kinds: ["lan", "tailnet"], port: 0, stateDirectory: tlsDirectory };
   const { app, store, directRoutes } = await createApp(config, runtime, { background: false, sendApns: async () => {}, upgrades: upgrades as HermesUpgrades,
-    directAddresses: () => [{ kind: "tailnet", address: "127.0.0.2" }, { kind: "lan", address: "127.0.0.1" }] });
+    directAddresses: () => [{ kind: "tailnet", address: SECOND_LOOPBACK }, { kind: "lan", address: "127.0.0.1" }] });
   await directRoutes!.start(3_600_000);
   const fixtures = new Map<string, { request: string; response: unknown }>();
   try {

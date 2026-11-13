@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../src/server/app.js";
@@ -111,7 +111,9 @@ function releases({ name = "previous-release.json", directory }: { name?: string
   writeFileSync(file, JSON.stringify({ assets: directory ? directory(root) : join(previous, "assets") }));
   return { root, live, previous, file, clientRoot: join(live, "client") };
 }
-function realRoot() { const root = mkdtempSync(join(tmpdir(), "agent-releases-")); directories.push(root); return root; }
+// The release paths a host serves from are real. previousAssetFile hands @fastify/static the real directory, so
+// isPreviousAsset is asked about a real path. macOS's temp directory is under /var, a link to /private/var.
+function realRoot() { const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-releases-"))); directories.push(root); return root; }
 
 async function withReleases(layout: ReturnType<typeof releases>) {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
