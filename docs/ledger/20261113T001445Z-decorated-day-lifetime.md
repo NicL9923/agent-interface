@@ -35,20 +35,28 @@ nothing outside that identity: artifacts are resolved when the tool runs and sto
 unless something it can see changed. Without readable redaction state the 30-second lifetime still applies. Memory is
 unchanged: entries were already kept until replaced or evicted (`DECORATED_LIMIT`), only no longer answered.
 
-A day leans harder on the identity than ten minutes did, so after review it covers two more inputs:
-- The `config.yaml` of the home Hermes runs in, not only the profile's. Hermes's `t()` labels tools in the language
-  configured there (`agent/i18n.py:89-91`); `projection_context` already stamped both.
-- `PRAGMA data_version` of the store, from one read-only connection the add-on keeps per file, reopened when the file
-  is replaced. File stamps alone can miss a commit: after the WAL resets, frames are rewritten in place at the same
-  size, and two commits within one clock tick leave the same times. The connection never waits for a writer
-  (`timeout=0`); a busy store answers None, which only misses. On the production host's SQLite 3.53.1, against a
-  `.backup` copy of `patch`'s WAL store (deleted afterward), the version stayed put without commits and moved after a
-  commit by Hermes's own `SessionDB`.
+A day leans harder on the identity than ten minutes did. After review, it also stamps the `config.yaml` of the home
+Hermes runs in, not only the profile's: Hermes's `t()` labels tools in the language configured there
+(`agent/i18n.py:89-91`), and `projection_context` already stamped both.
 
-Not covered, and said so in the comment: Hermes's projection also reads an attached image's file, the skin and
-installed language packs, and a journal restored from a backup sets its version count back, which later writes could
-count up to the old number. Keying the journal's own `data_version` would close that, but any other process's journal
-commit, such as the dashboard's, would then drop every assistant's decorated history.
+Not covered, and said so in the comment:
+- Hermes's projection also reads an attached image's file, the skin and installed language packs.
+- A commit the file stamps cannot see. The host runs Linux 6.8 on ext4, with coarse file times, so two commits within
+  one clock tick, the second rewriting WAL frames in place at the same size, leave equal stamps. It also needs a
+  writer that changes this chat's display rows without touching Hermes's in-memory history.
+- A journal restored from a backup sets its version back, which later writes could count up to the old number.
+
+A first fix kept one read-only connection per store to read `PRAGMA data_version`, which moves on every other
+connection's commit. On the host's SQLite 3.53.1 it did, against a `.backup` copy of `patch`'s WAL store with Hermes's
+own `SessionDB` writing. Re-review found it unsafe, and it was removed:
+- Hermes refuses to open a store for writing while any process holds a deleted `-wal` or `-shm` of it
+  (`refuse_deleted_wal_generation`, `hermes_state_dbfile.py:355-393`). An untracked connection outlives profile
+  deletion, so recreating a deleted assistant would fail until the gateway restarted.
+- The connection is invisible to Hermes's lock guard, so a raw open and close elsewhere in the process could strand it
+  on an old WAL generation with a frozen version.
+
+Keying the journal's own `data_version` would close the restore case, but any other process's journal commit, such as
+the dashboard's, would then drop every assistant's decorated history.
 
 ## Red runs
 
@@ -65,21 +73,20 @@ After review, the same tool over the four add-on test modules; the baseline pass
 | Mutation | Result |
 | --- | --- |
 | only the profile home's configuration | failed: test_the_configuration_of_the_home_hermes_runs_in_ends_a_profiles_decorated_history (exit 1) |
-| a replaced store keeps its old connection | failed: test_a_stores_version_moves_with_each_commit_another_connection_makes_and_follows_a_replaced_file (exit 1) |
-| store version never read | failed: test_a_stores_version_moves_with_each_commit_another_connection_makes_and_follows_a_replaced_file (exit 1) |
-| store version left out of the identity | survived |
+| warm-up reuses a projection made under another context | failed: test_a_redaction_change_while_the_warm_up_stood_aside_projects_again (exit 1) |
 
-The survivor needs a commit that leaves every file stamp equal, within one clock tick, which a test cannot stage;
-`store_version` itself is tested above.
+The second row is #375's fix, run again because its test changed (below).
 
 ## Review
 
-Claude Opus 5.5 reviewed `8ac3de22` (GPT-6.1 Sol and Grok unavailable; Nicolas approved Claude reviewers for this
-thread). No medium or high findings. Fixed: the launch home's configuration and the clock-tick collision, above, and
-the comment's claim that decoration reads nothing else. Not fixed: the journal restore, above.
+Claude Opus 5.5 reviewed `8ac3de22`, then `d40d6099` (GPT-6.1 Sol and Grok unavailable; Nicolas approved Claude
+reviewers for this thread). The first review had no medium or high findings; its launch-home configuration and comment
+findings are fixed, and the others are recorded above as not covered. The second found the store connection unsafe,
+which is why it was removed, and the warm-up test still timing-dependent.
 
 ## Test fix
 
 `test_a_redaction_change_while_the_warm_up_stood_aside_projects_again` failed once in a combined run and passed 40 of
 40 alone, on this branch and on `origin/main`. It ended its turn as soon as it saw it start, so a loaded machine could
-let the warm-up finish without standing aside. It now holds the turn 30 ms, as `turn_during` does.
+let the warm-up finish without standing aside. Its session record now notes when the warm-up's live-work check, on the
+warm-up's thread, reads the running turn, and the turn ends only after that. It passed 30 of 30 alone.

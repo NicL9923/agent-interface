@@ -687,10 +687,14 @@ def admission_turn(result):
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity (history_identity), the profile's journal version and
-# native redaction state. Those cover the rows, the store's commits, the configuration that labels tools and the
+# native redaction state. Those cover the rows, the store's files, the configuration that labels tools and the
 # journal rows decoration reads; tool artifacts are resolved when the tool runs. Hermes's projection also reads a
 # little that no key covers: an attached image's file, the skin and installed language packs. A change to those
-# alone shows once the chat next changes, or after this lifetime. A day keeps a chat idle overnight answering from
+# alone shows once the chat next changes, or after this lifetime. So does a commit file stamps cannot see: on a
+# kernel with coarse file times, two commits within one clock tick, the second rewriting WAL frames in place at the
+# same size, by a writer that leaves Hermes's in-memory history alone. A connection kept open to read the store's
+# PRAGMA data_version would see it, but Hermes refuses to open a store for writing while any process holds a deleted
+# generation of its WAL, so the add-on keeps none. A day keeps a chat idle overnight answering from
 # its decorated history. At ten minutes almost every open after a pause read and decorated the whole history again,
 # 1.5 to 2.5 s for an 8,000-row chat, though nothing had changed. A journal restored from a backup sets its version
 # back, and could only be mistaken for the history it replaced if later writes counted it back to the same number.
@@ -1146,8 +1150,6 @@ class Bridge:
         self.keepers = {}
         self.canonical = {}
         self.decorated = {}
-        # Store path -> (device, inode, read-only connection), whose PRAGMA data_version history_identity reads.
-        self.store_readers, self.store_readers_lock = {}, threading.Lock()
         # RowCache per canonical session ID, pruned with the decorated cache. ``projecting`` is
         # the one this thread's native activation may use while it projects history.
         self.row_caches = {}
@@ -1927,40 +1929,8 @@ class Bridge:
         # as does the configuration of the home Hermes runs in, whose language labels tools.
         # Vault secrets and plugin patterns registered at runtime redact native commentary.
         configs = tuple(sorted((str(path), file_stamp(path)) for path in {home / "config.yaml", Path(self.get_hermes_home()) / "config.yaml"}))
-        stamps = tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"))) + (self.store_version(db_path), configs)
-        return memory, stamps, redaction_state()
+        return memory, tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"))) + (configs,), redaction_state()
 
-    def store_version(self, path):
-        """``PRAGMA data_version`` of the store at ``path``, from one read-only connection kept per file; None without one.
-
-        It moves on every commit any other connection makes, in any process. File stamps alone can miss one: after the
-        WAL resets, a commit rewrites frames in place at the same size, and two commits within one clock tick leave
-        the same times.
-        """
-        try:
-            info = path.stat()
-        except OSError:
-            return None
-        with self.store_readers_lock:
-            known = self.store_readers.get(str(path))
-            if known is None or known[:2] != (info.st_dev, info.st_ino):
-                # A replaced file gets a new connection; the old one would keep reading the file it replaced.
-                if known is not None:
-                    known[2].close()
-                try:
-                    # Never waits for a writer: a store busy past the WAL, as in rollback mode, answers None, which only
-                    # misses the decorated history.
-                    reader = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False, timeout=0)
-                except sqlite3.Error:
-                    self.store_readers.pop(str(path), None)
-                    return None
-                known = self.store_readers[str(path)] = (info.st_dev, info.st_ino, reader)
-            try:
-                return known[2].execute("PRAGMA data_version").fetchone()[0]
-            except sqlite3.Error:
-                known[2].close()
-                del self.store_readers[str(path)]
-                return None
 
     def row_cache(self, sid, session):
         """The canonical session's RowCache, a new one when its stored session changed.
