@@ -687,9 +687,12 @@ def admission_turn(result):
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
 # Decorated history is keyed on exact history identity, the profile's journal version and native
-# redaction state; the lifetime only bounds what an identity collision could serve.
+# redaction state; the lifetime only bounds what an identity collision could serve. Decoration reads
+# nothing else: tool artifacts are resolved when the tool runs. A day keeps a chat idle overnight
+# answering from it. At ten minutes almost every open after a pause read and decorated the whole
+# history again, 1.5 to 2.5 s for an 8,000-row chat, though nothing had changed.
 # Without readable redaction state, the earlier short lifetime still applies.
-DECORATED_TTL = 600
+DECORATED_TTL = 24 * 60 * 60
 UNTRACKED_REDACTION_TTL = 30
 DECORATED_LIMIT = 32
 # Entries per table of one canonical session's RowCache; the oldest go first.
