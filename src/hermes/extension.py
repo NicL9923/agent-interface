@@ -686,10 +686,20 @@ def admission_turn(result):
     return ADMISSION_TURN.get(status, "unknown")
 # Where an admission spent its time, reported as app_timing like an open's phases.
 SUBMIT_PHASES = ("open", "preempt", "wait", "journal", "staging", "native")
-# Decorated history is keyed on exact history identity, the profile's journal version and native
-# redaction state; the lifetime only bounds what an identity collision could serve.
+# Decorated history is keyed on exact history identity (history_identity), the profile's journal version and
+# native redaction state. Those cover the rows, the store's files, the configuration that labels tools and the
+# journal rows decoration reads; tool artifacts are resolved when the tool runs. Hermes's projection also reads a
+# little that no key covers: an attached image's file, the skin and installed language packs. A change to those
+# alone shows once the chat next changes, or after this lifetime. So does a commit file stamps cannot see: on a
+# kernel with coarse file times, two commits within one clock tick, the second rewriting WAL frames in place at the
+# same size, by a writer that leaves Hermes's in-memory history alone. A connection kept open to read the store's
+# PRAGMA data_version would see it, but Hermes refuses to open a store for writing while any process holds a deleted
+# generation of its WAL, so the add-on keeps none. A day keeps a chat idle overnight answering from
+# its decorated history. At ten minutes almost every open after a pause read and decorated the whole history again,
+# 1.5 to 2.5 s for an 8,000-row chat, though nothing had changed. A journal restored from a backup sets its version
+# back, and could only be mistaken for the history it replaced if later writes counted it back to the same number.
 # Without readable redaction state, the earlier short lifetime still applies.
-DECORATED_TTL = 600
+DECORATED_TTL = 24 * 60 * 60
 UNTRACKED_REDACTION_TTL = 30
 DECORATED_LIMIT = 32
 # Entries per table of one canonical session's RowCache; the oldest go first.
@@ -1909,14 +1919,18 @@ class Bridge:
                 # Flush stamps row IDs in place without changing history_version.
                 return (id(rows), len(rows or []), tuple((id(row), row.get("_row_id")) for row in rows or [] if isinstance(row, dict)))
             memory = (session.get("session_key"), session.get("history_version"), rows_identity(prefix), rows_identity(history))
-            home = Path(session.get("profile_home") or self.get_hermes_home())
-        db = self.server._get_db() if not session.get("profile_home") and hasattr(self.server, "_get_db") else None
+            profile_home = session.get("profile_home")
+        home = Path(profile_home or self.get_hermes_home())
+        db = self.server._get_db() if not profile_home and hasattr(self.server, "_get_db") else None
         db_path = Path(getattr(db, "db_path", home / "state.db"))
         # Like the native change watcher, observe both DB and WAL: another native
         # connection can commit a display lineage without changing the warm history.
-        # File replacement, checkpoint and profile commentary configuration invalidate too.
+        # File replacement, checkpoint and profile commentary configuration invalidate too,
+        # as does the configuration of the home Hermes runs in, whose language labels tools.
         # Vault secrets and plugin patterns registered at runtime redact native commentary.
-        return memory, tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"), home / "config.yaml")), redaction_state()
+        configs = tuple(sorted((str(path), file_stamp(path)) for path in {home / "config.yaml", Path(self.get_hermes_home()) / "config.yaml"}))
+        return memory, tuple(file_stamp(path) for path in (db_path, db_path.with_name(db_path.name + "-wal"))) + (configs,), redaction_state()
+
 
     def row_cache(self, sid, session):
         """The canonical session's RowCache, a new one when its stored session changed.

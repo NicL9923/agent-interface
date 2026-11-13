@@ -839,15 +839,16 @@ class OpenTests(unittest.TestCase):
             self.assertTrue(all(isinstance(value, float) and value >= 0 for value in timing.values()))
             self.assertGreaterEqual(timing["total"], timing["activate"])
 
-    def test_decorated_history_outlives_a_short_idle_until_its_bound(self):
+    def test_decorated_history_outlives_an_overnight_idle_until_its_bound(self):
         with FakeGateway(turns(3)) as hermes:
             hermes.open()
             session = hermes.modules["tui_gateway.server"]._sessions["sid"]
             session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
             hermes.open()
             stored = time.monotonic()
-            # Coming back to an idle chat minutes later reuses its exact decorated history.
-            with patch.object(extension.time, "monotonic", return_value=stored + 300):
+            # Coming back to an unchanged chat the next morning reuses its exact decorated history, rather than reading
+            # and decorating every row again.
+            with patch.object(extension.time, "monotonic", return_value=stored + 12 * 60 * 60):
                 self.assertEqual(len(hermes.open()["messages"]), 6)
             self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
             with patch.object(extension.time, "monotonic", return_value=stored + extension.DECORATED_TTL + 1):
@@ -879,6 +880,20 @@ class OpenTests(unittest.TestCase):
                 with patch.object(extension.time, "monotonic", return_value=stored + extension.UNTRACKED_REDACTION_TTL + 1):
                     hermes.open()
                 self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
+
+    def test_the_configuration_of_the_home_hermes_runs_in_ends_a_profiles_decorated_history(self):
+        # Hermes labels tools in the language configured where it runs, not only in the profile's home.
+        with FakeGateway(turns(3)) as hermes, tempfile.TemporaryDirectory() as launch:
+            hermes.bridge.get_hermes_home = lambda: launch
+            hermes.open()
+            session = hermes.modules["tui_gateway.server"]._sessions["sid"]
+            session.update(history=hermes.messages, history_lock=threading.Lock(), profile_home=hermes.directory.name)
+            hermes.open()
+            hermes.open()
+            self.assertTrue(hermes.native_calls[-1][1].get("omit_messages"))
+            (Path(launch) / "config.yaml").write_text("display:\n  language: fr\n")
+            hermes.open()
+            self.assertNotIn("omit_messages", hermes.native_calls[-1][1])
 
     def test_eviction_keeps_the_most_recently_read_histories(self):
         clock = Mock(return_value=100)

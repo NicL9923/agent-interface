@@ -423,7 +423,17 @@ class SteppingAsideTests(unittest.TestCase):
             self.assertEqual(len(hermes.bridge.warm_caches["default", "stored"].tool_results), 3)
 
     def test_a_redaction_change_while_the_warm_up_stood_aside_projects_again(self):
+        seen = threading.Event()
+
+        class Watched(dict):
+            """Hermes's session record, which notes when the warm-up's live-work check reads a running turn."""
+            def get(self, key, default=None):
+                value = super().get(key, default)
+                if key == "running" and value and threading.current_thread().name == "warmer":
+                    seen.set()
+                return value
         with WarmHermes() as hermes:
+            hermes.session = hermes.server._sessions["sid"] = Watched(hermes.session)
             hermes.send("default", 1)
             user = hermes.add("user", "u0", "Run 0")
             hermes.add("assistant", "a0", "", tool_calls=[call("c0", "terminal")])
@@ -440,6 +450,9 @@ class SteppingAsideTests(unittest.TestCase):
             until(lambda: hermes.session["running"])
             first = len(hermes.calls)
             hermes.redact._VAULT_REDACTION_VALUES["/home/default"] = {"fixture-redacted": None}
+            # The turn ends only once the warm-up has seen it. Ended at once, a loaded machine could let the warm-up finish
+            # under the old redaction without ever standing aside.
+            self.assertTrue(seen.wait(5))
             hermes.session["running"] = False
             warmer.join(5)
             # The projection under the old redaction is not kept as finished: the warm-up projects again under the new one.
