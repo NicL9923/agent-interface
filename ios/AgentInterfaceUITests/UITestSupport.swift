@@ -69,7 +69,12 @@ extension XCUIElement {
   /// slides in, a second tap's position is stale and can land on the transcript, whose tap puts the
   /// keyboard away.
   func typeWhenFocused(_ text: String, timeout: TimeInterval = 15, file: StaticString = #filePath, line: UInt = #line) {
-    if !waitForKeyboardFocus(true, timeout: 0) { tapWhenReady(timeout: timeout, file: file, line: line) }
+    if !waitForKeyboardFocus(true, timeout: 0) {
+      // A field in a card that just replaced another one can jump for a frame as the transcript lays out.
+      // One tap during that lands beside it, and the field never takes focus.
+      waitForStableFrame()
+      tapWhenReady(timeout: timeout, file: file, line: line)
+    }
     guard waitForKeyboardFocus(true, timeout: timeout) else {
       XCTFail("\(self) never took keyboard focus", file: file, line: line); return
     }
@@ -83,6 +88,10 @@ extension XCUIElement {
   /// to stop moving. A hardware keyboard shows no software keyboard; the wait ends after 3 seconds.
   func waitForKeyboardLayout() {
     guard XCUIApplication().keyboards.firstMatch.waitForExistence(timeout: 3) else { return }
+    waitForStableFrame()
+  }
+  /// Waits, at most 2 seconds, until this element's frame reads the same three times in a row.
+  func waitForStableFrame() {
     // Reading a missing element's frame fails the test, so a field that went away reads as null.
     var last = exists ? frame : .null
     var unchanged = 0
