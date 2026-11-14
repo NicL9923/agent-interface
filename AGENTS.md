@@ -11,6 +11,18 @@
 - See `docs/Dependencies.md` for the tool choice and `README.md` for validation.
 - Before calling work done, run `.agents/tools/check-all`. Use `npm ci` per worktree, never a symlinked `node_modules`.
 
+# CI
+
+- GitHub Actions runs `Checks` on every PR and push to main, the weekly dependency audit, and the
+  manual iOS UI workflow. Nicolas re-enabled it on November 14, 2026 because this repository is
+  public, so GitHub's standard hosted runners are free.
+- Use only standard GitHub-hosted runners. Never add a larger runner, a self-hosted runner, or a
+  third-party runner service. `tests/workflows.test.ts` fails on any other `runs-on` label.
+- The repository allows only GitHub-owned actions pinned to a full commit SHA; the same test
+  checks that before a push does.
+- CI does not replace `check-all`: the Mac mini still runs the native iOS checks, and CI never
+  runs the `scripts/spike/*` probes that host qualification runs.
+
 # Tests
 
 The global Testing rules apply in full. The ones this repo has tripped on, restated:

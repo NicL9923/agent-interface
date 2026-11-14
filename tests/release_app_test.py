@@ -785,6 +785,10 @@ class RecoveryCommand(unittest.TestCase):
             release_app.remote = original
 
 
+# The facts program runs on the Linux host and reads a service's process from /proc, which macOS lacks.
+PROC = Path("/proc/self/exe").exists()
+
+
 class HostPrograms(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -802,7 +806,8 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual(code, 0, error)
         facts = json.loads(output)
         self.assertEqual(facts["prior"]["node"], "new-node")
-        self.assertEqual(facts["serviceRuntime"], {"running": REAL_NODE, "livePath": REAL_NODE, "execStart": REAL_NODE,
+        live = REAL_NODE if PROC else None
+        self.assertEqual(facts["serviceRuntime"], {"running": live, "livePath": live, "execStart": REAL_NODE,
                                                    "path": REAL_NODE, "pathFiles": []})
         self.assertEqual(facts["current"], str((self.host.base / "releases/release-live").resolve()))
         self.assertEqual(facts["profileHashes"], {str(self.host.profile): hashlib.sha256(b"model: default\n").hexdigest()})
@@ -854,6 +859,7 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual([name for name, passed in checks.items() if not passed], ["metadataEgressFloor"])
         self.assertEqual(sent[0]["metadataProbe"], release_app.METADATA_PROBE)
 
+    @unittest.skipUnless(PROC, "reads the running process from /proc, which only the Linux host has")
     def test_facts_tell_the_running_runtime_from_the_one_the_next_start_would_use(self):
         self.host.deployment("latest", "op-2", True)
         other = RUNTIME / "other/bin"; other.mkdir(parents=True, exist_ok=True)

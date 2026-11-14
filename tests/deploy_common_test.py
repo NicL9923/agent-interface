@@ -59,11 +59,13 @@ if sys.argv[2] == "show": print("4242")
         return [json.loads(line) for line in self.calls.read_text().splitlines()] if self.calls.exists() else []
 
 
+# Fixture roots are resolved because macOS temp paths sit under /var, a link to /private/var, and the
+# code under test resolves the paths it reports.
 class DeploymentTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.host = Fixture(Path(temporary.name))
+        self.host = Fixture(Path(temporary.name).resolve())
         self.addCleanup(self.host.close)
         self.d = self.host.deployment
 
@@ -258,7 +260,7 @@ class AcquireThenStopTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.host = Fixture(Path(temporary.name))
+        self.host = Fixture(Path(temporary.name).resolve())
         self.addCleanup(self.host.close)
         self.d = self.host.deployment
         state = self.host.root / "upgrade"
@@ -733,7 +735,7 @@ class MaintenanceRpcTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.host = Fixture(Path(temporary.name))
+        self.host = Fixture(Path(temporary.name).resolve())
         self.addCleanup(self.host.close)
         self.d = self.host.deployment
         source = self.host.source
