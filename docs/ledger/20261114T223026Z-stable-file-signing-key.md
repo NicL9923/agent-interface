@@ -38,3 +38,22 @@ Each broke one line by hand, ran only the named tests, then restored the file fr
 
 No real Hermes, no production database, and no iOS build: the iOS app treats file identifiers as opaque strings and
 no Swift changed.
+
+## Review fix
+
+GPT-6.1 Sol's review reproduced a lost clear: a device held draft revision 1, another device edited and restored the
+same content (revision 3), the startup pass re-signed the stored attachments, and the first device's send of its v1
+copy with `draftBaseRevision: 1` left the sent draft in place. A send without `draftBaseRevision` failed the same way.
+Draft equality compared signed identifier strings, and a re-signed identifier also rebuilds its body.
+
+Drafts now compare each attachment by the file it names (`fileIdentity` in `src/server/hermes-files.ts`: path,
+assistant and kind) when clearing a sent draft and when deciding a save changes nothing.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| Clear compares raw identifiers again | `clears the draft by content ... names a revision another device has moved past`, `... names no revision` | 2 failed |
+| Identity drops the path | `keeps a draft whose attachment is a different file` | 1 failed |
+| Save compares raw identifiers again | `treats a device saving its pre-upgrade copy as no change` | 1 failed |
+
+Each file was restored from a copy and `tests/store-files.test.ts` passed 11 of 11. `check-all --keep-going --py
+never` then passed typecheck, lint, ruff, build and 55 e2e tests; Vitest failed only the three `127.0.0.2` tests.

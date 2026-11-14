@@ -43,6 +43,22 @@ export function safeStagedPath(path: unknown): path is string {
 const hmac = (secret: string, text: string) => createHmac('sha256', secret).update(text).digest();
 
 /**
+ * The file an identifier names, for comparing two references: the same file signed with another key or
+ * format compares equal. It does not verify anything; only use it to compare references that were
+ * verified, or whose mismatch costs nothing worse than keeping a person's own draft.
+ */
+export function fileIdentity(id: string): string {
+  const parts = id.split('.');
+  const body = parts.length === 4 && parts[0] === 'v2' ? parts[2] : parts.length === 2 ? parts[0] : undefined;
+  if (!body) return id;
+  try {
+    const value = JSON.parse(Buffer.from(body, 'base64url').toString());
+    if (!value || typeof value !== 'object' || typeof value.path !== 'string' || typeof value.botId !== 'string') return id;
+    return JSON.stringify([value.path, value.botId, value.kind]);
+  } catch { return id; }
+}
+
+/**
  * Signs file identifiers with this server's own key, so only this server can mint them and rotating
  * the Hermes token leaves them working. An identifier is `v2.<key id>.<body>.<signature>`, signed over
  * everything before the last dot.

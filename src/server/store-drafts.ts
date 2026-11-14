@@ -1,5 +1,10 @@
 import type { SavedDraft } from "../shared/types.js";
+import { fileIdentity } from "./hermes-files.js";
 import type { StoreDatabase } from "./store-database.js";
+
+// What a draft says, with each attachment as the file it names: a re-signed identifier is the same attachment.
+const draftContent = ({ text, attachments }: Pick<SavedDraft, "text" | "attachments">) =>
+  JSON.stringify({ text, attachments: attachments.map(file => fileIdentity(file.id)) });
 
 /** Each person's unsent draft per assistant, with the revision every change advances. */
 export class DraftRepository {
@@ -32,7 +37,7 @@ export class DraftRepository {
     return this.database.transaction((): { saved: boolean; draft: SavedDraft } => {
       const current = this.draft(userId, botId);
       const content = JSON.stringify({ text: value.text, attachments: value.attachments });
-      if (current && JSON.stringify({ text: current.text, attachments: current.attachments }) === content)
+      if (current && draftContent(current) === draftContent(value))
         return { saved: true, draft: current };
       if (baseRevision !== undefined && baseRevision !== (current?.revision ?? 0))
         return { saved: false, draft: current ?? { text: "", attachments: [], revision: 0, reason: "edit", sentRevision: 0 } };
@@ -51,9 +56,10 @@ export class DraftRepository {
   clearSubmittedDraft(userId: string, botId: string, expected: Pick<SavedDraft, "text" | "attachments">, baseRevision?: number) {
     const current = this.draft(userId, botId);
     const empty = JSON.stringify({ text: "", attachments: [] });
-    const content = current ? JSON.stringify({ text: current.text, attachments: current.attachments }) : empty;
+    const none = draftContent({ text: "", attachments: [] });
+    const content = current ? draftContent(current) : none;
     // An empty draft still records the send, so a save dispatched before it cannot restore the text.
-    if (content !== empty && content !== JSON.stringify(expected) && (baseRevision === undefined || current!.revision > baseRevision))
+    if (content !== none && content !== draftContent(expected) && (baseRevision === undefined || current!.revision > baseRevision))
       return false;
     this.db
       .prepare("INSERT INTO drafts(user_id,bot_id,value) VALUES(?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET value=excluded.value")

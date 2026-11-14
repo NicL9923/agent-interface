@@ -111,6 +111,44 @@ describe("upgrading stored file identifiers", () => {
     expect(store.draft("one", "ranch")).toMatchObject({ text: "", attachments: [], reason: "sent" });
   });
 
+  it.each([
+    ["names a revision another device has moved past", (revision: number) => ({ draftBaseRevision: revision })],
+    ["names no revision", () => ({})],
+  ])("clears the draft by content when a device sends its pre-upgrade copy and %s", (_, base) => {
+    const store = open();
+    store.user({ id: "one", email: "one@example.test", name: "One" });
+    const held = { text: "Look", attachments: [legacy("photo.png")] };
+    const { draft } = store.saveDraft("one", "ranch", held);
+    // Another device edits and then restores the same content, so only content equality can clear it.
+    store.saveDraft("one", "ranch", { text: "Look!", attachments: held.attachments });
+    store.saveDraft("one", "ranch", held);
+    store.upgradeFileReferences(fileSigner(store.fileKeys(), token));
+    expect(store.draft("one", "ranch")!.attachments[0]!.id).not.toBe(held.attachments[0]!.id);
+    store.intent({ requestId: "request", botId: "ranch", senderId: "one", ...held, ...base(draft.revision) });
+    store.receipt({ requestId: "request", status: "accepted", messageId: "message" });
+    expect(store.draft("one", "ranch")).toMatchObject({ text: "", attachments: [], reason: "sent" });
+  });
+
+  it("treats a device saving its pre-upgrade copy as no change", () => {
+    const store = open();
+    store.user({ id: "one", email: "one@example.test", name: "One" });
+    const held = { text: "Look", attachments: [legacy("photo.png")] };
+    const { draft } = store.saveDraft("one", "ranch", held);
+    store.upgradeFileReferences(fileSigner(store.fileKeys(), token));
+    const upgraded = store.draft("one", "ranch")!;
+    expect(store.saveDraft("one", "ranch", held, draft.revision)).toEqual({ saved: true, draft: upgraded });
+  });
+
+  it("keeps a draft whose attachment is a different file", () => {
+    const store = open();
+    store.user({ id: "one", email: "one@example.test", name: "One" });
+    store.saveDraft("one", "ranch", { text: "Look", attachments: [legacy("other.png")] });
+    store.upgradeFileReferences(fileSigner(store.fileKeys(), token));
+    store.intent({ requestId: "request", botId: "ranch", senderId: "one", text: "Look", attachments: [legacy("photo.png")] });
+    store.receipt({ requestId: "request", status: "accepted", messageId: "message" });
+    expect(store.draft("one", "ranch")).toMatchObject({ text: "Look" });
+  });
+
   it("leaves submissions as sent, so a device retrying one with its earlier identifiers matches it", () => {
     const store = open();
     store.user({ id: "one", email: "one@example.test", name: "One" });
