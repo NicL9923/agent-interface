@@ -439,12 +439,20 @@ runs. Deploys depend on that, including during a Hermes drain.
   probes afresh. Only production probes; development and tests report
   `unconfigured`.
 
-It also reports two checks that warn but never fail readiness:
+It also reports three checks that warn but never fail readiness:
 
 - push: the latest delivery failure is newer than the latest success and less
   than 24 hours old.
 - backup: the newest completed backup in `APP_BACKUP_DIR` is older than 36 hours,
   or none exists. Unset reports `unconfigured`.
+- disk: free space is below what a Hermes update check needs. It reads
+  `minimumFreeBytes` and `stageRoot` from the update worker's configuration
+  (`HERMES_UPGRADE_CONFIG`) and measures the filesystem that holds the stage root,
+  or its nearest existing parent before the first check creates it. Exactly the
+  floor passes, as it does for the worker. Without Hermes updates enabled it
+  measures the app's data directory against the worker's 20 GB default. A worker
+  configuration it cannot read or parse, or a `minimumFreeBytes` that is not a
+  number, also warns, with the 20 GB default.
 
 Requests through Caddy see only `ok`. A direct loopback request with no forwarding
 headers also gets each check's status and detail, and `eventLoopP99Ms`, the last
@@ -576,10 +584,29 @@ mid-conversation, Discord included, it restarts `hermes-gateway.service` once. T
 re-checks the count, messages and routine runs in the same command that restarts it.
 A restart ends any real turn.
 
-Old releases accumulate under `releases/`. The household host filled to 14 GB free
-with 129 of them, below the update check's 20 GB minimum. `release-app.py activate`
-now keeps the ten newest releases plus the live and previous ones, and removes the
-rest.
+Old releases accumulate under `releases/`, and their payloads under `operations/`.
+The household host filled to 14 GB free with 129 releases, below the update check's
+20 GB minimum, and on Nov 14, 2026 to 9.5 GB free of 72 GB with 27, because pruning
+then kept every release for a week. After each activation `release-app.py` now keeps:
+
+- the ten newest releases, by directory time;
+- the live release, the rollback target its deploy configuration names, and any
+  release named in its `dist/previous-release.json`;
+- every release this checkout's `.private/releases` manifest records as preparing,
+  prepared, activating, needs-review or recovering. A failed prepare stays
+  `preparing` until `discard` removes it, so discard abandoned stages;
+- every release with a qualification stage marked `active`, or with a stage marker
+  it cannot read.
+
+It removes the rest regardless of age. Then, for each `operations/release-*` whose
+release is gone, it deletes `release.tar.gz` and every subdirectory of its
+`qualification-*` stages, the disposable checkouts, runtimes and backups, and keeps
+their top-level files: receipts, logs and the deploy configuration. It never touches
+an operation whose release still exists, one a protected manifest names, or one with
+no `deploy-config.json` yet, which another session may still be uploading. Removing
+the 163 such payloads by hand freed 3.2 GB. The tool prints what it removed and the
+host's free space, and warns about anything it could not remove without failing the
+release. Readiness's `disk` check alerts administrators when space still runs low.
 
 See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
 and recovery requirements. The [validation ledger](ledger/README.md) records

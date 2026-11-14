@@ -949,30 +949,132 @@ class HostPrograms(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             worker["native_chromium"](self.host.home)
 
-    def test_prune_keeps_the_live_release_its_rollback_target_and_the_newest(self):
-        import os, time
+    def prune(self, keep=3, protected=()):
+        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": keep, "protected": list(protected)})
+        self.assertEqual(code, 0, error)
+        return json.loads(output)
+
+    def stage_marker(self, operation, state):
+        marker = self.host.base / "operations" / operation / "qualification-one/.agent-interface-upgrade-stage"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(state if state == "{" else json.dumps({"schemaVersion": 1, "state": state}))
+
+    def test_prune_keeps_the_newest_the_live_release_its_rollback_targets_and_releases_in_flight(self):
         releases = self.host.base / "releases"
         live = (self.host.base / "current").resolve()
         now = time.time()
-        names = [f"release-old-{index:02}" for index in range(14)]
-        week = 8 * 86400
+        # All from the last day: age alone never keeps a release.
+        names = [f"release-old-{index:02}" for index in range(16)]
         for index, name in enumerate(names):
-            (releases / name).mkdir(); os.utime(releases / name, (now - week + index, now - week + index))
-        os.utime(live, (now - 2 * week, now - 2 * week))
-        # A stage another session is still qualifying: old directory, fresh operation.
-        (self.host.base / "operations/release-old-05").mkdir(parents=True)
+            (releases / name).mkdir(); os.utime(releases / name, (now - 3600 + index, now - 3600 + index))
         operation = self.host.base / "operations" / live.name
-        operation.mkdir(parents=True, exist_ok=True)
+        operation.mkdir(parents=True)
         (operation / "deploy-config.json").write_text(json.dumps({"previous": str(releases / "release-old-00")}))
-        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3, "minAgeDays": 7})
-        self.assertEqual(code, 0, error)
-        left = sorted(path.name for path in releases.iterdir())
-        self.assertEqual(left, sorted({live.name, "release-old-00", "release-old-05", "release-old-11", "release-old-12", "release-old-13"}))
-        self.assertEqual(sorted(json.loads(output)["removed"]), [name for name in names[1:11] if name != "release-old-05"])
-        # Recent releases beyond the newest few stay until they are a week old.
-        (releases / "release-recent").mkdir(); os.utime(releases / "release-recent", (now - 86400, now - 86400))
-        for name in ("release-old-11", "release-old-12", "release-old-13"): os.utime(releases / name, (now, now))
-        self.assertEqual(json.loads(run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": 3, "minAgeDays": 7})[1])["removed"], [])
+        (live / "dist").mkdir()
+        (live / "dist/previous-release.json").write_text(json.dumps({"assets": str(releases / "release-old-01/dist/client/assets")}))
+        os.utime(live, (now - 7200, now - 7200))
+        # Still qualifying on the host, finished qualifying, and a marker that cannot be read.
+        self.stage_marker("release-old-03", "active")
+        self.stage_marker("release-old-04", "completed")
+        self.stage_marker("release-old-05", "{")
+        result = self.prune(protected=["release-old-02"])
+        kept = {live.name, "release-old-00", "release-old-01", "release-old-02", "release-old-03", "release-old-05",
+                "release-old-13", "release-old-14", "release-old-15"}
+        self.assertEqual(sorted(path.name for path in releases.iterdir()), sorted(kept))
+        self.assertEqual(sorted(result["removed"]), sorted(set(names) - kept))
+        self.assertEqual((result["kept"], result["errors"]), (len(kept), []))
+        self.assertGreater(result["freeBytes"], 0)
+
+    def qualified_operation(self, name, config=True):
+        operation = self.host.base / "operations" / name
+        stage = operation / "qualification-one"
+        for path in ("source/.git/objects/ab", "pm-home/logs", "backup"):
+            (stage / path).mkdir(parents=True)
+        (stage / "source/.git/objects/ab/cdef").write_text("object")
+        # Native caches can leave directories without owner write access.
+        (stage / "source/.git/objects/ab").chmod(0o500)
+        for path in ("qualification.json", "integration.log", ".agent-interface-upgrade-stage"):
+            (stage / path).write_text("{}")
+        (operation / "release.tar.gz").write_bytes(b"archive")
+        (operation / "build.log").write_text("built")
+        if config:
+            (operation / "deploy-config.json").write_text("{}")
+        return operation
+
+    def tree(self, path):
+        return sorted(str(item.relative_to(path)) for item in path.rglob("*"))
+
+    def test_prune_clears_archives_and_stage_checkouts_only_from_operations_whose_release_is_gone(self):
+        releases = self.host.base / "releases"
+        (releases / "release-old").mkdir()
+        os.utime(releases / "release-old", (time.time() - 60,) * 2)
+        removed_now = self.qualified_operation("release-old")
+        gone = self.qualified_operation("release-gone")
+        (gone / "qualification-two/pm-home").mkdir(parents=True)
+        (gone / "qualification-two/qualification.json").write_text("{}")
+        untouched = {"release-live": self.qualified_operation("release-live"),
+                     # No deploy configuration yet: another session may still be uploading its archive.
+                     "release-uploading": self.qualified_operation("release-uploading", config=False),
+                     "release-held": self.qualified_operation("release-held")}
+        continued = self.host.base / "operations/continued-op-1/qualification-one/source"
+        continued.mkdir(parents=True)
+        before = {name: self.tree(path) for name, path in untouched.items()}
+        result = self.prune(keep=1, protected=["release-held"])
+        self.assertEqual(result["removed"], ["release-old"])
+        self.assertEqual(result["stripped"], ["release-gone", "release-old"])
+        spent = [".agent-interface-upgrade-stage", "integration.log", "qualification.json"]
+        for operation in (removed_now, gone):
+            self.assertEqual(sorted(path.name for path in operation.iterdir()), ["build.log", "deploy-config.json", "qualification-one"] + (["qualification-two"] if operation == gone else []))
+            self.assertEqual(sorted(path.name for path in (operation / "qualification-one").iterdir()), spent)
+        self.assertEqual(self.tree(gone / "qualification-two"), ["qualification.json"])
+        self.assertEqual({name: self.tree(path) for name, path in untouched.items()}, before)
+        self.assertTrue(continued.is_dir())
+        # A second run finds nothing left to clear.
+        self.assertEqual(self.prune(keep=1, protected=["release-held"])["stripped"], [])
+
+    def test_prune_reports_a_release_it_cannot_remove_and_still_clears_the_rest(self):
+        releases = self.host.base / "releases"
+        (releases / "release-stuck").mkdir()
+        os.utime(releases / "release-stuck", (time.time() - 60,) * 2)
+        gone = self.qualified_operation("release-gone")
+        releases.chmod(0o500)
+        try:
+            result = self.prune(keep=1)
+        finally:
+            releases.chmod(0o700)
+        self.assertEqual(result["removed"], [])
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn("release-stuck", result["errors"][0])
+        self.assertEqual(result["stripped"], ["release-gone"])
+        self.assertFalse((gone / "release.tar.gz").exists())
+
+    def test_prune_protects_releases_this_checkout_has_not_settled(self):
+        saved = release_app.MANIFESTS, release_app.remote
+        release_app.MANIFESTS = self.host.base.parent / "manifests"
+        release_app.MANIFESTS.mkdir()
+        try:
+            for name, status in (("release-a", "preparing"), ("release-b", "prepared"), ("release-c", "needs-review"),
+                                 ("release-d", "activated"), ("release-e", "discarded")):
+                release_app.save_manifest({"name": name, "status": status})
+            (release_app.MANIFESTS / "release-broken.json").write_text("{")
+            (release_app.MANIFESTS / "release-list.json").write_text("[]")
+            self.assertEqual(release_app.protected_releases(), ["release-a", "release-b", "release-c"])
+            sent = []
+            def remote(host, program, payload):
+                if program is not release_app.REMOTE_PRUNE:
+                    raise AssertionError("unexpected host program")
+                sent.append((host, payload))
+                return {"removed": ["release-x"], "kept": 11, "stripped": ["release-y"], "errors": ["release-z: denied"], "freeBytes": 26 * 1024 ** 3}
+            release_app.remote = remote
+            with patch("sys.stdout") as stdout, patch("sys.stderr") as stderr:
+                release_app.prune_releases({"host": "host", "appBase": "/srv/app"})
+            self.assertEqual(sent, [("host", {"appBase": "/srv/app", "keep": 10, "protected": ["release-a", "release-b", "release-c"]})])
+            printed = "".join(call.args[0] for call in stdout.write.call_args_list)
+            self.assertIn("Removed 1 old releases; kept 11.", printed)
+            self.assertIn("26.0 GB free on the host.", printed)
+            self.assertIn("could not prune release-z: denied", "".join(call.args[0] for call in stderr.write.call_args_list))
+        finally:
+            release_app.MANIFESTS, release_app.remote = saved
 
     def test_discard_removes_only_an_unactivated_release(self):
         release = self.host.base / "releases/release-new"

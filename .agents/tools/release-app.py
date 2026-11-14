@@ -451,30 +451,70 @@ base = Path(PAYLOAD["appBase"])
 finish({"current": str((base / "current").resolve()), "workerSha256": sha(base / "shared/hermes-worker.json")})
 """
 
-# Releases kept beyond the live one and the rollback target its deploy configuration names.
-# Older ones are removed only after a week untouched, so a stage another session is still
-# preparing or qualifying is never removed under it.
+# Releases kept besides the live one, its rollback targets and any release still in flight.
+# Each holds a full build; the host needs the room for Hermes update checks (docs/Hosting.md).
 RELEASES_KEPT = 10
-RELEASE_MIN_AGE_DAYS = 7
+# A release in these states may still be activated, reviewed or recovered from, so pruning
+# never removes it. A failed prepare stays "preparing" until it is discarded.
+PRUNE_PROTECTED = ("preparing", "prepared", "activating", "needs-review", "recovering")
 REMOTE_PRUNE = """
 import re
-base = Path(PAYLOAD["appBase"]); releases = base / "releases"
+base = Path(PAYLOAD["appBase"]); releases = base / "releases"; operations = base / "operations"
 current = (base / "current").resolve()
-keep = {current}
-# The live release's deploy configuration names its rollback target.
-config = base / "operations" / current.name / "deploy-config.json"
-if config.exists():
-    keep |= {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", config.read_text())}
+named = lambda text: {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", text)}
+keep = {current} | {(releases / name).resolve() for name in PAYLOAD["protected"]}
+# The live release's deploy configuration names its rollback target, and the file the cutover
+# wrote into it names the release whose assets open pages still load.
+for path in (operations / current.name / "deploy-config.json", current / "dist/previous-release.json"):
+    if path.is_file():
+        keep |= named(path.read_text())
+def qualifying(name):
+    for marker in (operations / name).glob("qualification-*/.agent-interface-upgrade-stage"):
+        try:
+            if json.loads(marker.read_text()).get("state") == "active":
+                return True
+        except (OSError, ValueError):
+            return True
+    return False
+def remove_tree(path):
+    # Native caches in qualification stages can hold read-only directories; restore owner access first.
+    for root, directories, _ in os.walk(path):
+        for name in directories:
+            child = os.path.join(root, name)
+            if not os.path.islink(child):
+                os.chmod(child, 0o700)
+    shutil.rmtree(path)
 dirs = sorted((p for p in releases.iterdir() if p.is_dir() and not p.is_symlink()), key=lambda p: p.stat().st_mtime, reverse=True)
 keep |= {p.resolve() for p in dirs[:PAYLOAD["keep"]]}
-import time
-def touched(path):
-    operation = base / "operations" / path.name
-    return max(path.stat().st_mtime, operation.stat().st_mtime if operation.exists() else 0)
-cutoff = time.time() - PAYLOAD["minAgeDays"] * 86400
-removed = [p.name for p in dirs if p.resolve() not in keep and touched(p) < cutoff]
-for name in removed: shutil.rmtree(releases / name)
-finish({"removed": removed, "kept": len(dirs) - len(removed)})
+removed, errors = [], []
+for path in dirs:
+    if path.resolve() in keep or qualifying(path.name):
+        continue
+    try:
+        remove_tree(path); removed.append(path.name)
+    except OSError as error:
+        errors.append(f"{path}: {error}")
+# A gone release's operation keeps its receipts and logs. Its archive and the checkouts, runtimes
+# and caches of its qualification stages go. Only an operation with a deploy configuration is
+# touched: without one, another session may still be uploading its archive.
+stripped = []
+for operation in sorted(operations.glob("release-*")):
+    if (operation.is_symlink() or not operation.is_dir() or (releases / operation.name).exists()
+            or operation.name in PAYLOAD["protected"] or not (operation / "deploy-config.json").is_file()):
+        continue
+    disposable = [operation / "release.tar.gz"] if (operation / "release.tar.gz").is_file() else []
+    for stage in sorted(operation.glob("qualification-*")):
+        if stage.is_dir() and not stage.is_symlink():
+            disposable += [child for child in sorted(stage.iterdir()) if child.is_dir() and not child.is_symlink()]
+    try:
+        for path in disposable:
+            path.unlink() if path.is_file() else remove_tree(path)
+    except OSError as error:
+        errors.append(f"{operation}: {error}")
+    if disposable:
+        stripped.append(operation.name)
+finish({"removed": removed, "kept": len(dirs) - len(removed), "stripped": stripped, "errors": errors,
+        "freeBytes": shutil.disk_usage(base).free})
 """
 
 REMOTE_WRITE_CONFIG = """
@@ -828,11 +868,30 @@ def activate(args):
     record_release(manifest, docs_pr=not args.no_docs_pr)
 
 
+def protected_releases():
+    """Releases this checkout's manifests record as not yet settled, which pruning must keep."""
+    names = []
+    for path in sorted(MANIFESTS.glob("release-*.json")):
+        try:
+            manifest = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(manifest, dict) and manifest.get("status") in PRUNE_PROTECTED and isinstance(manifest.get("name"), str):
+            names.append(manifest["name"])
+    return names
+
+
 def prune_releases(manifest):
-    """Remove old release builds so the host keeps room for Hermes update checks; never fails a release."""
+    """Remove old release builds and spent operation payloads so the host keeps room for Hermes
+    update checks; never fails a release."""
     try:
-        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT, "minAgeDays": RELEASE_MIN_AGE_DAYS})
-        print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}.")
+        pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT,
+                                                          "protected": protected_releases()})
+        print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}. Cleared the archives and "
+              f"qualification stages of {len(pruned['stripped'])} removed releases. "
+              f"{pruned['freeBytes'] / 1024 ** 3:.1f} GB free on the host.")
+        for error in pruned["errors"]:
+            print(f"Warning: could not prune {error}", file=sys.stderr)
     except (SystemExit, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
         print(f"Warning: old releases were not pruned: {error}", file=sys.stderr)
 
