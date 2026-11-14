@@ -77,12 +77,15 @@
       let environment = ProcessInfo.processInfo.environment
       if environment["AGENT_INTERFACE_UI_RESET"] == "1" {
         UserDefaults.standard.removeObject(forKey: DeviceDefaults.host)
+        UserDefaults.standard.removeObject(forKey: DeviceDefaults.liveActivities)
         store.host = ""
       }
       guard environment["AGENT_INTERFACE_UI_FIXTURE"] == "1" else { return false }
       precondition(!(environment["AGENT_INTERFACE_UI_AUTOMATION"] == "1" && FixtureProtocol.designFixture?["screen"] as? String == "work"),
         "The Work design fixture cannot be combined with the automation flow fixture.")
       VoiceController.fixtureRecording = true
+      // Simulators allow Live Activities; this stands in for a person who turned them off in iOS Settings.
+      if environment["AGENT_INTERFACE_UI_LIVE_ACTIVITIES_OFF_IN_SETTINGS"] == "1" { LiveActivityController.shared.system.allowed = { false } }
       TalkController.fixture = true
       let config = URLSessionConfiguration.ephemeral
       config.protocolClasses = [FixtureProtocol.self]

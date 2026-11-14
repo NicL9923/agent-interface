@@ -94,6 +94,7 @@ struct PreferencesView: View {
         }.disabled(store.sessionExpired)
         Section {
           DeviceNotificationSettings().id("captureNotifications")
+          LiveActivitySettings()
         } header: { Text("Notifications") }
           .disabled(store.sessionExpired)
         Section {

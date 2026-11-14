@@ -103,3 +103,40 @@ struct DeviceNotificationSettings: View {
     }.buttonStyle(.borderless)
   }
 }
+
+/// The Live Activities switch for this device. When iOS Settings has them off, the switch shows that
+/// and links there instead of pretending to work.
+struct LiveActivitySettings: View {
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var turnedOn = LiveActivityController.shared.turnedOn
+  @State private var systemAllowed = LiveActivityController.shared.systemAllowed
+  var body: some View {
+    let state = LiveActivitySwitch(turnedOn: turnedOn, systemAllowed: systemAllowed)
+    VStack(alignment: .leading, spacing: 8) {
+      Toggle(isOn: Binding(
+        get: { state == .on },
+        set: { on in turnedOn = on; Task { await LiveActivityController.shared.setTurnedOn(on) } }
+      )) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Live Activities on this device")
+          Text(state == .offInSettings ? "Off in iOS Settings" : state == .on ? "On" : "Off").font(.caption)
+            .foregroundStyle(state == .offInSettings ? Palette.attention : Palette.muted)
+        }
+      }.disabled(state == .offInSettings).accessibilityIdentifier("liveActivities")
+      switch state {
+      case .on: Text("Your assistants' progress shows on the Lock Screen and in the Dynamic Island.").font(.footnote).foregroundStyle(Palette.muted)
+      case .off: Text("Off on this device. Progress stays in the app.").font(.footnote).foregroundStyle(Palette.muted)
+      case .offInSettings:
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+          Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+          Text("Live Activities are off for this app. Turn them on in iOS Settings, then return here.")
+        }.font(.footnote).foregroundStyle(Palette.attention)
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+          Link("Open iOS Settings", destination: url).accessibilityIdentifier("liveActivitiesSettings")
+        }
+      }
+    }.buttonStyle(.borderless)
+      // Coming back from iOS Settings is a return to the foreground.
+      .onChange(of: scenePhase) { _, phase in if phase == .active { systemAllowed = LiveActivityController.shared.systemAllowed } }
+  }
+}

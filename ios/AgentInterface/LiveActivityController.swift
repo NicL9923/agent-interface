@@ -19,6 +19,44 @@ struct LiveActivityStartRegistration: Encodable {
   var scope: String
 }
 
+/// The ActivityKit calls the device switch relies on, so tests can stand in for iOS.
+struct LiveActivitySystem {
+  struct Running: Equatable {
+    var id: String
+    var scope: String
+    var token: String?
+  }
+  /// Whether iOS allows this app's Live Activities. The person can turn them off in iOS Settings.
+  var allowed: @MainActor () -> Bool
+  /// Every activity iOS has not ended or dismissed.
+  var running: @MainActor () -> [Running]
+  var end: @MainActor (_ id: String) async -> Void
+  /// iOS 18's push-to-start token. Nil before iOS 18 or until iOS issues one.
+  var startToken: @MainActor () -> String?
+
+  static var live: LiveActivitySystem {
+    LiveActivitySystem(
+      allowed: { ActivityAuthorizationInfo().areActivitiesEnabled },
+      running: {
+        LiveActivityController.Live.activities.filter { $0.activityState != .ended && $0.activityState != .dismissed }
+          .map { Running(id: $0.id, scope: $0.attributes.scope, token: $0.pushToken.map(LiveActivityController.hex)) }
+      },
+      end: { id in await LiveActivityController.Live.activities.first { $0.id == id }?.end(nil, dismissalPolicy: .immediate) },
+      startToken: {
+        guard #available(iOS 18.0, *) else { return nil }
+        return LiveActivityController.Live.pushToStartToken.map(LiveActivityController.hex)
+      })
+  }
+}
+
+/// What the device switch shows. iOS Settings wins over the app's own switch.
+enum LiveActivitySwitch: Equatable {
+  case on, off, offInSettings
+  init(turnedOn: Bool, systemAllowed: Bool) {
+    self = !systemAllowed ? .offInSettings : turnedOn ? .on : .off
+  }
+}
+
 /// Starts, feeds and ends the one aggregate Live Activity. Everything here is best effort: a
 /// failure never interrupts the conversation, it only leaves the activity to its stale date.
 @MainActor final class LiveActivityController {
@@ -54,6 +92,7 @@ struct LiveActivityStartRegistration: Encodable {
   /// How often a foreground app refreshes its own activity instead of waiting for a push.
   static let foregroundInterval: Duration = .seconds(15)
   static let staleAfter: TimeInterval = 15 * 60
+  nonisolated static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
 
   /// An offline sign-out cannot revoke the old server session. A separate installation ID
   /// per account lets the next account register without taking over that old registration.
@@ -68,9 +107,19 @@ struct LiveActivityStartRegistration: Encodable {
     "/native/live-activity?deviceId=\(Self.deviceId(for: scope))"
   }
 
-  /// The operating system owns the device preference, as it does notification permission.
-  var enabled: Bool { store?.scope != nil }
-  var systemAllowed: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
+  var system = LiveActivitySystem.live
+  var defaults = UserDefaults.standard
+  /// The Settings switch for this device. It is not per account, so it holds through sign-out and
+  /// sign-in, and a background launch reads it before any account loads. Unset means on, as
+  /// before the switch existed.
+  var turnedOn: Bool { defaults.object(forKey: DeviceDefaults.liveActivities) as? Bool ?? true }
+  var enabled: Bool { store?.scope != nil && turnedOn }
+  var systemAllowed: Bool { system.allowed() }
+  /// The last change the switch is carrying out. Each waits for the one before, so a quick off
+  /// and on reaches the server in that order.
+  private var switching: Task<Void, Never>?
+  /// The account whose push-to-start token the server confirmed it removed during this launch.
+  private var startForgotten: String?
   private var running: [Live] { Live.activities.filter { $0.activityState == .active || $0.activityState == .stale } }
   private func content(_ state: AssistantActivityState) -> ActivityContent<AssistantActivityState> {
     ActivityContent(state: state, staleDate: Date().addingTimeInterval(Self.staleAfter))
@@ -85,11 +134,13 @@ struct LiveActivityStartRegistration: Encodable {
     Task { [weak self] in
       for await activity in Live.activityUpdates {
         guard let self else { return }
-        // A pushed start can land just after the app started its own, or for an account that has
-        // since signed out here; either goes at once.
+        // A pushed start can land just after the app started its own, for an account that has
+        // since signed out here, or after the switch went off; each goes at once.
         let others = self.running.filter { $0.id != activity.id }.map { (id: $0.id, scope: $0.attributes.scope) }
-        if Self.shouldEnd(scope: activity.attributes.scope, signedIn: self.signedInScope(), among: others) {
+        if Self.shouldEnd(scope: activity.attributes.scope, signedIn: self.signedInScope(), turnedOn: self.turnedOn, among: others) {
           await activity.end(nil, dismissalPolicy: .immediate)
+          // The server has not heard the switch went off, so it is told again now.
+          if !self.turnedOn { await self.forgetStartToken(scope: activity.attributes.scope) }
           continue
         }
         self.observe(activity)
@@ -100,17 +151,17 @@ struct LiveActivityStartRegistration: Encodable {
       Task { [weak self] in
         for await data in Live.pushToStartTokenUpdates {
           guard let self else { return }
-          self.startToken = data.map { String(format: "%02x", $0) }.joined()
-          await self.registerStartToken()
+          self.startToken = Self.hex(data)
+          await self.settle()
         }
       }
     }
   }
 
-  /// One activity per device, for the signed-in account: a new one ends when nobody or another
-  /// account is signed in, or when this account already has one.
-  nonisolated static func shouldEnd(scope: String, signedIn: String?, among running: [(id: String, scope: String)]) -> Bool {
-    signedIn != scope || running.contains { $0.scope == scope }
+  /// One activity per device, for the signed-in account: a new one ends when the switch is off,
+  /// when nobody or another account is signed in, or when this account already has one.
+  nonisolated static func shouldEnd(scope: String, signedIn: String?, turnedOn: Bool, among running: [(id: String, scope: String)]) -> Bool {
+    !turnedOn || signedIn != scope || running.contains { $0.scope == scope }
   }
   /// The loaded account, or before it loads, the account the saved sign-in belongs to. Nil when
   /// nobody is signed in, as after an offline sign-out the server never heard about.
@@ -142,10 +193,8 @@ struct LiveActivityStartRegistration: Encodable {
     for activity in running where activity.attributes.scope != scope {
       Task { await activity.end(nil, dismissalPolicy: .immediate) }
     }
-    guard enabled, systemAllowed else {
-      if !enabled { await endAll(unregister: false) } else { await unregisterStartToken() }
-      return
-    }
+    guard turnedOn else { await settle(); return }
+    guard systemAllowed else { await unregisterStartToken(); return }
     let token = api.token
     guard let status: LiveActivityStatus = try? await api.get(statePath(scope: scope)),
       token == api.token, scope == store.scope, !store.suspended
@@ -160,7 +209,68 @@ struct LiveActivityStartRegistration: Encodable {
       await activity.end(ActivityContent(state: status.state, staleDate: nil), dismissalPolicy: .after(Date().addingTimeInterval(5 * 60)))
     }
     // Last, so its request never sits between checking the account and using its state.
-    await registerStartToken()
+    await settle()
+  }
+  /// The Settings switch. Off ends every activity here and asks the server to stop updating and
+  /// starting them. On hands the server the start token again; the next send, or a foreground
+  /// with work under way, starts the activity.
+  func setTurnedOn(_ on: Bool) async {
+    defaults.set(on, forKey: DeviceDefaults.liveActivities)
+    await settle()
+  }
+  /// Carries out the switch's current value, after any earlier change finishes.
+  private func settle() async {
+    let previous = switching
+    let task = Task { [weak self] in
+      await previous?.value
+      guard let self else { return }
+      if self.turnedOn {
+        self.startForgotten = nil
+        await self.registerStartToken()
+      } else {
+        await self.turnOff()
+      }
+    }
+    switching = task
+    await task.value
+  }
+  /// Ends every activity here, then asks the server to forget both tokens. Each foreground while
+  /// the switch is off repeats the requests the server has not confirmed, so a switch turned off
+  /// without a connection still reaches it.
+  private func turnOff() async {
+    background()
+    unregisteredSends = [:]
+    let activities = system.running()
+    let registered = registeredToken
+    registeredActivityId = nil
+    registeredToken = nil
+    registeredStart = nil
+    // Nothing waits on the network before the activities leave the Lock Screen.
+    for activity in activities { await system.end(activity.id) }
+    guard let scope = store?.scope, let api = store?.api, api.token != nil else { return }
+    for token in Self.tokensToForget(registered: registered, running: activities, scope: scope) {
+      let _: EmptyResponse? = try? await api.write(
+        "/native/live-activity", ["deviceId": Self.deviceId(for: scope), "token": token], method: "DELETE")
+    }
+    await forgetStartToken(scope: scope)
+  }
+  /// The update tokens the server may hold for this account here: the one this launch registered,
+  /// and those of its running activities, which an earlier launch may have registered.
+  nonisolated static func tokensToForget(registered: String?, running: [LiveActivitySystem.Running], scope: String) -> [String] {
+    var tokens: [String] = []
+    for token in [registered] + running.filter({ $0.scope == scope }).map(\.token) {
+      if let token, !tokens.contains(token) { tokens.append(token) }
+    }
+    return tokens
+  }
+  /// Stops the server starting activities here by push, once per account and launch.
+  private func forgetStartToken(scope: String) async {
+    guard startForgotten != scope, let api = client(for: scope)?.api else { return }
+    do {
+      let _: EmptyResponse = try await api.write(
+        "/native/live-activity/start", ["deviceId": Self.deviceId(for: scope)], method: "DELETE")
+      if !turnedOn { startForgotten = scope }
+    } catch {}
   }
   func background() {
     foregroundTask?.cancel()
@@ -188,7 +298,7 @@ struct LiveActivityStartRegistration: Encodable {
     foregroundTask = Task { [weak self] in
       while !Task.isCancelled {
         try? await Task.sleep(for: Self.foregroundInterval)
-        guard let self, !Task.isCancelled, let store = self.store, let api = store.api, let scope = store.scope,
+        guard let self, !Task.isCancelled, self.turnedOn, let store = self.store, let api = store.api, let scope = store.scope,
           let activity = self.running.first(where: { $0.attributes.scope == scope })
         else { return }
         let token = api.token
@@ -280,17 +390,17 @@ struct LiveActivityStartRegistration: Encodable {
   var backgroundClient: @MainActor () -> APIClient? = { NotificationController.shared.actionClient() }
   private func register(_ activity: Live, token: Data? = nil) async {
     let scope = activity.attributes.scope
-    guard let data = token ?? activity.pushToken, let client = client(for: scope),
+    guard turnedOn, let data = token ?? activity.pushToken, let client = client(for: scope),
       activity.activityState == .active || activity.activityState == .stale
     else { return }
     let (api, background) = client
     let botIds = background ? [] : unregisteredBotIds
     let body = LiveActivityRegistration(
-      deviceId: Self.deviceId(for: scope), token: data.map { String(format: "%02x", $0) }.joined(), botIds: botIds,
+      deviceId: Self.deviceId(for: scope), token: Self.hex(data), botIds: botIds,
       scope: background ? scope : nil)
     do {
       let _: EmptyResponse = try await api.write("/native/live-activity", body, method: "PUT")
-      guard store?.scope == nil || store?.scope == scope,
+      guard turnedOn, store?.scope == nil || store?.scope == scope,
         activity.activityState == .active || activity.activityState == .stale
       else {
         let _: EmptyResponse? = try? await api.write(
@@ -308,16 +418,15 @@ struct LiveActivityStartRegistration: Encodable {
   /// Lets the server start this device's activity. Sent once per launch, account and token, so a
   /// server that lost the token learns it again the next time the app opens.
   private func registerStartToken() async {
-    guard #available(iOS 18.0, *) else { return }
     // The stream may not repeat a token it already gave an earlier launch; ActivityKit keeps the current one.
-    if startToken == nil, let current = Live.pushToStartToken { startToken = current.map { String(format: "%02x", $0) }.joined() }
-    guard let token = startToken, let store, let api = store.api, api.token != nil, let scope = store.scope, systemAllowed
+    if startToken == nil { startToken = system.startToken() }
+    guard turnedOn, let token = startToken, let store, let api = store.api, api.token != nil, let scope = store.scope, systemAllowed
     else { return }
     if let registeredStart, registeredStart.scope == scope, registeredStart.token == token { return }
     let body = LiveActivityStartRegistration(deviceId: Self.deviceId(for: scope), token: token, scope: scope)
     do {
       let _: EmptyResponse = try await api.write("/native/live-activity/start", body, method: "PUT")
-      if store.scope == scope, startToken == token { registeredStart = (scope, token) }
+      if store.scope == scope, startToken == token, turnedOn { registeredStart = (scope, token) }
     } catch {}
   }
   /// Live Activities turned off in iOS Settings: the server stops trying to start them here.

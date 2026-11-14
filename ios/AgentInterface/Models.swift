@@ -1226,6 +1226,8 @@ enum DeviceDefaults {
   /// The account last signed in here, kept until sign-out, so a background launch can tell whose a
   /// pushed Live Activity is before the account loads.
   static let signedInScope = "connection.signedInScope"
+  /// The Settings switch for Live Activities here. Kept through sign-out, like the device itself.
+  static let liveActivities = "liveActivity.enabled"
   /// When the sign-in to `server` expires.
   static func expiry(_ server: URL) -> String { "connection.expiry.\(server.absoluteString)" }
   /// The LAN and tailnet routes `server` advertised last. Not secret: addresses and certificate pins.

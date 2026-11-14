@@ -152,6 +152,113 @@ import XCTest
     XCTAssertNotEqual(LiveActivityController.deviceId(for: second), one)
   }
 
+  /// A request the Live Activity controller sent, with its JSON body's string fields.
+  private struct Sent: Equatable {
+    var method: String, path: String, body: [String: String]
+    init(_ method: String, _ path: String, _ body: [String: String] = [:]) { (self.method, self.path, self.body) = (method, path, body) }
+  }
+  private func liveActivityRequests(_ server: FakeServer) -> [Sent] {
+    zip(server.requests, server.bodies).compactMap { request, body in
+      guard let path = request.url?.path, path.hasPrefix("/api/native/live-activity") else { return nil }
+      return Sent(request.httpMethod ?? "", path, (try? JSONDecoder().decode([String: String].self, from: body)) ?? [:])
+    }
+  }
+  /// A controller for a signed-in account, with iOS and the device's defaults stood in for.
+  private func liveActivities(_ fake: FakeActivities, turnedOn: Bool? = nil) throws -> (LiveActivityController, FakeServer, String) {
+    let server = FakeServer()
+    let store = AppStore()
+    store.widgetSnapshotURL = nil
+    store.api = server.api()
+    store.bootstrap = try bootstrap()
+    let scope = try XCTUnwrap(store.scope)
+    let suite = "live-activity-switch-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    if let turnedOn { defaults.set(turnedOn, forKey: DeviceDefaults.liveActivities) }
+    let controller = LiveActivityController()
+    controller.system = fake.system
+    controller.defaults = defaults
+    controller.store = store
+    addTeardownBlock { @MainActor in
+      store.suspend()
+      defaults.removePersistentDomain(forName: suite)
+      UserDefaults.standard.removeObject(forKey: "liveActivity.deviceId.\(scope)")
+      UserDefaults.standard.removeObject(forKey: DeviceDefaults.expiry(server.origin))
+      FakeExchange.remove(host: server.origin.host!)
+    }
+    return (controller, server, scope)
+  }
+
+  func testTurningLiveActivitiesOffEndsEveryActivityAndForgetsBothTokens() async throws {
+    let fake = FakeActivities()
+    let (controller, server, scope) = try liveActivities(fake)
+    fake.running = [.init(id: "mine", scope: scope, token: "aa11"), .init(id: "theirs", scope: "another-account", token: "bb22")]
+    XCTAssertTrue(controller.turnedOn, "Unset is on, so existing installs keep their Live Activities")
+    await controller.setTurnedOn(false)
+    XCTAssertEqual(fake.ended, ["mine", "theirs"])
+    let deviceId = LiveActivityController.deviceId(for: scope)
+    XCTAssertEqual(liveActivityRequests(server), [
+      Sent("DELETE", "/api/native/live-activity", ["deviceId": deviceId, "token": "aa11"]),
+      Sent("DELETE", "/api/native/live-activity/start", ["deviceId": deviceId]),
+    ], "Another account's token is not this sign-in's to remove")
+    let relaunched = LiveActivityController()
+    relaunched.defaults = controller.defaults
+    XCTAssertFalse(relaunched.turnedOn, "The choice outlives the launch and is not tied to the account")
+    // An earlier launch may have registered a running activity's token that this launch never did.
+    XCTAssertEqual(LiveActivityController.tokensToForget(registered: "aa", running: [
+      .init(id: "1", scope: "s", token: "aa"), .init(id: "2", scope: "s", token: "bb"),
+      .init(id: "3", scope: "s", token: nil), .init(id: "4", scope: "t", token: "cc"),
+    ], scope: "s"), ["aa", "bb"])
+  }
+
+  func testWhileLiveActivitiesAreOffNothingStartsAndForegroundsRepeatOnlyTheUnconfirmedRequest() async throws {
+    let fake = FakeActivities(startToken: "cc33")
+    let (controller, server, scope) = try liveActivities(fake, turnedOn: false)
+    await controller.sent(to: "kitchen")
+    XCTAssertEqual(liveActivityRequests(server), [], "No state read after a send, so nothing starts")
+    let forget = Sent("DELETE", "/api/native/live-activity/start", ["deviceId": LiveActivityController.deviceId(for: scope)])
+    server.reply = .init(status: 503)
+    await controller.foreground()
+    server.reply = .init()
+    await controller.foreground()
+    await controller.foreground()
+    XCTAssertEqual(liveActivityRequests(server), [forget, forget],
+      "A foreground neither reads state nor sends the start token, and repeats the off request until the server confirms it")
+  }
+
+  func testTurningLiveActivitiesOnSendsTheStartTokenOnlyAfterTheOffRequestIsAnswered() async throws {
+    let fake = FakeActivities(startToken: "cc33")
+    let (controller, server, scope) = try liveActivities(fake)
+    let deviceId = LiveActivityController.deviceId(for: scope)
+    let release = server.hold(path: "/api/native/live-activity/start")
+    let off = Task { await controller.setTurnedOn(false) }
+    try await until { self.liveActivityRequests(server).count == 1 }
+    let on = Task { await controller.setTurnedOn(true) }
+    // Absence check: the start token must not reach the server ahead of the off request it follows.
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertEqual(liveActivityRequests(server).map(\.method), ["DELETE"])
+    release()
+    await off.value
+    await on.value
+    XCTAssertEqual(liveActivityRequests(server), [
+      Sent("DELETE", "/api/native/live-activity/start", ["deviceId": deviceId]),
+      Sent("PUT", "/api/native/live-activity/start", ["deviceId": deviceId, "token": "cc33", "scope": scope]),
+    ])
+    XCTAssertTrue(controller.turnedOn)
+  }
+
+  func testWhenIosHasLiveActivitiesOffTheSwitchSaysSoAndNothingRegisters() async throws {
+    XCTAssertEqual(LiveActivitySwitch(turnedOn: true, systemAllowed: false), .offInSettings)
+    XCTAssertEqual(LiveActivitySwitch(turnedOn: false, systemAllowed: false), .offInSettings)
+    XCTAssertEqual(LiveActivitySwitch(turnedOn: true, systemAllowed: true), .on)
+    XCTAssertEqual(LiveActivitySwitch(turnedOn: false, systemAllowed: true), .off)
+    let fake = FakeActivities(startToken: "cc33")
+    fake.allowed = false
+    let (controller, server, _) = try liveActivities(fake)
+    await controller.setTurnedOn(true)
+    await controller.sent(to: "kitchen")
+    XCTAssertEqual(liveActivityRequests(server), [], "Neither the start token nor a state read goes out while iOS has them off")
+  }
+
   func testUpdateOfferComparesBuildsAndRequiresHTTPS() {
     let url = "https://testflight.apple.com/join/CODE"
     XCTAssertEqual(AppUpdate.evaluate(NativeAppInfo(latestBuild: 12, updateUrl: url), installedBuild: 11), .available(URL(string: url)!))
@@ -182,5 +289,25 @@ import XCTest
       let purpose = Bundle.main.object(forInfoDictionaryKey: key) as? String
       XCTAssertFalse(purpose?.isEmpty ?? true, key)
     }
+  }
+}
+
+/// Stands in for ActivityKit: the activities iOS is showing, those the app ended, and the start token.
+@MainActor private final class FakeActivities {
+  var allowed = true
+  var running: [LiveActivitySystem.Running] = []
+  var ended: [String] = []
+  var startToken: String?
+  init(startToken: String? = nil) { self.startToken = startToken }
+  var system: LiveActivitySystem {
+    LiveActivitySystem(
+      allowed: { [unowned self] in allowed },
+      running: { [unowned self] in running },
+      end: { [unowned self] id in
+        guard running.contains(where: { $0.id == id }) else { return XCTFail("Ended \(id), which iOS is not showing") }
+        ended.append(id)
+        running.removeAll { $0.id == id }
+      },
+      startToken: { [unowned self] in startToken })
   }
 }
