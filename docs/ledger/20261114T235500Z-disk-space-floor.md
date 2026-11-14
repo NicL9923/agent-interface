@@ -18,7 +18,13 @@ Nothing was deployed by this entry.
 
 `tests/ops.test.ts` runs the real Fastify app with an injected `statfs` that calls the real one on the same path, then
 reports the chosen free space. `tests/release_app_test.py` runs the host program against temporary directories.
-`.agents/tools/check-all --keep-going` results are in the PR.
+`.agents/tools/check-all --keep-going`: typecheck, lint, ruff and build pass. Vitest fails only the three tests that
+need the `127.0.0.2` loopback alias, which this machine lacks. The first run was stopped during e2e by a 10-minute
+shell timeout, so e2e and py were rerun with `--only`. e2e failed one smoke test once (`a reply keeps growing across
+a tool call`, an SVG `<rect>` negative-height console error in client code this change does not touch) and passed all
+55 on a rerun. py fails `deploy_common_test.py`, `mutate_py_test.py` and `release_app_test.py`. The same three fail on
+`origin/main` at `fa0243ee` on this machine; in `release_app_test.py` they are the two `serviceRuntime` facts tests.
+Every prune test passes.
 
 ## Red runs
 
