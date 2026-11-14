@@ -1,6 +1,7 @@
 # November 14 typed runtime refusals
 
-Branch `t3/typed-runtime-refusals` over `origin/main` `65ed9eb4`, on the Mac mini (macOS, arm64), Node 24.22.2.
+Branch `t3/typed-runtime-refusals`, written over `65ed9eb4` and rebased onto `origin/main` `fa0243ee` (which brought
+#396's request log into `http-error.ts`), on the Mac mini (macOS, arm64), Node 24.22.2, Python 3.14.7.
 No Hermes took part and nothing was deployed by this entry.
 
 ## Why
@@ -46,7 +47,16 @@ Each line was broken by hand in the working tree, the named test run alone, and 
 
 ## Checks
 
-`.agents/tools/check-all --keep-going`; results are in the PR. Application tests use the real Fastify app with the
-in-memory store, and either a fake runtime or the real Hermes adapter over a fake socket and `fetch`. Not exercised:
-real Hermes, the iOS app (no Swift changed; its status handling was read, not run), and a browser beyond the e2e smoke
-suite.
+`.agents/tools/check-all --keep-going` on the rebased commit:
+
+| check | result | counts |
+| --- | --- | --- |
+| typecheck, lint, ruff, build | pass | 894 modules |
+| test | 3 failed of 3,912 | all three need the `127.0.0.2` loopback alias (`EADDRNOTAVAIL`): two in `direct-routes`, one in `native-contract` |
+| e2e | 1 failed of 55, then 55 of 55 | the failure was the live reply across a tool call timing out at 5 s while the run waited 23 minutes for heavy slots; `check-all --only e2e` passed |
+| py | 3 failed of 52 files | `deploy_common`, `mutate_py` and `release_app` fail the same way on a clean `origin/main` `fa0243ee`: macOS `/private/var` paths and Linux process facts. No Python changed |
+
+Application tests use the real Fastify app with the in-memory store, and either a fake runtime or the real Hermes
+adapter over a fake socket and `fetch`. Since #396, a refusal is logged once at warn level as "Request answered with
+an error status" and no longer at error level as "Request failed". Not exercised: real Hermes, the iOS app (no Swift
+changed; its status handling was read, not run), and browsers other than the e2e smoke suite's Chromium.
