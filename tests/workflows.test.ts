@@ -14,21 +14,28 @@ const FREE_RUNNERS = new Set([
 
 const directory = join(import.meta.dirname, "..", ".github", "workflows");
 
-/** Every `runs-on` and `uses` value in a workflow, by line. The workflows here keep both on one line. */
+/**
+ * Every `runs-on` and `uses` value in a workflow. The guard reads only the plain one-line block form
+ * (`runs-on: label`, `- uses: owner/action@sha`), and fails closed on any other appearance of either key,
+ * such as a flow mapping (`{runs-on: ...}`) or a value wrapped onto the next line.
+ */
 function workflowRefs(text: string) {
-  const runners: string[] = [], actions: string[] = [];
+  const runners: string[] = [], actions: string[] = [], unreadable: string[] = [];
   for (const line of text.split("\n")) {
-    const runner = /^\s*runs-on:\s*(.*?)\s*(#.*)?$/.exec(line);
+    if (!/(^|[\s{,'"-])(runs-on|uses)['"]?\s*:/.test(line.replace(/#.*$/, ""))) continue;
+    const runner = /^\s*runs-on:\s*([^\s#{}[\],]+)\s*(#.*)?$/.exec(line);
+    const action = /^\s*(?:-\s+)?uses:\s*([^\s#{}[\],]+)\s*(#.*)?$/.exec(line);
     if (runner) runners.push(runner[1]!);
-    const action = /^\s*(?:-\s*)?uses:\s*(\S+)/.exec(line);
-    if (action) actions.push(action[1]!);
+    else if (action) actions.push(action[1]!);
+    else unreadable.push(line.trim());
   }
-  return { runners, actions };
+  return { runners, actions, unreadable };
 }
 
 /** Why a workflow breaks the free-runner rule, or undefined when it does not. */
 function workflowProblem(text: string): string | undefined {
-  const { runners, actions } = workflowRefs(text);
+  const { runners, actions, unreadable } = workflowRefs(text);
+  if (unreadable.length) return `has a runs-on or uses this guard cannot read: ${unreadable[0]}. Write it on one line in block style`;
   if (!runners.length) return "names no runs-on";
   for (const runner of runners)
     if (!FREE_RUNNERS.has(runner)) return `runs on ${runner || "an empty label"}, which is not a free GitHub-hosted runner`;
@@ -53,7 +60,9 @@ describe("GitHub workflows", () => {
 
   it.each([
     ["a larger runner", "jobs:\n  a:\n    runs-on: ubuntu-latest-4-cores\n", "runs on ubuntu-latest-4-cores"],
-    ["a self-hosted runner", "jobs:\n  a:\n    runs-on: [self-hosted, linux]\n", "runs on [self-hosted, linux]"],
+    ["a self-hosted runner", "jobs:\n  a:\n    runs-on: [self-hosted, linux]\n", "cannot read: runs-on: [self-hosted, linux]"],
+    ["a flow-style job beside an allowed one", "jobs:\n  a:\n    runs-on: ubuntu-latest\n  costly: {runs-on: ubuntu-latest-4-cores, steps: [{run: echo hi}]}\n", "cannot read: costly: {runs-on"],
+    ["an action wrapped onto the next line", "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses:\n          someone/action@0123456789abcdef0123456789abcdef01234567\n", "cannot read: - uses:"],
     ["no runner", "jobs:\n  a:\n    steps: []\n", "names no runs-on"],
     ["a third-party action", "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: someone/action@0123456789abcdef0123456789abcdef01234567\n", "uses someone/action@"],
     ["an action pinned to a tag", "jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v7\n", "uses actions/checkout@v7"],

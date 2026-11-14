@@ -17,7 +17,13 @@ pinned to a SHA. `Checks` gained a manual trigger so main can be rechecked witho
 | --- | --- | --- |
 | `audit.yml` `runs-on: ubuntu-latest-4-cores` | `run only on free GitHub-hosted runners with pinned GitHub-owned actions` | `audit.yml: runs on ubuntu-latest-4-cores, which is not a free GitHub-hosted runner` |
 
-The file was restored from a copy and the test passed again.
+| Removing the guard's refusal of `runs-on` or `uses` it cannot read | `refuses a flow-style job beside an allowed one`, `refuses an action wrapped onto the next line`, `refuses a self-hosted runner` | 3 failed |
+
+Each file was restored from a copy and the tests passed again (9 of 9).
+
+GPT-6.1 Sol reviewed the first version and found two ways past it: a flow-style job such as
+`costly: {runs-on: ubuntu-latest-4-cores, ...}` beside an allowed job, and a `uses:` whose value sits on the next
+line. The guard now reads only the plain one-line block form of each key and fails on any other appearance.
 
 ## Not exercised
 
