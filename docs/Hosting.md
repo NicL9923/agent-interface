@@ -380,6 +380,19 @@ These copies protect against an application mistake. They are on the same host,
 so they do not establish disaster recovery from loss of that host. Existing Hermes
 backups remain separate.
 
+The database also holds the key that signs file links (`file_key_current` and
+`file_key:<id>` in its `metadata` table), so every backup includes it. A restored
+backup keeps the links it saved working. A database recreated from nothing gets a
+new key, and links saved before it return 404.
+
+Links from releases before November 14, 2026 were signed with `HERMES_TOKEN`. Each
+start re-signs the ones saved in the app database with the file key, and logs how
+many it re-signed and how many it could not verify. To rotate `HERMES_TOKEN`, start
+this release with the old token once first. After the rotation, copies the app
+database does not hold stop working: drafts and the roster cached on a device from
+before that start, and portraits saved in Hermes profile metadata before it. Attach
+the file again or choose the portrait again.
+
 Set `APP_BACKUP_DIR` to the same directory the timer writes, the app base's
 `backups/` directory, so the readiness check can see them. The tool removes its
 temporary `.partial` copy and that copy's `-shm` and `-wal` files, and clears stale

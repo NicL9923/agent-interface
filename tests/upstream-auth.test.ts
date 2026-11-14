@@ -6,6 +6,7 @@ import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { createHermesRuntime } from "../src/server/hermes.js";
+import { testFiles } from "./helpers/file-signer.js";
 import { installVaultRoutes } from "../src/server/vault.js";
 import type { Runtime } from "../src/shared/types.js";
 import { fakeRuntime } from "./helpers/server.js";
@@ -28,7 +29,7 @@ async function setup(runtime: Runtime) {
 
 it("turns Hermes rejecting the server's token into an explained 502 for the native client", async () => {
   vi.stubGlobal("WebSocket", class { constructor() { throw new Error("No socket in this contract"); } });
-  const runtime = createHermesRuntime({ url: "http://127.0.0.1:19119", token: "server-token" });
+  const runtime = createHermesRuntime({ files: testFiles(), url: "http://127.0.0.1:19119", token: "server-token" });
   const s = await setup(runtime);
   for (const status of [401, 403]) {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Service authentication required" }, { status })));

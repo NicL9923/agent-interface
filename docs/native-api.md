@@ -68,6 +68,12 @@ When Hermes rejects this server's own credential, the server returns 502 with
 401 or 403. The person is still signed in; the self-hoster must update the
 server's Hermes token.
 
+File identifiers are opaque: never parse or build one. Every read names a file with the same
+identifier. Since November 14, 2026 they start with `v2.`, so a file seen before then now has a
+second identifier; the earlier one keeps working while the server holds the Hermes token that
+signed it. An identifier this server did not sign, or one for an unsafe path, returns 404 with
+`"error": "File not found."`.
+
 `GET /api/files/:id` streams the file. It sends `Content-Length` only when Hermes
 reports one for an uncompressed body, and the cap counts decoded bytes. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
 to show. If Hermes understated the length, the transfer stops at the cap instead,
