@@ -210,11 +210,27 @@ struct SelectableText {
     case .rule: chunk = plain("———")
     case .table(let table):
       // Each cell is its own Markdown, as in the transcript, so one cell's mark never pairs with another's.
-      chunk = row(table.header, font: Self.bold(body))
-      for cells in table.rows {
-        chunk.append(plain("\n"))
-        chunk.append(row(cells, font: body))
+      let rows = [table.header.map { inline($0, font: Self.bold(body)) }] + table.rows.map { $0.map { inline($0, font: body) } }
+      // A tab stop past each column's widest cell lines the columns up as a grid.
+      let style = NSMutableParagraphStyle()
+      style.firstLineHeadIndent = indent
+      style.headIndent = indent
+      style.tabStops = []  // A new style starts with default stops every 28 points.
+      var edge = indent
+      for column in 0..<max(table.header.count - 1, 0) {
+        edge += (rows.map { $0.indices.contains(column) ? ceil($0[column].size().width) : 0 }.max() ?? 0) + 24
+        style.tabStops.append(NSTextTab(textAlignment: .natural, location: edge))
       }
+      chunk = NSMutableAttributedString()
+      for (index, cells) in rows.enumerated() {
+        if index > 0 { chunk.append(plain("\n")) }
+        for (column, cell) in cells.enumerated() {
+          if column > 0 { chunk.append(plain("\t")) }
+          chunk.append(cell)
+        }
+      }
+      chunk.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: chunk.length))
+      return chunk
     }
     if indent > 0 {
       let style = NSMutableParagraphStyle()
@@ -238,14 +254,6 @@ struct SelectableText {
     style.headIndent = max(existing?.headIndent ?? 0, indent + markerWidth)
     content.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: (marker as NSString).length + first.length))
     return content
-  }
-  private func row(_ cells: [String], font: UIFont) -> NSMutableAttributedString {
-    let result = NSMutableAttributedString()
-    for (index, cell) in cells.enumerated() {
-      if index > 0 { result.append(plain("\t", font: font)) }
-      result.append(inline(cell, font: font))
-    }
-    return result
   }
   /// Inline Markdown through the transcript's own parser, with its styles as UIKit fonts.
   private func inline(_ text: String, font: UIFont) -> NSMutableAttributedString {

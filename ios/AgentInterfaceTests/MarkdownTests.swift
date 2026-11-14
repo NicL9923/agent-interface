@@ -75,6 +75,16 @@ import XCTest
     XCTAssertTrue(try font("hay").fontDescriptor.symbolicTraits.contains(.traitItalic))
     XCTAssertTrue(try font("2 scoops").fontDescriptor.symbolicTraits.contains(.traitMonoSpace))
     XCTAssertFalse(try font("Give").fontDescriptor.symbolicTraits.contains(.traitBold))
+    // Every row shares tab stops past the widest first cell, so the columns line up.
+    func stops(_ word: String) -> [CGFloat] {
+      (rendered.attribute(.paragraphStyle, at: text.range(of: word).location, effectiveRange: nil) as? NSParagraphStyle)?
+        .tabStops.map(\.location) ?? []
+    }
+    let widest = ["Horse", "Mare", "*left"].map { rendered.attributedSubstring(from: text.range(of: $0)).size().width }.max() ?? 0
+    XCTAssertEqual(stops("Horse").count, 1)
+    XCTAssertGreaterThan(stops("Horse").first ?? 0, widest)
+    XCTAssertEqual(stops("Mare"), stops("Horse"))
+    XCTAssertEqual(stops("*left"), stops("Horse"))
     let quote = rendered.attribute(.paragraphStyle, at: text.range(of: "Check").location, effectiveRange: nil) as? NSParagraphStyle
     XCTAssertEqual(quote?.headIndent, 16, "A quote is indented rather than marked with >")
     // A person's own message shows exactly as typed: the transcript does not render its Markdown either.
