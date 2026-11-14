@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { agentEnvelope } from "../shared/collaboration.js";
+import { assistantNotFoundMessage } from "../shared/errors.js";
 import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import { httpError } from "./http-error.js";
@@ -25,7 +26,7 @@ export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Sto
     .filter(bot => visible(bot, userId));
 }
 
-export const notFound = { error: "Assistant not found", code: "assistant_not_found" } as const;
+export const notFound = { error: assistantNotFoundMessage, code: "assistant_not_found" } as const;
 
 /**
  * The routine a route that names only its ID acts on. Hermes lets two assistants hold jobs with the same

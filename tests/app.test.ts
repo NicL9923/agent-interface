@@ -9,6 +9,7 @@ import { createApp } from "../src/server/app.js";
 import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
+import { assistantNotFoundMessage, NotFound } from "../src/shared/errors.js";
 import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
 import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
@@ -194,7 +195,7 @@ describe("default roster detail fallback", () => {
         expect((await app.inject({ url, headers })).statusCode).toBe(200);
         fake.runtime.botDetail = async id => {
           if (id === "broken") throw new Error("profiles.describe failed");
-          if (id === "deleted") throw new Error("Unknown Hermes bot.");
+          if (id === "deleted") throw new NotFound(assistantNotFoundMessage, "assistant_not_found");
           return { ...row(id), ...configuration, instructions: "Fresh instructions" };
         };
         const response = await app.inject({ url, headers });

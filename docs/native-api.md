@@ -68,10 +68,28 @@ When Hermes rejects this server's own credential, the server returns 502 with
 401 or 403. The person is still signed in; the self-hoster must update the
 server's Hermes token.
 
+A 4xx is a refusal: `error` is a sentence to show, and some carry a `code` to
+act on. A 5xx is a failure in Hermes or the server, and unless
+the route says otherwise its `error` in production is the generic "The Hermes
+operation could not be completed". These refusals come from the runtime or
+guard it:
+
+- 400 `assistant_name_invalid` from `POST /api/bots` when the name has no letter
+  or number, such as a name of only emoji, so it makes no assistant ID.
+- 404 `assistant_not_found` when an assistant was deleted while the request ran.
+- 404 `file_not_found` for a file ID this server did not issue or no longer
+  accepts, such as after the Hermes token changed. Reload the chat for current
+  file links.
+- 409 `request_not_pending` from an approval or question answer that someone
+  already answered, here or elsewhere, or that expired. Drop the card and refresh.
+- 409 without a code when a routine, an avatar or a delivery setting changed in
+  Hermes, or Hermes refused a routine. The message says what to do.
+
 `GET /api/files/:id` streams the file. It sends `Content-Length` only when Hermes
 reports one for an uncompressed body, and the cap counts decoded bytes. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
 to show. If Hermes understated the length, the transfer stops at the cap instead,
-so treat a truncated body as a failed download.
+so treat a truncated body as a failed download. An ID the server no longer accepts
+returns 404 with `code: "file_not_found"`, without asking Hermes.
 
 `GET /api/bots/:id/conversation` without a query returns the whole history and
 every file. With `turns` or `start`, it returns that window, `earlier` messages
@@ -705,6 +723,9 @@ request does not list. `always` saves each pattern to the assistant's Hermes
 `command_allowlist` and also grants the current session. Ask before sending
 `always` and name the patterns, since a pattern covers commands other than this one.
 A notification's Decline is unchanged and never carries a scope.
+An approval already decided, expired, or being decided by another member at the
+same moment answers 409 with `code: "request_not_pending"`: only the first
+decision reaches Hermes and is recorded.
 
 **Always-allowed commands.** These need an add-on that reports `approval_settings`.
 

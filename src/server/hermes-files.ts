@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { fileNotFoundMessage, NotFound } from '../shared/errors.js';
 import type { FileRef } from '../shared/types.js';
 import { unavailable, type Wire } from './hermes-transport.js';
 
@@ -27,14 +28,14 @@ export function fileSigner(token: string | undefined) {
   function fileValue(id: string): RegisteredFile {
     if (!token) throw unavailable();
     const [body, signature, ...extra] = id.split('.');
-    if (!body || !signature || extra.length) throw new Error('Invalid file identifier.');
+    if (!body || !signature || extra.length) throw new NotFound(fileNotFoundMessage, 'file_not_found');
     const expected = createHmac('sha256', token).update(body).digest();
     const actual = Buffer.from(signature, 'base64url');
-    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new Error('Invalid file identifier.');
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new NotFound(fileNotFoundMessage, 'file_not_found');
     const value = JSON.parse(Buffer.from(body, 'base64url').toString());
     if (value.version !== 1 || !['upload', 'artifact'].includes(value.kind) || !safeStagedPath(value.path) ||
         typeof value.botId !== 'string' || typeof value.name !== 'string' || typeof value.mime !== 'string')
-      throw new Error('Unregistered file identifier.');
+      throw new NotFound(fileNotFoundMessage, 'file_not_found');
     return value;
   }
   function artifacts(botId: string, row: Wire): FileRef[] {

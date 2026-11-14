@@ -24,7 +24,7 @@ describe("Hermes staged file paths", () => {
     expect(fileValue(files[0].id)).toMatchObject({ path: "/out/chart.png", botId: "ranch", kind: "artifact" });
     for (const path of unsafe) {
       const id = forged({ path, name: "file", mime: "text/plain", botId: "ranch", kind: "artifact", version: 1 });
-      expect(() => fileValue(id)).toThrow("Unregistered file identifier.");
+      expect(() => fileValue(id)).toThrow(expect.objectContaining({ statusCode: 404, code: "file_not_found" }));
     }
   });
 });

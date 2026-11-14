@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { IncompleteCreationError } from "../shared/errors.js";
+import { assistantNameMessage, IncompleteCreationError, InvalidInput, NotFound } from "../shared/errors.js";
 import { botIdFor, reasoningLevels, serviceTiers, type Bot, type CapabilityKey, type Runtime } from "../shared/types.js";
 import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
@@ -54,7 +54,7 @@ export class BotDirectory {
       try {
         return withUnread(this.decorate(this.remember(await this.runtime.botDetail(bot.id)), nativeAvatar), reads.get(bot.id));
       } catch (error) {
-        if (error instanceof Error && error.message === "Unknown Hermes bot.") {
+        if (error instanceof NotFound && error.code === "assistant_not_found") {
           this.details.delete(bot.id);
           return undefined;
         }
@@ -102,14 +102,16 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
     // public and a recreated ID never inherits an old record. An existing assistant's is never touched.
     const id = botIdFor(input.name);
-    if (id && await roster.has(id))
+    // A name of only emoji or punctuation makes no ID, so Hermes would get no profile name.
+    if (!id) throw new InvalidInput(assistantNameMessage, "assistant_name_invalid");
+    if (await roster.has(id))
       throw httpError(409, "An assistant with this name already exists. Choose another name.");
     // A room may still list an earlier assistant with this ID, which the new one would open again.
     // Checked and created in one turn with the other changes that decide who reads routine posts.
     const bot = await serialDelivery(store, async () => {
-      if (id) await assertRoutinesStayPrivate(runtime, store, signedIn(req).id, id, next);
-      const prior = id ? store.presentation(id) : {};
-      const version = id ? store.swapPresentation(id, prior, next) : false;
+      await assertRoutinesStayPrivate(runtime, store, signedIn(req).id, id, next);
+      const prior = store.presentation(id);
+      const version = store.swapPresentation(id, prior, next);
       let bot;
       try { bot = await runtime.saveBot(input); }
       catch (error) {
