@@ -41,6 +41,7 @@ describe("exact Hermes upgrade qualification", () => {
       "src/server/direct-routes.ts": "LAN and tailnet listeners for the native API",
       "src/server/etag.ts": "HTTP validators",
       "src/server/logging.ts": "log formatting",
+      "src/server/request-log.ts": "request and event-loop logging",
       "src/server/route-path.ts": "route pattern lookup",
       "src/server/security-headers.ts": "HTTP headers",
       "src/server/send-timing.ts": "send latency logging",

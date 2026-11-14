@@ -338,6 +338,11 @@ For hot reload, set `APP_ORIGIN=http://127.0.0.1:5173`, run `npm run dev` and
 requests to the app server. The built application serves its API and static files
 from one Fastify process.
 
+The server writes JSON log lines to stdout. It logs each response of 400 or above and each request that
+takes over a second, with the method, route pattern, status, duration and request ID, never the URL or its
+query. It also warns, at most once a minute, when the event loop stalls (p99 delay over 50 ms).
+Successful quick requests are not logged because clients poll every 1.5 seconds. `docs/Hosting.md` lists the lines worth searching for.
+
 ## Web UI components
 
 Shared controls live in `src/components/ui`, with shadcn configuration in

@@ -72,10 +72,25 @@ describe("health", () => {
       push: { status: "unconfigured", detail: expect.any(String) },
       backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
       metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
-    } });
+    }, eventLoopP99Ms: null });
     for (const headers of [{ "x-forwarded-for": "203.0.113.9" }, { forwarded: "for=203.0.113.9" }, { "x-real-ip": "203.0.113.9" }])
       expect((await app.inject({ url: "/api/health/ready", headers })).body).toBe('{"ok":true}');
     expect((await app.inject({ url: "/api/health/ready", remoteAddress: "203.0.113.9" })).body).toBe('{"ok":true}');
+  });
+
+  it("shows the event loop's last p99 to direct loopback callers only", async () => {
+    const { app, eventLoop } = await setup();
+    eventLoop.start();
+    try {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      for (const end = performance.now() + 120; performance.now() < end;);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      eventLoop.sample();
+    } finally { eventLoop.stop(); }
+    const direct = (await app.inject("/api/health/ready")).json();
+    expect(direct.eventLoopP99Ms).toBeGreaterThan(50);
+    for (const request of [{ headers: { "x-forwarded-for": "203.0.113.9" } }, { remoteAddress: "203.0.113.9" }])
+      expect((await app.inject({ url: "/api/health/ready", ...request })).body).toBe('{"ok":true}');
   });
 
   it("fails readiness when the worker stalls or the database stops responding", async () => {
@@ -273,7 +288,7 @@ describe("health", () => {
 });
 
 describe("logging", () => {
-  it("logs a repeated server error once, then a count every ten minutes, without secrets or 4xx noise", async () => {
+  it("logs a repeated server error once, then a count every ten minutes, without secrets", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const lines: string[] = [];
     const failing = runtime({ listBots: async () => { throw new Error("Hermes offline"); } });
@@ -282,13 +297,15 @@ describe("logging", () => {
     for (let request = 0; request < 3; request++)
       expect((await app.inject({ url: "/api/bots?ticket=secret-ticket", headers })).statusCode).toBe(502);
     expect((await app.inject({ url: "/api/bootstrap" })).statusCode).toBe(401);
+    // The 401 is the request log's line; the 502s are the error handler's, and the request log adds none of its own.
     expect(lines.map(line => JSON.parse(line))).toEqual([
       expect.objectContaining({ level: 50, msg: "Request failed", route: "GET /api/bots", status: 502, error: expect.objectContaining({ type: "Error", message: "Hermes offline" }) }),
+      expect.objectContaining({ level: 40, msg: "Request answered with an error status", route: "/api/bootstrap", status: 401 }),
     ]);
     vi.setSystemTime(Date.now() + 10 * minute);
     await app.inject({ url: "/api/bots", headers });
-    expect(JSON.parse(lines[1])).toMatchObject({ msg: "Request failure repeated", route: "GET /api/bots", repeats: 3 });
-    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[2])).toMatchObject({ msg: "Request failure repeated", route: "GET /api/bots", repeats: 3 });
+    expect(lines).toHaveLength(3);
     const output = lines.join("");
     for (const secret of ["secret-ticket", headers.cookie.split("=")[1], headers["x-csrf-token"]]) expect(output).not.toContain(secret);
   });

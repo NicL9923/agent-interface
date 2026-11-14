@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ErrorCode } from "../shared/errors.js";
 import type { Preferences } from "../shared/types.js";
 import { RepeatFilter, safeError } from "./logging.js";
+import { errorHandlerLogged } from "./request-log.js";
 
 export interface HttpErrorOptions {
   code?: ErrorCode;
@@ -34,6 +35,7 @@ export function errorHandler(options: { production?: boolean } = {}) {
     const err = error as Error & Partial<HttpError> & { code?: string };
     const status = err.statusCode ?? 502;
     if (status >= 500) {
+      errorHandlerLogged(req);
       const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
       const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
       if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");

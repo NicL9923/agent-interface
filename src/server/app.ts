@@ -39,6 +39,7 @@ import { installSnapshotInvalidation, runtimeSnapshots } from "./runtime-snapsho
 import { GroupWatch } from "./group-watch.js";
 import { GroupCatalogWatch } from "./group-catalog-watch.js";
 import { loggerOptions } from "./logging.js";
+import { EventLoopMonitor, installRequestLog } from "./request-log.js";
 import { errorHandler, httpError } from "./http-error.js";
 import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe } from "./health.js";
 import { installEtags } from "./etag.js";
@@ -82,6 +83,7 @@ export async function createApp(
     routerOptions: { maxParamLength: 8192 },
   });
   installShutdown(app);
+  installRequestLog(app);
   // Every registered route, so tests can prove each one is gated rather than sample a few.
   const routes: { method: string; url: string }[] = [];
   app.addHook("onRoute", (route) => {
@@ -201,10 +203,12 @@ export async function createApp(
     store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log,
     metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),
   });
-  installHealthRoutes(app, health);
+  const eventLoop = new EventLoopMonitor(app.log);
+  installHealthRoutes(app, health, eventLoop);
   if (options.background !== false) {
     worker.start();
     health.start();
+    eventLoop.start();
     mains.start();
   }
   app.addHook("onClose", async () => {
@@ -212,12 +216,13 @@ export async function createApp(
     groups.close();
     catalogs?.close();
     health.stop();
+    eventLoop.stop();
     await mains.stop();
     await worker.stop();
     await runtime.close();
     store.close();
   });
-  return { app, store, worker, health, routes, directRoutes, mains };
+  return { app, store, worker, health, eventLoop, routes, directRoutes, mains };
 }
 
 /** The association file Apple's CDN fetches for universal links and Handoff from Safari. */
