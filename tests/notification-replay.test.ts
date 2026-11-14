@@ -78,8 +78,11 @@ it("does not queue a delivered or failed event again, or change its state", () =
   store.markDelivered(first, "apns:device");
   store.finishDelivery(first);
   store.retryDelivery(second, 12, "gone");
+  const names = vi.spyOn(store.notifications.botNames, "get");
   store.enqueueKnownEvents();
   store.enqueueKnownEvents();
+  // A row in any state is a row: the replay has nothing to build for it.
+  expect(names).not.toHaveBeenCalled();
   expect(outbox(store)).toEqual([{ eventId: "e1", userId: "one", state: "delivered" }, { eventId: "e2", userId: "one", state: "failed" }]);
 });
 
