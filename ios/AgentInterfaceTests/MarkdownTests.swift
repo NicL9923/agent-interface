@@ -33,7 +33,7 @@ import XCTest
 
       | Horse | Hay |
       | --- | --- |
-      | Mare | 2 |
+      | Mare and foal | 2 |
       | *left | right* |
 
       ```
@@ -57,7 +57,7 @@ import XCTest
       Check the fence.
 
       Horse\tHay
-      Mare\t2
+      Mare and foal\t2
       *left\tright*
 
       let x = **1**
@@ -75,12 +75,12 @@ import XCTest
     XCTAssertTrue(try font("hay").fontDescriptor.symbolicTraits.contains(.traitItalic))
     XCTAssertTrue(try font("2 scoops").fontDescriptor.symbolicTraits.contains(.traitMonoSpace))
     XCTAssertFalse(try font("Give").fontDescriptor.symbolicTraits.contains(.traitBold))
-    // Every row shares tab stops past the widest first cell, so the columns line up.
+    // Every row shares tab stops past the widest first cell, here a body cell, so the columns line up.
     func stops(_ word: String) -> [CGFloat] {
       (rendered.attribute(.paragraphStyle, at: text.range(of: word).location, effectiveRange: nil) as? NSParagraphStyle)?
         .tabStops.map(\.location) ?? []
     }
-    let widest = ["Horse", "Mare", "*left"].map { rendered.attributedSubstring(from: text.range(of: $0)).size().width }.max() ?? 0
+    let widest = ["Horse", "Mare and foal", "*left"].map { rendered.attributedSubstring(from: text.range(of: $0)).size().width }.max() ?? 0
     XCTAssertEqual(stops("Horse").count, 1)
     XCTAssertGreaterThan(stops("Horse").first ?? 0, widest)
     XCTAssertEqual(stops("Mare"), stops("Horse"))
@@ -99,6 +99,19 @@ import XCTest
     XCTAssertEqual(marker.firstLineHeadIndent, 0)
     XCTAssertGreaterThan(marker.headIndent, 16, "Wrapped lines keep the quote's indent past the marker")
     XCTAssertEqual(rendered.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle, marker)
+  }
+
+  func testSelectTextKeepsATablesColumnsBehindAListMarker() throws {
+    let rendered = SelectableText().attributed(Message(id: "reply", role: "assistant",
+      text: "- | Horse | Hay |\n  | --- | --- |\n  | Mare and foal | 2 |"))
+    XCTAssertEqual(rendered.string, "• Horse\tHay\nMare and foal\t2")
+    let text = rendered.string as NSString
+    func stops(_ word: String) -> [CGFloat] {
+      (rendered.attribute(.paragraphStyle, at: text.range(of: word).location, effectiveRange: nil) as? NSParagraphStyle)?
+        .tabStops.map(\.location) ?? []
+    }
+    XCTAssertEqual(stops("Mare").count, 1)
+    XCTAssertEqual(stops("Horse"), stops("Mare"), "The header row keeps the table's stops under the marker's style")
   }
 
   func testSelectTextFollowsTheReadersTextSize() throws {

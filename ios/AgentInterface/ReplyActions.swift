@@ -249,7 +249,8 @@ struct SelectableText {
     let first = (content.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
     let existing = content.length > 0 ? content.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle : nil
     content.insert(plain(marker), at: 0)
-    let style = NSMutableParagraphStyle()
+    // Copied, so the first block's own settings, such as a table's tab stops, carry over.
+    let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
     style.firstLineHeadIndent = indent
     style.headIndent = max(existing?.headIndent ?? 0, indent + markerWidth)
     content.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: (marker as NSString).length + first.length))
