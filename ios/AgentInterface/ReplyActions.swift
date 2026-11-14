@@ -95,9 +95,10 @@ struct ReplyActions: ViewModifier {
 struct SelectTextSheet: View {
   var message: Message
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var typeSize
   var body: some View {
     NavigationStack {
-      SelectableTextView(text: SelectableText.attributed(message))
+      SelectableTextView(text: SelectableText(size: typeSize).attributed(message))
         .ignoresSafeArea(.container, edges: .bottom)
         .navigationTitle("Select text").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -106,6 +107,8 @@ struct SelectTextSheet: View {
 }
 private struct SelectableTextView: UIViewRepresentable {
   var text: NSAttributedString
+  final class Coordinator { var shown: NSAttributedString? }
+  func makeCoordinator() -> Coordinator { Coordinator() }
   func makeUIView(context: Context) -> UITextView {
     let view = UITextView()
     view.isEditable = false
@@ -117,57 +120,75 @@ private struct SelectableTextView: UIViewRepresentable {
     view.accessibilityIdentifier = "selectableMessage"
     return view
   }
+  /// Compared with what was last set rather than the view's own text, which UIKit normalizes, so
+  /// a render that changes nothing keeps the reader's selection.
   func updateUIView(_ view: UITextView, context: Context) {
-    if view.attributedText != text { view.attributedText = text }
+    guard context.coordinator.shown != text else { return }
+    context.coordinator.shown = text
+    view.attributedText = text
   }
 }
 /// A message as styled text for `SelectTextSheet`. A person's own message is plain, as the
 /// transcript shows it. A reply renders its Markdown: inline styles become fonts, lists keep their
 /// bullets and numbers, tables become tab-separated rows, and cards become their visible text.
-enum SelectableText {
-  static func attributed(_ message: Message) -> NSAttributedString {
-    let body = UIFont.preferredFont(forTextStyle: .body)
-    guard message.isReply else {
-      return NSAttributedString(string: message.text, attributes: [.font: body, .foregroundColor: UIColor.label])
-    }
+/// An inline view keeps only its title: its page is a web view, which selects text itself.
+struct SelectableText {
+  /// The reader's text size, so the sheet follows a change made while it is open.
+  var size: DynamicTypeSize = .large
+  private var traits: UITraitCollection { UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(size)) }
+  private func font(_ style: UIFont.TextStyle) -> UIFont { UIFont.preferredFont(forTextStyle: style, compatibleWith: traits) }
+  private var body: UIFont { font(.body) }
+
+  func attributed(_ message: Message) -> NSAttributedString {
+    guard message.isReply else { return plain(message.text) }
     let result = NSMutableAttributedString()
     for part in ReplyCards.parse(message.text, inlineUi: message.role == "assistant" && !message.isProgressLine) {
       var chunk = NSMutableAttributedString()
       if let markdown = part.markdown { chunk = blocks(MarkdownCache.shared.blocks(markdown), indent: 0) }
-      else if let inline = part.inline { chunk = plain(inline.title, font: body) }
-      else if let cards = part.cards { chunk = plain(cards.map(cardText).joined(separator: "\n\n"), font: body) }
+      else if let inline = part.inline { chunk = plain(inline.title) }
+      else if let cards = part.cards { chunk = plain(cards.map(Self.cardText).joined(separator: "\n\n")) }
       guard chunk.length > 0 else { continue }
-      if result.length > 0 { result.append(plain("\n\n", font: body)) }
+      if result.length > 0 { result.append(plain("\n\n")) }
       result.append(chunk)
     }
     return result
   }
-  private static func cardText(_ card: ReplyCard) -> String {
-    ([card.title] + (card.items ?? []).map { $0.text ?? $0.title ?? "" } + [card.subject].compactMap { $0 }
-      + (card.fields ?? []).map(\.label)).filter { !$0.isEmpty }.joined(separator: "\n")
+  /// The words a card shows, in the order it shows them.
+  static func cardText(_ card: ReplyCard) -> String {
+    var lines = [card.title]
+    if card.type == "event", let start = card.start.flatMap(ServerDate.parse) {
+      lines.append(When.format(start, relative: false)
+        + (card.end.flatMap(ServerDate.parse).map { " to " + When.format($0, relative: false, from: start) } ?? ""))
+    }
+    lines += [card.location, card.description].compactMap { $0 }
+    if let to = card.to { lines.append("To: " + to.joined(separator: ", ")) }
+    if let cc = card.cc { lines.append("Cc: " + cc.joined(separator: ", ")) }
+    if let subject = card.subject { lines.append("Subject: " + subject) }
+    if let body = card.body { lines.append(body) }
+    for item in card.items ?? [] { lines += [item.time, item.text ?? item.title, item.detail].compactMap { $0 } }
+    lines += (card.fields ?? []).map(\.label)
+    return lines.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n")
   }
-  private static func plain(_ text: String, font: UIFont) -> NSMutableAttributedString {
-    NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.label])
+  private func plain(_ text: String, font: UIFont? = nil) -> NSMutableAttributedString {
+    NSMutableAttributedString(string: text, attributes: [.font: font ?? body, .foregroundColor: UIColor.label])
   }
   /// Blocks a blank line apart, or a line apart inside a list item, which the transcript keeps tight.
-  private static func blocks(_ blocks: [MarkdownBlock], indent: CGFloat, separator: String = "\n\n") -> NSMutableAttributedString {
+  private func blocks(_ blocks: [MarkdownBlock], indent: CGFloat, separator: String = "\n\n") -> NSMutableAttributedString {
     let result = NSMutableAttributedString()
     for block in blocks {
       let chunk = self.block(block, indent: indent)
       guard chunk.length > 0 else { continue }
-      if result.length > 0 { result.append(plain(separator, font: UIFont.preferredFont(forTextStyle: .body))) }
+      if result.length > 0 { result.append(plain(separator)) }
       result.append(chunk)
     }
     return result
   }
-  private static func block(_ block: MarkdownBlock, indent: CGFloat) -> NSMutableAttributedString {
-    let body = UIFont.preferredFont(forTextStyle: .body)
+  private func block(_ block: MarkdownBlock, indent: CGFloat) -> NSMutableAttributedString {
     let chunk: NSMutableAttributedString
     switch block {
     case .paragraph(let text): chunk = inline(text, font: body)
     case .heading(let level, let text):
-      let style: UIFont.TextStyle = level == 1 ? .title2 : level == 2 ? .title3 : .headline
-      chunk = inline(text, font: bold(UIFont.preferredFont(forTextStyle: style)))
+      chunk = inline(text, font: Self.bold(font(level == 1 ? .title2 : level == 2 ? .title3 : .headline)))
     case .code(_, let text):
       chunk = plain(text, font: .monospacedSystemFont(ofSize: body.pointSize * 0.9, weight: .regular))
     case .quote(let inner):
@@ -177,29 +198,21 @@ enum SelectableText {
     case .list(let list):
       chunk = NSMutableAttributedString()
       for (index, item) in list.items.enumerated() {
-        let marker = switch item.task {
-        case true?: "☑ "
-        case false?: "☐ "
-        case nil: list.start.map { "\($0 + index). " } ?? "• "
-        }
-        let markerWidth = (marker as NSString).size(withAttributes: [.font: body]).width
-        let content = blocks(item.blocks, indent: indent + markerWidth, separator: "\n")
-        content.insert(plain(marker, font: body), at: 0)
-        // The marker hangs in the margin so wrapped lines align with the item's text.
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = indent
-        style.headIndent = indent + markerWidth
-        content.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: (marker as NSString).length))
-        if chunk.length > 0 { chunk.append(plain("\n", font: body)) }
-        chunk.append(content)
+        if chunk.length > 0 { chunk.append(plain("\n")) }
+        chunk.append(listItem(item, marker: switch item.task {
+          case true?: "☑ "
+          case false?: "☐ "
+          case nil: list.start.map { "\($0 + index). " } ?? "• "
+        }, indent: indent))
       }
       return chunk
-    case .rule: chunk = plain("———", font: body)
+    case .rule: chunk = plain("———")
     case .table(let table):
-      chunk = inline(table.header.joined(separator: "\t"), font: bold(body))
-      for row in table.rows {
-        chunk.append(plain("\n", font: body))
-        chunk.append(inline(row.joined(separator: "\t"), font: body))
+      // Each cell is its own Markdown, as in the transcript, so one cell's mark never pairs with another's.
+      chunk = row(table.header, font: Self.bold(body))
+      for cells in table.rows {
+        chunk.append(plain("\n"))
+        chunk.append(row(cells, font: body))
       }
     }
     if indent > 0 {
@@ -210,8 +223,31 @@ enum SelectableText {
     }
     return chunk
   }
+  /// The marker hangs in the margin so wrapped lines align with the item's text. A paragraph's
+  /// style is read from its first character, so one style covers the marker and the whole first
+  /// paragraph, keeping a deeper indent the first block already has, such as a quote's.
+  private func listItem(_ item: MarkdownListItem, marker: String, indent: CGFloat) -> NSMutableAttributedString {
+    let markerWidth = (marker as NSString).size(withAttributes: [.font: body]).width
+    let content = blocks(item.blocks, indent: indent + markerWidth, separator: "\n")
+    let first = (content.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+    let existing = content.length > 0 ? content.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle : nil
+    content.insert(plain(marker), at: 0)
+    let style = NSMutableParagraphStyle()
+    style.firstLineHeadIndent = indent
+    style.headIndent = max(existing?.headIndent ?? 0, indent + markerWidth)
+    content.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: (marker as NSString).length + first.length))
+    return content
+  }
+  private func row(_ cells: [String], font: UIFont) -> NSMutableAttributedString {
+    let result = NSMutableAttributedString()
+    for (index, cell) in cells.enumerated() {
+      if index > 0 { result.append(plain("\t", font: font)) }
+      result.append(inline(cell, font: font))
+    }
+    return result
+  }
   /// Inline Markdown through the transcript's own parser, with its styles as UIKit fonts.
-  private static func inline(_ text: String, font: UIFont) -> NSMutableAttributedString {
+  private func inline(_ text: String, font: UIFont) -> NSMutableAttributedString {
     let value = MarkdownCache.shared.attributed(text)
     let result = NSMutableAttributedString()
     for run in value.runs {
