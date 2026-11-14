@@ -578,13 +578,13 @@ class Activation(unittest.TestCase):
                       release_app.verify_release, release_app.remote)
         release_app.ROOT, release_app.MANIFESTS = root, root / ".private/releases"
         self.root = root
-        self.live = {"current": "/srv/app/releases/old", "workerSha256": "worker"}
+        self.live = {"current": "/srv/app/releases/old", "workerSha256": "worker", "releaseBuilt": True}
         self.runtime = dict(ON_NODE)
         release_app.remote = lambda host, program, payload: {"serviceRuntime": self.runtime} if program is release_app.REMOTE_FACTS else self.live
         release_app.save_manifest({"name": self.NAME, "status": "prepared", "host": "host",
             "commit": "7fac68e44e7d" + "0" * 28, "origin": "https://app.example.test", "webBuild": "b" * 16,
             "archiveSha256": "f" * 64, "hermesRevision": PRIOR["hermesRevision"], "qualification": "reused",
-            "pullRequest": 8, "appBase": "/srv/app", "operationId": "op",
+            "pullRequest": 8, "appBase": "/srv/app", "operationId": "op", "release": "/srv/app/releases/" + self.NAME,
             "expectedRelease": "/srv/app/releases/old", "workerSha256": "worker", "node": "/srv/node", "nodeRealpath": "/real/node"})
 
     def tearDown(self):
@@ -618,6 +618,19 @@ class Activation(unittest.TestCase):
         self.live["workerSha256"] = "edited"
         with self.assertRaises(SystemExit):
             self.activate(lambda *_, **__: self.fail("must not activate"), {})
+        self.assertEqual(self.status(), "prepared")
+
+    def test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable(self):
+        sent = []
+        def remote(host, program, payload):
+            if program is not release_app.REMOTE_LIVE:
+                raise AssertionError("unexpected host program")
+            sent.append(payload)
+            return {**self.live, "releaseBuilt": False}
+        release_app.remote = remote
+        with self.assertRaisesRegex(SystemExit, "build is gone from the host.*Discard " + self.NAME):
+            self.activate(lambda *_, **__: self.fail("must not activate"), {})
+        self.assertEqual(sent, [{"appBase": "/srv/app", "release": "/srv/app/releases/" + self.NAME}])
         self.assertEqual(self.status(), "prepared")
 
     def test_refuses_when_the_service_was_switched_off_the_releases_runtime(self):
@@ -950,9 +963,18 @@ class HostPrograms(unittest.TestCase):
             worker["native_chromium"](self.host.home)
 
     def prune(self, keep=3, protected=()):
-        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": keep, "protected": list(protected)})
+        code, output, error = run_remote(release_app.REMOTE_PRUNE, {"appBase": str(self.host.base), "keep": keep, "unsettledDays": 3,
+                                                                    "protected": list(protected)})
         self.assertEqual(code, 0, error)
         return json.loads(output)
+
+    def activated(self, name):
+        """The records a completed guarded activation leaves: the operation's config and its result."""
+        operation = self.host.base / "operations" / name
+        operation.mkdir(parents=True, exist_ok=True)
+        (operation / "deploy-config.json").write_text(json.dumps({"operationId": "op-" + name}))
+        (self.host.base / "operations" / ("continued-op-" + name)).mkdir()
+        (self.host.base / "operations" / ("continued-op-" + name) / "result.json").write_text("{}")
 
     def stage_marker(self, operation, state):
         marker = self.host.base / "operations" / operation / "qualification-one/.agent-interface-upgrade-stage"
@@ -963,10 +985,10 @@ class HostPrograms(unittest.TestCase):
         releases = self.host.base / "releases"
         live = (self.host.base / "current").resolve()
         now = time.time()
-        # All from the last day: age alone never keeps a release.
+        # All activated within the last day: age alone never keeps a settled release.
         names = [f"release-old-{index:02}" for index in range(16)]
         for index, name in enumerate(names):
-            (releases / name).mkdir(); os.utime(releases / name, (now - 3600 + index, now - 3600 + index))
+            (releases / name).mkdir(); self.activated(name); os.utime(releases / name, (now - 3600 + index, now - 3600 + index))
         operation = self.host.base / "operations" / live.name
         operation.mkdir(parents=True)
         (operation / "deploy-config.json").write_text(json.dumps({"previous": str(releases / "release-old-00")}))
@@ -1009,6 +1031,7 @@ class HostPrograms(unittest.TestCase):
         (releases / "release-old").mkdir()
         os.utime(releases / "release-old", (time.time() - 60,) * 2)
         removed_now = self.qualified_operation("release-old")
+        self.activated("release-old")
         gone = self.qualified_operation("release-gone")
         (gone / "qualification-two/pm-home").mkdir(parents=True)
         (gone / "qualification-two/qualification.json").write_text("{}")
@@ -1035,6 +1058,7 @@ class HostPrograms(unittest.TestCase):
     def test_prune_reports_a_release_it_cannot_remove_and_still_clears_the_rest(self):
         releases = self.host.base / "releases"
         (releases / "release-stuck").mkdir()
+        self.activated("release-stuck")
         os.utime(releases / "release-stuck", (time.time() - 60,) * 2)
         gone = self.qualified_operation("release-gone")
         releases.chmod(0o500)
@@ -1047,6 +1071,68 @@ class HostPrograms(unittest.TestCase):
         self.assertIn("release-stuck", result["errors"][0])
         self.assertEqual(result["stripped"], ["release-gone"])
         self.assertFalse((gone / "release.tar.gz").exists())
+
+    def age(self, *paths, seconds):
+        for path in paths:
+            os.utime(path, (time.time() - seconds,) * 2)
+
+    def test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days(self):
+        # Another checkout prepares releases this checkout's manifests know nothing about.
+        releases, operations = self.host.base / "releases", self.host.base / "operations"
+        day = 86400
+        names = ("release-preflighted", "release-building", "release-unreadable-config", "release-list-config",
+                 "release-numeric-operation", "release-unstattable", "release-almost-idle",
+                 "release-activated", "release-abandoned", "release-qualified-recently", "release-retried")
+        for name in names:
+            (releases / name).mkdir()
+        # Prepared and preflighted: the guarded check made continued-<op>, but only a completed activation writes result.json.
+        self.host.deployment("release-preflighted", "op-pre", False)
+        (operations / "continued-op-pre").mkdir()
+        # Still uploading or building: no deploy configuration yet.
+        (operations / "release-building").mkdir()
+        (operations / "release-building/release.tar.gz").write_bytes(b"archive")
+        (operations / "release-unreadable-config").mkdir()
+        (operations / "release-unreadable-config/deploy-config.json").write_text("{")
+        (operations / "release-list-config").mkdir()
+        (operations / "release-list-config/deploy-config.json").write_text("[]")
+        self.host.deployment("release-numeric-operation", 7, False)
+        # An operation whose time cannot be read counts as touched now.
+        (operations / "release-unstattable").symlink_to(operations / "release-unstattable")
+        self.age(releases / "release-unstattable", seconds=4 * day)
+        self.host.deployment("release-almost-idle", "op-almost", False)
+        self.host.deployment("release-activated", "op-done", True)
+        self.host.deployment("release-abandoned", "op-gone", False)
+        self.host.deployment("release-qualified-recently", "op-qualified", False)
+        self.host.deployment("release-retried", "op-retried", False)
+        (operations / "continued-op-retried").mkdir()
+        self.age(releases / "release-almost-idle", operations / "release-almost-idle", seconds=3 * day - 600)
+        self.age(releases / "release-abandoned", operations / "release-abandoned", seconds=3 * day + 600)
+        # A qualification run yesterday touched the operation, though the release dir is older.
+        self.age(releases / "release-qualified-recently", seconds=4 * day)
+        self.age(operations / "release-qualified-recently", seconds=day)
+        # A later activation attempt touched continued-<op>.
+        self.age(releases / "release-retried", operations / "release-retried", seconds=4 * day)
+        for name in ("release-preflighted", "release-building", "release-unreadable-config", "release-list-config",
+                     "release-numeric-operation", "release-activated"):
+            self.age(releases / name, seconds=3600)
+        self.age(releases / "release-live", seconds=7200)
+        result = self.prune(keep=0)
+        self.assertEqual(sorted(result["removed"]), ["release-abandoned", "release-activated"])
+        self.assertEqual(sorted(path.name for path in releases.iterdir()),
+                         sorted({"release-live", *names} - {"release-abandoned", "release-activated"}))
+
+    def test_prune_leaves_a_gone_release_s_operation_alone_while_its_qualification_runs_or_cannot_be_read(self):
+        running = self.qualified_operation("release-running")
+        unreadable = self.qualified_operation("release-unreadable")
+        finished = self.qualified_operation("release-finished")
+        (running / "qualification-one/.agent-interface-upgrade-stage").write_text(json.dumps({"schemaVersion": 1, "state": "active"}))
+        (unreadable / "qualification-one/.agent-interface-upgrade-stage").write_text("{")
+        (finished / "qualification-one/.agent-interface-upgrade-stage").write_text(json.dumps({"schemaVersion": 1, "state": "completed"}))
+        before = {path: self.tree(path) for path in (running, unreadable)}
+        result = self.prune(keep=1)
+        self.assertEqual(result["stripped"], ["release-finished"])
+        self.assertEqual({path: self.tree(path) for path in (running, unreadable)}, before)
+        self.assertFalse((finished / "qualification-one/source").exists())
 
     def test_prune_protects_releases_this_checkout_has_not_settled(self):
         saved = release_app.MANIFESTS, release_app.remote
@@ -1068,13 +1154,23 @@ class HostPrograms(unittest.TestCase):
             release_app.remote = remote
             with patch("sys.stdout") as stdout, patch("sys.stderr") as stderr:
                 release_app.prune_releases({"host": "host", "appBase": "/srv/app"})
-            self.assertEqual(sent, [("host", {"appBase": "/srv/app", "keep": 10, "protected": ["release-a", "release-b", "release-c"]})])
+            self.assertEqual(sent, [("host", {"appBase": "/srv/app", "keep": 10, "unsettledDays": 3,
+                                             "protected": ["release-a", "release-b", "release-c"]})])
             printed = "".join(call.args[0] for call in stdout.write.call_args_list)
             self.assertIn("Removed 1 old releases; kept 11.", printed)
             self.assertIn("26.0 GB free on the host.", printed)
             self.assertIn("could not prune release-z: denied", "".join(call.args[0] for call in stderr.write.call_args_list))
         finally:
             release_app.MANIFESTS, release_app.remote = saved
+
+    def test_live_facts_say_whether_the_release_is_still_built(self):
+        built = {}
+        for name in ("release-live", "release-pruned"):
+            code, output, error = run_remote(release_app.REMOTE_LIVE, {"appBase": str(self.host.base),
+                                                                       "release": str(self.host.base / "releases" / name)})
+            self.assertEqual(code, 0, error)
+            built[name] = json.loads(output)["releaseBuilt"]
+        self.assertEqual(built, {"release-live": True, "release-pruned": False})
 
     def test_discard_removes_only_an_unactivated_release(self):
         release = self.host.base / "releases/release-new"

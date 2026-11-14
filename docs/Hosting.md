@@ -596,17 +596,38 @@ then kept every release for a week. After each activation `release-app.py` now k
   prepared, activating, needs-review or recovering. A failed prepare stays
   `preparing` until `discard` removes it, so discard abandoned stages;
 - every release with a qualification stage marked `active`, or with a stage marker
-  it cannot read.
+  it cannot read;
+- every release the host cannot prove settled, until it has been idle for 3 days.
 
-It removes the rest regardless of age. Then, for each `operations/release-*` whose
-release is gone, it deletes `release.tar.gz` and every subdirectory of its
-`qualification-*` stages, the disposable checkouts, runtimes and backups, and keeps
-their top-level files: receipts, logs and the deploy configuration. It never touches
-an operation whose release still exists, one a protected manifest names, or one with
-no `deploy-config.json` yet, which another session may still be uploading. Removing
-the 163 such payloads by hand freed 3.2 GB. The tool prints what it removed and the
-host's free space, and warns about anything it could not remove without failing the
-release. Readiness's `disk` check alerts administrators when space still runs low.
+Only another checkout's manifests know that checkout's stages, and several
+sessions release from different checkouts at once; on Oct 14, 2026 two staged the
+same commit three minutes apart. So the host's own records decide. A release is
+settled when the `operationId` in its `operations/<release>/deploy-config.json`
+has an `operations/continued-<operationId>/result.json`, which the guarded deploy
+writes only when an activation completes. `discard` deletes the release and its
+operation, so a discarded release leaves nothing to prune. Any other release, one
+still uploading, building, preflighted or qualified, held for review, or with a
+missing or unreadable deploy configuration, is kept until its release directory,
+its operation directory and its `continued-<operationId>` directory have all gone
+3 days without a change. A time it cannot read keeps the release. Three days
+covers a stage prepared before a weekend and activated after it. A stage that
+old is rarely still usable: `activate` refuses once the live release has changed,
+and from Oct 20 to Nov 12, 2026 releases landed one to seven days apart, most
+often within two. A stage another checkout abandoned still ages out, so the disk
+does not fill with them again. When a pruned stage is activated, `activate`
+refuses before changing anything and says to discard it and prepare again.
+
+It removes the rest. Then, for each `operations/release-*` whose release is gone,
+it deletes `release.tar.gz` and every subdirectory of its `qualification-*` stages,
+the disposable checkouts, runtimes and backups, and keeps their top-level files:
+receipts, logs and the deploy configuration. It never touches an operation whose
+release still exists, one a protected manifest names, one with no
+`deploy-config.json` yet, which another session may still be uploading, or one
+with a qualification stage marked `active` or a stage marker it cannot read, whose
+process may still be using those directories. Removing the 163 such payloads by
+hand freed 3.2 GB. The tool prints what it removed and the host's free space, and
+warns about anything it could not remove without failing the release. Readiness's
+`disk` check alerts administrators when space still runs low.
 
 See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
 and recovery requirements. The [validation ledger](ledger/README.md) records

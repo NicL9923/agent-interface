@@ -448,17 +448,22 @@ finish({"buildLog": (operation / "build.log").read_text()[-4000:], "nodeVersion"
 
 REMOTE_LIVE = """
 base = Path(PAYLOAD["appBase"])
-finish({"current": str((base / "current").resolve()), "workerSha256": sha(base / "shared/hermes-worker.json")})
+finish({"current": str((base / "current").resolve()), "workerSha256": sha(base / "shared/hermes-worker.json"),
+        "releaseBuilt": Path(PAYLOAD["release"]).is_dir()})
 """
 
 # Releases kept besides the live one, its rollback targets and any release still in flight.
 # Each holds a full build; the host needs the room for Hermes update checks (docs/Hosting.md).
 RELEASES_KEPT = 10
+# Any checkout may be preparing or holding a release, and only its own manifests know. The host proves a
+# release settled only by a completed activation; discard leaves nothing behind. Any other release is kept
+# until it, its operation and its activation attempts have been idle this long (docs/Hosting.md).
+UNSETTLED_RELEASE_DAYS = 3
 # A release in these states may still be activated, reviewed or recovered from, so pruning
 # never removes it. A failed prepare stays "preparing" until it is discarded.
 PRUNE_PROTECTED = ("preparing", "prepared", "activating", "needs-review", "recovering")
 REMOTE_PRUNE = """
-import re
+import re, time
 base = Path(PAYLOAD["appBase"]); releases = base / "releases"; operations = base / "operations"
 current = (base / "current").resolve()
 named = lambda text: {(releases / name).resolve() for name in re.findall(r"releases/(release-[A-Za-z0-9._-]+)", text)}
@@ -476,6 +481,29 @@ def qualifying(name):
         except (OSError, ValueError):
             return True
     return False
+def operation_id(name):
+    try:
+        config = json.loads((operations / name / "deploy-config.json").read_text())
+    except (OSError, ValueError):
+        return None
+    value = config.get("operationId") if isinstance(config, dict) else None
+    return value if isinstance(value, str) else None
+def activated(name):
+    # The guarded deploy writes result.json only when an activation completes.
+    operation = operation_id(name)
+    return operation is not None and (operations / ("continued-" + operation) / "result.json").is_file()
+def idle(path):
+    # Prepare, qualification and each activation attempt touch one of these. A time it cannot read keeps it.
+    operation = operation_id(path.name)
+    times = []
+    for item in [path, operations / path.name] + ([operations / ("continued-" + operation)] if operation else []):
+        try:
+            times.append(item.stat().st_mtime)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+    return bool(times) and max(times) < time.time() - PAYLOAD["unsettledDays"] * 86400
 def remove_tree(path):
     # Native caches in qualification stages can hold read-only directories; restore owner access first.
     for root, directories, _ in os.walk(path):
@@ -488,7 +516,7 @@ dirs = sorted((p for p in releases.iterdir() if p.is_dir() and not p.is_symlink(
 keep |= {p.resolve() for p in dirs[:PAYLOAD["keep"]]}
 removed, errors = [], []
 for path in dirs:
-    if path.resolve() in keep or qualifying(path.name):
+    if path.resolve() in keep or qualifying(path.name) or not (activated(path.name) or idle(path)):
         continue
     try:
         remove_tree(path); removed.append(path.name)
@@ -496,11 +524,13 @@ for path in dirs:
         errors.append(f"{path}: {error}")
 # A gone release's operation keeps its receipts and logs. Its archive and the checkouts, runtimes
 # and caches of its qualification stages go. Only an operation with a deploy configuration is
-# touched: without one, another session may still be uploading its archive.
+# touched: without one, another session may still be uploading its archive. One with a running
+# or unreadable qualification stage is left whole, since its process may still be using them.
 stripped = []
 for operation in sorted(operations.glob("release-*")):
     if (operation.is_symlink() or not operation.is_dir() or (releases / operation.name).exists()
-            or operation.name in PAYLOAD["protected"] or not (operation / "deploy-config.json").is_file()):
+            or operation.name in PAYLOAD["protected"] or not (operation / "deploy-config.json").is_file()
+            or qualifying(operation.name)):
         continue
     disposable = [operation / "release.tar.gz"] if (operation / "release.tar.gz").is_file() else []
     for stage in sorted(operation.glob("qualification-*")):
@@ -831,7 +861,10 @@ def activate(args):
     if manifest["status"] != "prepared":
         raise SystemExit(f"{args.name} is {manifest['status']}, not prepared.")
     manifest["host"] = args.host or manifest["host"]
-    live = remote(manifest["host"], REMOTE_LIVE, {"appBase": manifest["appBase"]})
+    live = remote(manifest["host"], REMOTE_LIVE, {"appBase": manifest["appBase"], "release": manifest["release"]})
+    if not live["releaseBuilt"]:
+        raise SystemExit(f"{args.name}'s build is gone from the host. Pruning removes a stage no checkout has touched "
+                         f"for {UNSETTLED_RELEASE_DAYS} days. Discard {args.name} and prepare again.")
     if live["current"] != manifest["expectedRelease"] or live["workerSha256"] != manifest["workerSha256"]:
         raise SystemExit("The live release or worker configuration changed since preparation. "
                          f"Discard {args.name} and prepare again.")
@@ -886,6 +919,7 @@ def prune_releases(manifest):
     update checks; never fails a release."""
     try:
         pruned = remote(manifest["host"], REMOTE_PRUNE, {"appBase": manifest["appBase"], "keep": RELEASES_KEPT,
+                                                          "unsettledDays": UNSETTLED_RELEASE_DAYS,
                                                           "protected": protected_releases()})
         print(f"Removed {len(pruned['removed'])} old releases; kept {pruned['kept']}. Cleared the archives and "
               f"qualification stages of {len(pruned['stripped'])} removed releases. "
