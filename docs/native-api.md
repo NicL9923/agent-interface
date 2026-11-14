@@ -723,9 +723,11 @@ request does not list. `always` saves each pattern to the assistant's Hermes
 `command_allowlist` and also grants the current session. Ask before sending
 `always` and name the patterns, since a pattern covers commands other than this one.
 A notification's Decline is unchanged and never carries a scope.
-An approval already decided, expired, or being decided by another member at the
-same moment answers 409 with `code: "request_not_pending"`: only the first
-decision reaches Hermes and is recorded.
+An approval already decided or expired answers 409 with `code: "request_not_pending"`.
+When two members decide one approval at the same moment, only one decision is sent
+to Hermes at a time: the second waits for the first, then answers 409
+`request_not_pending` if the first was recorded, or is sent if the first failed. A
+409 therefore always means the approval is closed.
 
 **Always-allowed commands.** These need an add-on that reports `approval_settings`.
 

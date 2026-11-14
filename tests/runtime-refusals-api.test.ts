@@ -47,27 +47,62 @@ describe("refusals a person can act on", () => {
 });
 
 describe("two members deciding one shared approval at once", () => {
-  it("sends only the first decision to Hermes, records it, and refuses the second as no longer pending", async () => {
+  it("sends only the first decision to Hermes, records it, and refuses the second once the first is recorded", async () => {
     const pending: Approval = { id: "gate", title: "Open the gate", detail: "", status: "pending" };
     let release!: () => void;
     const held = new Promise<void>(resolve => { release = resolve; });
     // Hermes answers both, as it can when two answers reach it before either resolves the request.
     const approve = vi.fn<Runtime["approve"]>(async () => { await held; });
+    const capabilities = vi.fn(async () => capabilitiesFixture({ approvals: { supported: true }, botConfiguration: { supported: true } }));
     const { app, store } = await installation({
       conversation: async () => conversationFixture({ botId: "shared", approvals: [{ ...pending }] }),
-      approve,
+      approve, capabilities,
     });
     const [one, two] = [await localLogin(app, origin, "one"), await localLogin(app, origin, "two")];
     const decide = (headers: Record<string, string>, decision: string) =>
       app.inject({ method: "POST", url: "/api/bots/shared/approvals/gate", headers, payload: { decision } });
     const first = decide(one, "approved");
     await vi.waitFor(() => expect(approve).toHaveBeenCalled());
-    const second = await decide(two, "denied");
+    const checked = capabilities.mock.calls.length;
+    const waiting = decide(two, "denied");
+    // The second request passes the route's capability check and reaches the decision while the first is held.
+    await vi.waitFor(() => expect(capabilities.mock.calls.length).toBeGreaterThan(checked));
+    await new Promise(resolve => setImmediate(resolve));
     release();
     expect((await first).statusCode).toBe(200);
+    const second = await waiting;
     expect([second.statusCode, second.json().error, second.json().code]).toEqual([409, approvalNotPendingMessage, "request_not_pending"]);
     expect(approve.mock.calls).toEqual([["shared", "gate", "approved", "local-one"]]);
     expect(store.approval("gate")).toMatchObject({ userId: "local-one", decision: "approved" });
+  });
+
+  it("sends the waiting member's decision when the first one fails, instead of telling them it closed", async () => {
+    const pending: Approval = { id: "gate", title: "Open the gate", detail: "", status: "pending" };
+    let fail!: (error: Error) => void;
+    const held = new Promise<void>((_, reject) => { fail = reject; });
+    const approve = vi.fn<Runtime["approve"]>()
+      .mockImplementationOnce(async () => { await held; })
+      .mockResolvedValueOnce(undefined);
+    const capabilities = vi.fn(async () => capabilitiesFixture({ approvals: { supported: true }, botConfiguration: { supported: true } }));
+    const { app, store } = await installation({
+      conversation: async () => conversationFixture({ botId: "shared", approvals: [{ ...pending }] }),
+      approve, capabilities,
+    });
+    const [one, two] = [await localLogin(app, origin, "one"), await localLogin(app, origin, "two")];
+    const decide = (headers: Record<string, string>, decision: string) =>
+      app.inject({ method: "POST", url: "/api/bots/shared/approvals/gate", headers, payload: { decision } });
+    const first = decide(one, "approved");
+    await vi.waitFor(() => expect(approve).toHaveBeenCalled());
+    const checked = capabilities.mock.calls.length;
+    const second = decide(two, "denied");
+    // The second request passes the route's capability check, then reaches the decision while the first is held.
+    await vi.waitFor(() => expect(capabilities.mock.calls.length).toBeGreaterThan(checked));
+    await new Promise(resolve => setImmediate(resolve));
+    fail(new Error("Hermes connection lost"));
+    expect((await first).statusCode).toBe(502);
+    expect((await second).statusCode).toBe(200);
+    expect(approve.mock.calls).toEqual([["shared", "gate", "approved", "local-one"], ["shared", "gate", "denied", "local-two"]]);
+    expect(store.approval("gate")).toMatchObject({ userId: "local-two", decision: "denied" });
   });
 
   it("lets the approval be decided again after a decision Hermes failed", async () => {

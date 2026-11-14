@@ -60,3 +60,22 @@ Application tests use the real Fastify app with the in-memory store, and either 
 adapter over a fake socket and `fetch`. Since #396, a refusal is logged once at warn level as "Request answered with
 an error status" and no longer at error level as "Request failed". Not exercised: real Hermes, the iOS app (no Swift
 changed; its status handling was read, not run), and browsers other than the e2e smoke suite's Chromium.
+
+## Review fix
+
+GPT-6.1 Sol's review found that a second member deciding an approval while the first member's decision was in flight
+got 409 `request_not_pending` at once. If the first then failed, the approval stayed pending, but the web approval card
+had saved the second member's attempt as closed and hid its controls. Now the second decision waits for the first to
+settle and reads the approval again: it is refused if the first was recorded and sent if the first failed, so a 409
+always means closed.
+
+Both race tests now wait until the second request has passed the route's capability check before the first is
+released or failed. Without that wait, both mutants below passed, because the second request reached the decision only
+after the first had settled.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| Refuse a second decision at once while one is in flight | `sends the waiting member's decision when the first one fails, instead of telling them it closed` | 1 failed |
+| Never record the in-flight decision, so both reach Hermes | `sends only the first decision to Hermes, records it, and refuses the second once the first is recorded` | 1 failed |
+
+`tests/runtime-refusals-api.test.ts` passed 6 of 6 after each restore, and three more times in a row.
