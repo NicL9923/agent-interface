@@ -158,6 +158,7 @@ and disabled in Hermes in one step, so it can never run on both.
 | Attachments: images, PDFs and text, up to 10 files of 20 MB | Passed in each harness's own input format; files a harness cannot read go as paths it can open |
 | Speed and reasoning settings, model warnings that need confirmation | Mapped per harness where it supports them, hidden where it does not |
 | Shared computer and browser | The computer host moves into the WildBots server; the browser is an MCP server every harness gets |
+| WildBots for Mac tools (`wildbots_mac` in `src/hermes/mac.py`) | An MCP server in WildBots that relays to the owner's linked Mac through the existing Mac link (`src/server/mac-link.ts`), offered only to that owner's personal bots; the Mac app and its permissions are unchanged |
 | Google Workspace and other OAuth tools, per-bot MCP servers in Access | MCP servers with tokens held by WildBots |
 | Vault | WildBots, exposed through MCP; redaction applied to transcripts and logs |
 | Voice: Talk, read-aloud and transcription | WildBots's own voice service; the realtime plugin moves out of Hermes |
@@ -185,8 +186,8 @@ Each step ships on its own and is accepted before the next.
    recorded replay fixtures for its protocol.
 4. **Memory and skills service,** with learning, cleaning and the review UI.
 5. **Routines, goals and triggers** on the new scheduler, for bots already on a harness.
-6. **Tool parity** through MCP: computer and browser, Google, vault, voice, images, hand-offs and group chats. The
-   minors safeguards above are in place before any assistant a child uses moves.
+6. **Tool parity** through MCP: computer and browser, the linked Mac, Google, vault, voice, images, hand-offs and group
+   chats. The minors safeguards above are in place before any assistant a child uses moves.
 7. **Move bots one at a time,** with their routines. Before moving, export the bot's Hermes memory, skills and
    history as a rollback copy. Rolling back after new turns means Hermes resumes from that copy plus a summary of
    the turns it never saw. When every bot has moved, retire Hermes and the add-on.
