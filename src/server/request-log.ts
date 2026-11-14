@@ -1,4 +1,4 @@
-import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { RepeatFilter, type Log } from "./logging.js";
 
@@ -35,7 +35,10 @@ export function installRequestLog(app: FastifyInstance, { slowMs = slowRequestMs
 }
 
 /** What the monitor needs of a Node histogram, so a test can supply the one at the clock's edge. */
-type Histogram = Pick<IntervalHistogram, "enable" | "disable" | "reset" | "percentile" | "max" | "count">;
+type Histogram = {
+  enable(): unknown; disable(): unknown; reset(): void; percentile(percentile: number): number;
+  readonly max: number; readonly count: number;
+};
 
 /**
  * Samples event-loop delay and warns, at most once a minute, when the last window's p99 passes 50 ms.

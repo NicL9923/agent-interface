@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { eventStreamConnection } from "../src/server/event-stream.js";
@@ -12,7 +12,7 @@ import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const origin = "http://127.0.0.1:3000";
 const apps: { close(): unknown }[] = [];
-afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
+afterEach(async () => { vi.useRealTimers(); for (const app of apps.splice(0)) await app.close(); });
 
 type Line = Record<string, unknown>;
 async function setup(runtime: Partial<Runtime> = {}) {
@@ -70,14 +70,18 @@ describe("request log", () => {
   });
 
   it("logs a repeating failure once with its count at the reminder, so a polling client cannot flood journald", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const s = await setup();
     for (let i = 0; i < 5; i++) expect((await s.app.inject("/api/bots")).statusCode).toBe(401);
     const lines = s.requests();
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toHaveProperty("repeats");
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await s.app.inject("/api/bots");
+    expect(s.requests().map(line => line.repeats)).toEqual([undefined, 5]);
     // A different status on the same route is a new failure.
     await s.app.inject({ method: "POST", url: "/api/bots" });
-    expect(s.requests().map(line => [line.method, line.status])).toEqual([["GET", 401], ["POST", 401]]);
+    expect(s.requests().map(line => [line.method, line.status])).toEqual([["GET", 401], ["GET", 401], ["POST", 401]]);
   });
 
   it("logs a slow request with its duration even when it succeeds", async () => {
