@@ -19,6 +19,66 @@ import XCTest
     XCTAssertGreaterThan(accessible, normal * 1.5)
   }
 
+  /// Select text shows a reply as rendered, so a selection copies words without Markdown marks.
+  func testSelectTextRendersAReplyWithoutMarkdownMarks() throws {
+    let source = """
+      # Feed plan
+      Give the **mare** extra *hay* and `2 scoops`.
+
+      - Barn
+        1. Water
+      - [x] Gate
+
+      > Check the fence.
+
+      | Horse | Hay |
+      | --- | --- |
+      | Mare | 2 |
+
+      ```
+      let x = **1**
+      ```
+      Before
+      ```agent-ui
+      {"version":1,"cards":[{"id":"shopping","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}
+      ```
+      """
+    let rendered = SelectableText.attributed(Message(id: "reply", role: "assistant", text: source))
+    XCTAssertEqual(rendered.string, """
+      Feed plan
+
+      Give the mare extra hay and 2 scoops.
+
+      • Barn
+      1. Water
+      ☑ Gate
+
+      Check the fence.
+
+      Horse\tHay
+      Mare\t2
+
+      let x = **1**
+
+      Before
+
+      Groceries
+      Milk
+      """)
+    let text = rendered.string as NSString
+    func font(_ word: String) throws -> UIFont {
+      try XCTUnwrap(rendered.attribute(.font, at: text.range(of: word).location, effectiveRange: nil) as? UIFont)
+    }
+    XCTAssertTrue(try font("mare").fontDescriptor.symbolicTraits.contains(.traitBold))
+    XCTAssertTrue(try font("hay").fontDescriptor.symbolicTraits.contains(.traitItalic))
+    XCTAssertTrue(try font("2 scoops").fontDescriptor.symbolicTraits.contains(.traitMonoSpace))
+    XCTAssertFalse(try font("Give").fontDescriptor.symbolicTraits.contains(.traitBold))
+    let quote = rendered.attribute(.paragraphStyle, at: text.range(of: "Check").location, effectiveRange: nil) as? NSParagraphStyle
+    XCTAssertEqual(quote?.headIndent, 16, "A quote is indented rather than marked with >")
+    // A person's own message shows exactly as typed: the transcript does not render its Markdown either.
+    XCTAssertEqual(SelectableText.attributed(Message(id: "mine", role: "user", text: "**not bold** # here")).string, "**not bold** # here")
+  }
+
   private func parse(_ text: String) -> [MarkdownBlock] { Markdown.parse(text) }
   private func links(_ text: String) -> [String] {
     Markdown.attributed(text).runs.compactMap { $0.link?.absoluteString }

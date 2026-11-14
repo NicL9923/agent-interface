@@ -321,6 +321,22 @@ import XCTest
     try capture(app, "quote-in-draft")
   }
 
+  func testSelectTextOpensTheReplyInASelectableSheet() throws {
+    let app = launch()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+    app.staticTexts["Your household assistant"].press(forDuration: 1)
+    choose(app.buttons["Select text"])
+    let text = app.textViews["selectableMessage"]
+    XCTAssertTrue(text.waitForExistence(timeout: 5))
+    XCTAssertTrue(text.wait(until: "value BEGINSWITH %@", "Your household assistant\n\nI can help"), String(describing: text.value))
+    // A double tap selects a word and offers Copy, which SwiftUI's Text cannot do for part of a reply.
+    text.doubleTap()
+    XCTAssertTrue(app.menuItems["Copy"].waitForExistence(timeout: 5) || app.buttons["Copy"].waitForExistence(timeout: 1), app.debugDescription)
+    try capture(app, "select-text")
+    app.navigationBars["Select text"].buttons["Done"].tapWhenReady()
+    XCTAssertTrue(text.waitForDisappearance(timeout: 5))
+  }
+
   func testASentMessageStaysNearTheTopWhileItsReplyGrows() throws {
     let app = launch(["AGENT_INTERFACE_UI_LONG_HISTORY": "1"])
     XCTAssertTrue(app.staticTexts["Fixture answer 60."].waitForExistence(timeout: 15))
