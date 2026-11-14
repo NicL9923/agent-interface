@@ -42,7 +42,8 @@ class ToolTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.repo = Path(directory.name) / "repo"
+        # macOS temp paths sit under /var, a link to /private/var; the tool reports resolved paths.
+        self.repo = Path(directory.name).resolve() / "repo"
         self.repo.mkdir()
         # The tool keeps its pending records under the temp directory, so each test gets its own and never sees another's.
         self.scratch = Path(directory.name) / "tmp"
