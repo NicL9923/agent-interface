@@ -199,11 +199,12 @@ struct SelectableText {
       chunk = NSMutableAttributedString()
       for (index, item) in list.items.enumerated() {
         if chunk.length > 0 { chunk.append(plain("\n")) }
-        chunk.append(listItem(item, marker: switch item.task {
+        let marker = switch item.task {
           case true?: "☑ "
           case false?: "☐ "
           case nil: list.start.map { "\($0 + index). " } ?? "• "
-        }, indent: indent))
+        }
+        chunk.append(listItem(item, marker: marker, indent: indent))
       }
       return chunk
     case .rule: chunk = plain("———")
