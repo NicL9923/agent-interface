@@ -86,9 +86,14 @@ export class NotificationRepository {
   enqueue(event: RuntimeEvent & { quiet?: boolean }) {
     // A silent check-in run: see CheckInRepository.quiet.
     if (event.quiet) return;
+    // The replay in enqueueKnownEvents offers every recent event again, and almost every row already
+    // exists, so work out who has none before doing anything that costs more.
+    const queued = new Set((this.db.prepare("SELECT user_id FROM outbox WHERE event_id=?").all(event.id) as { user_id: string }[]).map(row => row.user_id));
+    const waiting = this.recipients(event).filter(userId => !queued.has(userId));
+    if (!waiting.length) return;
     // A notification is plain text, so the reply's Markdown becomes its words.
     const copy = notificationCopy({ ...event, body: event.body && markdownPlain(event.body) }, this.botNames.get(event.botId));
-    for (const userId of this.recipients(event))
+    for (const userId of waiting)
       this.queueNotification(event.id, userId, {
         title: copy.title,
         body: copy.body,
