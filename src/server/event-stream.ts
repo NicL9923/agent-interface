@@ -1,4 +1,5 @@
 import type { FastifyReply } from "fastify";
+import { markStream } from "./request-log.js";
 
 /** How often a stream pings: the iOS app and older web bundles expect `data: ping` this often. */
 export const PING_MS = 25_000;
@@ -33,6 +34,7 @@ export type EventStream = {
  * `closed` after each await, and reserve what teardown undoes only in `open`'s `reserve`.
  */
 export function eventStreamConnection(reply: FastifyReply) {
+  markStream(reply.request);
   const response = reply.raw;
   let closed = response.destroyed || response.writableEnded;
   const left = () => { closed = true; };

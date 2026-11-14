@@ -8,6 +8,7 @@ import type { Store } from "./store.js";
 import type { BackgroundWorker } from "./notifications.js";
 import type { Runtime } from "../shared/types.js";
 import { quietLog, type Log } from "./logging.js";
+import type { EventLoopMonitor } from "./request-log.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "unconfigured";
 export interface Check { status: CheckStatus; detail: string }
@@ -216,10 +217,10 @@ const directLoopback = (req: FastifyRequest) =>
   !["x-forwarded-for", "forwarded", "x-real-ip"].some(header => req.headers[header] !== undefined) &&
   ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
 
-export function installHealthRoutes(app: FastifyInstance, monitor: HealthMonitor) {
+export function installHealthRoutes(app: FastifyInstance, monitor: HealthMonitor, eventLoop?: EventLoopMonitor) {
   app.get("/api/health/ready", async (req, reply) => {
     const { ok, checks } = await monitor.evaluate();
     reply.code(ok ? 200 : 503);
-    return directLoopback(req) ? { ok, checks } : { ok };
+    return directLoopback(req) ? { ok, checks, eventLoopP99Ms: eventLoop?.lastP99Ms ?? null } : { ok };
   });
 }

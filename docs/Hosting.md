@@ -391,14 +391,25 @@ The server writes JSON lines to stdout, and systemd keeps them in journald. Read
 them with `journalctl -u <app service> -f -o cat`. Pino's `level` field is inside the JSON,
 so journald priorities can't filter it; for warnings and errors only, use
 `journalctl -u <app service> -o cat | jq -c 'select(.level >= 40)'`.
-`LOG_LEVEL` defaults to `info`. Individual requests are not logged because clients
-poll every 1.5 seconds. Logged requests keep only the method and path, and
-authorization, cookie, CSRF and ticket values are redacted.
+`LOG_LEVEL` defaults to `info`. Successful requests are not logged because clients
+poll every 1.5 seconds. A request is logged when it answers 400 or above, or takes
+longer than a second. Each line carries the method, the route pattern (`/api/bots/:id/conversation`,
+never the URL, because a query string can carry a one-time ticket), the status, `durationMs` and
+`reqId`. Authorization, cookie, CSRF and ticket values are redacted.
 
 Lines worth searching for:
 
-- `Request failed`: a 5xx response, logged once per route and message. Repeats
+- `Request failed`: a thrown 5xx, logged once per route and message with its error. Repeats
   are counted in `Request failure repeated`, at most every 10 minutes.
+- `Request answered with an error status`: any other response of 400 or above, including a
+  validation 400, a refusal and a 5xx a route sent directly, such as `assistants_changed`.
+  A failure that repeats, such as a signed-out tab polling, logs once and then every 10 minutes
+  with a `repeats` count, keyed by method, route and status.
+- `Slow request`: a response that took over a second. Event streams (`/api/events`,
+  `/api/bots/:id/events`) are left out because they stay open on purpose, and so are WebSockets.
+- `The event loop is stalling`: the p99 event-loop delay over a 10-second window passed
+  50 ms. It logs at most once a minute with `p99Ms` and `maxMs`. When this appears beside slow
+  requests, the loop is the cause, not Hermes.
 - `failed`, `is still failing`, `recovered`: the background worker, Hermes event
   discovery and push delivery. A reminder repeats every 10 minutes while a failure lasts.
 - `Gave up delivering notifications`: a notification failed 12 attempts, about an
@@ -436,7 +447,8 @@ It also reports two checks that warn but never fail readiness:
   or none exists. Unset reports `unconfigured`.
 
 Requests through Caddy see only `ok`. A direct loopback request with no forwarding
-headers also gets each check's status and detail:
+headers also gets each check's status and detail, and `eventLoopP99Ms`, the last
+10-second window's p99 event-loop delay (`null` before the first window):
 
 ```sh
 curl -s http://127.0.0.1:<port>/api/health/ready
