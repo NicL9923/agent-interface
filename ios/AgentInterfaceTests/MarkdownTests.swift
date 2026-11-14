@@ -19,6 +19,124 @@ import XCTest
     XCTAssertGreaterThan(accessible, normal * 1.5)
   }
 
+  /// Select text shows a reply as rendered, so a selection copies words without Markdown marks.
+  func testSelectTextRendersAReplyWithoutMarkdownMarks() throws {
+    let source = """
+      # Feed plan
+      Give the **mare** extra *hay* and `2 scoops`.
+
+      - Barn
+        1. Water
+      - [x] Gate
+
+      > Check the fence.
+
+      | Horse | Hay |
+      | --- | --- |
+      | Mare and foal | 2 |
+      | *left | right* |
+
+      ```
+      let x = **1**
+      ```
+      Before
+      ```agent-ui
+      {"version":1,"cards":[{"id":"shopping","type":"checklist","title":"Groceries","items":[{"id":"milk","text":"Milk"}]}]}
+      ```
+      """
+    let rendered = SelectableText().attributed(Message(id: "reply", role: "assistant", text: source))
+    XCTAssertEqual(rendered.string, """
+      Feed plan
+
+      Give the mare extra hay and 2 scoops.
+
+      • Barn
+      1. Water
+      ☑ Gate
+
+      Check the fence.
+
+      Horse\tHay
+      Mare and foal\t2
+      *left\tright*
+
+      let x = **1**
+
+      Before
+
+      Groceries
+      Milk
+      """)
+    let text = rendered.string as NSString
+    func font(_ word: String) throws -> UIFont {
+      try XCTUnwrap(rendered.attribute(.font, at: text.range(of: word).location, effectiveRange: nil) as? UIFont)
+    }
+    XCTAssertTrue(try font("mare").fontDescriptor.symbolicTraits.contains(.traitBold))
+    XCTAssertTrue(try font("hay").fontDescriptor.symbolicTraits.contains(.traitItalic))
+    XCTAssertTrue(try font("2 scoops").fontDescriptor.symbolicTraits.contains(.traitMonoSpace))
+    XCTAssertFalse(try font("Give").fontDescriptor.symbolicTraits.contains(.traitBold))
+    // Every row shares tab stops past the widest first cell, here a body cell, so the columns line up.
+    func stops(_ word: String) -> [CGFloat] {
+      (rendered.attribute(.paragraphStyle, at: text.range(of: word).location, effectiveRange: nil) as? NSParagraphStyle)?
+        .tabStops.map(\.location) ?? []
+    }
+    let widest = ["Horse", "Mare and foal", "*left"].map { rendered.attributedSubstring(from: text.range(of: $0)).size().width }.max() ?? 0
+    XCTAssertEqual(stops("Horse").count, 1)
+    XCTAssertGreaterThan(stops("Horse").first ?? 0, widest)
+    XCTAssertEqual(stops("Mare"), stops("Horse"))
+    XCTAssertEqual(stops("*left"), stops("Horse"))
+    let quote = rendered.attribute(.paragraphStyle, at: text.range(of: "Check").location, effectiveRange: nil) as? NSParagraphStyle
+    XCTAssertEqual(quote?.headIndent, 16, "A quote is indented rather than marked with >")
+    // A person's own message shows exactly as typed: the transcript does not render its Markdown either.
+    XCTAssertEqual(SelectableText().attributed(Message(id: "mine", role: "user", text: "**not bold** # here")).string, "**not bold** # here")
+  }
+
+  /// A paragraph's style comes from its first character, so a list marker and the quote it opens share one.
+  func testSelectTextKeepsAQuoteIndentBehindAListMarker() throws {
+    let rendered = SelectableText().attributed(Message(id: "reply", role: "assistant", text: "- > Quoted text"))
+    XCTAssertEqual(rendered.string, "• Quoted text")
+    let marker = try XCTUnwrap(rendered.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+    XCTAssertEqual(marker.firstLineHeadIndent, 0)
+    XCTAssertGreaterThan(marker.headIndent, 16, "Wrapped lines keep the quote's indent past the marker")
+    XCTAssertEqual(rendered.attribute(.paragraphStyle, at: 2, effectiveRange: nil) as? NSParagraphStyle, marker)
+  }
+
+  func testSelectTextKeepsATablesColumnsBehindAListMarker() throws {
+    let rendered = SelectableText().attributed(Message(id: "reply", role: "assistant",
+      text: "- | Horse | Hay |\n  | --- | --- |\n  | Mare and foal | 2 |"))
+    XCTAssertEqual(rendered.string, "• Horse\tHay\nMare and foal\t2")
+    let text = rendered.string as NSString
+    func stops(_ word: String) -> [CGFloat] {
+      (rendered.attribute(.paragraphStyle, at: text.range(of: word).location, effectiveRange: nil) as? NSParagraphStyle)?
+        .tabStops.map(\.location) ?? []
+    }
+    XCTAssertEqual(stops("Mare").count, 1)
+    XCTAssertEqual(stops("Horse"), stops("Mare"), "The header row keeps the table's stops under the marker's style")
+  }
+
+  func testSelectTextFollowsTheReadersTextSize() throws {
+    func bodySize(_ size: DynamicTypeSize) throws -> CGFloat {
+      let rendered = SelectableText(size: size).attributed(Message(id: "reply", role: "assistant", text: "Hay"))
+      return try XCTUnwrap(rendered.attribute(.font, at: 0, effectiveRange: nil) as? UIFont).pointSize
+    }
+    XCTAssertGreaterThan(try bodySize(.accessibility3), try bodySize(.large) * 1.5)
+  }
+
+  func testSelectTextShowsEveryWordACardShows() throws {
+    let card: [String: Any] = ["id": "reply", "type": "email", "title": "Reply to Sam", "to": ["sam@example.com"],
+      "cc": ["ann@example.com"], "subject": "Saturday", "body": "Hi Sam,\nSee you then."]
+    let data = try JSONSerialization.data(withJSONObject: ["version": 1, "cards": [card]])
+    let reply = "```agent-ui\n" + String(decoding: data, as: UTF8.self) + "\n```"
+    XCTAssertEqual(SelectableText().attributed(Message(id: "reply", role: "assistant", text: reply)).string, """
+      Reply to Sam
+      To: sam@example.com
+      Cc: ann@example.com
+      Subject: Saturday
+      Hi Sam,
+      See you then.
+      """)
+  }
+
   private func parse(_ text: String) -> [MarkdownBlock] { Markdown.parse(text) }
   private func links(_ text: String) -> [String] {
     Markdown.attributed(text).runs.compactMap { $0.link?.absoluteString }

@@ -321,6 +321,36 @@ import XCTest
     try capture(app, "quote-in-draft")
   }
 
+  /// The edit menu's item: a menu item on iPhone, a button in some iOS releases' compact menu.
+  private func editMenuItem(_ app: XCUIApplication, _ label: String) -> XCUIElement {
+    app.descendants(matching: .any).matching(NSPredicate(format: "label == %@ AND (elementType == %d OR elementType == %d)",
+      label, XCUIElement.ElementType.menuItem.rawValue, XCUIElement.ElementType.button.rawValue)).firstMatch
+  }
+  func testSelectTextOpensTheReplyInASelectableSheet() throws {
+    let app = launch()
+    XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
+    app.staticTexts["Your household assistant"].press(forDuration: 1)
+    choose(app.buttons["Select text"])
+    let text = app.textViews["selectableMessage"]
+    XCTAssertTrue(text.waitForExistence(timeout: 5))
+    XCTAssertTrue(text.wait(until: "value BEGINSWITH %@", "Your household assistant\n\nI can help"), String(describing: text.value))
+    // A double tap on the first word selects only that word, which SwiftUI's Text cannot do for part of a reply.
+    text.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 30, dy: 30)).doubleTap()
+    let copy = editMenuItem(app, "Copy")
+    XCTAssertTrue(copy.waitForExistence(timeout: 5), app.debugDescription)
+    try capture(app, "select-text")
+    copy.tap()
+    app.navigationBars["Select text"].buttons["Done"].tapWhenReady()
+    XCTAssertTrue(text.waitForDisappearance(timeout: 5))
+    let composer = app.textViews["messageComposer"]
+    composer.tapWhenReady()
+    composer.press(forDuration: 1)
+    let paste = editMenuItem(app, "Paste")
+    XCTAssertTrue(paste.waitForExistence(timeout: 5), app.debugDescription)
+    paste.tap()
+    XCTAssertTrue(composer.wait(until: "value == %@", "Your"), "Only the selected word was copied: \(String(describing: composer.value))")
+  }
+
   func testASentMessageStaysNearTheTopWhileItsReplyGrows() throws {
     let app = launch(["AGENT_INTERFACE_UI_LONG_HISTORY": "1"])
     XCTAssertTrue(app.staticTexts["Fixture answer 60."].waitForExistence(timeout: 15))

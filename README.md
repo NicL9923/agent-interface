@@ -742,8 +742,10 @@ external password managers and uncertain-request recovery.
 Each finished reply offers **Copy reply**, **Share reply** where the device can share,
 **Save reply** and **Quote in reply**. On a computer they appear when you point at or
 tab to the reply; on touch screens and in the iOS long-press menu they are always
-there. Select part of a web reply to quote just that part. Code blocks are colored by
-language, and tables can be copied as Markdown or CSV.
+there. Select part of a web reply to quote just that part. In the iOS app, **Select text**
+in the long-press menu of a reply or your own message opens it in a sheet where you can
+select any part and copy it; a reply shows there as rendered, without Markdown marks.
+Code blocks are colored by language, and tables can be copied as Markdown or CSV.
 
 When a reply fails, **Retry** under it sends your message again without touching
 your draft. A failed turn can be retried once, by anyone, from any device: a second
