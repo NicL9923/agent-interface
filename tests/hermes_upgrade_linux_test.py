@@ -78,6 +78,19 @@ class FixturePlatform(linux.Platform):
     def sync(self): return {"ok": True, "state": "synced"}
 
 
+def promisor_clone(origin, directory, revision):
+    """(upstream, clone): a tree:0 promisor clone checked out at REVISION, as the live Hermes
+    checkout is, and the full repository it lazily fetches from."""
+    upstream, partial = directory / "upstream", directory / "partial"
+    quiet = dict(check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "clone", "--no-hardlinks", str(origin), str(upstream)], **quiet)
+    for name in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
+        subprocess.run(["git", "-C", str(upstream), "config", name, "true"], check=True)
+    subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", upstream.as_uri(), str(partial)], **quiet)
+    subprocess.run(["git", "-C", str(partial), "checkout", "--detach", revision], **quiet)
+    return upstream, partial
+
+
 class HostFixture(unittest.TestCase):
     """A temporary Hermes host: source, home, stage, fake systemctl and store interpreters."""
     platform_type = FixturePlatform
@@ -281,16 +294,7 @@ class PlatformTests(HostFixture):
                 marker.unlink(missing_ok=True)
 
     def test_partial_clone_candidate_materializes_before_stop_and_installs_without_upstream(self):
-        upstream = self.directory / "upstream"
-        subprocess.run(["git", "clone", "--no-hardlinks", str(self.source), str(upstream)],
-            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        for name in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
-            subprocess.run(["git", "-C", str(upstream), "config", name, "true"], check=True)
-        partial = self.directory / "partial"
-        subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", upstream.as_uri(), str(partial)],
-            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        subprocess.run(["git", "-C", str(partial), "checkout", "--detach", self.old],
-            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        upstream, partial = promisor_clone(self.source, self.directory, self.old)
         subprocess.run(["git", "-C", str(upstream), "checkout", "--detach", self.candidate],
             check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         (upstream / "candidate-only.txt").write_text("published after partial checkout")
@@ -610,6 +614,16 @@ class PlatformTests(HostFixture):
         shutil.rmtree(self.target / ".git/objects"); (self.target / ".git/objects/pack").mkdir(parents=True)
         with self.assertRaises((subprocess.CalledProcessError, RuntimeError)): self.platform.rollback()
         self.assertNotEqual(self.platform.load()["phase"], "restored")
+
+    def test_install_and_rollback_turn_off_automatic_repacks_in_the_live_checkout(self):
+        refusals = lambda: linux.qualification.live_clone_refusals(self.source, os.environ)
+        # The fixture checkout starts unprotected, so the cold archive holds a configuration without it.
+        self.assertIn("allows automatic gc or maintenance", "".join(refusals()))
+        self.platform.quiescence(); self.platform.backup(); self.platform.install()
+        self.assertEqual(refusals(), [])
+        self.platform.rollback()
+        self.assertEqual(self.platform.source_state()[0], self.old)
+        self.assertEqual(refusals(), [])
 
     def test_rollback_rebuilds_a_lost_object_store_and_clears_stale_git_metadata(self):
         self.platform.quiescence(); self.platform.backup(); self.platform.install()
@@ -932,6 +946,69 @@ def sync_venv(extras=None, **kwargs):
             self.platform.write_gateway("draining")
             with self.assertRaises(RuntimeError): self.platform.gateway(draining=True)
 
+
+
+class LiveCheckoutTests(unittest.TestCase):
+    """The read-only check release qualification runs against the live promisor clone first."""
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        directory = Path(temp.name)
+        origin = directory / "origin"; (origin / "d").mkdir(parents=True)
+        (origin / "a").write_text("one\n"); (origin / "d/b").write_text("two\n")
+        self.commit(origin, "one")
+        self.upstream, self.live = promisor_clone(origin, directory, "HEAD")
+
+    @staticmethod
+    def commit(repository, message):
+        identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test"]
+        for argv in (["init", "-q"], ["add", "."], [*identity, "commit", "-qm", message]):
+            subprocess.run(["git", "-C", str(repository), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
+
+    def git(self, *args, **kwargs):
+        return subprocess.run(["git", "-C", str(self.live), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+
+    def refusals(self):
+        return linux.qualification.live_clone_refusals(self.live, os.environ)
+
+    def test_a_complete_protected_clone_may_be_qualified(self):
+        linux.qualification.protect_clone(self.live, os.environ)
+        self.assertEqual(self.git("config", "--local", "--get", "remote.origin.promisor").stdout.strip(), "true")
+        self.assertEqual(self.refusals(), [])
+        # A hand edit may spell the setting as git allows; git reads `off` as false.
+        self.git("config", "--local", "maintenance.auto", "off", check=True)
+        self.assertEqual(self.refusals(), [])
+
+    def test_automatic_gc_or_maintenance_is_refused_with_a_one_line_fix_that_works(self):
+        for settings in ({}, {"gc.auto": "0"}, {"maintenance.auto": "false"}, {"gc.auto": "1", "maintenance.auto": "false"}):
+            with self.subTest(settings=settings):
+                for key in ("gc.auto", "maintenance.auto"): self.git("config", "--local", "--unset-all", key)
+                for key, value in settings.items(): self.git("config", "--local", key, value, check=True)
+                [refusal] = self.refusals()
+                self.assertIn("allows automatic gc or maintenance", refusal)
+        # The operator applies the fix as printed, a shell line that runs no git in the checkout.
+        subprocess.run(["sh", "-c", refusal.rpartition("without running git there: ")[2]], check=True)
+        self.assertEqual(self.refusals(), [])
+
+    def test_missing_head_objects_are_counted_without_fetching_them(self):
+        # Two blobs absent, their trees present: what the Nov 9, 2026 repack left (42 blobs).
+        (self.upstream / "c").write_text("three\n"); (self.upstream / "d/e").write_text("four\n")
+        revision = self.commit(self.upstream, "two")
+        self.git("fetch", "-q", "--filter=blob:none", "origin", revision, check=True)
+        self.git("update-ref", "--no-deref", "HEAD", revision, check=True)
+        linux.qualification.protect_clone(self.live, os.environ)
+        [refusal] = self.refusals()
+        self.assertIn("lacks 2 object(s) of HEAD's tree", refusal)
+        self.assertIn('docs/HermesUpgradeLinux.md, "Live checkout objects"', refusal)
+        # Upstream still answers, but the check fetched nothing.
+        offline = dict(os.environ, GIT_NO_LAZY_FETCH="1")
+        self.assertNotEqual(self.git("cat-file", "-e", revision + ":c", env=offline).returncode, 0)
+
+    def test_a_head_git_cannot_list_is_refused(self):
+        linux.qualification.protect_clone(self.live, os.environ)
+        (self.live / ".git/HEAD").write_text("ref: refs/heads/absent\n")
+        [refusal] = self.refusals()
+        self.assertIn("Could not list HEAD's objects in the live Hermes checkout " + str(self.live), refusal)
 
 
 class AddonPlatform(FixturePlatform):

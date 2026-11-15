@@ -4,12 +4,57 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import stat
+import subprocess
 from pathlib import Path
 
 # Shared with the app. Include the manifest itself so list changes invalidate receipts.
 INTEGRATION_FILES = tuple(json.loads(
     (Path(__file__).resolve().parents[1] / "shared/qualification-inputs.json").read_text()))
+
+# The live Hermes checkout is a promisor partial clone. On the host's git 2.43, repacking it
+# dropped objects that promisor objects link to, on Oct 14 and again on Nov 9, 2026. Any fetch,
+# a lazy one included, can start that repack through automatic gc or maintenance. These local
+# settings turn both off: (key, type git normalizes the value to, required value).
+CLONE_PROTECTION = (("gc.auto", "int", "0"), ("maintenance.auto", "bool", "false"))
+# Git reads that can neither fetch a missing object nor take an optional lock.
+OFFLINE_GIT = {"GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+LIVE_CHECKOUT_DOCS = 'docs/HermesUpgradeLinux.md, "Live checkout objects"'
+
+
+def protect_clone(source, environment):
+    """Turn off automatic gc and maintenance in this checkout's own configuration."""
+    for key, _, value in CLONE_PROTECTION:
+        subprocess.run(["git", "-C", str(source), "config", "--local", key, value],
+                       env={**environment, **OFFLINE_GIT}, capture_output=True, check=True, timeout=60)
+
+
+def live_clone_refusals(source, environment):
+    """Why qualification must not start from this live checkout; empty when it may.
+
+    Read-only, and it walks no history: one listing of HEAD's tree with lazy fetch and
+    optional locks off. git 2.43 prints a missing tree or blob as a `?` line here and exits 0,
+    unlike an object lookup, which dies in a promisor clone when lazy fetch is off.
+    """
+    environment = {**environment, **OFFLINE_GIT}
+    def read(*args):
+        return subprocess.run(["git", "-C", str(source), *args], env=environment,
+                              capture_output=True, text=True, timeout=600)
+    refusals = []
+    if any(read("config", "--local", "--type=" + kind, "--get", key).stdout.strip() != value
+           for key, kind, value in CLONE_PROTECTION):
+        fix = "printf '[gc]\\n\\tauto = 0\\n[maintenance]\\n\\tauto = false\\n' >> " + shlex.quote(str(Path(source) / ".git/config"))
+        refusals.append(f"The live Hermes checkout {source} allows automatic gc or maintenance, and a repack "
+                        f"drops objects from this promisor clone. Turn both off, without running git there: {fix}")
+    listing = read("rev-list", "--objects", "--missing=print", "--no-walk", "HEAD")
+    if listing.returncode:
+        refusals.append(f"Could not list HEAD's objects in the live Hermes checkout {source}: "
+                        f"{listing.stderr.strip()[-300:]}. See {LIVE_CHECKOUT_DOCS}.")
+    elif missing := sum(line.startswith("?") for line in listing.stdout.splitlines()):
+        refusals.append(f"The live Hermes checkout {source} lacks {missing} object(s) of HEAD's tree, at least: a missing "
+                        f"tree hides the objects under it. Restore them before qualifying, as {LIVE_CHECKOUT_DOCS} describes.")
+    return refusals
 
 
 def integration_digest(app_root):

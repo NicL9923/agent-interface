@@ -61,6 +61,7 @@ def hermes_module(name):
 
 
 private_fs = hermes_module("private_fs")
+qualification = hermes_module("qualification")
 
 
 def private(path, directory=False):
@@ -888,6 +889,8 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # No fetch, pull or stash: checkout exactly the already-qualified object.
         self.git(self.source, "reset", "--hard", candidate)
         if preserved: self.run(["git", "-C", str(self.source), "apply", "--index", "--binary", "-"], input=preserved)
+        # After object preparation, which refuses any configuration change it did not make.
+        qualification.protect_clone(self.source, self.child_env)
         result = self.sync()
         if result.get("ok") is not True or result.get("state") not in ("current", "synced"): raise RuntimeError("Native managed dependency sync did not finish")
         if self.source_state() != (candidate, patch) or self.settings() != record["baseline"]["settings"]: raise RuntimeError("Native installation changed protected source repair or household settings")
@@ -950,6 +953,9 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 else: path.unlink()
         self.extract("source.tar.gz", self.source.parent)
         self.restore_baseline_objects(record["baseline"]["source"][0])
+        # The archived configuration is the one before installation, which may predate the protection.
+        # Git needs the object store it just restored to recognize the repository.
+        qualification.protect_clone(self.source, self.child_env)
         # Restore managed generations/selections and tool binaries only. Never
         # restore .env, auth.json, profile OAuth files or sessions from home.tar.gz.
         for name in ("installs", "tools"):
