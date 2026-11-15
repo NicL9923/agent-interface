@@ -22,10 +22,6 @@ const notes: Bot = { id: "notes", name: "Notes", model: "m", shared: false, owne
 const ranch: Bot = { id: "ranch", name: "Ranch Hand", model: "m", shared: true, activity: "idle" };
 const legacy: Bot = { id: "legacy", name: "Legacy", model: "m", shared: false, activity: "idle" };
 beforeEach(() => {
-  // A minute tick renders every timestamp again, on a real timer here, and a render outside act() fails the test, so a minute that
-  // turned mid-test failed correct code. A stopped Date never reaches the next minute, so a tick has nothing to render, and at the top
-  // of a minute the timer waits a full real minute between ticks. Timers stay real; tests/setup-ui.ts restores Date after each test.
-  vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 9, 25, 12) });
   vi.clearAllMocks();
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
   Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
