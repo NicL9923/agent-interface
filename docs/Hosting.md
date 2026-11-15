@@ -595,21 +595,32 @@ then kept every release for a week. After each activation `release-app.py` now k
 - every release this checkout's `.private/releases` manifest records as preparing,
   prepared, activating, needs-review or recovering. A failed prepare stays
   `preparing` until `discard` removes it, so discard abandoned stages;
-- every release with a qualification stage marked `active`, or with a stage marker
-  it cannot read;
+- every release with a qualification stage that is not marked completed;
 - every release the host cannot prove settled, until it has been idle for 3 days.
 
 Only another checkout's manifests know that checkout's stages, and several
 sessions release from different checkouts at once; on Oct 14, 2026 two staged the
 same commit three minutes apart. So the host's own records decide. A release is
-settled when the `operationId` in its `operations/<release>/deploy-config.json`
-has an `operations/continued-<operationId>/result.json`, which the guarded deploy
-writes only when an activation completes. `discard` deletes the release and its
+settled when its `operations/<release>/deploy-config.json` names an `operationId`
+and a `webBuild`, and `operations/continued-<operationId>/` holds the two records
+the guarded deploy leaves as its last steps of a completed activation: a
+`result.json` object whose `webBuild` and `hermesRevision` match the configuration,
+and a `phase.json` that says `complete` for that `operationId`. A result that is
+cut off, not an object or for another build, or a phase that is missing, held for
+review or another operation's, proves nothing. `discard` deletes the release and its
 operation, so a discarded release leaves nothing to prune. Any other release, one
 still uploading, building, preflighted or qualified, held for review, or with a
-missing or unreadable deploy configuration, is kept until its release directory,
-its operation directory and its `continued-<operationId>` directory have all gone
-3 days without a change. A time it cannot read keeps the release. Three days
+missing or unreadable deploy configuration, is kept until nothing in it has changed
+for 3 days. That counts the release directory's own time and the time of every
+file and directory under its operation directory and its
+`continued-<operationId>` directory. Rewriting a file, as a rebuild's `build.log`
+or a retried activation's `commands.log` does, leaves its directory's time alone,
+so directory times alone miss it. The walk skips the subdirectories of qualification
+stages, which hold the checkouts and runtimes: a stage still in use is not marked
+completed, which keeps its release anyway. It does not walk the release's own
+build, which holds `node_modules`; prepare writes the operation's `build.log` for
+as long as it builds. A time it cannot read keeps the release, and a file that
+vanishes during the walk counts as a change now. Three days
 covers a stage prepared before a weekend and activated after it. A stage that
 old is rarely still usable: `activate` refuses once the live release has changed,
 and from Oct 20 to Nov 12, 2026 releases landed one to seven days apart, most
@@ -623,8 +634,11 @@ the disposable checkouts, runtimes and backups, and keeps their top-level files:
 receipts, logs and the deploy configuration. It never touches an operation whose
 release still exists, one a protected manifest names, one with no
 `deploy-config.json` yet, which another session may still be uploading, or one
-with a qualification stage marked `active` or a stage marker it cannot read, whose
-process may still be using those directories. Removing the 163 such payloads by
+with a qualification stage that is not marked completed, whose process may still
+be using those directories. Completed means a marker object with `schemaVersion` 1,
+`state` `completed` and the stage's own `operationId`, as `qualify-app-release.py`
+and the update worker write it. A missing, cut-off, empty or unknown marker keeps
+the operation whole. Removing the 163 such payloads by
 hand freed 3.2 GB. The tool prints what it removed and the host's free space, and
 warns about anything it could not remove without failing the release. Readiness's
 `disk` check alerts administrators when space still runs low.

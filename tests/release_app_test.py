@@ -46,6 +46,32 @@ def run_remote(program, payload):
     return done.returncode, done.stdout.strip().splitlines()[-1] if done.stdout.strip() else "", done.stderr
 
 
+MARKER = ".agent-interface-upgrade-stage"
+# Stages are named for their operation's UUID, as qualify-app-release.py and the update worker name them.
+STAGE_ONE = "qualification-33333333-3333-4333-8333-333333333333"
+STAGE_TWO = "qualification-44444444-4444-4444-8444-444444444444"
+
+
+def stage_marker(stage, state):
+    """A qualification stage's marker, as qualify-app-release.py and the update worker write it."""
+    stage.mkdir(parents=True, exist_ok=True)
+    (stage / MARKER).write_text(json.dumps({"schemaVersion": 1, "operationId": stage.name.removeprefix("qualification-"),
+                                            "state": state}))
+
+
+def completed_activation(operations, config):
+    """What deploy-guarded-app-release.py leaves in continued-<operationId> when an activation completes."""
+    ops = operations / ("continued-" + config["operationId"])
+    ops.mkdir(exist_ok=True)
+    (ops / "result.json").write_text(json.dumps({
+        "webBuild": config["webBuild"], "hermesRevision": config["hermesRevision"], "hermesVersionUnchanged": True,
+        "repairPreserved": True, "profileSettingsPreserved": True, "originalGoogleHttpAndFreshWebsocket": True,
+        "gatewayGuardVerified": True, "bothDiscordConnected": True, "actualInstallerMaintenanceRpc": True}, indent=2) + "\n")
+    (ops / "phase.json").write_text(json.dumps({"operationId": config["operationId"], "phase": "complete",
+                                                "updatedAt": "2026-11-14T12:00:00+00:00"}) + "\n")
+    return ops
+
+
 def closed_probe(listing_uid=None):
     """The production probe aimed at a closed loopback port, with a fixture live-rule listing."""
     with socket.socket() as unused:
@@ -303,12 +329,12 @@ class Host:
     def deployment(self, name, operation, succeeded, **extra):
         config = {"operationId": operation, "upgradeStateDir": str(self.base / "shared/upgrade-state"),
                   "maintenanceFile": str(self.home / "maintenance.json"), "hermesHome": str(self.home),
-                  "profileHashes": {str(self.profile): "old"}, "source": str(self.source), **extra}
+                  "profileHashes": {str(self.profile): "old"}, "source": str(self.source),
+                  "webBuild": "web-" + str(operation), "hermesRevision": "a" * 40, **extra}
         (self.base / "operations" / name).mkdir()
         (self.base / "operations" / name / "deploy-config.json").write_text(json.dumps(config))
         if succeeded:
-            (self.base / "operations" / f"continued-{operation}").mkdir()
-            (self.base / "operations" / f"continued-{operation}" / "result.json").write_text("{}")
+            completed_activation(self.base / "operations", config)
         return config
 
 
@@ -975,17 +1001,19 @@ class HostPrograms(unittest.TestCase):
         return json.loads(output)
 
     def activated(self, name):
-        """The records a completed guarded activation leaves: the operation's config and its result."""
+        """The records a completed guarded activation leaves: the operation's config, its result and its phase."""
         operation = self.host.base / "operations" / name
         operation.mkdir(parents=True, exist_ok=True)
-        (operation / "deploy-config.json").write_text(json.dumps({"operationId": "op-" + name}))
-        (self.host.base / "operations" / ("continued-op-" + name)).mkdir()
-        (self.host.base / "operations" / ("continued-op-" + name) / "result.json").write_text("{}")
+        config = {"operationId": "op-" + name, "webBuild": "web-" + name, "hermesRevision": "a" * 40}
+        (operation / "deploy-config.json").write_text(json.dumps(config))
+        return completed_activation(self.host.base / "operations", config)
 
     def stage_marker(self, operation, state):
-        marker = self.host.base / "operations" / operation / "qualification-one/.agent-interface-upgrade-stage"
-        marker.parent.mkdir(parents=True)
-        marker.write_text(state if state == "{" else json.dumps({"schemaVersion": 1, "state": state}))
+        stage = self.host.base / "operations" / operation / STAGE_ONE
+        if state in ("{", "{}"):
+            stage.mkdir(parents=True); (stage / MARKER).write_text(state)
+        else:
+            stage_marker(stage, state)
 
     def test_prune_keeps_the_newest_the_live_release_its_rollback_targets_and_releases_in_flight(self):
         releases = self.host.base / "releases"
@@ -1001,13 +1029,14 @@ class HostPrograms(unittest.TestCase):
         (live / "dist").mkdir()
         (live / "dist/previous-release.json").write_text(json.dumps({"assets": str(releases / "release-old-01/dist/client/assets")}))
         os.utime(live, (now - 7200, now - 7200))
-        # Still qualifying on the host, finished qualifying, and a marker that cannot be read.
+        # Still qualifying on the host, finished qualifying, and markers that cannot be read or say nothing.
         self.stage_marker("release-old-03", "active")
         self.stage_marker("release-old-04", "completed")
         self.stage_marker("release-old-05", "{")
+        self.stage_marker("release-old-06", "{}")
         result = self.prune(protected=["release-old-02"])
         kept = {live.name, "release-old-00", "release-old-01", "release-old-02", "release-old-03", "release-old-05",
-                "release-old-13", "release-old-14", "release-old-15"}
+                "release-old-06", "release-old-13", "release-old-14", "release-old-15"}
         self.assertEqual(sorted(path.name for path in releases.iterdir()), sorted(kept))
         self.assertEqual(sorted(result["removed"]), sorted(set(names) - kept))
         self.assertEqual((result["kept"], result["errors"]), (len(kept), []))
@@ -1015,14 +1044,15 @@ class HostPrograms(unittest.TestCase):
 
     def qualified_operation(self, name, config=True):
         operation = self.host.base / "operations" / name
-        stage = operation / "qualification-one"
+        stage = operation / STAGE_ONE
         for path in ("source/.git/objects/ab", "pm-home/logs", "backup"):
             (stage / path).mkdir(parents=True)
         (stage / "source/.git/objects/ab/cdef").write_text("object")
         # Native caches can leave directories without owner write access.
         (stage / "source/.git/objects/ab").chmod(0o500)
-        for path in ("qualification.json", "integration.log", ".agent-interface-upgrade-stage"):
+        for path in ("qualification.json", "integration.log"):
             (stage / path).write_text("{}")
+        stage_marker(stage, "completed")
         (operation / "release.tar.gz").write_bytes(b"archive")
         (operation / "build.log").write_text("built")
         if config:
@@ -1039,8 +1069,9 @@ class HostPrograms(unittest.TestCase):
         removed_now = self.qualified_operation("release-old")
         self.activated("release-old")
         gone = self.qualified_operation("release-gone")
-        (gone / "qualification-two/pm-home").mkdir(parents=True)
-        (gone / "qualification-two/qualification.json").write_text("{}")
+        (gone / STAGE_TWO / "pm-home").mkdir(parents=True)
+        (gone / STAGE_TWO / "qualification.json").write_text("{}")
+        stage_marker(gone / STAGE_TWO, "completed")
         untouched = {"release-live": self.qualified_operation("release-live"),
                      # No deploy configuration yet: another session may still be uploading its archive.
                      "release-uploading": self.qualified_operation("release-uploading", config=False),
@@ -1053,9 +1084,9 @@ class HostPrograms(unittest.TestCase):
         self.assertEqual(result["stripped"], ["release-gone", "release-old"])
         spent = [".agent-interface-upgrade-stage", "integration.log", "qualification.json"]
         for operation in (removed_now, gone):
-            self.assertEqual(sorted(path.name for path in operation.iterdir()), ["build.log", "deploy-config.json", "qualification-one"] + (["qualification-two"] if operation == gone else []))
-            self.assertEqual(sorted(path.name for path in (operation / "qualification-one").iterdir()), spent)
-        self.assertEqual(self.tree(gone / "qualification-two"), ["qualification.json"])
+            self.assertEqual(sorted(path.name for path in operation.iterdir()), ["build.log", "deploy-config.json", STAGE_ONE] + ([STAGE_TWO] if operation == gone else []))
+            self.assertEqual(sorted(path.name for path in (operation / STAGE_ONE).iterdir()), spent)
+        self.assertEqual(self.tree(gone / STAGE_TWO), [MARKER, "qualification.json"])
         self.assertEqual({name: self.tree(path) for name, path in untouched.items()}, before)
         self.assertTrue(continued.is_dir())
         # A second run finds nothing left to clear.
@@ -1079,8 +1110,10 @@ class HostPrograms(unittest.TestCase):
         self.assertFalse((gone / "release.tar.gz").exists())
 
     def age(self, *paths, seconds):
+        """Set each path and everything under it to the given age."""
         for path in paths:
-            os.utime(path, (time.time() - seconds,) * 2)
+            for item in [*(path.rglob("*") if path.is_dir() and not path.is_symlink() else []), path]:
+                os.utime(item, (time.time() - seconds,) * 2, follow_symlinks=False)
 
     def test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days(self):
         # Another checkout prepares releases this checkout's manifests know nothing about.
@@ -1131,14 +1164,93 @@ class HostPrograms(unittest.TestCase):
         running = self.qualified_operation("release-running")
         unreadable = self.qualified_operation("release-unreadable")
         finished = self.qualified_operation("release-finished")
-        (running / "qualification-one/.agent-interface-upgrade-stage").write_text(json.dumps({"schemaVersion": 1, "state": "active"}))
-        (unreadable / "qualification-one/.agent-interface-upgrade-stage").write_text("{")
-        (finished / "qualification-one/.agent-interface-upgrade-stage").write_text(json.dumps({"schemaVersion": 1, "state": "completed"}))
+        stage_marker(running / STAGE_ONE, "active")
+        (unreadable / STAGE_ONE / MARKER).write_text("{")
         before = {path: self.tree(path) for path in (running, unreadable)}
         result = self.prune(keep=1)
         self.assertEqual(result["stripped"], ["release-finished"])
         self.assertEqual({path: self.tree(path) for path in (running, unreadable)}, before)
-        self.assertFalse((finished / "qualification-one/source").exists())
+        self.assertFalse((finished / STAGE_ONE / "source").exists())
+
+    def test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof(self):
+        releases = self.host.base / "releases"
+        rewrite = lambda path, **changes: path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+        spoiled = {
+            # Sol's reproduction: a result cut off after its first byte.
+            "release-truncated": lambda ops: (ops / "result.json").write_text("{"),
+            "release-list-result": lambda ops: (ops / "result.json").write_text("[]"),
+            "release-other-build": lambda ops: rewrite(ops / "result.json", webBuild="web-other"),
+            "release-other-revision": lambda ops: rewrite(ops / "result.json", hermesRevision="b" * 40),
+            # Neither the configuration nor the result names a build, so they cannot be matched.
+            "release-config-without-build": lambda ops: (
+                rewrite(ops / "result.json", webBuild=None),
+                rewrite(ops.parent / "release-config-without-build/deploy-config.json", webBuild=None)),
+            # The tool held the activation for review after writing its result.
+            "release-held-for-review": lambda ops: rewrite(ops / "phase.json", phase="admission-needs-review"),
+            "release-other-operation": lambda ops: rewrite(ops / "phase.json", operationId="op-other"),
+            "release-no-phase": lambda ops: (ops / "phase.json").unlink(),
+            "release-unreadable-phase": lambda ops: (ops / "phase.json").write_text("{"),
+        }
+        for name, spoil in spoiled.items():
+            (releases / name).mkdir()
+            spoil(self.activated(name))
+        (releases / "release-completed").mkdir()
+        self.activated("release-completed")
+        for name in [*spoiled, "release-completed"]:
+            self.age(releases / name, seconds=3600)
+        self.age(releases / "release-live", seconds=7200)
+        # All were touched within the day, so only proof of a completed activation removes one.
+        self.assertEqual(self.prune(keep=0)["removed"], ["release-completed"])
+        self.assertEqual(sorted(path.name for path in releases.iterdir()), sorted({"release-live", *spoiled}))
+
+    def test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity(self):
+        releases, operations = self.host.base / "releases", self.host.base / "operations"
+        names = ("release-rebuilt", "release-retried", "release-qualified", "release-idle")
+        for name in names:
+            (releases / name).mkdir()
+            self.host.deployment(name, "op-" + name, False)
+            (operations / name / "build.log").write_text("first build")
+        retried = operations / "continued-op-release-retried"
+        retried.mkdir()
+        (retried / "commands.log").write_text("first attempt")
+        # A completed stage's checkout is the bulk the strip pass removes; nothing that still runs writes there.
+        stage = operations / "release-idle" / STAGE_ONE
+        stage_marker(stage, "completed")
+        stage_marker(operations / "release-qualified" / STAGE_ONE, "active")
+        (stage / "source").mkdir()
+        (stage / "source/fresh").write_text("checked out")
+        self.age(*(releases / name for name in names), *(operations / name for name in names), retried, seconds=4 * 86400)
+        os.utime(stage / "source/fresh")
+        # Sol's reproduction: rewriting a file leaves its directory's time alone.
+        (operations / "release-rebuilt/build.log").write_text("second build")
+        (retried / "commands.log").write_text("second attempt")
+        # qualify-app-release.py marks its stage completed in place when the run ends.
+        stage_marker(operations / "release-qualified" / STAGE_ONE, "completed")
+        self.age(releases / "release-live", seconds=7200)
+        self.assertEqual(self.prune(keep=0)["removed"], ["release-idle"])
+
+    def test_prune_strips_a_gone_release_s_operation_only_once_every_stage_is_marked_completed(self):
+        identifier = STAGE_ONE.removeprefix("qualification-")
+        markers = {
+            # Sol's reproduction.
+            "release-empty-marker": {},
+            "release-list-marker": [],
+            "release-unknown-state": {"schemaVersion": 1, "operationId": identifier, "state": "paused"},
+            "release-other-stage": {"schemaVersion": 1, "operationId": STAGE_TWO.removeprefix("qualification-"), "state": "completed"},
+            "release-later-schema": {"schemaVersion": 2, "operationId": identifier, "state": "completed"},
+        }
+        operations = {name: self.qualified_operation(name) for name in [*markers, "release-no-marker", "release-one-running", "release-finished"]}
+        for name, marker in markers.items():
+            (operations[name] / STAGE_ONE / MARKER).write_text(json.dumps(marker))
+        (operations["release-no-marker"] / STAGE_ONE / MARKER).unlink()
+        # One stage finished, a later one still running.
+        stage_marker(operations["release-one-running"] / STAGE_TWO, "active")
+        (operations["release-one-running"] / STAGE_TWO / "source").mkdir()
+        held = {name: self.tree(path) for name, path in operations.items() if name != "release-finished"}
+        result = self.prune(keep=1)
+        self.assertEqual((result["stripped"], result["errors"]), (["release-finished"], []))
+        self.assertEqual({name: self.tree(operations[name]) for name in held}, held)
+        self.assertFalse((operations["release-finished"] / STAGE_ONE / "source").exists())
 
     def test_prune_protects_releases_this_checkout_has_not_settled(self):
         saved = release_app.MANIFESTS, release_app.remote

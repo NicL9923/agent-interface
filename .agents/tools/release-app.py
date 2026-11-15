@@ -456,8 +456,8 @@ finish({"current": str((base / "current").resolve()), "workerSha256": sha(base /
 # Each holds a full build; the host needs the room for Hermes update checks (docs/Hosting.md).
 RELEASES_KEPT = 10
 # Any checkout may be preparing or holding a release, and only its own manifests know. The host proves a
-# release settled only by a completed activation; discard leaves nothing behind. Any other release is kept
-# until it, its operation and its activation attempts have been idle this long (docs/Hosting.md).
+# release settled only by a completed activation's records; discard leaves nothing behind. Any other release
+# is kept until no file in it, its operation or its activation attempts has changed for this long (docs/Hosting.md).
 UNSETTLED_RELEASE_DAYS = 3
 # A release in these states may still be activated, reviewed or recovered from, so pruning
 # never removes it. A failed prepare stays "preparing" until it is discarded.
@@ -473,32 +473,66 @@ keep = {current} | {(releases / name).resolve() for name in PAYLOAD["protected"]
 for path in (operations / current.name / "deploy-config.json", current / "dist/previous-release.json"):
     if path.is_file():
         keep |= named(path.read_text())
-def qualifying(name):
-    for marker in (operations / name).glob("qualification-*/.agent-interface-upgrade-stage"):
-        try:
-            if json.loads(marker.read_text()).get("state") == "active":
-                return True
-        except (OSError, ValueError):
-            return True
-    return False
-def operation_id(name):
+def stage_completed(stage):
+    # qualify-app-release.py and the update worker mark a stage completed once nothing uses its
+    # checkout or runtime. Anything else, including a marker that is missing, cut off or unknown, may be running.
     try:
-        config = json.loads((operations / name / "deploy-config.json").read_text())
+        record = json.loads((stage / ".agent-interface-upgrade-stage").read_text())
+    except (OSError, ValueError):
+        return False
+    return (isinstance(record, dict) and record.get("schemaVersion") == 1 and record.get("state") == "completed"
+            and record.get("operationId") == stage.name.removeprefix("qualification-"))
+def qualifying(name):
+    return any(stage.is_dir() and not stage_completed(stage) for stage in (operations / name).glob("qualification-*"))
+def read_json(path):
+    try:
+        value = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    value = config.get("operationId") if isinstance(config, dict) else None
+    return value if isinstance(value, dict) else None
+def operation_id(name):
+    config = read_json(operations / name / "deploy-config.json")
+    value = config.get("operationId") if config else None
     return value if isinstance(value, str) else None
 def activated(name):
-    # The guarded deploy writes result.json only when an activation completes.
-    operation = operation_id(name)
-    return operation is not None and (operations / ("continued-" + operation) / "result.json").is_file()
+    # Only a completed guarded activation leaves both records: a result naming the configured build
+    # and Hermes revision, then the phase "complete" for this operation. Anything else keeps the release.
+    config = read_json(operations / name / "deploy-config.json")
+    if not config or not isinstance(config.get("operationId"), str) or not isinstance(config.get("webBuild"), str):
+        return False
+    continued = operations / ("continued-" + config["operationId"])
+    result, phase = read_json(continued / "result.json"), read_json(continued / "phase.json")
+    return (result is not None and phase is not None
+            and all(result.get(key) == config.get(key) for key in ("webBuild", "hermesRevision"))
+            and phase.get("operationId") == config["operationId"] and phase.get("phase") == "complete")
+def newest_change(path):
+    # Rewriting a file leaves its directory's time alone, so every entry below counts. A stage's
+    # subdirectories are skipped: they hold the bulk, and a stage still in use keeps its release anyway.
+    newest = path.stat().st_mtime
+    with os.scandir(path) as entries:
+        for entry in entries:
+            try:
+                newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+                if entry.is_dir(follow_symlinks=False) and not path.name.startswith("qualification-"):
+                    newest = max(newest, newest_change(Path(entry.path)))
+            except FileNotFoundError:
+                # Renamed or removed during the walk, so it changed just now.
+                return time.time()
+    return newest
 def idle(path):
-    # Prepare, qualification and each activation attempt touch one of these. A time it cannot read keeps it.
+    # Prepare writes the release and its operation's build log, qualification its operation, and each
+    # activation attempt continued-<op>. A time it cannot read keeps the release.
     operation = operation_id(path.name)
     times = []
-    for item in [path, operations / path.name] + ([operations / ("continued-" + operation)] if operation else []):
+    try:
+        times.append(path.stat().st_mtime)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    for item in [operations / path.name] + ([operations / ("continued-" + operation)] if operation else []):
         try:
-            times.append(item.stat().st_mtime)
+            times.append(newest_change(item))
         except FileNotFoundError:
             continue
         except OSError:
@@ -524,8 +558,8 @@ for path in dirs:
         errors.append(f"{path}: {error}")
 # A gone release's operation keeps its receipts and logs. Its archive and the checkouts, runtimes
 # and caches of its qualification stages go. Only an operation with a deploy configuration is
-# touched: without one, another session may still be uploading its archive. One with a running
-# or unreadable qualification stage is left whole, since its process may still be using them.
+# touched: without one, another session may still be uploading its archive. One with a stage not
+# marked completed is left whole, since its process may still be using them.
 stripped = []
 for operation in sorted(operations.glob("release-*")):
     if (operation.is_symlink() or not operation.is_dir() or (releases / operation.name).exists()
