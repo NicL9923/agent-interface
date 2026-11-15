@@ -27,6 +27,36 @@ export function depthOf(state: unknown) {
  */
 export const startsAtHome = () => (history.state as Record<string, unknown> | null)?.[KEY] === 0;
 
+let leaving: Promise<void> | undefined;
+/**
+ * Ends the entries a previous account's screens left, before the next generation draws. The address names that
+ * account's destination and the entry stands for a step in from its home, so the next generation must not meet
+ * either: Back would land on the old address with nothing to step back from. The entry this step is on
+ * and the home entry under it both take the address `/`, and the step is popped. Resolves once the pop has landed,
+ * or after a second if it never does, as when the entry under was dropped; calls made meanwhile share it, so
+ * two changes in a row never pop twice. A phone is at most one step in, so one entry is popped.
+ */
+export function leaveAccountEntries(): Promise<void> {
+  if (leaving) return leaving;
+  const depth = depthOf(history.state);
+  // The entry stepped in from is the one Forward returns to, so it names nothing either.
+  history.replaceState(null, "", "/");
+  if (depth === 0) return Promise.resolve();
+  leaving = new Promise<void>(resolve => {
+    const landed = () => {
+      window.removeEventListener("popstate", landed);
+      clearTimeout(timer);
+      history.replaceState(null, "", "/");
+      leaving = undefined;
+      resolve();
+    };
+    const timer = setTimeout(landed, 1000);
+    window.addEventListener("popstate", landed);
+    history.go(-depth);
+  });
+  return leaving;
+}
+
 type Options = {
   /** 0 on home or on a two-pane layout, 1 on a phone one step in. */
   depth: number;

@@ -17,6 +17,30 @@ and the line restored byte for byte; the restored spec passes 16 of 16.
 | `stepBack`'s sheet branch changed to `if (panel) return true;`, so Back never closes the sheet | 3 failed: sheet over home, sheet over a chat, edited sheet asks first. |
 | `depth` without the `mobile &&` condition, so two panes push too | 1 failed: "choosing chats adds no entries, so one Back leaves the app". |
 
+## Review findings: red runs
+
+A second pass on two findings from the review of this PR (Back after a sign-out in another tab, and Back on the new group chat
+form). Each line below was broken by hand, the named test run, and the line restored byte for byte. Before any fix, both new
+e2e tests failed on the branch: the sign-out test with `Expected: "about:blank"`, `Received: "http://127.0.0.1:4173/?bot=ranch"`,
+which is the old account's chat coming back into the address, and the group form test because no discard question appeared.
+The group form's e2e test scripts `GET /api/groups` with Playwright's `page.route`, because the e2e server hosts no group coordinator.
+
+| Broken line | Result |
+| --- | --- |
+| `history.go(-depth)` in `leaveAccountEntries` replaced by a no-op | e2e: 1 failed, the sign-out in another tab test; 18 passed. |
+| `stepBack`'s group branch in `src/App.tsx` back to `setCreatingGroup(false)`, skipping the form's guard | e2e: 1 failed, "asks before Back discards it"; 18 passed. |
+| `useCloseRequest` callback in `GroupCreate` returns `onClose()` without checking `unsaved` | `tests/collaboration-ui.test.ts`: 1 failed, "asks before the app closes it". |
+| `requestClose` in `GroupCreate` calls `onClose()` directly | `tests/collaboration-ui.test.ts`: 1 failed, "asks for the close button". |
+| `unsaved` counts `name !== ''` instead of the trimmed name | `tests/collaboration-ui.test.ts`: 1 failed, "closes at once, asking nothing". |
+
+`e2e/back-navigation.spec.ts` is 19 tests after this change, all passing.
+
+Checks for this pass (Node 24.22.2, Mac mini): typecheck, lint, ruff and build pass. Vitest 3948 of 3951; the 3 failures are the
+tests that need the `127.0.0.2` loopback alias. The full e2e suite passes 74 of 74 run alone. One `check-all` e2e run, which shared
+the machine with another worktree's load, failed "Back from a chat shows home" on `Uncaught error: Transition was skipped. New
+ViewTransition started`; it passed 20 of 20 repeated alone and in the full run. The cause is `morphNavigate` in
+`src/app/navigation-morph.ts` handling only the transition's `finished` promise, a gap older than this PR and not changed here.
+
 ## Checks
 
 - `.agents/tools/check-all --keep-going`: typecheck, lint, ruff, build pass. Vitest 3909 of 3912; the 3 failures are the

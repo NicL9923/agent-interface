@@ -16,6 +16,16 @@ const tapNotification = async (context: BrowserContext, page: Page, url: string)
   const [worker] = context.serviceWorkers();
   await worker.evaluate(address => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: address } }), url);
 };
+/** Signs the account out from a second tab, which signs out every tab of the profile. */
+async function signOutElsewhere(context: BrowserContext) {
+  const other = await context.newPage();
+  await other.goto("/");
+  await other.getByRole("button", { name: "Account" }).click();
+  await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
+  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click();
+  await expect(other.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+  await other.close();
+}
 /** A fresh tab, so the entry before the app is about:blank and Back out of the app is visible. */
 async function signedInTab(context: BrowserContext, path = "/") {
   const first = await context.newPage();
@@ -183,6 +193,61 @@ test.describe("on a phone", () => {
     await page.goBack();
     await expect(question).toBeVisible();
     await sheet.getByRole("button", { name: "Discard changes" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(assistants(page)).toBeVisible();
+    await leaves(page);
+  });
+
+  test("a sign-out in another tab while a chat is open leaves nothing for Back to land on, so one Back leaves the app", async ({ context, page }) => {
+    await page.goto("about:blank");
+    await signIn(page);
+    await ranchRow(page).click();
+    await expect(page.getByRole("textbox", { name: "Message Ranch Hand" })).toBeVisible();
+    await signOutElsewhere(context);
+    await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+    // The chat's entry is popped and the home entry under it no longer names the chat of the account that left.
+    await expect.poll(() => page.evaluate(() => history.state?.wbDepth ?? 0)).toBe(0);
+    expect(new URL(page.url()).search).toBe("");
+    await leaves(page);
+  });
+
+  test("a group chat form with a name and an assistant asks before Back discards it", async ({ page }) => {
+    // The e2e server hosts no group coordinator, so its catalog is the one thing scripted: at the network edge.
+    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
+      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+    await page.goto("about:blank");
+    await signIn(page);
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New group chat" }).click();
+    const sheet = page.getByRole("dialog", { name: "New group chat" });
+    await sheet.getByRole("textbox", { name: "Name" }).fill("Fence crew");
+    await sheet.getByRole("checkbox", { name: /Ranch Hand/ }).check();
+    await page.goBack();
+    const question = sheet.getByRole("alert").filter({ hasText: "Discard your unsaved changes?" });
+    await expect(question).toBeVisible();
+    await expect(sheet.getByRole("textbox", { name: "Name" })).toHaveValue("Fence crew");
+    await expect(sheet.getByRole("checkbox", { name: /Ranch Hand/ })).toBeChecked();
+    await sheet.getByRole("button", { name: "Keep editing" }).click();
+    await expect(sheet.getByRole("textbox", { name: "Name" })).toHaveValue("Fence crew");
+    // The question took Back's step, and Back is armed again, so it asks again rather than leaving.
+    await page.goBack();
+    await expect(question).toBeVisible();
+    await sheet.getByRole("button", { name: "Discard changes" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(assistants(page)).toBeVisible();
+    await leaves(page);
+  });
+
+  test("Back on a new group chat form with nothing entered closes it at once", async ({ page }) => {
+    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
+      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+    await page.goto("about:blank");
+    await signIn(page);
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New group chat" }).click();
+    const sheet = page.getByRole("dialog", { name: "New group chat" });
+    await expect(sheet).toBeVisible();
+    await page.goBack();
     await expect(sheet).toBeHidden();
     await expect(assistants(page)).toBeVisible();
     await leaves(page);

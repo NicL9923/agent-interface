@@ -370,12 +370,14 @@ with about 5% overshoot for the livelier one (the toast, the jump button, sent m
 - Back on a phone: a phone-width layout is home, or one step in from it. A chat, group chat, Today, Search,
   or a sheet laid over home is one history entry, pushed when the step is taken. The system Back gesture
   and the browser's Back button take the step the on-screen Back takes: they close an open sheet through
-  its own close, so an edited form still asks first, and otherwise return to home with the chat's row
+  its own close, so an edited form, a new group chat with a name or choices, still asks first, and otherwise return to home with the chat's row
   focused. A second Back leaves the app. Switching between chats, as a notification tap does, only
   replaces the address, so entries do not pile up. Two-pane layouts push nothing, and a window
   resized between the layouts drops or adds the entry to match. A link that names a chat opens it with
   home one Back below; a page reloaded inside a chat still opens home on Back. The entries carry their
-  depth in `history.state` (`src/app/history-nav.ts`); `e2e/back-navigation.spec.ts` checks them.
+  depth in `history.state` (`src/app/history-nav.ts`); `e2e/back-navigation.spec.ts` checks them. A change of
+  account, as a sign-out in another tab, pops the step in and puts the address `/` on the entries it leaves,
+  before the next account or sign-in draws, so Back never lands on the previous account's chat.
 - On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
   flies between its home row and the chat header while the screens slide. Browsers without the
   API change screens at once.
