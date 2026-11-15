@@ -28,7 +28,7 @@
 .automation-work > p.muted { margin: 0 0 20px; font-size: .875rem; line-height: 1.6; }
 .automation-work > .form-error, .automation-work > .form-notice { margin: 12px 0 0; font-size: .875rem; line-height: 1.6; }
 .automation-work > .automation-toolbar > button { min-height: 44px; }
-.automation-toolbar > button[aria-disabled="true"] { opacity: 0.42; cursor: not-allowed; }
+.automation-toolbar > button[aria-disabled="true"], .automation-toolbar > button[aria-disabled="true"]:hover, .automation-toolbar > button[aria-disabled="true"]:active { opacity: 0.42; cursor: not-allowed; background: transparent; transform: none; }
 .automation-goal { font-size: 1rem; line-height: 1.55; }
 .automation-goal h3 { font-size: 1.0625rem; line-height: 1.5; }
 .automation-goal-card { min-width: 0; overflow-wrap: anywhere; }

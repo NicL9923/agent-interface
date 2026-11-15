@@ -6,10 +6,11 @@ this entry, Node 24.22.2 on the Mac mini.
 ## Change
 
 PR #422's Node 24 CI run failed `waits for the create review result before moving focus from Refresh status`: focus was
-on the page, not on Refresh status. jsdom 31, merged in #421, refuses `focus()` on a disabled button, as browsers do,
-and Refresh status was `disabled` while a change was busy. On a slow runner the test focused it before the failed
-create had settled. Refresh status now uses `aria-disabled` and ignores presses while busy, so keyboard users can rest
-on it during a change or a refresh.
+on the page, not on Refresh status. jsdom 31, merged in #421, behaves as browsers do: it refuses `focus()` on a disabled
+button, and it moves focus to the page, asynchronously, when the focused button becomes disabled. Refresh status was
+`disabled` while a change was busy and while it refreshed, so a keyboard user lost their place on it, and the test
+depended on when jsdom's move ran. GPT-6.1 Sol's review reproduced the second path. Refresh status now uses
+`aria-disabled` and ignores presses while busy, without the hover and press styles.
 
 ## Red runs
 
