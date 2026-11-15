@@ -6,6 +6,8 @@ async (page, { origin, outputDir }) => {
   const paths = [];
   const checks = [];
   let initialPreferences, restoreFailed = false;
+  // The app takes Command on Apple platforms and Control elsewhere, by the browser's platform as shortcuts.ts reads it.
+  const mod = await tab.evaluate(() => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent)) ? 'Meta' : 'Control';
   const shot = async name => {
     await tab.mouse.move(0, 0);
     await tab.evaluate(async () => {
@@ -96,7 +98,7 @@ async (page, { origin, outputDir }) => {
       await help.getByRole('button', { name: 'Close keyboard shortcuts', exact: true }).click();
       await sheet.getByRole('button', { name: 'Close settings', exact: true }).click();
 
-      await tab.keyboard.press('Meta+k');
+      await tab.keyboard.press(`${mod}+k`);
       const palette = tab.getByRole('dialog', { name: 'Command palette', exact: true });
       await palette.waitFor();
       await shot(`settings-palette-${width}`);
@@ -108,7 +110,7 @@ async (page, { origin, outputDir }) => {
 
       await tab.goto(`${origin}/?view=conversation&bot=ranch`);
       await tab.locator('article[data-message-id]').first().waitFor();
-      await tab.keyboard.press('Meta+f');
+      await tab.keyboard.press(`${mod}+f`);
       const find = tab.getByRole('searchbox', { name: 'Find in chat', exact: true });
       await find.fill('gate');
       await tab.waitForFunction(() => document.querySelector('.find-count')?.textContent.includes(' of '));
