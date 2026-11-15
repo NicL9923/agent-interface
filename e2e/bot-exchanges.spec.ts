@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
 
+// This fixture replaces a conversation response. Worker-owned requests bypass page routing in WebKit.
+test.use({ serviceWorkers: 'block' });
+
 for (const width of [320, 1280]) test(`bot exchanges collapse and reveal with a keyboard at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 900 });
   await page.emulateMedia({ colorScheme: width === 320 ? 'light' : 'dark', reducedMotion: 'reduce' });
