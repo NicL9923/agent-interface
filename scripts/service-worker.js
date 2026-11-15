@@ -296,7 +296,9 @@ function setPageBadge(user, count) {
       void self.navigator.setAppBadge(count).catch(() => {});
       return keepBadgeFor({ named });
     }
-    if (owner && mayShow(state, owner.named) && owner.named !== named) return;
+    // A legacy push names no account. Only the latest account's page may clear that unknown owner.
+    if (owner && mayShow(state, owner.named) && owner.named !== named
+      && (typeof owner.named === 'string' || state?.marker !== named)) return;
     return clearBadge();
   });
 }

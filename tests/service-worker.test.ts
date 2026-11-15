@@ -1576,6 +1576,21 @@ describe('service worker app badge for the page', () => {
     expect(sw.badge.count).toBe(0);
   });
 
+  it("lets the latest account clear a legacy push badge after a restart, while stale tabs leave it alone", async () => {
+    const first = worker();
+    await first.signedIn('one');
+    await push(first, { title: 'Legacy reply', body: 'The gate is shut.', badge: 4 });
+    expect(first.badge.count).toBe(4);
+    await first.pageBadge('two', 0);
+    expect(first.badge.count).toBe(4);
+    await first.pageBadge(null, 0);
+    expect(first.badge.count).toBe(4);
+    // The worker reads the saved owner {}, as a push from an older server has no account marker.
+    const sw = worker({ stores: first.stores });
+    await sw.pageBadge('one', 0);
+    expect(sw.badge.count).toBe(0);
+  });
+
   it.each([
     ['a tab of another account', 'two'],
     ['a tab that shows no account', null],
