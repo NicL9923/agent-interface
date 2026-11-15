@@ -7,7 +7,7 @@ import { createServer, Socket, type AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
 import { attemptConnect, defaultMetadataProbe, metadataTargets, metadataVerdict, probeMetadata, type MetadataAttempt, type MetadataProbe, type StatFs } from "../src/server/health.js";
