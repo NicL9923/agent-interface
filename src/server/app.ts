@@ -41,7 +41,7 @@ import { GroupCatalogWatch } from "./group-catalog-watch.js";
 import { loggerOptions } from "./logging.js";
 import { EventLoopMonitor, installRequestLog } from "./request-log.js";
 import { errorHandler, httpError } from "./http-error.js";
-import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe } from "./health.js";
+import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe, type StatFs } from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { installInlineUi } from "./inline-ui.js";
@@ -71,6 +71,8 @@ export async function createApp(
     /** The file the deploy tooling writes to name the previous release's assets; tests name theirs. Without a clientRoot it is dist/previous-release.json. */
     previousRelease?: string;
     metadataProbe?: MetadataProbe;
+    /** Measures free disk space for readiness; tests choose the result. */
+    statfs?: StatFs;
     /** Replaces interface discovery for direct routes, so tests choose the addresses. */
     directAddresses?: () => DirectAddress[];
   } = {},
@@ -202,7 +204,7 @@ export async function createApp(
   worker.identify = events => mains.identify(events);
   const health = new HealthMonitor({
     store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log,
-    metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),
+    metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config), statfs: options.statfs,
   });
   const eventLoop = new EventLoopMonitor(app.log);
   installHealthRoutes(app, health, eventLoop);

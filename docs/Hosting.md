@@ -452,12 +452,20 @@ runs. Deploys depend on that, including during a Hermes drain.
   probes afresh. Only production probes; development and tests report
   `unconfigured`.
 
-It also reports two checks that warn but never fail readiness:
+It also reports three checks that warn but never fail readiness:
 
 - push: the latest delivery failure is newer than the latest success and less
   than 24 hours old.
 - backup: the newest completed backup in `APP_BACKUP_DIR` is older than 36 hours,
   or none exists. Unset reports `unconfigured`.
+- disk: free space is below what a Hermes update check needs. It reads
+  `minimumFreeBytes` and `stageRoot` from the update worker's configuration
+  (`HERMES_UPGRADE_CONFIG`) and measures the filesystem that holds the stage root,
+  or its nearest existing parent before the first check creates it. Exactly the
+  floor passes, as it does for the worker. Without Hermes updates enabled it
+  measures the app's data directory against the worker's 20 GB default. A worker
+  configuration it cannot read or parse, or a `minimumFreeBytes` that is not a
+  number, also warns, with the 20 GB default.
 
 Requests through Caddy see only `ok`. A direct loopback request with no forwarding
 headers also gets each check's status and detail, and `eventLoopP99Ms`, the last
@@ -589,10 +597,64 @@ mid-conversation, Discord included, it restarts `hermes-gateway.service` once. T
 re-checks the count, messages and routine runs in the same command that restarts it.
 A restart ends any real turn.
 
-Old releases accumulate under `releases/`. The household host filled to 14 GB free
-with 129 of them, below the update check's 20 GB minimum. `release-app.py activate`
-now keeps the ten newest releases plus the live and previous ones, and removes the
-rest.
+Old releases accumulate under `releases/`, and their payloads under `operations/`.
+The household host filled to 14 GB free with 129 releases, below the update check's
+20 GB minimum, and on Nov 14, 2026 to 9.5 GB free of 72 GB with 27, because pruning
+then kept every release for a week. After each activation `release-app.py` now keeps:
+
+- the ten newest releases, by directory time;
+- the live release, the rollback target its deploy configuration names, and any
+  release named in its `dist/previous-release.json`;
+- every release this checkout's `.private/releases` manifest records as preparing,
+  prepared, activating, needs-review or recovering. A failed prepare stays
+  `preparing` until `discard` removes it, so discard abandoned stages;
+- every release with a qualification stage that is not marked completed;
+- every release the host cannot prove settled, until it has been idle for 3 days.
+
+Only another checkout's manifests know that checkout's stages, and several
+sessions release from different checkouts at once; on Oct 14, 2026 two staged the
+same commit three minutes apart. So the host's own records decide. A release is
+settled when its `operations/<release>/deploy-config.json` names an `operationId`
+and a `webBuild`, and `operations/continued-<operationId>/` holds the two records
+the guarded deploy leaves as its last steps of a completed activation: a
+`result.json` object whose `webBuild` and `hermesRevision` match the configuration,
+and a `phase.json` that says `complete` for that `operationId`. A result that is
+cut off, not an object or for another build, or a phase that is missing, held for
+review or another operation's, proves nothing. `discard` deletes the release and its
+operation, so a discarded release leaves nothing to prune. Any other release, one
+still uploading, building, preflighted or qualified, held for review, or with a
+missing or unreadable deploy configuration, is kept until nothing in it has changed
+for 3 days. That counts the release directory's own time and the time of every
+file and directory under its operation directory and its
+`continued-<operationId>` directory. Rewriting a file, as a rebuild's `build.log`
+or a retried activation's `commands.log` does, leaves its directory's time alone,
+so directory times alone miss it. The walk skips the subdirectories of qualification
+stages, which hold the checkouts and runtimes: a stage still in use is not marked
+completed, which keeps its release anyway. It does not walk the release's own
+build, which holds `node_modules`; prepare writes the operation's `build.log` for
+as long as it builds. A time it cannot read keeps the release, and a file that
+vanishes during the walk counts as a change now. Three days
+covers a stage prepared before a weekend and activated after it. A stage that
+old is rarely still usable: `activate` refuses once the live release has changed,
+and from Oct 20 to Nov 12, 2026 releases landed one to seven days apart, most
+often within two. A stage another checkout abandoned still ages out, so the disk
+does not fill with them again. When a pruned stage is activated, `activate`
+refuses before changing anything and says to discard it and prepare again.
+
+It removes the rest. Then, for each `operations/release-*` whose release is gone,
+it deletes `release.tar.gz` and every subdirectory of its `qualification-*` stages,
+the disposable checkouts, runtimes and backups, and keeps their top-level files:
+receipts, logs and the deploy configuration. It never touches an operation whose
+release still exists, one a protected manifest names, one with no
+`deploy-config.json` yet, which another session may still be uploading, or one
+with a qualification stage that is not marked completed, whose process may still
+be using those directories. Completed means a marker object with `schemaVersion` 1,
+`state` `completed` and the stage's own `operationId`, as `qualify-app-release.py`
+and the update worker write it. A missing, cut-off, empty or unknown marker keeps
+the operation whole. Removing the 163 such payloads by
+hand freed 3.2 GB. The tool prints what it removed and the host's free space, and
+warns about anything it could not remove without failing the release. Readiness's
+`disk` check alerts administrators when space still runs low.
 
 See the [Linux installer contract](HermesUpgradeLinux.md) for host configuration
 and recovery requirements. The [validation ledger](ledger/README.md) records
