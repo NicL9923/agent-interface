@@ -39,7 +39,7 @@ const notify = (botId: string, kind?: "inflight", turnVersion?: string) => { for
  * own turn read, which takes TURN_READ_MS. The real runtime's turn reads are covered in tests/live-turn-*.test.ts.
  */
 const STREAMING = "trail", TURN_READ_MS = 60;
-type Running = { thread: Message[]; prompt: number; runId: string; tail: string; tools: ToolCall[]; done: boolean };
+type Running = { thread: Message[]; prompt: number; runId: string; tail: string; tools: ToolCall[]; done: boolean; holdChat: boolean; finished: Promise<void>; finish: () => void };
 let running: Running | undefined, generation = 0, readAt = -1;
 const followers = new Set<() => void>();
 const activityOf = (turn: Running): Activity => ({ runId: turn.runId,
@@ -55,7 +55,10 @@ function structural(botId: string, covered = false) {
   }, TURN_READ_MS);
 }
 function streamReply(thread: Message[], runId: string, prompt: string) {
-  const turn: Running = running = { thread, prompt: thread.length - 1, runId, tail: "", tools: [], done: false };
+  let finish!: () => void;
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  const turn: Running = running = { thread, prompt: thread.length - 1, runId, tail: "", tools: [], done: false,
+    holdChat: prompt === "Walk the fence line", finished, finish };
   structural(STREAMING);
   const steps: (() => void)[] = [];
   const words = (text: string) => { for (const word of text.split(/(?<= )/)) steps.push(() => { turn.tail += word; notify(STREAMING, "inflight"); }); };
@@ -119,8 +122,10 @@ const runtime: Runtime = {
   experienceRequest,
   botDetail: async botId => bots.find(bot => bot.id === botId)!,
   conversation: async botId => {
-    const thread = [...messages.get(botId) ?? []];
     const turn = botId === STREAMING && running?.thread === messages.get(botId) ? running : undefined;
+    // Keep post-tool chat reads behind the turn; only the turn stream can restore live text.
+    if (turn?.holdChat && turn.tools.some(tool => tool.status === "completed")) await turn.finished;
+    const thread = [...messages.get(botId) ?? []];
     if (!turn) return conversationFixture({ botId, messages: thread });
     readAt = generation;
     return conversationFixture({ botId, version: `e2e:0:${generation}`, activity: activityOf(turn), toolCalls: turn.tools,
@@ -199,11 +204,13 @@ await app.listen({ host: "127.0.0.1", port });
 // the roster activity from the next bootstrap on, such as "waiting", which the app badge counts.
 const control = createServer((req, res) => {
   if (req.method === "DELETE") {
+    running?.finish();
     violations.length = 0; uploads.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
     bots.splice(0, bots.length, ...initialBots.map(bot => ({ ...bot })));
     // A saved draft outlives the browser that wrote it, so the next test must not open on a photo the last one attached.
     for (const bot of bots) if (store.draft("local-one", bot.id)) store.saveDraft("local-one", bot.id, { text: "", attachments: [] });
   }
+  if (req.method === "POST" && req.url === "/release-chat") running?.finish();
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
     const query = new URL(req.url, "http://localhost").searchParams, at = bots.findIndex(bot => bot.id === query.get("bot"));
     if (at >= 0) bots[at] = { ...bots[at]!, activity: query.get("state") as Bot["activity"] };
