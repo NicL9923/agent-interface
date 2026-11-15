@@ -3,14 +3,17 @@ import https from "node:https";
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import * as webpush from "web-push";
+// @ts-expect-error http_ece, web-push's own encryption dependency, ships no types.
+import ece from "http_ece";
 
 afterEach(() => vi.restoreAllMocks());
 
 it("sends an encrypted VAPID notification and preserves expiry responses", async () => {
   const receiver = createECDH("prime256v1");
   receiver.generateKeys();
+  const auth = randomBytes(16);
   const subscription = { endpoint: "https://push.example.test/message", keys: {
-    p256dh: receiver.getPublicKey().toString("base64url"), auth: randomBytes(16).toString("base64url"),
+    p256dh: receiver.getPublicKey().toString("base64url"), auth: auth.toString("base64url"),
   } };
   const keys = webpush.generateVAPIDKeys();
   webpush.setVapidDetails("mailto:test@example.com", keys.publicKey, keys.privateKey);
@@ -34,4 +37,6 @@ it("sends an encrypted VAPID notification and preserves expiry responses", async
   expect(sent.length).toBeGreaterThan(86);
   expect(sent.readUInt32BE(16)).toBe(4096);
   expect(sent[20]).toBe(65);
+  // The phone's side: its private key and auth secret open the record to the exact payload.
+  expect((ece.decrypt(sent, { version: "aes128gcm", privateKey: receiver, authSecret: auth }) as Buffer).toString()).toBe("hello");
 });
