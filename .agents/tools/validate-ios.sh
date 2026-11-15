@@ -13,6 +13,7 @@ if [[ $# -ge 2 ]]; then shift 2; else shift; fi
 cd "$repo_dir"
 state_tool="$repo_dir/.agents/tools/ios-validation-state.py"
 request_options=("$@")
+source_before=$(python3 "$state_tool" source)
 inputs_before=$(python3 "$state_tool" key "$operation" "$simulator_id" ${request_options[@]+"${request_options[@]}"})
 can_reuse=0
 if python3 "$state_tool" eligible "$operation" ${request_options[@]+"${request_options[@]}"}; then
@@ -116,9 +117,10 @@ shell_words() { local words; words=$(printf '%q ' "$@"); echo "${words% }"; }
 products="$derived_data/Build/Products"
 mkdir -p "$products"
 find "$products" -maxdepth 1 -name '*.xctestrun' -delete
-xcodebuild -project ios/AgentInterface.xcodeproj -scheme AgentInterface -destination "$destination" \
-  -derivedDataPath "$derived_data" -resultBundlePath ".private/ios-${run_id}-build.xcresult" \
-  "${build_options[@]}" build-for-testing
+build_args=(-project ios/AgentInterface.xcodeproj -scheme AgentInterface -destination "$destination"
+  -derivedDataPath "$derived_data" -resultBundlePath ".private/ios-${run_id}-build.xcresult"
+  "${build_options[@]}" build-for-testing)
+xcodebuild "${build_args[@]}"
 xctestruns=("$products"/*.xctestrun)
 if [[ ${#xctestruns[@]} -ne 1 || ! -f "${xctestruns[0]}" ]]; then
   echo "Expected one .xctestrun in $products after building." >&2
@@ -130,8 +132,9 @@ python3 .agents/tools/patch-xctestrun.py "${xctestruns[0]}" "$patched" 15
 # boots the selected device when execution starts; leave pre-existing devices up.
 booted_here=$(xcrun simctl list devices booted --json | python3 -c 'import json,sys; groups=json.load(sys.stdin)["devices"]; print(0 if any(d["udid"]==sys.argv[1] for ds in groups.values() for d in ds) else 1)' "$simulator_id")
 status=0
-xcodebuild test-without-building -xctestrun "$patched" -destination "$destination" \
-  -resultBundlePath "$result_path" ${test_options[@]+"${test_options[@]}"} || status=$?
+test_args=(test-without-building -xctestrun "$patched" -destination "$destination"
+  -resultBundlePath "$result_path" ${test_options[@]+"${test_options[@]}"})
+xcodebuild "${test_args[@]}" || status=$?
 cleanup_status=0
 cleanup || cleanup_status=$?
 if [[ $status == 0 && $cleanup_status != 0 ]]; then status=$cleanup_status; fi
@@ -164,6 +167,12 @@ summary=".private/ios-${run_id}.txt"
 } > "$summary"
 echo "Summary: $summary"
 if [[ $status == 0 && $can_reuse == 1 ]]; then
-  python3 "$state_tool" record "$inputs_before" "$result_path" "$summary" ${request_options[@]+"${request_options[@]}"} || echo 'Validation succeeded, but no reusable evidence was recorded.' >&2
+  if [[ $(python3 "$state_tool" source) != "$source_before" ]]; then
+    echo 'iOS inputs changed while validation ran.' >&2
+    status=75
+  elif ! python3 "$state_tool" record "$inputs_before" "$source_before" "$result_path" "$summary" "${build_args[@]}" --test-invocation-- "${test_args[@]}"; then
+    echo 'Validation succeeded, but no reusable evidence was recorded.' >&2
+    if [[ $(python3 "$state_tool" source) != "$source_before" ]]; then status=75; fi
+  fi
 fi
 exit "$status"

@@ -85,7 +85,9 @@ if args==['simctl','shutdown','PHONE']:
  with open(os.environ['TEST_CALLS'],'a') as f:f.write(json.dumps(['xcrun',*args])+'\\n')
  sys.exit(0)
 if args[:4]==['xcresulttool','get','test-results','summary']:
- result=pathlib.Path(args[args.index('--path')+1]);print((result/'evidence.json').read_text());sys.exit(0)
+ result=pathlib.Path(args[args.index('--path')+1]);
+ if os.environ.get('TEST_SUMMARY_CHANGE')=='1':(root/'ios/Input.swift').write_text('changed during summary')
+ print((result/'evidence.json').read_text());sys.exit(0)
 sys.exit('unexpected xcrun call: '+repr(args))
 ''', python=True)
 
@@ -106,6 +108,54 @@ sys.exit('unexpected xcrun call: '+repr(args))
     def full_run(self):
         return subprocess.run([sys.executable, str(self.tools / 'ios-validation-state.py'), 'full-run'],
                               check=False, cwd=self.root, env=self.env, capture_output=True, text=True)
+
+    def test_summary_source_change_never_certifies_new_source(self):
+        p = self.run_validation(TEST_SUMMARY_CHANGE='1')
+        self.assertEqual(p.returncode, 75, p.stderr)
+        self.assertEqual(self.receipts(), [])
+        self.assertEqual(self.full_run().returncode, 1)
+
+    def test_filtered_scope_and_bundle_counts_are_checked(self):
+        self.assertEqual(self.run_validation(options=['-only-testing:Unit/one']).returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        value['full'] = True
+        receipt.write_text(json.dumps(value))
+        self.assertEqual(self.full_run().returncode, 1)
+        receipt.unlink()
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        execution = [a[1:] for a in self.actions() if a[0] == 'xcodebuild' and ('build-for-testing' in a or 'test-without-building' in a)][-2:]
+        self.assertEqual(value['arguments'], execution[0] + ['--test-invocation--'] + execution[1])
+        for field in ['passed', 'failed', 'skipped', 'expectedFailures']:
+            damaged = json.loads(json.dumps(value))
+            damaged['tests'][field] += 1
+            receipt.write_text(json.dumps(damaged))
+            self.assertEqual(self.full_run().returncode, 1, field)
+        receipt.write_text(json.dumps(value))
+        (Path(value['result']) / 'evidence.json').unlink()
+        self.assertEqual(self.full_run().returncode, 1)
+
+    def test_incomplete_counts_are_not_reused(self):
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        del value['tests']
+        receipt.write_text(json.dumps(value))
+        p = self.run_validation()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn('Reused successful', p.stdout)
+        self.assertEqual(self.full_run().returncode, 0)
+
+    def test_documentation_and_evidence_do_not_invalidate(self):
+        self.assertEqual(self.run_validation().returncode, 0)
+        (self.repo / 'ios/README.md').write_text('notes')
+        (self.repo / 'ios/evidence').mkdir()
+        (self.repo / 'ios/evidence/screenshot.png').write_bytes(b'image')
+        p = self.run_validation()
+        self.assertIn('Reused successful', p.stdout)
+        self.assertEqual(self.full_run().returncode, 0)
 
     def test_identical_success_reuses_before_taking_the_lock(self):
         first = self.run_validation(options=['-only-testing:Unit/one'])

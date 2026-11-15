@@ -52,3 +52,17 @@ through the same replace, test, restore loop by hand. All 21 failed the test nam
 Real `archive`, `upload` and `distribute`: they sign and call Apple. The two end-to-end tests run a copy of the tool in a
 throwaway repository with no receipts, so they stop at the gate. The `validation` field written to `release.json` has no
 test. A full UI run on this change was not run; the change touches no Swift source.
+# November 15 iOS archive gate review fixes
+
+The four regression tests ran against the unchanged iOS validation files from PR head `b82f0cfd` (also unchanged by the merge of main). The red runs used `python3 .agents/tools/mutate-py.py --batch` with a harmless docstring whitespace mutation, so the original production behavior remained intact. Each test failed on the reported behavior:
+
+| Finding | Red result |
+| --- | --- |
+| Source changes during summary | `test_summary_source_change_never_certifies_new_source` failed |
+| Edited scope or counts | `test_filtered_scope_and_bundle_counts_are_checked` failed |
+| Incomplete receipt reuse | `test_incomplete_counts_are_not_reused` failed |
+| Documentation and evidence fingerprint | `test_documentation_and_evidence_do_not_invalidate` failed |
+
+After the fix, the iOS validation suite passed 26 tests using fake Xcode tools. The strengthened scope and count test passed separately. The code and test diff at that point had SHA-256 `7b08139b84e5e231e1130ac69fc2fc3efd74921adb4e8dd87ff6cac44a56d8d3` from `git diff` over the three changed implementation and test files. No archive, signing, App Store Connect, or real iOS validation was run.
+
+On the final code and test diff, `.agents/tools/check-all` passed typecheck, lint, and ruff. Vitest passed 4,029 of 4,032 tests across 218 files; three failed because `127.0.0.2` is unavailable on this Mac (two direct-route tests and one native-contract test). The command stopped at that failure. `.agents/tools/check-all --only build,e2e,py --keep-going` then passed the build (896 modules), browser suite (79 tests), and Python suite (52 files). Node 24.22.2 was used. No simulator or physical device was exercised.

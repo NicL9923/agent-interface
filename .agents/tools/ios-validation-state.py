@@ -33,6 +33,8 @@ def source_state():
             '.agents/tools/source-state.py', '.agents/tools/patch-xctestrun.py',
         }):
             continue
+        if relative.endswith('.md') or relative.startswith('ios/evidence/'):
+            continue
         path = ROOT / relative
         # Missing tracked files and symlink targets are part of the fingerprint.
         if path.is_symlink():
@@ -107,13 +109,38 @@ def cache_path(key):
     return cache_dir() / (key + '.json')
 
 
+def evidence_counts(result):
+    evidence = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result), '--compact'))
+    if (not isinstance(evidence, dict) or evidence.get('result') != 'Passed' or evidence.get('failedTests') != 0
+            or type(evidence.get('passedTests')) is not int or evidence['passedTests'] <= 0 or evidence.get('testFailures')):
+        raise ValueError('Only completed, passing, nonempty test results can be reused')
+    fields = {'passed': 'passedTests', 'failed': 'failedTests', 'skipped': 'skippedTests', 'expectedFailures': 'expectedFailures'}
+    counts = {name: evidence.get(field) for name, field in fields.items()}
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        raise ValueError('Invalid test counts')
+    return counts
+
+
+def valid_receipt(value):
+    try:
+        args = value['arguments']
+        if not (isinstance(value, dict) and value.get('schema') == 2 and value.get('exit') == 0
+                and isinstance(value.get('source'), str) and isinstance(args, list) and all(isinstance(a, str) for a in args)
+                and args.count('--test-invocation--') == 1 and args.count('-scheme') == 1
+                and args[args.index('-scheme') + 1] == 'AgentInterface'
+                and 'build-for-testing' in args and 'test-without-building' in args
+                and value.get('full') is (not partial(args))
+                and Path(value['result']).is_dir() and Path(value['summary']).is_file()):
+            return False
+        return value.get('tests') == evidence_counts(value['result'])
+    except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.CalledProcessError):
+        return False
+
+
 def lookup(key):
     try:
         record = json.loads(cache_path(key).read_text())
-        # Evidence recorded before releases asked for the whole scheme has no source or scope. Run it again.
-        if (isinstance(record, dict) and record.get('key') == key and record.get('schema') == 1 and record.get('exit') == 0
-                and isinstance(record.get('source'), str) and isinstance(record.get('full'), bool)
-                and Path(record['result']).is_dir() and Path(record['summary']).is_file()):
+        if valid_receipt(record) and record.get('key') == key:
             print('Reused successful iOS validation:', record['summary'])
             print('Validated inputs:', key)
             print('Result bundle:', record['result'])
@@ -128,21 +155,19 @@ def partial(options):
     return any(option.startswith(('-only-testing', '-skip-testing')) for option in options)
 
 
-def record(key, result, summary, *options):
+def record(key, source, result, summary, *arguments):
     result, summary = Path(result).resolve(), Path(summary).resolve()
-    evidence = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result), '--compact'))
-    if (not isinstance(evidence, dict) or evidence.get('result') != 'Passed' or evidence.get('failedTests') != 0
-            or not isinstance(evidence.get('passedTests'), int) or evidence['passedTests'] <= 0
-            or evidence.get('testFailures') or not summary.is_file()):
-        raise ValueError('Only completed, passing, nonempty test results can be reused')
+    counts = evidence_counts(result)
+    if source_state() != source:
+        raise ValueError('iOS inputs changed while validation ran')
+    value = {'schema': 2, 'key': key, 'exit': 0, 'result': str(result), 'summary': str(summary),
+             'source': source, 'full': not partial(arguments), 'tests': counts, 'arguments': list(arguments)}
+    if not valid_receipt(value):
+        raise ValueError('Invalid validation receipt')
+    if source_state() != source:
+        raise ValueError('iOS inputs changed while validation ran')
     path = cache_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # The source fingerprint and counts let a release ask for a passing whole-scheme run without knowing the
-    # simulator or toolchain that produced it. The wrapper checked the inputs did not move during the run.
-    counts = {name: evidence.get(field, 0) for name, field in [('passed', 'passedTests'), ('failed', 'failedTests'),
-                                                               ('skipped', 'skippedTests'), ('expectedFailures', 'expectedFailures')]}
-    value = {'schema': 1, 'key': key, 'exit': 0, 'result': str(result), 'summary': str(summary),
-             'source': source_state(), 'full': not partial(options), 'tests': counts}
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix='.receipt-', delete=False) as f:
         json.dump(value, f, sort_keys=True)
         temporary = Path(f.name)
@@ -159,8 +184,7 @@ def full_run():
     for path in cache_dir().glob('*.json'):
         try:
             value = json.loads(path.read_text())
-            if not (isinstance(value, dict) and value.get('schema') == 1 and value.get('exit') == 0 and value.get('source') == source
-                    and Path(value['result']).is_dir() and Path(value['summary']).is_file()):
+            if not valid_receipt(value) or value.get('source') != source:
                 continue
             if value.get('full') is not True:
                 partial_runs += 1
@@ -182,6 +206,8 @@ def main():
     if action == 'key':
         operation, simulator, *options = args
         print(identity(operation, simulator, options))
+    elif action == 'source':
+        print(source_state())
     elif action == 'eligible':
         operation, *options = args
         return 0 if cacheable(operation, options) else 1
