@@ -15,7 +15,7 @@ const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
 let reports = Promise.resolve();
 function report(botId: string, state: "active" | "left" | "idle", generation: number) {
   reports = reports.then(() => generation === accountGeneration()
-    ? request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state } }) : undefined).then(() => {}, () => {});
+    ? request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state }, keepalive: true }) : undefined).then(() => {}, () => { /* Presence expires on its own when a report fails. */ });
 }
 
 /** Closes this browser's notifications for a chat now on screen. Routine results open elsewhere. */

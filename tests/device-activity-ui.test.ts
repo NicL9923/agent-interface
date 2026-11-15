@@ -111,3 +111,11 @@ it("never sends an old active report after the window was left, and stamps idle 
   expect(reports()).toEqual(["active 0", "active 35000", "inactive"]);
   expect(pending).toHaveLength(0);
 });
+
+it("keeps the inactive report alive after the page hides and tolerates a failed report", async () => {
+  vi.mocked(write).mockRejectedValueOnce(new Error("offline"));
+  await render("one");
+  visibility = "hidden";
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(vi.mocked(write).mock.calls.at(-1)).toEqual(["/devices/activity", { deviceId: deviceId(), state: "inactive" }, "PUT", { keepalive: true }]);
+});

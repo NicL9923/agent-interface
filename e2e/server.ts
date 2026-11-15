@@ -182,17 +182,22 @@ const { app, store } = await createApp(
 // With ?install=fail its worker cannot install, as when a deploy is missing a file.
 let nextRelease: "none" | "ready" | "broken" = "none";
 let admissionDelay = 0;
+let groupCatalog = false;
 const NEXT_MARK = '<meta name="release" content="next">';
 app.addHook("onRequest", async (req, reply) => {
-  if (nextRelease === "none") return;
   const path = new URL(req.url, "http://localhost").pathname;
+  if (groupCatalog && path === "/api/groups" && req.method === "GET") return reply.send({ supported: true, canSend: true, rooms: [] });
   if (path === "/sw.js") {
-    let source = readFileSync("dist/client/sw.js", "utf8").replace("const CACHE = 'agent-interface-", "const CACHE = 'agent-interface-next-");
+    let source = readFileSync("dist/client/sw.js", "utf8");
+    if (nextRelease !== "none") source = source.replace("const CACHE = 'agent-interface-", "const CACHE = 'agent-interface-next-");
+    source += `\nself.addEventListener("message", event => {
+      if (event.data?.type === "TEST_OPEN_CHAT") event.waitUntil(openChat({ data: { url: event.data.url } }).then(() => event.ports[0].postMessage(true)));
+    });`;
     // A file the release lists but the server lacks: the server answers it with the shell, which install refuses.
     if (nextRelease === "broken") source = source.replace("const INSTALL_FILES = [", 'const INSTALL_FILES = ["/assets/missing-AAAAAAAA.js",');
     return reply.header("Cache-Control", "no-cache").type("text/javascript").send(source);
   }
-  if (req.method === "GET" && (path === "/" || path === "/index.html")) {
+  if (nextRelease !== "none" && req.method === "GET" && (path === "/" || path === "/index.html")) {
     const shell = readFileSync("dist/client/index.html", "utf8").replace("<head>", `<head>${NEXT_MARK}`);
     return reply.header("Cache-Control", "no-cache").type("text/html").send(shell);
   }
@@ -205,11 +210,12 @@ await app.listen({ host: "127.0.0.1", port });
 const control = createServer((req, res) => {
   if (req.method === "DELETE") {
     running?.finish();
-    violations.length = 0; uploads.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
+    violations.length = 0; uploads.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0; groupCatalog = false;
     bots.splice(0, bots.length, ...initialBots.map(bot => ({ ...bot })));
     // A saved draft outlives the browser that wrote it, so the next test must not open on a photo the last one attached.
     for (const bot of bots) if (store.draft("local-one", bot.id)) store.saveDraft("local-one", bot.id, { text: "", attachments: [] });
   }
+  if (req.method === "POST" && req.url === "/group-catalog") groupCatalog = true;
   if (req.method === "POST" && req.url === "/release-chat") running?.finish();
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
     const query = new URL(req.url, "http://localhost").searchParams, at = bots.findIndex(bot => bot.id === query.get("bot"));

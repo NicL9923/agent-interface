@@ -2,7 +2,7 @@ import { routeParts, routeUrl, type ApiParams, type ApiQuery, type ApiRoute } fr
 
 type Mocked = { api?: unknown; write?: unknown };
 type Call = (...args: unknown[]) => unknown;
-type Options = { params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown; signal?: AbortSignal };
+type Options = { params?: Record<string, string>; query?: Record<string, unknown>; body?: unknown; signal?: AbortSignal; keepalive?: boolean };
 
 /** The app's own background reports, which each have a test file of their own. */
 const HEARTBEATS: ReadonlySet<ApiRoute> = new Set<ApiRoute>(["PUT /bots/:id/presence", "PUT /devices/activity"]);
@@ -28,7 +28,7 @@ export function withRequest<M extends Mocked>(mocked: M, { heartbeats = true }: 
       if (!heartbeats && HEARTBEATS.has(route)) { heartbeatLog.push({ url, body: options.body }); return Promise.resolve({}); }
       if (method === "GET") return options.signal ? (mocked.api as Call)(url, { signal: options.signal }) : (mocked.api as Call)(url);
       const body = options.body ?? {};
-      return method === "POST" ? (mocked.write as Call)(url, body) : (mocked.write as Call)(url, body, method);
+      return method === "POST" ? (mocked.write as Call)(url, body) : options.keepalive ? (mocked.write as Call)(url, body, method, { keepalive: true }) : (mocked.write as Call)(url, body, method);
     },
   };
 }

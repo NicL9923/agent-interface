@@ -34,6 +34,7 @@ export function reportClientError(kind: ClientErrorReport["kind"], cause: unknow
     reported.add(key);
     sent++;
     const route = location.pathname.slice(0, CLIENT_ERROR_LIMITS.route);
+    // A failed crash report cannot be reported through the same endpoint without a loop.
     void request("POST /client-errors", { body: { kind, message, stack, route, release: release() } }).catch(() => {});
   } catch { /* Reporting never adds a failure of its own. */ }
 }

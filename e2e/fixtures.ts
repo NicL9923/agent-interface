@@ -16,6 +16,7 @@ export const setActivity = (botId: string, state: string) =>
   fetch(`http://127.0.0.1:${controlPort}/activity?bot=${encodeURIComponent(botId)}&state=${encodeURIComponent(state)}`, { method: "POST" });
 /** The files the browser uploaded since the test started, with their bytes as base64. */
 export const uploadedFiles = async () => await (await fetch(`http://127.0.0.1:${controlPort}/uploads`)).json() as { name: string; mime: string; base64: string }[];
+export const enableGroupCatalog = () => fetch(`http://127.0.0.1:${controlPort}/group-catalog`, { method: "POST" });
 export const releaseChat = () => fetch(`http://127.0.0.1:${controlPort}/release-chat`, { method: "POST" });
 /** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */
 export const slowAdmission = (ms: number) => fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
@@ -30,11 +31,19 @@ const signedOutProbe = (message: ConsoleMessage) =>
 export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void }>({
   allowConsoleError: [[], { option: false }],
   // Every page the test opens must stay free of uncaught errors, console errors and CSP violation reports.
-  pageHealth: [async ({ context, allowConsoleError }, use) => {
+  pageHealth: [async ({ context, allowConsoleError, browserName }, use) => {
+    if (browserName === "webkit") await context.addInitScript(() => {
+      // Playwright WebKit has no push service; leave the app and its error handling real.
+      if (typeof PushManager === "undefined") return;
+      PushManager.prototype.getSubscription = async () => null;
+      PushManager.prototype.subscribe = async () => { throw new Error("no push service in Playwright WebKit"); };
+    });
     const problems: string[] = [];
     const watch = (page: Page) => {
       page.on("pageerror", error => problems.push(`Uncaught error: ${error.message}`));
       page.on("console", message => {
+        // Linux WebKit ignores this Chromium viewport extension and reports the ignored key as an error.
+        if (browserName === "webkit" && message.text() === 'Viewport argument key "interactive-widget" not recognized and ignored.') return;
         if (message.type() !== "error" || signedOutProbe(message) || allowConsoleError.some(allowed => allowed.test(message.text()))) return;
         problems.push(`Console error: ${message.text()} (${message.location().url})`);
       });
@@ -69,4 +78,16 @@ export async function chooseDark(page: Page) {
   expect(saved).toBe(200);
   await page.reload();
   await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+}
+
+/** Exercise the worker's notification handler through the page on both browser engines. */
+export async function tapNotification(page: Page, url: string) {
+  await page.evaluate(async address => {
+    const worker = (await navigator.serviceWorker.ready).active!;
+    await new Promise<void>(resolve => {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => resolve();
+      worker.postMessage({ type: "TEST_OPEN_CHAT", url: address }, [channel.port2]);
+    });
+  }, url);
 }

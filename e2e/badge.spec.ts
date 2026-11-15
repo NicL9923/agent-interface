@@ -16,7 +16,8 @@ const watchPages = () => {
   }
 };
 
-test("the worker writes the badge in the order of the account words, and the page writes none while it controls it", async ({ context, page }) => {
+test("the worker writes the badge in the order of the account words, and the page writes none while it controls it", async ({ context, page, browserName }) => {
+  test.skip(browserName === "webkit", "Playwright exposes service worker handles only in Chromium; this test instruments the worker badge API.");
   let crashed = false;
   page.on("crash", () => { crashed = true; });
   await context.addInitScript(watchPages);
