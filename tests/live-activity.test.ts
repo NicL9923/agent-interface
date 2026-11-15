@@ -41,7 +41,10 @@ beforeEach(() => {
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apns();
   const runtime = {
     listBots: async () => bots,
-    conversation: async (botId: string) => ({ botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } }) as Conversation,
+    conversation: async (botId: string) => {
+      if (!(botId in conversations)) throw new Error(`Unconfigured conversation: ${botId}`);
+      return { botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } } as Conversation;
+    },
   };
   live = new LiveActivities(store, runtime, config, async (target, payload, priority) => {
     duringSend?.();
@@ -51,6 +54,110 @@ beforeEach(() => {
 });
 
 describe("aggregate Live Activity", () => {
+  it("holds disconnected work through other rows and ends only after a fresh completion", async () => {
+    bots = ["barn", "a", "b", "c", "d"].map(id => bot(id));
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    set("barn", "working"); register("one"); await tick();
+    set("barn", "disconnected");
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (id, options) => {
+      if (id === "barn") throw new Error("offline");
+      return read(id, options);
+    };
+    for (const id of ["a", "b", "c", "d"]) set(id, "waiting");
+    await tick(15_000);
+    expect(last().payload.aps.event).toBe("update");
+    expect(rows()).not.toContain("barn:done");
+    for (const id of ["a", "b", "c", "d"]) set(id, "idle");
+    await tick(15_000);
+    expect(last().payload.aps.event).toBe("update");
+    expect(rows()).toContain("barn:working");
+    live["runtime"].conversation = read;
+    set("barn", "idle"); await tick(15_000);
+    expect(last().payload.aps.event).toBe("end");
+    expect(rows()).toContain("barn:done");
+  });
+
+  it("holds work when a conversation read fails despite an idle roster", async () => {
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
+    set("kitchen", "working"); register("one"); await tick();
+    set("kitchen", "idle");
+    live["runtime"].conversation = async () => { throw new Error("unreadable"); };
+    await tick(15_000);
+    expect(last().payload.aps.event).toBe("update");
+    expect(rows()).toEqual(["kitchen:working"]);
+    // The held row says it cannot be checked, and no heartbeat refreshes it, so its stale date lapses.
+    expect(last().payload.aps["content-state"].rows[0].detail).toBe("Can't check on this right now");
+    const sent = pushes.length;
+    await tick(30 * 60_000);
+    expect(pushes.length).toBe(sent);
+  });
+
+  it("keeps the heartbeat while a running assistant past the fourth row is still fresh", async () => {
+    bots = ["a", "b", "c", "d", "fresh"].map(id => bot(id));
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    for (const id of ["a", "b", "c", "d", "fresh"]) set(id, "working");
+    register("one"); await tick();
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (id, options) => {
+      if (id !== "fresh") throw new Error("offline");
+      return read(id, options);
+    };
+    await tick(15_000);
+    const sent = pushes.length;
+    await tick(6 * 60_000);
+    expect(pushes.length).toBeGreaterThan(sent);
+    expect(last().payload.aps.event).toBe("update");
+  });
+
+  it("does not claim an armed run finished when its conversation cannot be read", async () => {
+    register("one", ["kitchen"]);
+    set("kitchen", "idle", {}, { lastMessage: { text: "Old result", at: new Date(clock + 1000).toISOString() } });
+    live["runtime"].conversation = async () => { throw new Error("unreadable"); };
+    await tick(5_000);
+    expect(last().payload.aps.event).toBe("update");
+    expect(rows()).toEqual(["kitchen:starting"]);
+  });
+
+  it("drops a long unknown registration without sending a finished event", async () => {
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
+    store.registerLiveActivityStart("one", "one", "one-device", "ef".repeat(32), "sandbox", "c2NvcGU");
+    set("kitchen", "working"); register("one"); await tick();
+    set("kitchen", "disconnected");
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (id, options) => {
+      if (id === "kitchen") throw new Error("offline");
+      return read(id, options);
+    };
+    await tick(15_000);
+    await tick(8 * 60 * 60_000 - 1);
+    expect(store.liveActivities("sandbox", clock)).toHaveLength(1);
+    clock += 1;
+    const context = store.liveActivityContext("one", "one", "one-device")!;
+    expect((await live.state("one", context, context.lastState)).title).toBe("Status unavailable");
+    await tick();
+    expect(pushes.every(push => push.payload.aps.event !== "end")).toBe(true);
+    expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
+    set("garden", "working"); await tick(5_000);
+    expect(last().payload.aps.event).toBe("start");
+  });
+
+  it("does not resurrect expired unknown work while another assistant runs", async () => {
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
+    set("kitchen", "working"); set("garden", "working"); register("one"); await tick();
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (id, options) => {
+      if (id === "kitchen") throw new Error("offline");
+      return read(id, options);
+    };
+    await tick(15_000); await tick(8 * 60 * 60_000); await tick(15_000);
+    expect(rows()).toEqual(["garden:working"]);
+    set("garden", "idle"); await tick(15_000);
+    expect(pushes.every(push => push.payload.aps.event !== "end")).toBe(true);
+    expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
+  });
+
   it("follows a sent message from starting to working to done, then ends with the result", async () => {
     register("one", ["kitchen"]);
     await tick();
@@ -86,6 +193,7 @@ describe("aggregate Live Activity", () => {
   });
 
   it("keeps a just-sent activity open through the grace period, then ends it empty", async () => {
+    set("kitchen", "idle");
     register("one", ["kitchen"]);
     await tick();
     await tick(ARMED_MS - 1000);

@@ -35,6 +35,10 @@ const HEARTBEAT_MS = 5 * 60_000;
 const STALE_S = 15 * 60;
 const DISMISS_S = 5 * 60;
 const MAX_ROWS = 4;
+// ActivityKit ends an activity after eight hours. Stop retaining unknown work at that limit.
+const UNKNOWN_MS = 8 * 60 * 60_000;
+type ObservedState = LiveState & { observedRows?: LiveRow[]; unknownSince?: Record<string, number> };
+const heldDetail = "Can't check on this right now";
 
 /**
  * Builds each person's aggregate of assistant work and pushes it to their devices' Live
@@ -73,12 +77,16 @@ export class LiveActivities {
     const startFor = new Map(starts.map(start => [start.deviceId, start]));
     for (const registration of registrations) {
       try {
-        const { state, active, unread } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
+        const { state, observed, expired, active, unread } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
         // Remember what this activity covers before delivery, which forgets a dismissed one, so
         // dismissing it keeps that work off the Lock Screen.
         const start = startFor.get(registration.deviceId);
         if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
-        await this.deliver(registration, state);
+        if (expired && !state.activeCount) {
+          this.store.removeLiveActivity(registration.userId, registration.deviceId, registration.token);
+          continue;
+        }
+        await this.deliver(registration, state, observed);
       } catch (error) {
         this.push.failure(error);
       }
@@ -151,9 +159,9 @@ export class LiveActivities {
     this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
   }
 
-  private async deliver(registration: LiveActivityRegistration, state: LiveState) {
+  private async deliver(registration: LiveActivityRegistration, state: LiveState, observed: ObservedState) {
     const now = this.now(), previous = registration.sentState;
-    this.store.liveActivityObserved(registration.deviceId, registration.token, state, state.rows.filter(row => row.phase !== "starting").map(row => row.botId));
+    this.store.liveActivityObserved(registration.deviceId, registration.token, observed, observed.observedRows!.filter(row => row.phase !== "starting").map(row => row.botId));
     registration.armed = registration.armed.filter(id => state.rows.some(row => row.botId === id && row.phase === "starting"));
     // A just-sent message keeps the activity open until Hermes reports it or the grace period passes.
     const armed = registration.armed.length > 0 && now - registration.armedAt < ARMED_MS;
@@ -169,6 +177,12 @@ export class LiveActivities {
     const urgent = !previous || state.attentionCount > previous.attentionCount || state.activeCount !== previous.activeCount
       || state.rows.some(row => terminal(row.phase) && !previous.rows.some(old => old.botId === row.botId && old.phase === row.phase));
     const since = now - registration.sentAt;
+    // While every running row is held unknown, no heartbeat: its stale date then lapses, and iOS shows the card as out of date.
+    const held = observed.unknownSince ?? {};
+    // Every running row, not only the four shown: a fresh one past the fourth still needs its heartbeat.
+    const running = (observed.observedRows ?? state.rows).filter(row => !terminal(row.phase));
+    const allHeld = running.length > 0 && running.every(row => row.botId in held);
+    if (!changed && allHeld) return;
     if (!(changed && (urgent || since >= THROTTLE_MS)) && since < HEARTBEAT_MS) return;
     const rising = !!previous && state.attentionCount > previous.attentionCount;
     await this.post(registration, { aps: { timestamp: seconds(now), event: "update", "content-state": state, "stale-date": seconds(now) + STALE_S } }, rising ? 10 : 5);
@@ -195,11 +209,14 @@ export class LiveActivities {
   private async build(
     userId: string, roster: Bot[], conversations: Map<string, Promise<Conversation | undefined>>,
     armed?: Pick<LiveActivityRegistration, "armed" | "armedAt">, previous?: LiveState,
-  ): Promise<{ state: LiveState; active: CoveredRun[]; unread: Set<string> }> {
+  ): Promise<{ state: LiveState; observed: ObservedState; expired: boolean; active: CoveredRun[]; unread: Set<string> }> {
     const now = this.now();
     const follows = new Set(this.store.preferences(userId).followBots);
     const arming = armed && now - armed.armedAt < ARMED_MS ? new Set(armed.armed) : new Set<string>();
-    const shown = new Map(previous?.rows.map(row => [row.botId, row]));
+    const history = previous as ObservedState | undefined;
+    const shown = new Map((history?.observedRows ?? previous?.rows ?? []).map(row => [row.botId, row]));
+    const unknownSince: Record<string, number> = {};
+    let expired = false;
     const conversation = (botId: string) => {
       // An unreadable conversation falls back to the roster state instead of dropping the person's whole aggregate.
       if (!conversations.has(botId)) conversations.set(botId, Promise.resolve().then(() => this.runtime.conversation(botId, { history: false })).catch(() => undefined));
@@ -215,7 +232,7 @@ export class LiveActivities {
       const presentation = this.store.presentation(bot.id);
       if (!visible(presentation, userId)) continue;
       const before = shown.get(bot.id);
-      const candidate = activeStates.has(bot.activity) || arming.has(bot.id) || (before && !terminal(before.phase));
+      const candidate = activeStates.has(bot.activity) || arming.has(bot.id) || (before && !terminal(before.phase)) || history?.unknownSince?.[bot.id] !== undefined;
       let row: LiveRow | undefined;
       if (candidate) {
         const current = await conversation(bot.id);
@@ -223,7 +240,18 @@ export class LiveActivities {
         const state = current?.activity.state ?? bot.activity;
         const mine = arming.has(bot.id) || follows.has(bot.id) || !!before
           || (!!current?.activity.runId && this.store.participants(current.activity.runId).includes(userId));
-        if (mine && activeStates.has(state)) {
+        const unknown = !current || bot.activity === "disconnected" || state === "disconnected";
+        const oldUnknown = history?.unknownSince?.[bot.id];
+        if (!before && oldUnknown !== undefined && unknown) {
+          unknownSince[bot.id] = oldUnknown;
+          expired = true;
+          unread.add(bot.id);
+        } else if (before && !terminal(before.phase) && unknown) {
+          const since = oldUnknown ?? now;
+          if (now - since >= UNKNOWN_MS) { expired = true; unknownSince[bot.id] = since; unread.add(bot.id); }
+          // Held, not claimed: the row says it cannot be checked, so the card never reads as still working.
+          else { row = { ...before, detail: heldDetail }; unknownSince[bot.id] = since; unread.add(bot.id); }
+        } else if (mine && activeStates.has(state)) {
           const phase = state as LivePhase;
           if (current?.activity.runId) runs.set(bot.id, current.activity.runId);
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(current?.activity.detail, 80),
@@ -231,7 +259,7 @@ export class LiveActivities {
           // Decline from the Lock Screen names one approval. An ID too long to send intact gets no button.
           const approvalId = phase === "waiting" ? current?.approvals.find(value => value.status === "pending")?.id : undefined;
           if (approvalId && Buffer.byteLength(approvalId) <= 200) row.approvalId = approvalId;
-        } else if (mine && before && !terminal(before.phase) && before.phase !== "starting" || arming.has(bot.id) && finishedSince(bot, armed!.armedAt)) {
+        } else if (mine && before && !terminal(before.phase) && before.phase !== "starting" || arming.has(bot.id) && !!current && bot.activity !== "disconnected" && state !== "disconnected" && finishedSince(bot, armed!.armedAt)) {
           const phase: LivePhase = state === "failed" || state === "interrupted" ? state : "done";
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(phase === "done" ? bot.lastMessage?.text : current?.activity.detail, 80), since: seconds(now) };
         } else if (arming.has(bot.id) && (!before || before.phase === "starting" || terminal(before.phase))) {
@@ -250,10 +278,11 @@ export class LiveActivities {
     rows.sort((a, b) => rank[a.phase] - rank[b.phase] || (b.since ?? 0) - (a.since ?? 0));
     const active = rows.filter(row => !terminal(row.phase));
     const waiting = rows.filter(row => attention(row.phase));
-    const state: LiveState = { title: fit(title(rows, active.length, waiting.length), 80) ?? "Assistant activity", activeCount: active.length, attentionCount: waiting.length,
+    const state: LiveState = { title: expired && !active.length ? "Status unavailable" : fit(title(rows, active.length, waiting.length), 80) ?? "Assistant activity", activeCount: active.length, attentionCount: waiting.length,
       updatedAt: seconds(now), rows: rows.slice(0, MAX_ROWS) };
     // Reserve room for the APNs envelope.
-    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }), unread };
+    const observed: ObservedState = { ...state, rows: state.rows.slice(), observedRows: rows, unknownSince };
+    return { state: shed(state, 3500), observed, expired, active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }), unread };
   }
 }
 
