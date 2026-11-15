@@ -188,7 +188,9 @@ Each step ships on its own and is accepted before the next.
    `src/server/index.ts` registers Hermes as the default, and the adapter is registered beside it, with
    `runtimeOf` naming the bots that run on it. Routes ask the bot's own runtime for capabilities
    (`requireCapability(key, botId)` in `src/server/app.ts`), steering included, and each runtime's events resume
-   from their own cursor (`src/server/store-events.ts`). Still for this step: where a bot's harness is stored, so
+   from their own cursor (`src/server/store-events.ts`). While one runtime is down, the roster keeps its last
+   assistants marked disconnected, its events wait without holding up the others', and the routine inventory fails
+   whole, because check-in reconciliation prunes what it leaves out. Still for this step: where a bot's harness is stored, so
    `runtimeOf` can read it; event IDs that cannot collide with Hermes's; and per-bot capabilities for clients,
    which still get the default runtime's set (`src/server/runtime-snapshot.ts`). Group chats, the shared computer,
    delegation limits and Talk sessions stay on the default runtime until step 6.

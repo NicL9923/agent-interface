@@ -219,13 +219,17 @@ export class BackgroundWorker {
         }
       }
       for (const id of this.submissionChecks.keys()) if (this.store.submission(id)?.receipt.status !== "uncertain") this.submissionChecks.delete(id);
-      const capabilities = await this.runtime.capabilities();
-      if (!capabilities.durableEvents.supported)
-        throw new Error(capabilities.durableEvents.reason ?? "Durable events are unavailable");
-      // Each runtime's events resume from its own cursor. One that fails keeps its cursor and holds up no other.
+      // Each runtime's events resume from its own cursor. One that fails, or has no durable events, keeps its cursor
+      // and holds up no other.
       let failure: { error: unknown } | undefined;
-      for (const source of this.runtime.eventSources?.() ?? [hermesRuntimeId]) {
+      const sources = this.runtime.eventSources?.();
+      for (const source of sources ?? [hermesRuntimeId]) {
         try {
+          // A runtime with event sources refuses one without durable events itself; a lone runtime is asked here.
+          if (!sources) {
+            const durable = (await this.runtime.capabilities()).durableEvents;
+            if (!durable.supported) throw new Error(durable.reason ?? "Durable events are unavailable");
+          }
           const discovery = await this.runtime.discoverEvents(this.store.cursor(source), source);
           // Titles name the assistant; a roster failure keeps the previous names.
           if (discovery.events.length) try {

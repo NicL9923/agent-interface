@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { MainAssistants, ReconcileError } from "../src/server/main-assistant.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { createRuntimeRouter, hermesRuntimeId } from "../src/server/runtime-router.js";
 import { Store } from "../src/server/store.js";
@@ -74,6 +75,56 @@ describe("runtime router", () => {
     expect((await router.routines()).map(row => `${row.botId}/${row.id}`)).toEqual(["ranch/morning", "barn/feed"]);
     // Naming the assistant asks only its runtime.
     expect((await router.routines("barn")).map(row => `${row.botId}/${row.id}`)).toEqual(["barn/feed"]);
+  });
+
+  it("keeps a failed runtime's last roster, marked disconnected, and fails only when it has none to keep", async () => {
+    let codexDown = true;
+    const codexBots = vi.fn<Runtime["listBots"]>(async () => { if (codexDown) throw new Error("Codex is unreachable"); return [bot("barn")]; });
+    const router = routerOver({ listBots: async () => [bot("ranch")] }, { listBots: codexBots });
+    // Before codex has answered once, leaving barn out would read as barn being gone.
+    await expect(router.listBots()).rejects.toThrow("Codex is unreachable");
+    codexDown = false;
+    expect((await router.listBots()).map(row => `${row.id}:${row.activity}`)).toEqual(["ranch:idle", "barn:idle"]);
+    codexDown = true;
+    expect((await router.listBots()).map(row => `${row.id}:${row.activity}`)).toEqual(["ranch:idle", "barn:disconnected"]);
+  });
+
+  it("keeps the roster of the read that started last, whichever answers first", async () => {
+    const answers: ((bots: Bot[]) => void)[] = [];
+    let codexDown = false;
+    const router = routerOver({ listBots: async () => [] }, { listBots: () => codexDown
+      ? Promise.reject(new Error("Codex is unreachable")) : new Promise(resolve => answers.push(resolve)) });
+    const older = router.listBots(), newer = router.listBots();
+    await vi.waitFor(() => expect(answers).toHaveLength(2));
+    answers[1]!([bot("barn")]);
+    await newer;
+    // The older read answers last, from before barn was added.
+    answers[0]!([]);
+    await older;
+    codexDown = true;
+    expect((await router.listBots()).map(row => `${row.id}:${row.activity}`)).toEqual(["barn:disconnected"]);
+  });
+
+  it("fails the routine inventory whole when one runtime fails, since callers prune by what it leaves out", async () => {
+    const router = routerOver({ routines: async () => [routine("morning", "ranch")] },
+      { routines: async () => { throw new Error("Codex is unreachable"); } });
+    await expect(router.routines()).rejects.toThrow("Codex is unreachable");
+  });
+
+  it("undoes every watcher already registered when a later runtime refuses its own", () => {
+    const stopHermes = vi.fn();
+    const router = routerOver({ watchRoster: () => stopHermes },
+      { watchRoster: () => { throw new Error("Codex refused the watcher"); } });
+    expect(() => router.watchRoster!(() => {})).toThrow("Codex refused the watcher");
+    expect(stopHermes).toHaveBeenCalled();
+  });
+
+  it("tries every stop when one throws, then reports the first failure", () => {
+    const stopCodex = vi.fn();
+    const router = routerOver({ watchTurns: () => () => { throw new Error("Hermes stop failed"); } }, { watchTurns: () => stopCodex });
+    const stop = router.watchTurns!({ changed: () => {}, disconnected: () => {} } as never);
+    expect(stop).toThrow("Hermes stop failed");
+    expect(stopCodex).toHaveBeenCalled();
   });
 
   it("offers an optional member while any runtime has it, and refuses it for an assistant whose runtime lacks it", async () => {
@@ -151,6 +202,79 @@ describe("background discovery over several runtimes", () => {
       expect([store.cursor(), store.cursor("codex")]).toEqual(["hermes-9", "codex-2"]);
       expect(store.db.prepare("SELECT id FROM notification_events").all()).toEqual([{ id: "barn-done" }]);
     } finally { await worker.stop(); store.close(); }
+  });
+});
+
+describe("background discovery when the default runtime has no durable events", () => {
+  it("still reads every other runtime's events", async () => {
+    const store = new Store(":memory:");
+    const discovered = vi.fn<Runtime["discoverEvents"]>(async () => ({ cursor: "codex-2", events: [] }));
+    // Hermes, disconnected, says durable events are unavailable. Reaching its discoverEvents fails the test.
+    const router = routerOver({ capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false, reason: "Hermes is disconnected." } }) },
+      { capabilities: async () => capabilitiesFixture({ durableEvents: { supported: true } }), discoverEvents: discovered });
+    store.recordEvents([], "hermes-9");
+    store.recordEvents([], "codex-1", "codex");
+    const worker = new BackgroundWorker(store, router, loadConfig({}));
+    try {
+      await worker.tick();
+      expect(discovered).toHaveBeenCalledWith("codex-1");
+      expect([store.cursor(), store.cursor("codex")]).toEqual(["hermes-9", "codex-2"]);
+    } finally { await worker.stop(); store.close(); }
+  });
+});
+
+describe("background discovery from a lone runtime", () => {
+  it("asks that runtime whether it has durable events, and reads none when it says no", async () => {
+    const store = new Store(":memory:");
+    store.recordEvents([], "hermes-9");
+    const discoverEvents = vi.fn<Runtime["discoverEvents"]>(async () => ({ cursor: "hermes-10", events: [] }));
+    const worker = new BackgroundWorker(store, fakeRuntime({ discoverEvents,
+      capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false, reason: "This Hermes keeps no event journal." } }) }), loadConfig({}));
+    try {
+      await worker.tick();
+      expect(discoverEvents).not.toHaveBeenCalled();
+      expect([store.cursor(), worker.discovery.lastError]).toEqual(["hermes-9", "This Hermes keeps no event journal."]);
+    } finally { await worker.stop(); store.close(); }
+  });
+});
+
+describe("reconciling over several runtimes", () => {
+  it("removes no tracked check-in while one runtime's routines cannot be read", async () => {
+    const store = new Store(":memory:");
+    const router = routerOver({
+      status: async () => ({ connected: true, code: "ready" }),
+      capabilities: async () => capabilitiesFixture({ routines: { supported: true } }),
+      listBots: async () => [bot("ranch")],
+      routines: async () => [],
+    }, { listBots: async () => [bot("barn")], routines: async () => { throw new Error("Codex is unreachable"); } });
+    store.user({ id: "mom", name: "Mom", email: "mom@example.test" });
+    store.checkIns.track({ botId: "barn", jobId: "job1", userId: "mom" });
+    try {
+      const failed = await new MainAssistants(router, store, loadConfig({})).reconcile().then(() => undefined, (error: unknown) => error);
+      expect(failed).toBeInstanceOf(ReconcileError);
+      expect((failed as ReconcileError).whole).toBe(true);
+      expect(store.checkIns.current()).toEqual([{ botId: "barn", jobId: "job1", userId: "mom" }]);
+    } finally { store.close(); }
+  });
+});
+
+describe("the roster during one runtime's outage", () => {
+  const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
+  afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); });
+
+  it("lists every assistant, the failed runtime's as disconnected", async () => {
+    let codexDown = false;
+    const router = routerOver({ listBots: async () => [bot("ranch")], close: async () => {},
+      status: async () => ({ connected: true, code: "ready" }), capabilities: async () => capabilitiesFixture() },
+    { listBots: async () => { if (codexDown) throw new Error("Codex is unreachable"); return [bot("barn")]; }, close: async () => {} });
+    const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), router, { background: false });
+    apps.push(app);
+    const headers = await localLogin(app, "http://127.0.0.1:3000");
+    await app.inject({ method: "GET", url: "/api/bots", headers });
+    codexDown = true;
+    const listed = await app.inject({ method: "GET", url: "/api/bots", headers });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().map((row: Bot) => `${row.id}:${row.activity}`)).toEqual(["ranch:idle", "barn:disconnected"]);
   });
 });
 

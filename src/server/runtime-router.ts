@@ -1,7 +1,7 @@
 import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
-import type { Runtime } from "../shared/types.js";
+import type { Bot, Runtime } from "../shared/types.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
 export const hermesRuntimeId = "hermes";
@@ -37,6 +37,9 @@ void everyOptionalListed;
  * the roster, routines, roster and turn watchers, a file's assistant, a receipt lookup without an assistant,
  * reconnecting and closing. Each runtime's events are read with its own cursor (`eventSources`).
  *
+ * The roster outlasts one runtime's outage with that runtime's last answer, marked disconnected. The routine
+ * inventory does not: it fails whole, since check-in reconciliation and room checks prune by what it leaves out.
+ *
  * An assistant whose runtime lacks an optional member another runtime has gets a 409 for it, nothing from a
  * synchronous read, and a watcher that never fires.
  */
@@ -60,13 +63,44 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     if (found === undefined) throw unsupported();
     return (typeof found === "function" ? found.bind(runtime) : found) as NonNullable<Runtime[K]>;
   };
+  // Every stop is tried, even after one throws; the first failure is reported.
+  const stopEach = (stops: ((() => void) | undefined)[]) => {
+    let failure: { error: unknown } | undefined;
+    for (const stop of stops) try { stop?.(); } catch (error) { failure ??= { error }; }
+    if (failure) throw failure.error;
+  };
+  // A runtime that refuses its watcher undoes the ones already registered, so the caller, who gets no stop, leaks none.
   const subscribe = (each: (runtime: Runtime) => (() => void) | undefined) => {
-    const stops = all.map(each);
-    return () => { for (const stop of stops) stop?.(); };
+    const stops: ((() => void) | undefined)[] = [];
+    try { for (const runtime of all) stops.push(each(runtime)); }
+    catch (error) {
+      try { stopEach(stops); } catch { /* The registration failure is the one to report. */ }
+      throw error;
+    }
+    return () => stopEach(stops);
   };
   // Each runtime lists only the assistants that run on it, so no assistant appears twice or from the wrong runtime.
+  const mine = <T>(id: string, rows: T[], botIdOf: (row: T) => string) => rows.filter(row => runtimeIdOf(botIdOf(row)) === id);
+  // All or nothing: callers reconcile and prune on this inventory, so one runtime's outage fails the whole answer.
   const fanOut = async <T>(read: (runtime: Runtime) => Promise<T[]>, botIdOf: (row: T) => string) =>
-    (await Promise.all(ids.map(async id => (await read(byId(id))).filter(row => runtimeIdOf(botIdOf(row)) === id)))).flat();
+    (await Promise.all(ids.map(async id => mine(id, await read(byId(id)), botIdOf)))).flat();
+  // A runtime's last good roster, for the outages that follow. A read that started earlier never replaces a later one.
+  const rosters = new Map<string, { read: number; bots: Bot[] }>();
+  let reads = 0;
+  // A runtime that fails keeps its last roster, marked disconnected as Hermes marks its own, so one outage takes no
+  // assistant off anyone's list. Before a runtime has answered once there is no roster to keep, so the listing fails.
+  const listBots = async () => (await Promise.all(ids.map(async id => {
+    const read = ++reads;
+    try {
+      const bots = mine(id, await byId(id).listBots(), bot => bot.id);
+      if ((rosters.get(id)?.read ?? 0) < read) rosters.set(id, { read, bots });
+      return bots;
+    } catch (error) {
+      const kept = rosters.get(id);
+      if (!kept) throw error;
+      return kept.bots.map(bot => ({ ...bot, activity: "disconnected" as const }));
+    }
+  }))).flat();
 
   // Required, so a member added to Runtime fails to compile until the router dispatches it.
   const router: Required<Runtime> = {
@@ -97,7 +131,7 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     },
     capabilities: async (...args) => on(args[0]).capabilities(...args),
     canonicalSubmit: async (...args) => await on(args[0]).canonicalSubmit?.(...args) === true,
-    listBots: async () => fanOut(runtime => runtime.listBots(), bot => bot.id),
+    listBots,
     botDetail: async botId => member(botId, "botDetail")(botId),
     watchRoster: changed => subscribe(runtime => runtime.watchRoster?.(changed)),
     // A new assistant is created on the default runtime.

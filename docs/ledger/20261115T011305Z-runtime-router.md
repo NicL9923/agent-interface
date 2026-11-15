@@ -48,6 +48,44 @@ Two compile-time guards were broken the same way, with `npm run typecheck` as th
 router's list of optional members failed it on `everyOptionalListed`, and adding an optional member to `Runtime` failed
 it on both that guard and the router's `Required<Runtime>` literal.
 
+## Review fixes
+
+GPT-6.1 Sol's review found three defects with two runtimes. Each fix has a test over two fake runtimes that throw on
+anything a test did not configure.
+
+- The worker asked the default runtime whether it had durable events before its per-runtime loop, so a disconnected
+  Hermes stopped every other runtime's discovery and cursor. The check now runs inside each runtime's own failure
+  boundary: the router refuses a source without durable events in `discoverEvents`, and the worker asks a lone runtime
+  itself.
+- `listBots()` failed whole when one runtime failed, so `/bots` failed for everyone. A failed runtime now lists its last
+  good roster with every assistant `disconnected`, as Hermes marks its own after a failed read. Every consumer already
+  treats a disconnected row as proving nothing. Before a runtime has answered once there is nothing to keep, so the
+  listing still fails rather than leave its assistants out. A slower, older read never replaces a newer one's roster.
+- The routine inventory stays all or nothing, now on purpose and documented on `Runtime.routines`. Check-in
+  reconciliation (`MainAssistants.reconcileJobs`) marks a tracked job removed when the inventory lacks it, and the room
+  check on a sharing change (`routine-delivery.ts`) skips routines it does not see. Every other caller of `routines()`
+  only displays or looks a row up, and the search and Today readers already fall back on a failure.
+- A watcher that a later runtime refused leaked the ones already registered. Registration now undoes them before it
+  rethrows, and a stop tries every runtime's stop before it reports the first failure.
+
+## Review fix red runs
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| The worker checks the default runtime's durable events before the loop, as before the fix | `still reads every other runtime's events` | 1 failed |
+| The worker never asks a lone runtime about durable events | `asks that runtime whether it has durable events` | 1 failed |
+| A runtime with no roster to keep answers none | `keeps a failed runtime's last roster` | 1 failed |
+| An older read's roster replaces a newer one | `keeps the roster of the read that started last` | 1 failed |
+| A kept roster is not marked disconnected | `lists every assistant, the failed runtime's as disconnected` | 1 failed |
+| The routine fan-out drops a failed runtime's routines | `fails the routine inventory whole` | 1 failed |
+| The routine fan-out drops a failed runtime's routines | `removes no tracked check-in while one runtime's routines cannot be read` | 1 failed |
+| A refused registration leaves earlier watchers registered | `undoes every watcher already registered` | 1 failed |
+| A stop that throws skips the stops after it | `tries every stop when one throws` | 1 failed |
+| A stop that throws is swallowed | `tries every stop when one throws` | 1 failed |
+
+One break was discarded: limiting the worker's own check to the default source left the router's per-source check in
+place, so it did not recreate the defect and its test passed. The first row is the break that does.
+
 ## Checks
 
 See the PR for the `check-all` table.

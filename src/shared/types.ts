@@ -583,6 +583,7 @@ export interface Runtime {
    */
   capabilities(botId?: string): Promise<Capabilities>;
   canonicalSubmit?(botId?: string): Promise<boolean>;
+  /** A runtime that cannot read its roster lists its last one with every assistant `disconnected`: it proves nothing. */
   listBots(): Promise<Bot[]>;
   botDetail?(botId: string): Promise<Bot>;
   watchRoster?(changed: () => void): () => void;
@@ -656,7 +657,8 @@ export interface Runtime {
   setSkills(botId: string, ids: string[]): Promise<void>;
   /**
    * With `botId`, only that assistant's runtime is asked. The list may still hold other assistants' routines, so a
-   * caller that wants one assistant's filters by `botId`.
+   * caller that wants one assistant's filters by `botId`. Without it, the list is complete or the call fails: callers
+   * reconcile and prune by what it leaves out.
    */
   routines(botId?: string): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
@@ -664,7 +666,10 @@ export interface Runtime {
   deleteRoutine(id: string, botId: string): Promise<void>;
   /** Events after `cursor` from one event source (see `eventSources`), the default runtime without one. */
   discoverEvents(cursor: string, source?: string): Promise<RuntimeDiscovery>;
-  /** Each runtime whose events `discoverEvents` reads, with a cursor of its own. Absent: only the default runtime. */
+  /**
+   * Each runtime whose events `discoverEvents` reads, with a cursor of its own. Absent: only the default runtime.
+   * A runtime that has this refuses, in `discoverEvents`, a source without durable events.
+   */
   eventSources?(): string[];
   /**
    * Who each assistant may see and reach, replacing every earlier policy. Resolves once Hermes holds
