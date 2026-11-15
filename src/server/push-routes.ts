@@ -4,7 +4,7 @@ import type { Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { sessionHash, signedIn } from "./auth.js";
 import { deviceIdleMs, deviceIdPattern } from "../shared/device-activity.js";
-import { visibleTo } from "./bot-access.js";
+import { rosterBot, visibleTo } from "./bot-access.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { decideApproval } from "./conversation-routes.js";
 import { httpError } from "./http-error.js";
@@ -165,7 +165,7 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
     return { ok: true };
   });
   apiRoute(app, "POST /native/push/test", { ...requireNativePush, body: z.object({ botId: id }).strict() }, async (req, { botId }) => {
-    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "Bot not found");
+    if (!await rosterBot(runtime, botId)) throw httpError(404, "Bot not found");
     const eventId = crypto.randomUUID();
     store.queueNotification(eventId, signedIn(req).id, { title: "WildBots test", body: "Push delivery is connected.", url: `/?bot=${encodeURIComponent(botId)}`, tag: eventId });
     return { ok: true, detail: "Queued for this person. Confirm delivery on the signed-in physical device." };

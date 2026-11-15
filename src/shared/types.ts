@@ -180,6 +180,13 @@ export type CapabilityKey =
 export type Capabilities = Record<CapabilityKey, Capability>;
 /** Refuses with a 409 unless the runtime of `botId`, or the default runtime for undefined, supports `key`. */
 export type RequireCapability = (key: CapabilityKey, botId: string | undefined) => Promise<void>;
+/**
+ * A roster read. `incomplete` marks one that lacks some runtime's fresh answer: that runtime's assistants are its last
+ * known rows, marked `disconnected`, or are missing when it has not answered since this server started. Show what it
+ * lists. Never delete, prune, reconcile or decide privacy by what it leaves out: `completeRoster` and `rosterBot` in
+ * src/server/bot-access.ts refuse instead.
+ */
+export type BotListing = Bot[] & { readonly incomplete?: true };
 export interface Bot {
   id: string;
   name: string;
@@ -583,8 +590,11 @@ export interface Runtime {
    */
   capabilities(botId?: string): Promise<Capabilities>;
   canonicalSubmit?(botId?: string): Promise<boolean>;
-  /** A runtime that cannot read its roster lists its last one with every assistant `disconnected`: it proves nothing. */
-  listBots(): Promise<Bot[]>;
+  /**
+   * Every assistant that can be shown now. A runtime that cannot read its roster lists its last one with every assistant
+   * `disconnected`, and marks the listing `incomplete` (see `BotListing`): it proves nothing about what it leaves out.
+   */
+  listBots(): Promise<BotListing>;
   botDetail?(botId: string): Promise<Bot>;
   watchRoster?(changed: () => void): () => void;
   saveBot(input: BotInput, id?: string): Promise<Bot>;

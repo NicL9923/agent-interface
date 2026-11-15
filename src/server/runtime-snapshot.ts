@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Bootstrap, Runtime } from "../shared/types.js";
+import type { Bootstrap, BotListing, Runtime } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 
 /**
@@ -10,7 +10,7 @@ import { routePattern } from "./route-path.js";
  * fresh bootstrap.
  */
 export const SNAPSHOT_TTL_MS = 1500;
-export type RuntimeSnapshot = Pick<Bootstrap, "bots" | "capabilities" | "connection">;
+export type RuntimeSnapshot = Pick<Bootstrap, "capabilities" | "connection"> & { bots: BotListing };
 /** A read's start, from `begin`, which decides whether it may still publish. */
 export type SnapshotRead = { startedAt: number; order: number };
 
@@ -25,13 +25,14 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
   const begin = (): SnapshotRead => ({ startedAt: Date.now(), order: ++readsStarted });
   /**
    * Keeps a read only while the runtime is connected and answering, so an outage is never served
-   * from memory: Hermes reports a failed roster read as disconnected rows, and a lost socket as
-   * a disconnected status. Either replaces what was kept, so the outage shows at once.
+   * from memory: Hermes reports a failed roster read as disconnected rows, a runtime that never
+   * answered leaves an incomplete roster, and a lost socket is a disconnected status. Any of them
+   * replaces what was kept, so the outage shows at once.
    */
   const keep = (value: RuntimeSnapshot, { startedAt, order }: SnapshotRead) => {
     if (order < readPublished) return;
     readPublished = order;
-    snapshotKept = value.connection.connected && !value.bots.some(bot => bot.activity === "disconnected") ? { value, at: startedAt } : undefined;
+    snapshotKept = value.connection.connected && !value.bots.incomplete && !value.bots.some(bot => bot.activity === "disconnected") ? { value, at: startedAt } : undefined;
     // Callers that arrive now take this read, not an older one still in flight.
     snapshotRead = undefined;
   };

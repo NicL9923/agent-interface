@@ -1,6 +1,6 @@
 import type { GroupCatalog, GroupRoom } from "../shared/collaboration.js";
 import type { Routine, Runtime } from "../shared/types.js";
-import { visible } from "./bot-access.js";
+import { completeRoster, visible } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { routineTargets } from "./delivery-targets.js";
 import type { Store } from "./store.js";
@@ -13,10 +13,11 @@ export type Presentation = { shared?: boolean; ownerId?: string };
 
 /**
  * Who can see each current assistant, as every group route decides it: the app's record over what Hermes
- * reports. Undefined for an ID that is no assistant now, such as a deleted one.
+ * reports. Undefined for an ID that is no assistant now, such as a deleted one. A room with such a member opens
+ * for nobody, so an incomplete roster would wave a leak through: it is refused instead.
  */
 export async function presentations(runtime: Pick<Runtime, "listBots">, store: Store) {
-  const bots = new Map((await runtime.listBots()).map(bot => [bot.id, bot]));
+  const bots = new Map((await completeRoster(runtime)).map(bot => [bot.id, bot]));
   return (botId: string): Presentation | undefined => {
     const bot = bots.get(botId);
     return bot && { shared: bot.shared, ownerId: bot.ownerId, ...store.presentation(botId) };

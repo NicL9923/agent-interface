@@ -1,7 +1,7 @@
 import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
-import type { Bot, Runtime } from "../shared/types.js";
+import type { Bot, BotListing, Runtime } from "../shared/types.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
 export const hermesRuntimeId = "hermes";
@@ -37,8 +37,10 @@ void everyOptionalListed;
  * the roster, routines, roster and turn watchers, a file's assistant, a receipt lookup without an assistant,
  * reconnecting and closing. Each runtime's events are read with its own cursor (`eventSources`).
  *
- * The roster outlasts one runtime's outage with that runtime's last answer, marked disconnected. The routine
- * inventory does not: it fails whole, since check-in reconciliation and room checks prune by what it leaves out.
+ * The roster outlasts one runtime's outage: it lists every other runtime's assistants and that runtime's last
+ * complete answer, marked disconnected, and is marked `incomplete` (see `BotListing`). Display reads show it; readers
+ * that prune or reconcile by absence go through `completeRoster`, which refuses it. The routine inventory has no
+ * such marker, so it fails whole: check-in reconciliation and room checks prune by what it leaves out.
  *
  * An assistant whose runtime lacks an optional member another runtime has gets a 409 for it, nothing from a
  * synchronous read, and a watcher that never fires.
@@ -84,23 +86,29 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
   // All or nothing: callers reconcile and prune on this inventory, so one runtime's outage fails the whole answer.
   const fanOut = async <T>(read: (runtime: Runtime) => Promise<T[]>, botIdOf: (row: T) => string) =>
     (await Promise.all(ids.map(async id => mine(id, await read(byId(id)), botIdOf)))).flat();
-  // A runtime's last good roster, for the outages that follow. A read that started earlier never replaces a later one.
+  // A runtime's last complete roster, for the outages that follow. A read that started earlier never replaces a later one.
   const rosters = new Map<string, { read: number; bots: Bot[] }>();
   let reads = 0;
-  // A runtime that fails keeps its last roster, marked disconnected as Hermes marks its own, so one outage takes no
-  // assistant off anyone's list. Before a runtime has answered once there is no roster to keep, so the listing fails.
-  const listBots = async () => (await Promise.all(ids.map(async id => {
-    const read = ++reads;
-    try {
-      const bots = mine(id, await byId(id).listBots(), bot => bot.id);
-      if ((rosters.get(id)?.read ?? 0) < read) rosters.set(id, { read, bots });
-      return bots;
-    } catch (error) {
-      const kept = rosters.get(id);
-      if (!kept) throw error;
-      return kept.bots.map(bot => ({ ...bot, activity: "disconnected" as const }));
-    }
-  }))).flat();
+  // Every assistant that can be shown, so one runtime's outage hides no other runtime's assistants. A runtime that
+  // fails lists its last complete roster, marked disconnected as Hermes marks its own, or nothing before it has
+  // answered once. Either way the listing is marked incomplete, so callers that prune by absence refuse it.
+  const listBots = async (): Promise<BotListing> => {
+    let incomplete = false;
+    const bots = (await Promise.all(ids.map(async id => {
+      const read = ++reads;
+      try {
+        const listed = await byId(id).listBots();
+        const bots = mine(id, listed, bot => bot.id);
+        if (listed.incomplete) incomplete = true;
+        else if ((rosters.get(id)?.read ?? 0) < read) rosters.set(id, { read, bots });
+        return bots;
+      } catch {
+        incomplete = true;
+        return rosters.get(id)?.bots.map(bot => ({ ...bot, activity: "disconnected" as const })) ?? [];
+      }
+    }))).flat();
+    return incomplete ? Object.assign(bots, { incomplete: true as const }) : bots;
+  };
 
   // Required, so a member added to Runtime fails to compile until the router dispatches it.
   const router: Required<Runtime> = {

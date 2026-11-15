@@ -8,7 +8,7 @@ import type { Bot, Conversation, Message, RealtimeSessionInput, RequireCapabilit
 import { DEFAULT_TALK_VOICE, MAX_HEARD_LINES, MAX_TALK_ANSWER, MAX_TALK_PROGRESS, TALK_TOOL, type TalkAnswer, type TalkProgress } from "../shared/voice.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { redactAgents, type Roster } from "./bot-access.js";
+import { redactAgents, rosterBot, type Roster } from "./bot-access.js";
 import type { BotDirectory } from "./bot-routes.js";
 import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
@@ -208,8 +208,7 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "POST /bots/:id/talk/session", { before: req => requireCapability("liveVoice", req.params.id) }, async (req, _body, reply) => {
     if (!runtime.realtimeSession) throw httpError(409, "Live voice is unavailable on this Hermes connection.");
     limit.take(signedIn(req).id);
-    const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities(req.params.id)]);
-    const row = bots.find(bot => bot.id === req.params.id);
+    const [row, capabilities] = await Promise.all([rosterBot(runtime, req.params.id), runtime.capabilities(req.params.id)]);
     if (!row) throw httpError(404, "Bot not found");
     const bot = directory.decorate(row, capabilities.avatarMetadata.supported);
     const session = await runtime.realtimeSession({ voice: bot.voice ?? DEFAULT_TALK_VOICE, instructions: talkPersona(bot), tools: talkTools(bot.name) });

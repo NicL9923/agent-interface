@@ -7,6 +7,7 @@ import type { VoiceAudio, VoiceTranscript } from "../shared/voice.js";
 import { MAX_SPOKEN_TEXT, MAX_VOICE_BYTES, VOICE_MIMES } from "../shared/voice.js";
 import { signedIn } from "./auth.js";
 import { readMessage } from "./conversation-view.js";
+import { rosterBot } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 
 type VoiceRuntime = Runtime & {
@@ -28,7 +29,7 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
   const checkBot = async (req: FastifyRequest, botId: string) => {
     // Cached speech outlives the request that made it, so it is checked again when fetched.
     if (options.visible && !options.visible(botId, signedIn(req).id)) throw httpError(404, "This assistant is no longer available.");
-    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "This assistant is no longer available.");
+    if (!await rosterBot(runtime, botId)) throw httpError(404, "This assistant is no longer available.");
   };
   const readableReply = async (req: FastifyRequest, botId: string, messageId: string) => {
     const found = await readMessage(runtime, botId, messageId);

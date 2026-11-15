@@ -86,6 +86,80 @@ anything a test did not configure.
 One break was discarded: limiting the worker's own check to the default source left the router's per-source check in
 place, so it did not recreate the defect and its test passed. The first row is the break that does.
 
+## Second review fixes
+
+GPT-6.1 Sol reproduced two more defects at `42918f2`. The code state for this section is `42918f2` merged with
+`origin/main` at `f271c5fa`, plus the commit that adds this section. No real Hermes run took part.
+
+- If a second runtime never answered, every `listBots()` failed, and `/api/bots` answered 502. The previous section's
+  "the listing still fails" rule is replaced. `listBots()` now lists every assistant that can be shown and marks the
+  listing `incomplete` when some runtime gave no fresh answer (`BotListing` in `src/shared/types.ts`). Hermes marks
+  its own last-roster fallback the same way. `completeRoster` and `rosterBot` in `src/server/bot-access.ts` refuse an
+  incomplete listing with a 503 for readers that act on what it leaves out.
+- A Live Activity pass turned a cached disconnected assistant whose conversation it could not read into `done`, sent
+  APNs `event: "end"`, and removed the registration. A disconnected state now keeps the row from the previous pass, an
+  incomplete roster keeps the rows of assistants it leaves out, and a pass holding a row sends no heartbeat. The same
+  test with Hermes alone, run against `origin/main`'s source at `f271c5fa`, also sent the `end`, so this was also a
+  production bug.
+
+Every `listBots()` consumer, classified:
+
+| Consumer | Kind | Handling |
+| --- | --- | --- |
+| `GET /bots`, `visibleBots`, bootstrap snapshot, roster watcher and its notices, group catalog notice, widget refresh, badges | Display | Lists what can be shown. The bootstrap snapshot is never kept while incomplete. |
+| Notification titles (`BackgroundWorker`) | Display | Merges with the previous names, so a missing assistant keeps its name. |
+| Live Activities | Display that ends activities | Keeps rows it cannot confirm finished. |
+| `Roster.note`, `exists`, `has` (the access gate) | Privacy gate | `exists` lets through an ID the incomplete roster lacks only if this server has stored a name for it. `has` refuses. |
+| `MainAssistants.roster` (check-in reconciliation, main-assistant clearing) | Reconcile | `completeRoster`. An incomplete roster skips the pass. |
+| `presentations` (sharing change room check, routine delivery and room saves) | Privacy decision | `completeRoster`. A missing member would make a room look closed. |
+| Hermes upgrade busy check | Gate | `completeRoster`. An incomplete roster counts as busy. |
+| Lookups by ID: talk, vault, voice, push test, experience, starters, `GET /bots/:id`, avatar, voice, main-assistant picker | Existence check | `rosterBot`. 503 instead of 404 when the incomplete roster lacks the ID. |
+
+Privacy versioning (`assistants_changed`) reads the store, not the roster. Delivery pruning (`pruneRetention`) does
+not read the roster.
+
+### Red runs against the head before the fix
+
+These are the new tests run on `42918f2` merged with `origin/main`, with this change's `src/` reverted.
+
+| Test | Failure on the head |
+| --- | --- |
+| `lists the other runtimes' assistants when one has not answered since the server started` | `/api/bots` answered a non-array error body |
+| `keeps a running assistant as it was while Hermes is down` (Hermes only, also run on `origin/main`) | Sent events `["update", "end"]` |
+| `keeps a run whose runtime went down as it was` | Sent events `["update", "end"]` |
+| `clears no main assistant while one runtime has not answered` | Rejected with the raw `Codex is unreachable`, not `ReconcileError` |
+| `lets a known assistant past the access check` | A never-seen ID passed the gate |
+| `lists the assistants that can be shown while one runtime is down` | The listing rejected |
+| `passes a runtime's own incomplete roster on as incomplete` | No marker |
+| `keeps the successful bot roster visible and disconnected during an outage` (Hermes adapter) | No marker |
+| `keeps the row of an assistant a restarted server cannot list yet` | The pass rejected with `Codex is unreachable` |
+
+### Red runs with one line broken
+
+`mutate.py` in the session scratchpad replaced one exact string, ran the named tests, and restored the file. Every
+break went red.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| The router ignores a runtime's own `incomplete` marker | `passes a runtime's own incomplete roster on as incomplete` | 1 failed |
+| The router keeps an incomplete answer as the last complete roster | same | 1 failed |
+| The router does not mark a failed runtime's listing incomplete | `lists the assistants that can be shown while one runtime is down` | 1 failed |
+| A never-answered runtime fails the listing, as on the head | `lists the other runtimes' assistants when one has not answered` | 1 failed |
+| Hermes's stale roster carries no marker | `keeps the successful bot roster visible and disconnected during an outage` | 1 failed |
+| `completeRoster` accepts an incomplete listing | `clears no main assistant`, `refuses a sharing change it cannot check`, `answers a lookup by ID with a refusal` | 3 failed |
+| `rosterBot` answers not found on an incomplete listing | `answers a lookup by ID with a refusal` | 1 failed |
+| `Roster.exists` refuses a known ID on an incomplete roster | `lets a known assistant past the access check` | 1 failed |
+| `Roster.exists` admits a never-seen ID on an incomplete roster | same | 1 failed |
+| `Roster.has` answers false on an incomplete roster | same | 1 failed |
+| `presentations` reads the partial roster | `refuses a sharing change it cannot check` | 1 failed |
+| Main-assistant reconciliation reads the partial roster | `clears no main assistant` | 1 failed |
+| The upgrade busy check reads the partial roster | `counts an incomplete roster as busy` | 1 failed |
+| Notification names are replaced, not merged | `keeps the names of those it leaves out` | 1 failed |
+| The bootstrap snapshot is kept while incomplete | `never serves a bootstrap from memory while the roster is incomplete` | 1 failed |
+| A disconnected state ends the run as done | both Live Activity outage tests | 2 failed |
+| An incomplete roster drops the rows it leaves out | `keeps the row of an assistant a restarted server cannot list yet` | 1 failed |
+| A held row still gets a heartbeat | all three Live Activity outage tests | 3 failed |
+
 ## Checks
 
 See the PR for the `check-all` table.

@@ -1499,10 +1499,13 @@ describe('Hermes transport liveness and diagnostics', () => {
     const before = await runtime.listBots();
     sockets[0].close();
     const offline = await runtime.listBots();
-    expect(offline).toEqual(before.map(bot => ({...bot, activity: 'disconnected'})));
+    // Marked incomplete, so nothing prunes or reconciles by it.
+    expect([before.incomplete, offline.incomplete]).toEqual([undefined, true]);
+    expect([...offline]).toEqual(before.map(bot => ({...bot, activity: 'disconnected'})));
     expect(sockets).toHaveLength(1);
     await runtime.reconnect!();
-    expect((await runtime.listBots())[0].activity).toBe('idle');
+    const back = await runtime.listBots();
+    expect([back[0].activity, back.incomplete]).toEqual(['idle', undefined]);
   });
 
   it('ignores old socket close, error, response, and activity events after replacement', async () => {

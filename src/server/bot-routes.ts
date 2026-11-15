@@ -5,7 +5,7 @@ import { botIdFor, reasoningLevels, serviceTiers, type Bot, type RequireCapabili
 import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { notFound, visible, type Roster } from "./bot-access.js";
+import { notFound, rosterBot, visible, type Roster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 import { assertRoutinesStayPrivate, serialDelivery } from "./routine-delivery.js";
 import { avatar, botSaveRequest, id } from "./schemas.js";
@@ -137,7 +137,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "GET /bots/:id", {}, async req => {
     const botId = req.params.id;
     const value = runtime.botDetail ? await runtime.botDetail(botId)
-      : (await runtime.listBots()).find(bot => bot.id === botId);
+      : await rosterBot(runtime, botId);
     if (!value) throw httpError(404, "Bot not found");
     return directory.decorate(directory.remember(value), await nativeAvatar(botId));
   });
@@ -195,7 +195,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     return { ok: true };
   });
   apiRoute(app, "PUT /bots/:id/avatar", { body: avatar }, async (req, value) => {
-    const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
+    const bot = await rosterBot(runtime, req.params.id);
     if (!bot) throw httpError(404, "Bot not found");
     if (
       (await runtime.capabilities(bot.id)).avatarMetadata?.supported &&
@@ -207,7 +207,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
   });
   // Like the avatar, anyone who sees the assistant may change how it sounds.
   apiRoute(app, "PUT /bots/:id/voice", { body: z.object({ voice: z.enum(TALK_VOICES) }).strict() }, async (req, { voice }) => {
-    const bot = (await runtime.listBots()).find(b => b.id === req.params.id);
+    const bot = await rosterBot(runtime, req.params.id);
     if (!bot) throw httpError(404, "Bot not found");
     if (await nativeAvatar(bot.id) && runtime.setVoice) await runtime.setVoice(bot.id, voice);
     else store.saveVoice(bot.id, voice);
