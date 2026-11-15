@@ -8,7 +8,8 @@ import { VoiceControls } from "../components/VoiceControls";
 import { TalkPanel } from "../components/TalkPanel";
 import { useTalk } from "./use-talk";
 import { request } from "../client-api";
-import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
+import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, UPLOAD_ACCEPT } from "../shared/uploads";
+import { HEIC_ACCEPT, prepareAttachment } from "../image-upload";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending } from "./storage";
 import { sendingDraft } from "./sent-echo";
@@ -159,7 +160,7 @@ function useFileDrop(footer: React.RefObject<HTMLElement | null>, onDrop: (files
   return { panel, over };
 }
 // Memoized with stable callbacks from App, so a streaming reply, which changes the conversation up to ten times a second, does not re-render it.
-export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, connectionShown, draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
+export const Composer = memo(function Composer({ boot, selected, botId, prompts, state, active, connectionLost, connectionShown, draft, setDraft, draftReady, uploads, refusals, dismissRefusals, previews, uploading, upload, retryUpload, cancelUpload, pending, receipt, sending, send, retry, discard, reviewed, setReviewed, dock = [], stopping, onStop, waiting }: {
   boot: Bootstrap;
   selected: Bot;
   botId: string;
@@ -179,6 +180,9 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   uploads: LocalUpload[];
   previews: Record<string, { url: string }>;
   uploading: boolean;
+  /** Why photos that looked attachable could not be shrunk or converted, once their chips are gone. They belong to this assistant's draft, so they show again when the person returns to it. */
+  refusals: string[];
+  dismissRefusals(): void;
   upload(files: File[], botId: string): void;
   retryUpload(id: string): void;
   cancelUpload(id: string): void;
@@ -230,15 +234,17 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     const problems: string[] = [];
     const accepted: File[] = [];
     for (const file of files) {
-      const prepared = prepareUpload(file);
+      const prepared = prepareAttachment(file);
       if ("error" in prepared) problems.push(prepared.error);
       else accepted.push(prepared.file);
     }
     if (accepted.length > slots)
       problems.push(`A message can carry up to ${MAX_ATTACHMENTS} attachments, so ${accepted.length - slots} of these ${accepted.length - slots === 1 ? "wasn't" : "weren't"} added.`);
     setAttachNotice(problems);
+    dismissRefusals();
     upload(accepted.slice(0, slots), botId);
   };
+  const attachProblems = [...attachNotice, ...refusals.filter(problem => !attachNotice.includes(problem))];
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
   // After a declined approval the message box asks what to do instead, until Hermes accepts the next message.
@@ -328,10 +334,10 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
         }}
       >
         <div className="composer-extras">
-        {!!attachNotice.length && <div className="attachment-notice" role="alert">
+        {!!attachProblems.length && <div className="attachment-notice" role="alert">
           <Icon name="alert" size={15} />
-          <div>{attachNotice.map(problem => <p key={problem}>{problem}</p>)}</div>
-          <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => setAttachNotice([])}><Icon name="close" size={14} /></button>
+          <div>{attachProblems.map(problem => <p key={problem}>{problem}</p>)}</div>
+          <button type="button" className="icon-button" aria-label="Dismiss" onClick={() => { setAttachNotice([]); dismissRefusals(); }}><Icon name="close" size={14} /></button>
         </div>}
         <p id="composer-paste-status" className="composer-status" role="status">{status}</p>
         <AttachmentTray attachments={shown.attachments} uploads={uploads} previews={previews}
@@ -356,7 +362,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             ref={fileInput}
             hidden
             type="file"
-            accept={UPLOAD_ACCEPT}
+            accept={`${UPLOAD_ACCEPT},${HEIC_ACCEPT}`}
             multiple
             disabled={!!attachUnavailable}
             onChange={(event) => {

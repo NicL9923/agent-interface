@@ -5,7 +5,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from "react";
-import { useCloseRequest, type SheetClose } from "./app/close-request";
+import { stayAlso, useCloseRequest, type SheetClose } from "./app/close-request";
 import type {
   Avatar as AvatarConfig,
   Bootstrap,
@@ -180,7 +180,7 @@ function LoadedBotSettings({
   useCloseRequest(closer, onStay => {
     if (memorySaving) return onStay();
     if (!unsaved) return onClose();
-    stay.current = onStay;
+    stay.current = stayAlso(stay.current, onStay);
     setConfirmDiscard(true);
   });
   useEffect(() => {

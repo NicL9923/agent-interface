@@ -1,7 +1,7 @@
-import { readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat, statfs } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { networkInterfaces } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { allowedIdentity, type Config } from "./config.js";
 import type { Store } from "./store.js";
@@ -12,19 +12,25 @@ import type { EventLoopMonitor } from "./request-log.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "unconfigured";
 export interface Check { status: CheckStatus; detail: string }
-type Name = "database" | "hermes" | "worker" | "push" | "backup" | "metadataFloor";
+type Name = "database" | "hermes" | "worker" | "push" | "backup" | "disk" | "metadataFloor";
 export type Readiness = { ok: boolean; checks: Record<Name, Check> };
 // Completed copies written by .agents/tools/backup-app.mjs; never its .partial files.
 export const backupName = /^agent-interface-\d{4}-\d{2}-\d{2}T[\d.-]+Z-[a-f0-9-]{36}\.sqlite$/;
 const minute = 60_000, hour = 60 * minute;
-// Only these make the app unready. Push and backup problems alert but never fail readiness.
+// Only these make the app unready. Push, backup and disk problems alert but never fail readiness.
 const required: Name[] = ["database", "hermes", "worker", "metadataFloor"];
 const labels: Record<Name, string> = {
   database: "The app database", hermes: "The Hermes connection", worker: "The background worker",
-  push: "Push delivery", backup: "App backups", metadataFloor: "The metadata egress floor",
+  push: "Push delivery", backup: "App backups", disk: "Free disk space", metadataFloor: "The metadata egress floor",
 };
 const ago = (ms: number) => ms < 2 * minute ? `${Math.round(ms / 1000)} s` : ms < 2 * hour ? `${Math.round(ms / minute)} min` : `${Math.round(ms / hour)} h`;
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
+const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code ?? reason(error);
+const GiB = 1024 ** 3;
+const gb = (bytes: number) => `${Number((bytes / GiB).toFixed(1))} GB`;
+/** The floor scripts/hermes-upgrade-worker.py uses when its configuration sets no minimumFreeBytes. */
+export const defaultMinimumFreeBytes = 20 * GiB;
+export type StatFs = (path: string) => Promise<{ bavail: number; bsize: number }>;
 
 /**
  * The cloud metadata service. The host's nftables floor (.agents/tools/metadata-egress-floor.py)
@@ -83,7 +89,7 @@ export class HealthMonitor {
   private timer?: ReturnType<typeof setInterval>;
   constructor(private deps: {
     store: Store; runtime: Runtime; worker: BackgroundWorker; config: Config;
-    maintenance: () => boolean; log?: Log; metadataProbe?: MetadataProbe;
+    maintenance: () => boolean; log?: Log; metadataProbe?: MetadataProbe; statfs?: StatFs;
   }) {}
   start() {
     this.timer = setInterval(() => void this.evaluate(), minute);
@@ -98,11 +104,11 @@ export class HealthMonitor {
   private async run(now: number): Promise<Readiness> {
     const settle = (check: () => Check | Promise<Check>) =>
       Promise.resolve().then(check).catch((error): Check => ({ status: "fail", detail: reason(error) }));
-    const [database, hermes, worker, push, backup, metadataFloor] = await Promise.all([
+    const [database, hermes, worker, push, backup, disk, metadataFloor] = await Promise.all([
       settle(() => this.database()), settle(() => this.hermes(now)), settle(() => this.worker(now)),
-      settle(() => this.push(now)), settle(() => this.backup(now)), settle(() => this.metadataFloor(now)),
+      settle(() => this.push(now)), settle(() => this.backup(now)), settle(() => this.disk()), settle(() => this.metadataFloor(now)),
     ]);
-    const checks = { database, hermes, worker, push, backup, metadataFloor };
+    const checks = { database, hermes, worker, push, backup, disk, metadataFloor };
     this.track(checks, now);
     return { ok: required.every(name => checks[name].status !== "fail"), checks };
   }
@@ -154,6 +160,46 @@ export class HealthMonitor {
     }
     if (!newest) return { status: "warn", detail: "No completed backups" };
     return { status: now - newest < 36 * hour ? "ok" : "warn", detail: `Newest backup is ${ago(now - newest)} old` };
+  }
+  /**
+   * The Hermes update worker refuses to stage a check unless its stage root has minimumFreeBytes
+   * free. This reads the same configuration and measures the same filesystem, so the household
+   * hears about a filling disk before an update check is refused. Without the worker's
+   * configuration it measures the app's data directory against the worker's default.
+   */
+  private async disk(): Promise<Check> {
+    const { config, statfs: measure = statfs } = this.deps;
+    let floor = defaultMinimumFreeBytes, problem = "";
+    let path = config.database === ":memory:" ? process.cwd() : dirname(resolve(config.database));
+    if (config.hermesUpgrade) {
+      try {
+        const text = await readFile(config.hermesUpgrade.workerConfig, "utf8");
+        let settings: unknown;
+        try { settings = JSON.parse(text); } catch { throw new Error("it is not valid JSON"); }
+        if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("it is not a JSON object");
+        const { minimumFreeBytes, stageRoot } = settings as Record<string, unknown>;
+        if (minimumFreeBytes !== undefined && (typeof minimumFreeBytes !== "number" || !Number.isFinite(minimumFreeBytes)))
+          throw new Error("its minimumFreeBytes is not a number");
+        if (typeof minimumFreeBytes === "number") floor = minimumFreeBytes;
+        if (typeof stageRoot === "string" && stageRoot.startsWith("/")) path = stageRoot;
+      } catch (error) {
+        problem = `Cannot read the Hermes update worker's configuration (${errorCode(error)}), so this assumes its ${gb(floor)} default. `;
+      }
+    }
+    // The worker creates its stage root on its first check; until then it lands on the nearest parent's filesystem.
+    let free: number;
+    for (;;) {
+      try {
+        const { bavail, bsize } = await measure(path);
+        free = bavail * bsize;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && dirname(path) !== path) { path = dirname(path); continue; }
+        return { status: "warn", detail: `${problem}Cannot measure free space at ${path}: ${errorCode(error)}` };
+      }
+    }
+    // The worker refuses only below its floor, so exactly the floor is enough.
+    return { status: problem !== "" || free < floor ? "warn" : "ok", detail: `${problem}${gb(free)} free at ${path}; a Hermes update check needs ${gb(floor)}` };
   }
   private async metadataFloor(now: number): Promise<Check> {
     const probe = this.deps.metadataProbe;

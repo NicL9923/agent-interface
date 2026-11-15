@@ -21,7 +21,7 @@ button.attachment-thumb { cursor: zoom-in; }
 .attachment-progress .track { stroke: color-mix(in srgb, var(--accent) 22%, transparent); }
 .attachment-progress .bar { stroke: currentColor; stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; transition: stroke-dasharray 160ms linear; }
 .attachment-progress.failed { color: var(--danger); }
-.attachment-queued img, .attachment-uploading img, .attachment-processing img { filter: saturate(.6); }
+.attachment-queued img, .attachment-preparing img, .attachment-uploading img, .attachment-processing img { filter: saturate(.6); }
 .attachment-failed { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
 .attachment-failed .attachment-label small { color: var(--danger); }
 .attachment-retry { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; padding: 5px 9px; font-size: 0.6875rem; border-radius: 8px; }
