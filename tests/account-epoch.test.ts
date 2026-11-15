@@ -26,6 +26,33 @@ function another(epoch: Epoch, record: string | null) {
 beforeEach(() => { vi.useFakeTimers({ now: NOW }); localStorage.clear(); });
 afterEach(() => { vi.useRealTimers(); });
 
+it("drops an old account word when another tab settles while its worker lookup is pending", async () => {
+  const posted: object[] = [];
+  const registration = { active: { postMessage: (message: object) => { posted.push(message); } } };
+  let release!: (value: typeof registration) => void;
+  const waiting = new Promise<typeof registration>(resolve => { release = resolve; });
+  const getRegistration = vi.fn().mockResolvedValue(registration).mockImplementationOnce(() => waiting);
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { getRegistration } });
+  try {
+    const first = await openWith(settled({ user: "one" }, "first"));
+    first.accountStart();
+    expect(first.accountNamed("one", undefined)).toBe(true);
+    await vi.waitFor(() => expect(getRegistration).toHaveBeenCalled());
+    // A second tab has its own module state but shares this browser's account record and worker.
+    const second = await openWith(settled({ user: "two" }, "second"));
+    second.accountStart();
+    expect(second.accountNamed("two", undefined)).toBe(true);
+    await vi.waitFor(() => expect(posted).toEqual([{ type: "ACCOUNT", user: "two" }]));
+    release(registration);
+    await vi.runAllTimersAsync();
+    expect(posted).toEqual([{ type: "ACCOUNT", user: "two" }]);
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ user: "two" });
+  } finally {
+    release(registration);
+    Reflect.deleteProperty(navigator, "serviceWorker");
+  }
+});
+
 describe("a page that opens while another tab's sign-in or sign-out is on its way", () => {
   it.each([
     // The mark began with member one signed in, so the address is theirs, and stays when the change is undone.

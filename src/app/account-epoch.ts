@@ -471,11 +471,15 @@ let told: string | null | undefined;
 let telling = Promise.resolve();
 const workerContainer = () => typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
 /** Posts `message` to the active worker after everything this tab posted before it, so the worker hears them in the order this tab said them. */
-function post(message: object, ports: MessagePort[] = []) {
+function post(message: object, ports: MessagePort[] = [], accountRecord?: string) {
   const container = workerContainer();
   if (!container) return;
   telling = telling.then(() => container.getRegistration())
-    .then(registration => registration?.active?.postMessage(message, ports))
+    .then(registration => {
+      // Another tab may settle a newer account while this worker lookup waits.
+      if (accountRecord !== undefined && accountRecord !== stored()) return;
+      registration?.active?.postMessage(message, ports);
+    })
     .catch(() => {});
 }
 /**
@@ -487,7 +491,7 @@ function post(message: object, ports: MessagePort[] = []) {
 function tellWorker(user: string | null) {
   if (told === user) return;
   told = user;
-  post({ type: "ACCOUNT", user });
+  post({ type: "ACCOUNT", user }, [], stored());
 }
 /**
  * Posts a message the worker handles in order with this tab's account words, such as the app badge
