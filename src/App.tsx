@@ -200,7 +200,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   }, [userId, reloadGroups]);
   const pendingCreate = useMemo(() => userId && !creatingGroup ? pendingGroup(userId) : null, [userId, creatingGroup]);
   const notifications = useDeviceNotifications(userId, boot?.vapidPublicKey);
-  const { draft, setDraft, draftReady, uploads, previews, uploading, upload, retryUpload, cancelUpload } = useDraft({ botId, userId, identityEpoch, setError });
+  const { draft, setDraft, draftReady, uploads, refusals, dismissRefusals, previews, uploading, upload, retryUpload, cancelUpload } = useDraft({ botId, userId, identityEpoch, setError });
   const { conversation, disconnected: conversationDisconnected, readFailed: conversationReadFailed, reply, reviewed, setReviewed, scroll, endSpace, content, history, persistPosition } = useConversation(botId, userId, id => {
     gone(id);
     setBotId("");
@@ -427,6 +427,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const reconnect = useStableCallback(() => void session.reconnect());
   const uploadFiles = useStableCallback(upload);
   const retryUploadFile = useStableCallback(retryUpload);
+  const dismissRefusalsStable = useStableCallback(dismissRefusals);
   const cancelUploadFile = useStableCallback(cancelUpload);
   const retrySend = useStableCallback(retry);
   const discardSend = useStableCallback(discard);
@@ -595,7 +596,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
           {selected && <Composer key={`${boot.user.id}:${botId}`} boot={boot} selected={selected} botId={botId} prompts={prompts}
             state={reported}
             active={active} connectionLost={connectionLost} connectionShown={connectionShown} draft={draft} setDraft={setDraft}
-            draftReady={draftReady} uploads={uploads} previews={previews} uploading={uploading} upload={uploadFiles}
+            draftReady={draftReady} uploads={uploads} refusals={refusals} dismissRefusals={dismissRefusalsStable} previews={previews} uploading={uploading} upload={uploadFiles}
             retryUpload={retryUploadFile} cancelUpload={cancelUploadFile} pending={pending} receipt={receipt}
             sending={sending} retry={retrySend} discard={discardSend} waiting={waitingPlaceholder(ownConversation, boot.user.id)}
             send={sendMessage} reviewed={reviewed} setReviewed={setReviewed}
