@@ -13,6 +13,11 @@ let root: Root;
 let container: HTMLDivElement;
 let props: ComponentProps<typeof Sidebar>;
 beforeEach(() => {
+  // A minute tick renders every timestamp again, on a real timer here, and a render outside act() fails the test, so a minute that
+  // turned mid-test failed correct code. A stopped Date never reaches the next minute, so a tick has nothing to render, and at the top
+  // of a minute the timer waits a full real minute between ticks. Timers stay real for the waits below; tests/setup-ui.ts restores Date after each test.
+  // Mid-August is outside every home season.
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.UTC(2026, 7, 15, 12) });
   ({ container, root } = mountRoot());
   props = {
     boot: {
