@@ -1,6 +1,10 @@
 import type { Page } from "@playwright/test";
 import { assistants, conversation, expect, signIn, test, uploadedFiles } from "./fixtures.js";
 
+/** The names of the attachments the server holds in Ranch Hand's draft, read through the signed-in page. No draft yet reads as none. */
+const serverDraft = async (page: Page) =>
+  ((await (await page.request.get("/api/bots/ranch/draft")).json()) as { attachments: { name: string }[] } | null)?.attachments.map(file => file.name) ?? [];
+
 /**
  * A phone photo in real Chromium: it decodes, rotates and encodes through the browser's own codecs, which jsdom
  * has none of. The photo is generated here, 4000 by 3000 with a red square in its top-left corner, and tagged with
@@ -77,6 +81,13 @@ test("a phone photo uploads at 2048 px, upright, in a fraction of its size", asy
   expect((await decoded(page, sent!.base64, sent!.mime, [20, 20])).color[0]).toBeLessThan(120);
   // The chip in the message box shows the shrunk file, under its new name.
   await expect(page.getByRole("button", { name: "Preview IMG_4242.webp" })).toBeVisible();
+  // The server keeps the uploaded photo in the draft: its identifier passes the draft route, which refused a bare id
+  // with a 400. The chip comes back after a reload only if the server's copy holds it.
+  await expect.poll(() => serverDraft(page)).toEqual(["IMG_4242.webp"]);
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await expect(page.getByRole("list", { name: "Attachments" }).getByRole("listitem", { name: /IMG_4242\.webp/ })).toBeVisible();
 });
 
 test("an image the server takes whole is left alone: a small photo, a GIF, and a PNG screenshot", async ({ page }) => {
@@ -125,6 +136,26 @@ test("a HEIC photo the browser cannot decode is refused with the reason, and not
   // Not a decodable picture in any browser, which is what an unsupported codec looks like to the page.
   await picker(page).setInputFiles({ name: "IMG_0001.HEIC", mimeType: "image/heic", buffer: Buffer.from("not a picture") });
   await expect(page.getByRole("alert").filter({ hasText: "IMG_0001.HEIC is a HEIC photo, and this browser can't open it." })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Attachments" })).toHaveCount(0);
+  expect(await uploadedFiles()).toEqual([]);
+});
+
+test("a HEIC refusal that lands after switching assistants waits in the draft it came from", async ({ page }) => {
+  await openAssistant(page);
+  // The browser's decoder is held, so the photo is still preparing when the person leaves for another assistant.
+  await page.evaluate(() => {
+    const held = window as unknown as { failDecode(): void };
+    window.createImageBitmap = () => new Promise((_, reject) => { held.failDecode = () => reject(new DOMException("The source image could not be decoded.", "InvalidStateError")); });
+  });
+  await picker(page).setInputFiles({ name: "IMG_0002.HEIC", mimeType: "image/heic", buffer: Buffer.from("not a picture") });
+  await expect(page.getByRole("list", { name: "Attachments" })).toBeVisible();
+  await assistants(page).getByRole("button", { name: /Trail Cook/ }).click();
+  await expect(page.getByRole("list", { name: "Attachments" })).toHaveCount(0);
+  await page.evaluate(() => (window as unknown as { failDecode(): void }).failDecode());
+  // The other assistant's composer says nothing about a photo it never had.
+  await expect(page.getByText("IMG_0002.HEIC is a HEIC photo")).toHaveCount(0);
+  await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "IMG_0002.HEIC is a HEIC photo, and this browser can't open it." })).toBeVisible();
   await expect(page.getByRole("list", { name: "Attachments" })).toHaveCount(0);
   expect(await uploadedFiles()).toEqual([]);
 });

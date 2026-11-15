@@ -46,6 +46,27 @@ not an image, and the second needed a shrunk file of 1 MB or more so the size ru
 tests were tightened and went red. In Chromium, `imageOrientation: "none"` still honors EXIF, which is why the e2e needs
 the `"flipY"` break instead.
 
+## Review fixes
+
+Two findings from GPT-6.1 Sol's review, fixed on branch `t3/fix-405-review` and merged into the PR, with `origin/main` at
+`aca62444` merged in. Mac mini, Node 24.22.2, Chromium via Playwright.
+
+1. A HEIC refusal that landed after the person switched assistants was lost, because the old composer had unmounted. The
+   refusal now lives in `useDraft`, keyed by assistant and account like a failed upload's chip, and shows again when the
+   person returns to that chat. The `refused` callback on `upload` is gone.
+2. The e2e upload fake returned a bare UUID. Making it sign through the real file signer exposed a bug on `main`: since
+   #399 a signed identifier is `v2.<key id>.<body>.<signature>`, and the `fileRef` schema still accepted only two parts,
+   so every draft save and send that carried an uploaded file answered 400 at `attachments[0].id`. The schema accepts both
+   shapes now. No other e2e test attached a file. The e2e reset also clears saved drafts now, since a draft that saves
+   outlives the test that wrote it.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| `fileRef` accepts only the two-part identifier again | `tests/app.test.ts` `keeps a draft's attachment signed with the app's own key` | 1 failed, 400 instead of 200 |
+| `fileRef` accepts only the two-part identifier again | e2e `a phone photo uploads at 2048 px` (draft never holds the photo) | 1 failed |
+| e2e fake returns a bare UUID again | e2e `a phone photo uploads at 2048 px` | 1 failed |
+| Refusal reported to the unmounted composer again (the hook's fix reverted) | e2e `a HEIC refusal that lands after switching assistants` | 1 failed, refusal absent on return |
+
 ## Not exercised in the committed suite
 
 Chromium cannot decode HEIC, so the committed e2e covers only the refusal. A one-off run in Playwright WebKit, outside the

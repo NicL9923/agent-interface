@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
+import { testFiles } from "../tests/helpers/file-signer.js";
 import { botFixture, capabilitiesFixture, conversationFixture, experienceRequester } from "../tests/helpers/runtime-fixtures.js";
 import type { Activity, Bot, LiveTurn, Message, Runtime, ToolCall } from "../src/shared/types.js";
 import { controlPort, port } from "./ports.js";
@@ -106,9 +107,11 @@ const runtime: Runtime = {
   setTools: unscripted("setTools"), skills: unscripted("skills"), setSkills: unscripted("setSkills"),
   saveRoutine: unscripted("saveRoutine"), deleteRoutine: unscripted("deleteRoutine"),
   // Keeps what the browser uploaded, for GET /uploads on the control port to report.
-  upload: async (_botId, { name, mime, data }) => {
+  // The identifier is signed by the real file signer, so it has the shape the draft routes accept and the server
+  // would hand out: a bare id is refused at `attachments[].id`, and a saved draft would never hold the photo.
+  upload: async (botId, { name, mime, data }) => {
     uploads.push({ name, mime, base64: data.toString("base64") });
-    return { id: randomUUID(), name, mime, size: data.length };
+    return { ...testFiles().signFile({ path: `/e2e/uploads/${randomUUID()}`, name, mime, botId, kind: "upload", version: 1 }), size: data.length };
   },
   status: async () => ({ connected: true, code: "ready" }),
   capabilities: async () => capabilitiesFixture({ chat: { supported: true }, durableEvents: { supported: true }, idempotency: { supported: true }, uploads: { supported: true } }),
@@ -161,7 +164,7 @@ const runtime: Runtime = {
 };
 
 const violations: unknown[] = [];
-const { app } = await createApp(
+const { app, store } = await createApp(
   loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", HOST: "127.0.0.1", PORT: String(port), LOG_LEVEL: "warn" }),
   runtime,
   { background: false, logStream: { write(line) {
@@ -198,6 +201,8 @@ const control = createServer((req, res) => {
   if (req.method === "DELETE") {
     violations.length = 0; uploads.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
     bots.splice(0, bots.length, ...initialBots.map(bot => ({ ...bot })));
+    // A saved draft outlives the browser that wrote it, so the next test must not open on a photo the last one attached.
+    for (const bot of bots) if (store.draft("local-one", bot.id)) store.saveDraft("local-one", bot.id, { text: "", attachments: [] });
   }
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
     const query = new URL(req.url, "http://localhost").searchParams, at = bots.findIndex(bot => bot.id === query.get("bot"));
