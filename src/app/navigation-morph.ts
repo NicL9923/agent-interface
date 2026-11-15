@@ -10,7 +10,7 @@ export type MorphDirection = "forward" | "back";
 const NAME = "wildbots-avatar";
 let current = 0;
 
-type TransitionDocument = Document & { startViewTransition?: (update: () => void) => { finished: Promise<void> } };
+type TransitionDocument = Document & { startViewTransition?: (update: () => void) => { finished: Promise<void>; ready?: Promise<void> } };
 
 const name = (element: Element | null | undefined, value: string) => {
   if (element instanceof HTMLElement) element.style.viewTransitionName = value;
@@ -39,12 +39,16 @@ export function morphNavigate(update: () => void, from: () => Element | null, to
     if (run === current) delete root.dataset.navigation;
   };
   try {
-    doc.startViewTransition!(() => {
+    const transition = doc.startViewTransition!(() => {
       name(source, "");
       flushSync(update);
       target = source ? onScreen(to()) : null;
       name(target, NAME);
-    }).finished.then(settle, settle);
+    });
+    transition.finished.then(settle, settle);
+    // A newer navigation skips this one, and `ready` then rejects with "Transition was skipped". The update
+    // still ran, so it is no failure, and unhandled it surfaced as an uncaught error.
+    transition.ready?.catch(() => undefined);
   } catch {
     settle();
     update();
