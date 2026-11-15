@@ -132,9 +132,91 @@ prepare. It also failed one `hermes_upgrade_linux_test.py` maintenance RPC case 
 that file passed all 81 tests run alone. `check-all --only py,ruff` then passed all 52 Python files, including the two
 `serviceRuntime` facts tests that #398 fixed on main.
 
+## Second review fixes
+
+GPT-6.1 Sol reviewed the first fixes at `9a783b53` and reproduced three defects with the real host program:
+
+1. `activated()` took any `continued-<op>/result.json` as proof. A recent, unsettled release whose result held only
+   `{` was deleted at once.
+2. The idle check read only directory times. With the release and operation dirs aged four days, rewriting the
+   existing `build.log` left both times alone, and the release was deleted. A retry that overwrites
+   `continued-<op>/commands.log` is the same case.
+3. Stripping kept a stage only for malformed JSON or `state: active`. A gone release with the marker `{}` lost its
+   qualification `source`.
+
+The fixes:
+
+1. Proof is now the two records `deploy-guarded-app-release.py` leaves as its last steps of a completed activation,
+   both present since the tool was added in `bee48c89`: a `result.json` object whose `webBuild` and `hermesRevision`
+   equal the release's deploy configuration, and a `phase.json` with `phase: complete` and the configuration's
+   `operationId`. The configuration must name a string `webBuild`. A result written just before a failed final print
+   leaves the phase at needs-review, so that release falls back to the idle rule.
+2. Activity is the newest time of every file and directory under the operation dir and `continued-<op>`, plus the
+   release dir's own time. I chose this over an activity stamp because other checkouts release with older copies of
+   this tool, and the guarded deploy, qualification and the update worker would all have to write the stamp; a
+   writer that skips it would make a live stage look idle. The walk is bounded: it skips the subdirectories of
+   qualification stages, which hold the checkouts and runtimes, because a stage in use is not marked completed and
+   keeps its release regardless. It does not walk the release's own build tree, which holds `node_modules`, because
+   prepare writes the operation's `build.log` for as long as it builds. It runs only for releases outside the kept
+   set that lack proof. An entry that vanishes mid-walk, such as an atomic write's temporary file, counts as a change
+   now instead of dropping that directory's times.
+3. A stage counts as finished only when its marker is an object with `schemaVersion` 1, `state` `completed` and the
+   stage's own `operationId`, which is what `qualify-app-release.py` `prune_stage` and the update worker write, and
+   what the worker's own retention requires. A missing, cut-off, empty or unknown marker keeps both the release and
+   the operation. A list marker used to crash the whole prune with `AttributeError`; it now keeps the stage.
+
+The test fixtures now write those records: `completed_activation()` writes the guarded deploy's result fields and
+phase, and `stage_marker()` writes a schema 1 marker named for the stage's UUID. The `{}` success results and
+markers are gone.
+
+New tests, each run against `9a783b53`'s `.agents/tools` in a temporary detached worktree:
+
+| Test | Result before the fix |
+| --- | --- |
+| `test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof` | failed: removed all ten releases, expected only `release-completed` |
+| `test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity` | failed: removed `release-rebuilt`, `release-retried` and `release-qualified` too |
+| `test_prune_strips_a_gone_release_s_operation_only_once_every_stage_is_marked_completed` | failed: the prune exited with `AttributeError` on the list marker. Without that case it stripped the `{}`, unknown-state, other-stage, later-schema and marker-less operations too |
+| `test_prune_keeps_the_newest_...` with a new `{}` marker case | failed: removed `release-old-06` |
+
+All pass after the fix. Red runs:
+`python3 .agents/tools/mutate-py.py --batch ... --baseline -- sh -c 'cd tests && python3 -B release_app_test.py -k prune'`.
+
+| Mutation | Result |
+| --- | --- |
+| any result.json is proof (the earlier rule) | failed: test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof |
+| a result that does not parse counts | failed: same |
+| a result that is not an object counts | failed: same |
+| skip the build match | failed: same |
+| skip the revision match | failed: same |
+| a config without a build matches | failed: same |
+| a missing phase counts | failed: same |
+| any phase counts | failed: same |
+| another operation's phase counts | failed: same |
+| directory times only (the earlier rule) | failed: test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity |
+| no descent below the operation | failed: same |
+| descend into stage subdirectories | failed: same |
+| idle ignores continued-<op> | failed: same |
+| only an active marker keeps a stage (the earlier rule) | failed: test_prune_strips_a_gone_release_s_operation_only_once_every_stage_is_marked_completed |
+| any state but active is done | failed: same |
+| skip the schema check | failed: same |
+| skip the stage identity check | failed: same |
+| a marker that is not an object stops the prune | failed: same |
+| a stage without a marker is done | failed: same |
+| only the first stage counts | failed: same |
+
+No test covers the vanished-entry branch, because making a file disappear between `scandir` and `stat` needs a
+mocked filesystem call.
+
+Checks on `978aee15` merged with `origin/main` at `907eb1ca`, Node 24.22.2, Python 3.14.7:
+`.agents/tools/check-all --keep-going --py always` passed typecheck, lint, ruff, build and e2e (55). Vitest failed only
+the three tests that need the `127.0.0.2` loopback alias (`direct-routes` twice, `native-contract`). py passed 51 of 52
+files; `hermes_upgrade_linux_test.py` failed its maintenance RPC case with the same `ConnectionResetError` as the first
+round, and passed all 81 tests run alone.
+
 ## Not exercised
 
 The production host. Nothing here ran over SSH, and the prune has not run against the live `releases/` and
 `operations/` trees, so how many releases the 3-day rule keeps there is not measured. Directory times on the host's
-filesystem were not checked against what prepare, qualification and activation write. The first `release-app.py activate` after merge is that run; its output reports what it removed and
-the host's free space. `fs.statfs` on Linux ext4 was not measured against `shutil.disk_usage` on the host.
+filesystem were not checked against what prepare, qualification and activation write, and the walk's run time over
+the host's real operation dirs is not measured. The first `release-app.py activate` after merge is that run; its
+output reports what it removed and the host's free space. `fs.statfs` on Linux ext4 was not measured against `shutil.disk_usage` on the host.
