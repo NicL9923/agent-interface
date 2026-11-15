@@ -13,7 +13,8 @@ devices. Pin assistants to show them as large live avatars at the top. In a conv
 name in the header open its details: Pin, Artifacts, Settings, "Notify me about all
 activity" and its home section. Long-press (right-click on a computer) an assistant
 on home to pin it or move it to a section. Phones open on home and push into a
-conversation; Back returns. The account button opens Settings, which also holds Hermes
+conversation; Back returns, and so do the browser's Back button and the system Back gesture
+(see "Back on a phone" below). The account button opens Settings, which also holds Hermes
 updates, Computer, Integrations, the assistants you follow and your home sections.
 Each assistant can be in one section. New assistants start with their name and look,
 then role and model. On the web, a new assistant's chat opens once it is created.
@@ -366,6 +367,15 @@ lit edge and the rail's grain, is that selector's only one. Springs are sampled 
 `linear()` gets the app's ease-out for the soft spring (menus, sheets, the status dock) and a cubic-bezier
 with about 5% overshoot for the livelier one (the toast, the jump button, sent messages, the work strip).
 
+- Back on a phone: a phone-width layout is home, or one step in from it. A chat, group chat, Today, Search,
+  or a sheet laid over home is one history entry, pushed when the step is taken. The system Back gesture
+  and the browser's Back button take the step the on-screen Back takes: they close an open sheet through
+  its own close, so an edited form still asks first, and otherwise return to home with the chat's row
+  focused. A second Back leaves the app. Switching between chats, as a notification tap does, only
+  replaces the address, so entries do not pile up. Two-pane layouts push nothing, and a window
+  resized between the layouts drops or adds the entry to match. A link that names a chat opens it with
+  home one Back below; a page reloaded inside a chat still opens home on Back. The entries carry their
+  depth in `history.state` (`src/app/history-nav.ts`); `e2e/back-navigation.spec.ts` checks them.
 - On a phone, opening a chat from home and going Back use the View Transitions API. The avatar
   flies between its home row and the chat header while the screens slide. Browsers without the
   API change screens at once.

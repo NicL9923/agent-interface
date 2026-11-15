@@ -8,6 +8,7 @@ import { useDeviceNotifications } from "./components/use-device-notifications";
 import { TodayPanel } from "./components/TodayPanel";
 import "./components/discovery.css";
 import { hasDestination, initialPanel, initialRoom, initialView, startsOnToday, useUrlSync } from "./app/view";
+import { startsAtHome, useBackNavigation } from "./app/history-nav";
 import type { Panel, View } from "./app/view";
 import { chatStream, STREAM_NOTICE_MS, useStreamsDown } from "./app/stream-health";
 import { GROUP_FALLBACK_POLL_MS, GROUP_UNNOTIFIED_POLL_MS, GROUPS_EVENT, useSession } from "./app/use-session";
@@ -127,8 +128,8 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const closePanels = (...kinds: Panel["kind"][]) =>
     setPanel(current => current && kinds.includes(current.kind) ? null : current);
   const [error, setError] = useState("");
-  // Phones open on the home list unless a link names a destination.
-  const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && !hasDestination());
+  // Phones open on the home list unless a link names a destination, or the page is an entry that stands for home (see history-nav.ts).
+  const [railOpen, setRailOpen] = useState(() => matchMedia("(max-width: 620px)").matches && (!hasDestination() || startsAtHome()));
   const mobile = useMobile();
   // The home this device last showed, drawn until bootstrap answers. Read once per account generation:
   // whatever ends it, a change of account in any tab, a sign-out, a refused session, cleared storage
@@ -155,7 +156,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const { boot, botId, setBotId, identityEpoch, offline, appUnavailable } = session;
   const userId = boot?.user.id;
   const toast = useToast(session.auth ? undefined : userId);
-  useUrlSync(view, panel, botId, userId, roomId);
+  const syncUrl = useUrlSync(view, panel, botId, userId, roomId);
   // Home lists the household's group chats beside its assistants. The catalog carries each room's
   // newest message, so one read serves every row; no room's log is read from here. The household
   // stream's notices drive reads; the slow poll only covers one it missed.
@@ -505,6 +506,20 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     // A tab that has not yet seen another tab's change is refused; that change draws this tab again.
     void signOutHere(earlyHome.user.id).then(done => { if (!done) setSignOutUnkept(true); }, () => {});
   });
+  // On a phone, one step in from home is one history entry: a chat, group, Today or Search, or anything laid over home.
+  // The system Back and the browser's Back take the step the on-screen Back takes, closing what covers the screen first.
+  const covered = !!panel || overlay !== null || creatingGroup || choosingMain;
+  const stepBack = useStableCallback(() => {
+    // A panel closes the way its own close does, so an edited form still asks. Back never discards its work.
+    if (panel) { const offered = panelClose.current; if (offered) offered.close(() => {}); else setPanel(null); return true; }
+    if (overlay !== null) { setOverlay(null); return true; }
+    if (choosingMain) { setChoosingMain(false); return true; }
+    if (creatingGroup) { setCreatingGroup(false); return true; }
+    backToHome();
+    return false;
+  });
+  const stepForward = useStableCallback(() => { if (mobile) setRailOpen(false); });
+  useBackNavigation({ depth: mobile && !session.auth && (!!boot || !!earlyHome) && (!railOpen || covered) ? 1 : 0, stepBack, stepForward, syncUrl });
   if (session.auth) return <SignIn />;
   // The same tree as the full app below, so bootstrap's answer redraws home in place: rows, scroll and focus stay.
   if (!boot && earlyHome)
