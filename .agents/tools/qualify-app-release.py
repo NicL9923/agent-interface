@@ -95,6 +95,14 @@ private = base / "shared/upgrade-private"
 runner = private / "regressions.py"
 assert all(p.is_absolute() for p in [live, home, python, launcher, patch])
 assert sha(patch) == worker["requiredPatchSha256"]
+qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
+# Before any other git command reads live, and before a stage exists: on Nov 9, 2026 a live
+# checkout missing 42 objects of HEAD's tree failed this run only after cloning, in snapshot.
+# Read-only against live rather than the clone: the clone holds what live holds, and an
+# unprotected live checkout must be refused before the lazy-fetching reads below run there.
+refusals = qualification["live_clone_refusals"](live, os.environ)
+if refusals:
+    raise SystemExit("Qualification refused before staging.\n" + "\n".join(refusals))
 
 def snapshot(path):
     revision = subprocess.check_output(["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
@@ -112,7 +120,6 @@ repair_worker["Worker"].approved_repair(repair_owner, baseline[0], baseline[1],
     subprocess.check_output(["git", "-c", "core.abbrev=10", "-C", str(live), "diff", "HEAD", "--binary"]))
 browser_facts = home / "tools/facts.json"
 browser = repair_worker["native_chromium"](home)
-qualification = runpy.run_path(str(release / "src/hermes/qualification.py"))
 
 def live_probe_browser(path):
     """The live receipt's browser selection, bound afresh. The receipt picks an executable this
