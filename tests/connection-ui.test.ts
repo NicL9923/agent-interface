@@ -509,7 +509,7 @@ it('lets the next sign-in send after signing out while a send was unanswered',as
   await renderApp();await advance(400);
   await act(async()=>container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
   // The avatar opens the profile menu; Settings is one of its items.
-  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
   await loaded();
   await act(async()=>button('Sign out').click());

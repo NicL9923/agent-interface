@@ -44,7 +44,7 @@ it('opens the profile menu with how close the nearest account is to a limit, and
   await act(async () => root.render(createElement(AccountMenu, { user: { id: 'one', name: 'Nic Layne', email: 'nic@example.test' }, status: 'connected', ...handlers })));
   // Nothing is read until the menu opens.
   expect(api).not.toHaveBeenCalled();
-  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
   expect(api).toHaveBeenCalledWith('/usage/accounts', expect.anything());
   const menu = container.querySelector('[role="menu"]')!;
   expect(menu.textContent).toContain('nic@example.test');
@@ -53,8 +53,8 @@ it('opens the profile menu with how close the nearest account is to a limit, and
   expect(handlers.onUsage).toHaveBeenCalledOnce();
   expect(container.querySelector('[role="menu"]')).toBeNull();
   // Focus is back on the avatar before Usage opens, so closing Usage returns there.
-  expect(document.activeElement).toBe(container.querySelector('[aria-label="Account"]'));
-  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  expect(document.activeElement).toBe(container.querySelector(".home-account"));
+  await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
   await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === 'Sign out')!.click());
   expect(handlers.onSignOut).toHaveBeenCalledOnce();
   expect(handlers.onSettings).not.toHaveBeenCalled();
@@ -63,7 +63,7 @@ it('opens the profile menu with how close the nearest account is to a limit, and
 it('keeps a plain description in the menu when the accounts cannot be read', async () => {
   vi.mocked(api).mockRejectedValue(new ApiError('Hermes is offline', 502));
   await act(async () => root.render(createElement(AccountMenu, { user: { id: 'one', name: 'One', email: 'one@example.test' }, status: 'offline', onUsage() {}, onSettings() {}, onSignOut() {} })));
-  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
   expect(container.querySelector('[role="menu"]')!.textContent).toContain('Plans, limits and credits');
 });
 

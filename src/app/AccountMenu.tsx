@@ -24,7 +24,7 @@ export function AccountMenu({ user, status, disabled = false, onUsage, onSetting
   const usage = useResource(routeUrl("GET /usage/accounts", {}), { load: (_, signal) => request("GET /usage/accounts", { signal }), enabled: open });
   const summary = usage.data ? usageSummary(usage.data.accounts) ?? "No limits reported" : "Plans, limits and credits";
   return <span className="home-new account-menu" ref={wrap} onKeyDown={keys}>
-    <Button ref={trigger} className="home-account" aria-label="Account" title="Account" aria-haspopup="menu" aria-expanded={open}
+    <Button ref={trigger} className="home-account" aria-label={user.picture ? "Account" : `${initials(user.name)} Account`} title="Account" aria-haspopup="menu" aria-expanded={open}
       aria-controls={open ? menuId : undefined} disabled={disabled} onClick={() => setOpen(value => !value)}>
       {user.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer" /> : initials(user.name)}
       <span className={`home-status home-status-${status}`} aria-hidden="true" />

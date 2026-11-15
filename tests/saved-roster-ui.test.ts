@@ -326,7 +326,7 @@ describe("whose saved home it is", () => {
     await open();
     await answer("GET /bootstrap?roster=lean", 200, one);
     expect(savedRoster()).not.toBeNull();
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith("Sign out"))!.click());
     await act(async () => { await vi.dynamicImportSettled(); });
     await act(async () => button("Sign out", document.querySelector('[role="alertdialog"]')!).click());
