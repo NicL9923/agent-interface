@@ -261,7 +261,7 @@ describe("where the caret goes", () => {
       await show("```\nlet gate = latched;\nend");
       const caret = mount.container.querySelector<HTMLElement>(".streaming-caret")!, pre = mount.container.querySelector("pre")!;
       const end = pre.textContent!.trimEnd().length;
-      expect(caret.style.transform).toBe(`translate(${end * 10 + 2}px, 0px)`);
+      expect(caret.style.transform).toMatch(new RegExp(`^translate\\(${end * 10 + 2}px(?:, 0px)?\\)$`));
 
       const scroll = async (to: number, events: number) => {
         scrolled = to;
@@ -270,7 +270,7 @@ describe("where the caret goes", () => {
         // Not before the next frame.
         expect(caret.style.transform).toBe(transform);
         await advance(FRAME);
-        expect(caret.style.transform).toBe(`translate(${end * 10 - to + 2}px, 0px)`);
+        expect(caret.style.transform).toMatch(new RegExp(`^translate\\(${end * 10 - to + 2}px(?:, 0px)?\\)$`));
         return measured - before;
       };
       // Three scroll events in one frame measure the text as often as one does.
