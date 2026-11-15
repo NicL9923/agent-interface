@@ -9,7 +9,6 @@ import XCTest
       // #412: XCTest supplies nil even for debugDescription, so these remain unidentified.
       // Limit matches to the observed count until the views can be isolated.
       if issue.element == nil {
-        print("#412 missing element: \(screen), \(issue.detailedDescription); element: \(issue.element?.debugDescription ?? "nil")")
         let key = "\(screen)|\(issue.auditType.rawValue)|\(issue.compactDescription)"
         let limits = [
           "settings|2|Potentially inaccessible text": 1,
@@ -20,9 +19,11 @@ import XCTest
         return missingElementCounts[key, default: 0] <= limit
       }
       switch (screen, issue.auditType, label, identifier) {
-      // #412: system-styled initials remain reported as partially unsupported.
+      // Decorative initials in a fixed 40-point badge, hidden from VoiceOver; the button reads "Account menu".
+      // Scaling them would only overflow the circle, but the audit inspects hidden text too.
       case ("home", .dynamicType, "LT", _): return true
-      // #412: system toolbar Close still reports contrast and font scaling.
+      // #412: the system toolbar Close. Its accent label on dark glass measures 5.2:1 from the pixels of
+      // ios/evidence/issue-412-before-settings-default.png; the audit misreads the translucent material.
       case ("settings", .contrast, "Close", _), ("settings", .dynamicType, "Close", _): return true
       // #412: Today heading and notice scaling and section clipping remain under investigation.
       case ("today", .dynamicType, "Today", _),

@@ -877,7 +877,7 @@ struct AccountAvatar: View {
     let initials = (member?.name ?? "").split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
     ZStack {
       Circle().fill(Palette.accentSoft)
-      Text(initials).font((size >= 50 ? Font.body : Font.footnote).weight(.semibold)).foregroundStyle(Palette.accent)
+      Text(initials).font(.system(size: size * 0.34, weight: .semibold)).foregroundStyle(Palette.accent)
       if let picture = member?.picture, let url = URL(string: picture), url.scheme == "https" {
         AsyncImage(url: url) { image in image.resizable().scaledToFill() } placeholder: { Color.clear }
       }
