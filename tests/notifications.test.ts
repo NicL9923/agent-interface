@@ -226,12 +226,14 @@ it("keeps each job nonoverlapping across repeated ticks while other jobs are sta
     expect(discoverEvents).not.toHaveBeenCalled();
     receipt.resolve();
     await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
+    // The pass also read the default runtime's capabilities for discovery; no later pass reads any.
+    const reads = capabilities.mock.calls.length;
     delivery.resolve();
     await vi.waitFor(() => expect(store.outbox()).toHaveLength(0));
     queue(store, "second", Date.now());
     ticks.push(worker.tick());
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
-    expect(capabilities).toHaveBeenCalledTimes(1);
+    expect(capabilities).toHaveBeenCalledTimes(reads);
     expect(discoverEvents).toHaveBeenCalledTimes(1);
     expect(liveTick).toHaveBeenCalledTimes(1);
   } finally {

@@ -211,7 +211,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
     // sharing changes and routine saves.
     const receipt = await serialDelivery(store, async () => {
       // The same assistant's routine Hermes runs, read again in this turn.
-      const current = (await runtime.routines()).find(other => other.id === row.id && other.botId === row.botId);
+      const current = (await runtime.routines(row.botId)).find(other => other.id === row.id && other.botId === row.botId);
       // A retried trial whose routine Hermes no longer has, such as a one-shot routine that removed itself,
       // cannot run again and only reads its receipt. Any other routine the app cannot find is refused.
       if (current || !previous) await assertDeliveryPrivate(runtime, store, row.botId, current && routineTargets(current));

@@ -289,7 +289,7 @@ it("keeps discovering events and recovering receipts while an approval read hang
     await vi.advanceTimersByTimeAsync(15000);
     expect(conversation).toHaveBeenCalledTimes(1);
     expect(discoverEvents.mock.calls.length).toBeGreaterThanOrEqual(4);
-    expect(lookupSubmission).toHaveBeenCalledWith("pending");
+    expect(lookupSubmission).toHaveBeenCalledWith("pending", "barn");
     // The hung read is abandoned once the pass runs out of time, and the next pass reads again.
     await vi.advanceTimersByTimeAsync(approvalPassBudget + 60000);
     expect(conversation).toHaveBeenCalledTimes(2);

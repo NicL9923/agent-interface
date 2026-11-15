@@ -223,7 +223,7 @@ describe("retrying a failed turn", () => {
       expect(submit).toHaveBeenCalledTimes(1);
       const recovered = await send({ text: "Order more feed ", retryOf: "u2", reviewedUncertain: true }, "messages", other);
       expect(recovered.statusCode).toBe(200);
-      expect(lookupSubmission).toHaveBeenCalledWith(first.requestId);
+      expect(lookupSubmission).toHaveBeenCalledWith(first.requestId, "shared");
       expect(submit).toHaveBeenCalledTimes(2);
       expect(submit.mock.calls[1][0]).toEqual(submit.mock.calls[0][0]);
       expect(submit.mock.calls[1][0]).toMatchObject({ senderId: "local-one", text: "Order more feed", requestId: first.requestId });

@@ -52,7 +52,7 @@ export async function installAutomationRoutes(app: FastifyInstance, runtime: Run
     const profile = z.object({ id }).parse(req.params).id;
     const main = isMainAssistant(store, profile);
     if (!main && !runtime.groupRequest) return work();
-    const routine = (await runtime.routines()).find(row => row.id === routineId && row.botId === profile);
+    const routine = (await runtime.routines(profile)).find(row => row.id === routineId && row.botId === profile);
     // A main assistant's routine posts only in its own chat, whether or not this Hermes has group chats.
     if (main) assertMainOwnChat(store, profile, routine && routineTargets(routine));
     // A routine the app cannot find cannot be checked, so the trigger is refused.

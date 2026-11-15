@@ -84,6 +84,7 @@
   "src/server/push-routes.ts",
   "src/server/routine-delivery.ts",
   "src/server/routine-routes.ts",
+  "src/server/runtime-router.ts",
   "src/server/runtime-snapshot.ts",
   "src/server/schemas.ts",
   "src/server/shutdown.ts",

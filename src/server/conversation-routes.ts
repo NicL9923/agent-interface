@@ -5,7 +5,7 @@ import { approvalNotPendingMessage, interruptionPendingMessage, submissionConfli
 import { filesBefore, HISTORY_PAGE_TURNS, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
-import type { Approval, ApprovalChoice, ApprovalScope, CapabilityKey, InflightDelta, ReadTiming, Runtime, Submission, SubmissionReceipt, TurnEvent } from "../shared/types.js";
+import type { Approval, ApprovalChoice, ApprovalScope, InflightDelta, RequireCapability, ReadTiming, Runtime, Submission, SubmissionReceipt, TurnEvent } from "../shared/types.js";
 import { MAX_MESSAGE_TEXT } from "../shared/api.js";
 import { formatBytes, MAX_ATTACHMENTS, MAX_DOWNLOAD_BYTES, MAX_UPLOAD_BYTES, UPLOAD_KINDS, UPLOAD_MIME_TYPES } from "../shared/uploads.js";
 import { accountMarker } from "./apns.js";
@@ -161,7 +161,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   roster: Roster;
   /** Open event streams, which the app ends on shutdown. */
   streams: Set<() => void>;
-  requireCapability: (key: CapabilityKey) => Promise<void>;
+  requireCapability: RequireCapability;
 }) {
   const { config, runtime, store, roster, streams, requireCapability } = collaborators;
   // Each admitted send is timed to its own run's first streamed text and first live event on a stream.
@@ -479,17 +479,17 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
         throw httpError(409, interruptionPendingMessage);
       if (!retryInterruption && (!reviewedUncertain || previous.receipt.status !== "uncertain"))
         return previous.receipt;
-      await requireCapability("idempotency");
-      const known = await runtime.lookupSubmission(input.requestId);
+      await requireCapability("idempotency", input.botId);
+      const known = await runtime.lookupSubmission(input.requestId, input.botId);
       if (known) {
         store.receipt(known, undefined, retryInterruption);
         return known;
       }
     } else if (reviewedUncertain) {
-      await requireCapability("idempotency");
+      await requireCapability("idempotency", input.botId);
     }
-    await requireCapability("chat");
-    const fast = await runtime.canonicalSubmit?.() === true;
+    await requireCapability("chat", input.botId);
+    const fast = await runtime.canonicalSubmit?.(input.botId) === true;
     // A retry reads the window that starts at its message, which also proves the message is still there.
     const conversation = input.retryOf !== undefined
       ? await runtime.conversation(input.botId, { window: { start: input.retryOf } })
@@ -515,7 +515,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       ["thinking", "working", "waiting", "blocked"].includes(
         conversation?.activity.state ?? "idle",
       );
-    if (steering || fast) await requireCapability("steering");
+    // Steering is the assistant's runtime's to support: one that queues messages for the next turn refuses it.
+    if (steering || fast) await requireCapability("steering", input.botId);
     // The first retry of a failed turn claims it; any later one, from anyone, follows that request.
     const intent = input.retryOf !== undefined
       ? store.claimRetry(conversation!.activity.runId ?? "", input as Submission & { retryOf: string })
@@ -576,8 +577,10 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     const own = previous && previous.input.senderId === signedIn(req).id ? previous.input.text : undefined;
     const told = (receipt: SubmissionReceipt): SubmissionReceipt => own === undefined ? receipt : { ...receipt, text: own };
     try {
-      if ((await runtime.capabilities()).idempotency.supported) {
-        const receipt = await runtime.lookupSubmission(requestId);
+      // A recorded submission names its assistant. An unrecorded ID is asked of every runtime.
+      const botId = recorded?.input.botId;
+      if ((await runtime.capabilities(botId)).idempotency.supported) {
+        const receipt = await runtime.lookupSubmission(requestId, botId);
         if (receipt) {
           if (previous) store.receipt(receipt);
           // A client whose answer was lost learns the turn here.
@@ -627,12 +630,12 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "POST /bots/:id/stop", { body: stopBody }, async (req, body) => {
     if (body?.account !== undefined && body.account !== accountMarker(signedIn(req).id))
       throw httpError(409, "This activity belongs to a different account");
-    await requireCapability("stop");
+    await requireCapability("stop", req.params.id);
     await runtime.stop(req.params.id, body?.runId);
     return { ok: true };
   });
   const decision = z.object({ decision: z.enum(["approved", "denied"]), scope: z.enum(["once", "session", "always"]).optional(), account: z.string().max(64).optional() });
-  apiRoute(app, "POST /bots/:id/approvals/:approvalId", { before: () => requireCapability("approvals"), body: decision },
+  apiRoute(app, "POST /bots/:id/approvals/:approvalId", { before: req => requireCapability("approvals", req.params.id), body: decision },
     async (req, { decision, scope, account }) => {
     const p = req.params;
     // An iOS notification action names the account it was sent to. Another person signed in on that phone must not decide it.
@@ -667,7 +670,7 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
     return { ok: true };
   });
   apiRoute(app, "POST /bots/:id/uploads", {}, async req => {
-    await requireCapability("uploads");
+    await requireCapability("uploads", req.params.id);
     const file = await req.file();
     if (!file) throw httpError(400, "No file provided");
     if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.mimetype))
@@ -683,8 +686,9 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
   // Stays no-store like every API response. An id is signed over a path, not a version, so an
   // overwritten artifact keeps its URL, and a browser cache is shared by whoever signs in next.
   app.get("/api/files/:id", async (req, reply) => {
-    await requireCapability("generatedFiles");
-    const file = await runtime.download((req.params as { id: string }).id, MAX_DOWNLOAD_BYTES);
+    // The ID's signature names its assistant, which the access hook already read into req.assistantId.
+    await requireCapability("generatedFiles", req.assistantId);
+    const file = await runtime.download((req.params as { id: string }).id, MAX_DOWNLOAD_BYTES, req.assistantId);
     if (file.size !== undefined) reply.header("Content-Length", file.size);
     reply
       .header("X-Content-Type-Options", "nosniff")

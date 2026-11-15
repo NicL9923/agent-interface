@@ -103,7 +103,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     await serialDelivery(store, async () => {
       if (enabled) {
         // The same assistant's routine Hermes is told to resume, read again in this turn.
-        const current = (await runtime.routines()).find(other => other.id === routineId && other.botId === row.botId);
+        const current = (await runtime.routines(row.botId)).find(other => other.id === routineId && other.botId === row.botId);
         if (!current) throw httpError(404, 'Routine not found');
         await assertDeliveryPrivate(runtime, store, current.botId, routineTargets(current));
       }
@@ -139,7 +139,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
     const tools = await runtime.tools(botId);
     const enabled = new Set(tools.filter(tool => tool.enabled).map(tool => tool.id));
     const starters: Starter[] = [{ id: 'meals', title: 'Plan dinners', prompt: 'Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan.' }];
-    if ((await runtime.capabilities()).uploads.supported) starters.push({ id: 'document', title: 'Explain a document', prompt: 'Help me understand the document I attach. Summarize its key points and highlight questions I should ask.' });
+    if ((await runtime.capabilities(botId)).uploads.supported) starters.push({ id: 'document', title: 'Explain a document', prompt: 'Help me understand the document I attach. Summarize its key points and highlight questions I should ask.' });
     if (enabled.has('terminal')) starters.push({ id: 'server', title: 'Check a server', prompt: 'Help me review my server health. First confirm which server and connection to use. Inspect only, then show findings and ask before making changes.' });
     if (enabled.has('web') || enabled.has('browser')) starters.push({ id: 'research', title: 'Research a question', prompt: 'Research this question using current primary sources, link them and explain any uncertainty: ' });
     return starters;

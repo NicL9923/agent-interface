@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store, schemaVersion } from "../src/server/store.js";
+import { hermesRuntimeId } from "../src/server/runtime-router.js";
 
 const legacySchema = readFileSync(new URL("./fixtures/schema-v0.sql", import.meta.url), "utf8");
 // Tables the previous release writes only with named columns, so new defaulted columns are safe.
@@ -61,6 +62,20 @@ describe("store migrations", () => {
     // Drafts saved before revisions start at revision 0, so a client's first base matches.
     expect(store.draft("one", "ranch")).toEqual({ text: "Unsent before the upgrade", attachments: [], revision: 0, reason: "edit", sentRevision: 0 });
     expect(store.saveDraft("one", "ranch", { text: "Edited after", attachments: [] }, 0)).toMatchObject({ saved: true, draft: { revision: 1 } });
+  });
+
+  it("keeps the event cursor from before per-runtime cursors as Hermes's, where a rolled-back release still reads it", () => {
+    const path = legacyDatabase();
+    const legacy = new DatabaseSync(path);
+    legacy.prepare("INSERT INTO metadata VALUES('event_cursor',?)").run("hermes-41");
+    legacy.close();
+    const store = open(path);
+    expect([store.cursor(hermesRuntimeId), store.cursor("codex")]).toEqual(["hermes-41", ""]);
+    store.recordEvents([], "codex-3", "codex");
+    store.recordEvents([], "hermes-42", hermesRuntimeId);
+    expect([store.cursor(hermesRuntimeId), store.cursor("codex")]).toEqual(["hermes-42", "codex-3"]);
+    // The previous release reads and writes only this row, so after a rollback it resumes where Hermes's discovery stopped.
+    expect(store.db.prepare("SELECT value FROM metadata WHERE key='event_cursor'").get()).toEqual({ value: "hermes-42" });
   });
 
   it("serves polling lookups from indexes", () => {
