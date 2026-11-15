@@ -146,6 +146,18 @@ describe("phone navigation morph", () => {
     expect(target()!.style.viewTransitionName).toBe("");
     expect(document.documentElement.dataset.navigation).toBeUndefined();
   });
+  it("treats a transition a newer navigation skipped as done, not as an error", async () => {
+    // A skipped transition still runs its update; only its `ready` rejects. Vitest fails the run on an unhandled rejection.
+    Object.assign(document, { startViewTransition: (callback: () => void) => {
+      callback();
+      return { finished: Promise.resolve(), ready: Promise.reject(new DOMException("Transition was skipped", "AbortError")) };
+    } });
+    const update = vi.fn();
+    morphNavigate(update, source, target, "forward");
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(document.documentElement.dataset.navigation).toBeUndefined();
+  });
   it("skips the transition under Reduce Motion", () => {
     reduceMotion = true;
     const start = vi.fn();
