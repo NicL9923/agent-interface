@@ -343,16 +343,32 @@ the app record in App Store Connect with the main bundle ID and SKU
 membership, the main app's production APNs entitlement, its two notification
 capabilities and Associated Domains. It stops if the portal setup is incomplete.
 
-After review and a clean commit, publish an explicit version and increasing build:
+The release number lives in `ios/tools/generate-project.py` (`MARKETING_VERSION` and
+`CURRENT_PROJECT_VERSION`). To ship a new build, raise `CURRENT_PROJECT_VERSION` there, run
+`python3 ios/tools/generate-project.py`, and commit. That changes the iOS inputs, so the
+whole suite must pass again on the committed state, on the Mac mini:
 
 ```sh
-node .agents/tools/publish-ios.mjs archive 1.0 1
-node .agents/tools/publish-ios.mjs upload 1.0 1
-node .agents/tools/publish-ios.mjs distribute 1.0 1
+bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
 ```
 
-The archive command uses the same version and build for all four bundles and
-checks the exported IPA's signatures, profiles, App Group, push and notification entitlements.
+Run it with no `-only-testing` or `-skip-testing` filter. A filtered run never counts toward a
+release. Skipped tests and the one expected failure are normal; a failure is not. Then publish,
+typing the version and build the repository holds:
+
+```sh
+node .agents/tools/publish-ios.mjs archive 1.0 27
+node .agents/tools/publish-ios.mjs upload 1.0 27
+node .agents/tools/publish-ios.mjs distribute 1.0 27
+```
+
+`archive` refuses, before it reads credentials or calls Apple, unless the typed VERSION and
+BUILD equal the generator's values, so the signed build number can never differ from the
+repository. It also refuses unless a passing full-scheme run recorded for the current iOS inputs
+exists, and the refusal names the command above. Upload and distribute still take the same two
+arguments to find the artifact. There is no override: when the suite cannot pass, fix or
+change the test in a reviewed commit, then validate again. The run it found, with its summary
+and result bundle paths and test counts, goes into `release.json` as `validation`.
 Artifacts and private logs stay under `/Volumes/DevSSD/scratch/wildbots-testflight`.
 An uncertain upload requires inspection, never an automatic second upload.
 `distribute` waits while Apple processes the build, checking about once a minute for up to 45

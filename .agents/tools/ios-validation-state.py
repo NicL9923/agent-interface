@@ -33,6 +33,8 @@ def source_state():
             '.agents/tools/source-state.py', '.agents/tools/patch-xctestrun.py',
         }):
             continue
+        if relative.endswith('.md') or relative.startswith('ios/evidence/'):
+            continue
         path = ROOT / relative
         # Missing tracked files and symlink targets are part of the fingerprint.
         if path.is_symlink():
@@ -94,20 +96,51 @@ def identity(operation, simulator, options):
                    'environment': environment})
 
 
-def cache_path(key):
-    if len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
-        raise ValueError('Invalid validation key')
+def cache_dir():
     common = Path(command('git', 'rev-parse', '--git-common-dir'))
     if not common.is_absolute():
         common = ROOT / common
-    return common.resolve().parent / '.private' / 'ios-validation-cache' / (key + '.json')
+    return common.resolve().parent / '.private' / 'ios-validation-cache'
+
+
+def cache_path(key):
+    if len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
+        raise ValueError('Invalid validation key')
+    return cache_dir() / (key + '.json')
+
+
+def evidence_counts(result):
+    evidence = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result), '--compact'))
+    if (not isinstance(evidence, dict) or evidence.get('result') != 'Passed' or evidence.get('failedTests') != 0
+            or type(evidence.get('passedTests')) is not int or evidence['passedTests'] <= 0 or evidence.get('testFailures')):
+        raise ValueError('Only completed, passing, nonempty test results can be reused')
+    fields = {'passed': 'passedTests', 'failed': 'failedTests', 'skipped': 'skippedTests', 'expectedFailures': 'expectedFailures'}
+    counts = {name: evidence.get(field) for name, field in fields.items()}
+    if any(type(value) is not int or value < 0 for value in counts.values()):
+        raise ValueError('Invalid test counts')
+    return counts
+
+
+def valid_receipt(value):
+    try:
+        args = value['arguments']
+        if not (isinstance(value, dict) and value.get('schema') == 2 and value.get('exit') == 0
+                and isinstance(value.get('source'), str) and isinstance(args, list) and all(isinstance(a, str) for a in args)
+                and args.count('--test-invocation--') == 1 and args.count('-scheme') == 1
+                and args[args.index('-scheme') + 1] == 'AgentInterface'
+                and 'build-for-testing' in args and 'test-without-building' in args
+                and value.get('full') is (not partial(args))
+                and Path(value['result']).is_dir() and Path(value['summary']).is_file()):
+            return False
+        return value.get('tests') == evidence_counts(value['result'])
+    except (OSError, ValueError, KeyError, TypeError, IndexError, subprocess.CalledProcessError):
+        return False
 
 
 def lookup(key):
     try:
         record = json.loads(cache_path(key).read_text())
-        if (isinstance(record, dict) and record.get('key') == key and record.get('schema') == 1 and record.get('exit') == 0
-                and Path(record['result']).is_dir() and Path(record['summary']).is_file()):
+        if valid_receipt(record) and record.get('key') == key:
             print('Reused successful iOS validation:', record['summary'])
             print('Validated inputs:', key)
             print('Result bundle:', record['result'])
@@ -117,16 +150,24 @@ def lookup(key):
     return 1
 
 
-def record(key, result, summary):
+def partial(options):
+    # A filter runs part of the scheme. The scheme's whole suite is what a release needs.
+    return any(option.startswith(('-only-testing', '-skip-testing')) for option in options)
+
+
+def record(key, source, result, summary, *arguments):
     result, summary = Path(result).resolve(), Path(summary).resolve()
-    evidence = json.loads(command('xcrun', 'xcresulttool', 'get', 'test-results', 'summary', '--path', str(result), '--compact'))
-    if (not isinstance(evidence, dict) or evidence.get('result') != 'Passed' or evidence.get('failedTests') != 0
-            or not isinstance(evidence.get('passedTests'), int) or evidence['passedTests'] <= 0
-            or evidence.get('testFailures') or not summary.is_file()):
-        raise ValueError('Only completed, passing, nonempty test results can be reused')
+    counts = evidence_counts(result)
+    if source_state() != source:
+        raise ValueError('iOS inputs changed while validation ran')
+    value = {'schema': 2, 'key': key, 'exit': 0, 'result': str(result), 'summary': str(summary),
+             'source': source, 'full': not partial(arguments), 'tests': counts, 'arguments': list(arguments)}
+    if not valid_receipt(value):
+        raise ValueError('Invalid validation receipt')
+    if source_state() != source:
+        raise ValueError('iOS inputs changed while validation ran')
     path = cache_path(key)
     path.parent.mkdir(parents=True, exist_ok=True)
-    value = {'schema': 1, 'key': key, 'exit': 0, 'result': str(result), 'summary': str(summary)}
     with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, prefix='.receipt-', delete=False) as f:
         json.dump(value, f, sort_keys=True)
         temporary = Path(f.name)
@@ -136,11 +177,37 @@ def record(key, result, summary):
         temporary.unlink(missing_ok=True)
 
 
+def full_run():
+    """Print the newest passing whole-scheme record for the current iOS inputs, or say why there is none."""
+    source = source_state()
+    matching, partial_runs = [], 0
+    for path in cache_dir().glob('*.json'):
+        try:
+            value = json.loads(path.read_text())
+            if not valid_receipt(value) or value.get('source') != source:
+                continue
+            if value.get('full') is not True:
+                partial_runs += 1
+            elif isinstance(value.get('tests'), dict) and value['tests'].get('failed') == 0 and value['tests'].get('passed', 0) > 0:
+                matching.append((path.stat().st_mtime, value))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    if not matching:
+        reason = 'Only a partial run (-only-testing or -skip-testing) passed' if partial_runs else 'No passing iOS validation exists'
+        print(f'{reason} for the current iOS inputs ({source}).', file=sys.stderr)
+        return 1
+    value = max(matching, key=lambda item: item[0])[1]
+    print(json.dumps({'source': source, 'key': value['key'], 'summary': value['summary'], 'result': value['result'], 'tests': value['tests']}))
+    return 0
+
+
 def main():
     action, *args = sys.argv[1:]
     if action == 'key':
         operation, simulator, *options = args
         print(identity(operation, simulator, options))
+    elif action == 'source':
+        print(source_state())
     elif action == 'eligible':
         operation, *options = args
         return 0 if cacheable(operation, options) else 1
@@ -150,6 +217,8 @@ def main():
         cache_path(*args).unlink(missing_ok=True)
     elif action == 'record':
         record(*args)
+    elif action == 'full-run':
+        return full_run()
     else:
         raise ValueError('Unknown validation-state action')
     return 0

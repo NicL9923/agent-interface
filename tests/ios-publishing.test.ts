@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 // Operator tooling uses Node's built-in modules and has no TypeScript build step.
 // @ts-expect-error Plain JavaScript operator module.
 import { all, appleApi, AppleNotReady, distribute, requireReadyBuild, runPrivate, untilReady } from '../.agents/tools/apple-api.mjs';
 
+// @ts-expect-error Plain JavaScript operator module.
+import { repositoryRelease, requireFullIosValidation, requireRepositoryRelease, validateCommand } from '../.agents/tools/ios-release-gate.mjs';
+
+const root = resolve(__dirname, '..');
 const ready = () => ({ id: 'build-42', attributes: { version: '42', processingState: 'VALID', expired: false }, marketingVersion: '1.0', relationships: { app: { data: { id: 'wildbots' } }, preReleaseVersion: { data: { id: 'v1' } } } });
 const household = ['one@example.test', 'two@example.test'];
 
@@ -106,5 +111,99 @@ describe('iOS publishing fences', () => {
     const once = vi.fn(async () => { throw new AppleNotReady('not yet'); });
     await expect(untilReady(once, { ...options, wait: false })).rejects.toThrow('Run distribute again later');
     expect(once).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The generator is the source of the shipped numbers, so the gate reads it as text.
+const generator = (version: string, build: string) => `MARKETING_VERSION = "${version}"\nCURRENT_PROJECT_VERSION = "${build}"\nLINK_DOMAIN = "x"\n`;
+const repoFiles = (version = '1.0', build = '27') => (_path: string) => generator(version, build);
+
+describe('iOS archive gate: the repository decides the release', () => {
+  it('reads the version and build the real generator holds, so a reformat there fails here and not at release time', () => {
+    const release = repositoryRelease(root);
+    expect(release.version).toMatch(/^\d+\.\d+/);
+    expect(Number.isInteger(release.build) && release.build > 0).toBe(true);
+  });
+
+  it('refuses a build number that is higher or lower than the repository holds, and says which file to change', () => {
+    expect(requireRepositoryRelease(root, '1.0', 27, repoFiles())).toEqual({ version: '1.0', build: 27 });
+    for (const typed of [28, 26]) {
+      expect(() => requireRepositoryRelease(root, '1.0', typed, repoFiles())).toThrow(`BUILD ${typed} does not match CURRENT_PROJECT_VERSION 27 in ios/tools/generate-project.py`);
+    }
+  });
+
+  it('refuses a version the repository does not hold', () => {
+    expect(() => requireRepositoryRelease(root, '1.1', 27, repoFiles())).toThrow('VERSION 1.1 does not match MARKETING_VERSION 1.0');
+  });
+
+  it('refuses a generator it cannot read the release from, rather than guessing', () => {
+    for (const text of ['MARKETING_VERSION = "1.0"\n', 'CURRENT_PROJECT_VERSION = "27"\n', generator('1.0', 'twenty-seven'), generator('1.0', '0')]) {
+      expect(() => repositoryRelease(root, () => text)).toThrow('no readable MARKETING_VERSION and CURRENT_PROJECT_VERSION');
+    }
+  });
+});
+
+describe('iOS archive gate: a full passing run for these iOS inputs', () => {
+  const evidence = { source: 'abc', key: 'k', summary: '/s.txt', result: '/r.xcresult', tests: { passed: 700, failed: 0, skipped: 29, expectedFailures: 1 } };
+  const exec = (reply: Partial<{ status: number | null; stdout: string; stderr: string; error: Error }>) => vi.fn((..._args: unknown[]) => ({ status: 0, stdout: '', stderr: '', ...reply }));
+
+  it('returns the evidence for the receipt, with skips and an expected failure allowed', () => {
+    const run = exec({ stdout: JSON.stringify(evidence) });
+    expect(requireFullIosValidation(root, run)).toEqual(evidence);
+    expect(run).toHaveBeenCalledWith('python3', [join(root, '.agents/tools/ios-validation-state.py'), 'full-run'], root);
+  });
+
+  it('relays the tool\'s reason and names the command that produces a run', () => {
+    for (const reason of ['No passing iOS validation exists for the current iOS inputs (sha).', 'Only a partial run (-only-testing or -skip-testing) passed for the current iOS inputs (sha).']) {
+      const refusal = (() => { try { requireFullIosValidation(root, exec({ status: 1, stderr: reason + '\n' })); } catch (error) { return (error as Error).message; } })();
+      expect(refusal).toContain(reason);
+      expect(refusal).toContain(validateCommand);
+    }
+  });
+
+  it('refuses when the evidence cannot be read, and says that instead of claiming no run exists', () => {
+    for (const reply of [{ status: 2, stderr: 'iOS validation evidence: boom' }, { status: null }, { status: 0, error: new Error('spawn python3 ENOENT') }]) {
+      expect(() => requireFullIosValidation(root, exec(reply))).toThrow('Could not read the iOS validation evidence');
+    }
+    expect(() => requireFullIosValidation(root, exec({ status: 2, stderr: 'iOS validation evidence: boom' }))).toThrow(validateCommand);
+  });
+
+  it('refuses success output that is not usable evidence, or that records a failure', () => {
+    for (const stdout of ['', 'not json', '{}', JSON.stringify({ ...evidence, tests: undefined })]) {
+      expect(() => requireFullIosValidation(root, exec({ stdout }))).toThrow('evidence was unreadable');
+    }
+    expect(() => requireFullIosValidation(root, exec({ stdout: JSON.stringify({ ...evidence, tests: { ...evidence.tests, failed: 2 } }) }))).toThrow('records 2 failing tests');
+  });
+});
+
+describe('publish-ios archive refuses before it touches the host, credentials or Apple', () => {
+  // A copy of the tool in a throwaway repository with no validation records, so no outcome here can
+  // reach a signing or App Store Connect step. The copy resolves its repository from its own location.
+  const archive = (version: string, build: string, held = '27') => {
+    const directory = mkdtempSync(join(tmpdir(), 'wildbots-archive-gate-'));
+    try {
+      mkdirSync(join(directory, '.agents/tools'), { recursive: true });
+      mkdirSync(join(directory, 'ios/tools'), { recursive: true });
+      for (const name of ['publish-ios.mjs', 'apple-api.mjs', 'ios-release-gate.mjs', 'ios-validation-state.py']) copyFileSync(join(root, '.agents/tools', name), join(directory, '.agents/tools', name));
+      writeFileSync(join(directory, 'ios/tools/generate-project.py'), generator('1.0', held));
+      writeFileSync(join(directory, 'ios/Input.swift'), 'source');
+      spawnSync('git', ['init', '-q', directory]);
+      const result = spawnSync(process.execPath, [join(directory, '.agents/tools/publish-ios.mjs'), 'archive', version, build], { cwd: directory, encoding: 'utf8', timeout: 20000 });
+      return { status: result.status, stderr: result.stderr };
+    } finally { rmSync(directory, { recursive: true }); }
+  };
+
+  it('refuses a build number the repository does not hold', () => {
+    const result = archive('1.0', '28');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('BUILD 28 does not match CURRENT_PROJECT_VERSION 27');
+  });
+
+  it('refuses when no full validation passed for the iOS inputs, naming the command to run one', () => {
+    const result = archive('1.0', '27');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('No passing iOS validation exists');
+    expect(result.stderr).toContain(validateCommand);
+    expect(result.stderr).not.toContain('Mac mini');
   });
 });

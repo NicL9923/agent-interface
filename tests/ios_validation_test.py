@@ -66,7 +66,7 @@ elif 'test-without-building' in args:
 else:sys.exit('unexpected xcodebuild action')
 result=pathlib.Path(args[args.index('-resultBundlePath')+1]);result.mkdir(parents=True,exist_ok=True)
 passed=int(os.environ.get('TEST_PASSED','1'));failed=int(os.environ.get('TEST_FAILED','0'))
-(result/'evidence.json').write_text(json.dumps({'result':'Passed' if failed==0 else 'Failed','passedTests':passed,'failedTests':failed,'testFailures':[]}))
+(result/'evidence.json').write_text(json.dumps({'result':'Passed' if failed==0 else 'Failed','passedTests':passed,'failedTests':failed,'skippedTests':int(os.environ.get('TEST_SKIPPED','0')),'expectedFailures':int(os.environ.get('TEST_EXPECTED','0')),'testFailures':[]}))
 sys.exit(int(os.environ.get('TEST_NATIVE_EXIT','0')) if 'test-without-building' in args else 0)
 ''', python=True)
         self.executable(self.bin / 'xcrun', '''import os,sys,pathlib,json
@@ -85,7 +85,9 @@ if args==['simctl','shutdown','PHONE']:
  with open(os.environ['TEST_CALLS'],'a') as f:f.write(json.dumps(['xcrun',*args])+'\\n')
  sys.exit(0)
 if args[:4]==['xcresulttool','get','test-results','summary']:
- result=pathlib.Path(args[args.index('--path')+1]);print((result/'evidence.json').read_text());sys.exit(0)
+ result=pathlib.Path(args[args.index('--path')+1]);
+ if os.environ.get('TEST_SUMMARY_CHANGE')=='1':(root/'ios/Input.swift').write_text('changed during summary')
+ print((result/'evidence.json').read_text());sys.exit(0)
 sys.exit('unexpected xcrun call: '+repr(args))
 ''', python=True)
 
@@ -102,6 +104,58 @@ sys.exit('unexpected xcrun call: '+repr(args))
 
     def receipts(self):
         return list((self.repo / '.private/ios-validation-cache').glob('*.json'))
+
+    def full_run(self):
+        return subprocess.run([sys.executable, str(self.tools / 'ios-validation-state.py'), 'full-run'],
+                              check=False, cwd=self.root, env=self.env, capture_output=True, text=True)
+
+    def test_summary_source_change_never_certifies_new_source(self):
+        p = self.run_validation(TEST_SUMMARY_CHANGE='1')
+        self.assertEqual(p.returncode, 75, p.stderr)
+        self.assertEqual(self.receipts(), [])
+        self.assertEqual(self.full_run().returncode, 1)
+
+    def test_filtered_scope_and_bundle_counts_are_checked(self):
+        self.assertEqual(self.run_validation(options=['-only-testing:Unit/one']).returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        value['full'] = True
+        receipt.write_text(json.dumps(value))
+        self.assertEqual(self.full_run().returncode, 1)
+        receipt.unlink()
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        execution = [a[1:] for a in self.actions() if a[0] == 'xcodebuild' and ('build-for-testing' in a or 'test-without-building' in a)][-2:]
+        self.assertEqual(value['arguments'], execution[0] + ['--test-invocation--'] + execution[1])
+        for field in ['passed', 'failed', 'skipped', 'expectedFailures']:
+            damaged = json.loads(json.dumps(value))
+            damaged['tests'][field] += 1
+            receipt.write_text(json.dumps(damaged))
+            self.assertEqual(self.full_run().returncode, 1, field)
+        receipt.write_text(json.dumps(value))
+        (Path(value['result']) / 'evidence.json').unlink()
+        self.assertEqual(self.full_run().returncode, 1)
+
+    def test_incomplete_counts_are_not_reused(self):
+        self.assertEqual(self.run_validation().returncode, 0)
+        receipt = self.receipts()[0]
+        value = json.loads(receipt.read_text())
+        del value['tests']
+        receipt.write_text(json.dumps(value))
+        p = self.run_validation()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn('Reused successful', p.stdout)
+        self.assertEqual(self.full_run().returncode, 0)
+
+    def test_documentation_and_evidence_do_not_invalidate(self):
+        self.assertEqual(self.run_validation().returncode, 0)
+        (self.repo / 'ios/README.md').write_text('notes')
+        (self.repo / 'ios/evidence').mkdir()
+        (self.repo / 'ios/evidence/screenshot.png').write_bytes(b'image')
+        p = self.run_validation()
+        self.assertIn('Reused successful', p.stdout)
+        self.assertEqual(self.full_run().returncode, 0)
 
     def test_identical_success_reuses_before_taking_the_lock(self):
         first = self.run_validation(options=['-only-testing:Unit/one'])
@@ -253,6 +307,74 @@ sys.exit('unexpected xcrun call: '+repr(args))
         self.assertNotEqual(p.returncode,0)
         self.assertIn('needs a value',p.stderr)
         self.assertEqual(self.actions(),[])
+
+    def test_full_run_names_a_passing_whole_scheme_run_and_its_counts(self):
+        # A normal full run has skipped tests and one expected failure; neither blocks a release.
+        self.assertEqual(self.run_validation(TEST_PASSED='700',TEST_SKIPPED='29',TEST_EXPECTED='1').returncode,0)
+        p=self.full_run()
+        self.assertEqual(p.returncode,0,p.stderr)
+        evidence=json.loads(p.stdout)
+        self.assertEqual(evidence['tests'],{'passed':700,'failed':0,'skipped':29,'expectedFailures':1})
+        self.assertTrue(Path(evidence['summary']).is_file() and Path(evidence['result']).is_dir())
+        self.assertEqual(evidence['source'],json.loads(self.receipts()[0].read_text())['source'])
+
+    def test_full_run_refuses_without_any_run(self):
+        p=self.full_run()
+        self.assertEqual(p.returncode,1)
+        self.assertIn('No passing iOS validation exists',p.stderr)
+        self.assertEqual(p.stdout,'')
+
+    def test_full_run_refuses_a_filtered_run_and_says_so(self):
+        for option in ['-only-testing:Unit/one','-skip-testing:Unit/one']:
+            with self.subTest(option=option):
+                self.assertEqual(self.run_validation(options=[option]).returncode,0)
+                self.assertEqual(len(self.receipts()),1)
+                self.assertFalse(json.loads(self.receipts()[0].read_text())['full'])
+                p=self.full_run()
+                self.assertEqual(p.returncode,1)
+                self.assertIn('Only a partial run',p.stderr)
+                shutil.rmtree(self.repo/'.private/ios-validation-cache')
+
+    def test_full_run_refuses_after_the_ios_inputs_change(self):
+        self.assertEqual(self.run_validation().returncode,0)
+        self.assertEqual(self.full_run().returncode,0)
+        for change in [lambda:self.input.write_text('edited after the run'),lambda:(self.repo/'ios/New.swift').write_text('new')]:
+            change()
+            p=self.full_run()
+            self.assertEqual(p.returncode,1)
+            self.assertIn('No passing iOS validation exists',p.stderr)
+
+    def test_full_run_ignores_failed_runs_and_unreadable_or_incomplete_receipts(self):
+        self.assertEqual(self.run_validation(TEST_NATIVE_EXIT='65').returncode,65)
+        self.assertEqual(self.full_run().returncode,1)
+        self.assertEqual(self.run_validation().returncode,0)
+        receipt=self.receipts()[0]
+        good=json.loads(receipt.read_text())
+        for name,damage in [('failures',lambda r:r['tests'].update(failed=1)),('nothing passed',lambda r:r['tests'].update(passed=0)),
+                            ('no counts',lambda r:r.pop('tests')),('failed exit',lambda r:r.update(exit=1)),
+                            ('result gone',lambda r:r.update(result=str(self.root/'missing.xcresult'))),
+                            ('other source',lambda r:r.update(source='0'*64))]:
+            with self.subTest(name=name):
+                value=json.loads(json.dumps(good));damage(value)
+                receipt.write_text(json.dumps(value))
+                p=self.full_run()
+                self.assertEqual(p.returncode,1)
+        receipt.write_text('[]')
+        self.assertEqual(self.full_run().returncode,1)
+
+    def test_a_receipt_from_before_scope_was_recorded_is_rerun_not_reused(self):
+        self.assertEqual(self.run_validation().returncode,0)
+        receipt=self.receipts()[0]
+        old=json.loads(receipt.read_text())
+        for field in ['source','full','tests']:old.pop(field)
+        receipt.write_text(json.dumps(old))
+        self.assertEqual(self.full_run().returncode,1)
+        before=len(self.actions())
+        p=self.run_validation()
+        self.assertEqual(p.returncode,0,p.stderr)
+        self.assertNotIn('Reused successful',p.stdout)
+        self.assertGreater(len(self.actions()),before)
+        self.assertEqual(self.full_run().returncode,0)
 
 
 if __name__=='__main__':unittest.main()
