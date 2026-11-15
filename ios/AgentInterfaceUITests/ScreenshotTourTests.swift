@@ -1,17 +1,18 @@
 import XCTest
 import CryptoKit
 
-/// Captures a repeatable PNG tour of the Debug fixture for visual before/after review.
-/// Skipped unless the runner sets AGENT_INTERFACE_SCREENSHOT_DIR, which xcodebuild forwards
+/// Runs fixture-backed assertions and optionally captures the Debug fixture for visual review.
+/// Capture-only tours require AGENT_INTERFACE_SCREENSHOT_DIR, forwarded by xcodebuild
 /// from TEST_RUNNER_AGENT_INTERFACE_SCREENSHOT_DIR. Run with .agents/tools/ios-screenshot-tour.sh.
 @MainActor final class ScreenshotTourTests: XCTestCase {
   private var directory: URL!
 
   override func setUp() async throws {
     let path = ProcessInfo.processInfo.environment["AGENT_INTERFACE_SCREENSHOT_DIR"] ?? ""
-    try XCTSkipUnless(!path.isEmpty, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
-    directory = URL(fileURLWithPath: path, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    if !path.isEmpty {
+      directory = URL(fileURLWithPath: path, isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
     continueAfterFailure = false
   }
 
@@ -29,7 +30,7 @@ import CryptoKit
   /// Focused captures for the screen-by-screen design gate, using the same data as the web.
   func testTodayDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_TODAY_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_TODAY_PATH to the shared design fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_TODAY_PATH to the shared design fixture."); return }
     let fixture = try Data(contentsOf: URL(fileURLWithPath: source))
     let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
     let variants = [
@@ -89,7 +90,7 @@ import CryptoKit
 
   func testHomeDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_HOME_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_HOME_PATH to capture home.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_HOME_PATH to capture home."); return }
     let fixture = try String(contentsOfFile: source, encoding: .utf8)
     for (name, theme, size) in [
       ("home-loaded", "light", "UICTContentSizeCategoryL"),
@@ -119,8 +120,9 @@ import CryptoKit
   }
 
   func testConversationDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_CONVERSATION_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_CONVERSATION_PATH to capture conversation.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_CONVERSATION_PATH to capture conversation."); return }
     let fixture = try String(contentsOfFile: source, encoding: .utf8)
     let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
     let variants = [
@@ -153,8 +155,9 @@ import CryptoKit
   }
 
   func testQuestionsDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to capture questions.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to capture questions."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
     let fixture = String(decoding: data, as: UTF8.self)
     let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -232,7 +235,7 @@ import CryptoKit
 
   func testShortQuestionFollowsItsLongReply() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_QUESTIONS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to exercise the question fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_QUESTIONS_PATH to exercise the question fixture."); return }
     var fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     var conversation = try XCTUnwrap(fixture["conversation"] as? [String: Any])
     var request = try XCTUnwrap((conversation["attention"] as? [[String: Any]])?.first)
@@ -268,8 +271,9 @@ import CryptoKit
   }
 
   func testApprovalsDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_APPROVALS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_APPROVALS_PATH to capture approvals.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_APPROVALS_PATH to capture approvals."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let error = try XCTUnwrap(original["decisionError"] as? String)
@@ -350,8 +354,9 @@ import CryptoKit
   }
 
   func testRecoveryDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_RECOVERY_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_RECOVERY_PATH to capture recovery.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_RECOVERY_PATH to capture recovery."); return }
     let data = try Data(contentsOf: URL(fileURLWithPath: source))
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
@@ -423,7 +428,7 @@ import CryptoKit
 
   func testDetailsDesignReview() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_DETAILS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_DETAILS_PATH to capture assistant details.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_DETAILS_PATH to capture assistant details."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
     guard ["before", "after"].contains(stage) else { XCTFail("Unknown details stage: \(stage)"); return }
@@ -578,8 +583,9 @@ import CryptoKit
 
   /// Only states affected by moving guidance outside disabled controls. Other captures stay valid.
   func testModelsCaptionDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set the shared Models fixture to capture caption corrections.")
+    guard !source.isEmpty else { XCTFail("Set the shared Models fixture to capture caption corrections."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     for (name, theme, size) in [
       ("models-loaded", "light", "UICTContentSizeCategoryL"),
@@ -638,8 +644,9 @@ import CryptoKit
   /// Memory baseline and final comparisons share the production-shaped two-document fixture.
   /// W1 only. Each variant starts a new fixture process with a fresh account scope.
   func testWorkGoalDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_PATH to the Work fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_PATH to the Work fixture."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
     guard ["before", "after"].contains(stage) else { XCTFail("Unknown Work stage: \(stage)"); return }
@@ -875,12 +882,13 @@ import CryptoKit
 
   /// W2a AFTER only. The BEFORE tour remains frozen for the remaining editor captures.
   func testWorkTaskDesignReviewAfter() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture this after-stage tour.")
     try XCTSkipUnless(ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after", "W2a AFTER only")
     guard directory.pathComponents.contains("after"), !(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)).contains(where: { $0.pathExtension.lowercased() == "png" }) else {
       XCTFail("AFTER captures require a fresh after directory with no existing PNGs"); return
     }
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture."); return }
     var fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let config = try XCTUnwrap(fixture["workFixture"] as? [String: Any])
     XCTAssertEqual(config["gate"] as? String, "W2-tasks")
@@ -1098,8 +1106,9 @@ import CryptoKit
 
   /// W2b only. The shared BEFORE tour and accepted W2a AFTER tour keep their own selectors.
   func testWorkTaskEditorDesignReviewAfter() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture this after-stage tour.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set the W2 task fixture to capture its editors.")
+    guard !source.isEmpty else { XCTFail("Set the W2 task fixture to capture its editors."); return }
     try XCTSkipUnless(ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after", "This is the AFTER editor tour.")
     guard directory.pathComponents.contains("after"), !(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)).contains(where: { $0.pathExtension.lowercased() == "png" }) else {
       XCTFail("AFTER captures require a fresh after directory with no existing PNGs"); return
@@ -1294,8 +1303,9 @@ import CryptoKit
   }
 
   func testWorkTaskDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
     XCTAssertEqual(config["gate"] as? String, "W2-tasks")
@@ -1457,9 +1467,10 @@ import CryptoKit
   }
 
   func testWorkTriggerDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let environment = ProcessInfo.processInfo.environment
     let source = environment["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let config = try XCTUnwrap(original["workFixture"] as? [String: Any])
     guard config["gate"] as? String == "W3-triggers", environment["AGENT_INTERFACE_DESIGN_STAGE"] == "before",
@@ -1690,9 +1701,10 @@ import CryptoKit
   }
 
   func testWorkTriggerAfterDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let environment = ProcessInfo.processInfo.environment
     let source = environment["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH to the W3 fixture."); return }
     let fixtureData = try Data(contentsOf: URL(fileURLWithPath: source))
     guard SHA256.hash(data: fixtureData).map({ String(format: "%02x", $0) }).joined() == "5ed79b279e92aec72374303ef45c340560ca753524187cff9e78637f17e97e9d" else { XCTFail("Wrong W3 fixture."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: fixtureData) as? [String: Any])
@@ -2364,8 +2376,9 @@ import CryptoKit
   }
 
   func testMemoryDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MEMORY_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MEMORY_PATH to capture Memory."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let config = try XCTUnwrap(original["memoryFixture"] as? [String: String])
     let messages = try XCTUnwrap(original["memoryMessages"] as? [String: String])
@@ -2572,8 +2585,9 @@ import CryptoKit
 
   /// Shared production-shaped model and capability data, with explicit recoverable failures.
   func testModelsDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_MODELS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_MODELS_PATH to capture Models."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let after = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] == "after"
     let selection = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_VARIANT"] ?? ""
@@ -2786,8 +2800,9 @@ import CryptoKit
 
   /// Captures the real editor with fixture-backed writes and refresh readback.
   func testAvatarDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_AVATAR_PATH to capture Avatar.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_AVATAR_PATH to capture Avatar."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
     guard ["before", "after"].contains(stage) else { XCTFail("Unknown Avatar stage: \(stage)"); return }
@@ -2994,7 +3009,7 @@ import CryptoKit
   /// Avatar controls are shared with creation, whose accepted full preview stays unchanged.
   func testAvatarCreationLayoutRegression() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_AVATAR_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_AVATAR_PATH for the creation regression.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_AVATAR_PATH for the creation regression."); return }
     let fixture = try String(contentsOfFile: source, encoding: .utf8)
     for (name, theme, size) in [("light", "light", "UICTContentSizeCategoryL"),
       ("dark", "dark", "UICTContentSizeCategoryL"),
@@ -3015,8 +3030,9 @@ import CryptoKit
   }
 
   func testSettingsDesignReview() throws {
+    try XCTSkipUnless(directory != nil, "Capture-only until design tour failures in #416 are resolved.")
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_SETTINGS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_SETTINGS_PATH to capture assistant creation and settings.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_SETTINGS_PATH to capture assistant creation and settings."); return }
     let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     let stage = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_STAGE"] ?? "before"
     guard ["before", "after"].contains(stage) else { XCTFail("Unknown settings stage: \(stage)"); return }
@@ -3205,6 +3221,7 @@ import CryptoKit
   }
 
   func testScreenshotTour() throws {
+    try XCTSkipUnless(directory != nil, "Set AGENT_INTERFACE_SCREENSHOT_DIR to capture the tour.")
     var app = launch()
     XCTAssertTrue(app.textViews["messageComposer"].waitForExistence(timeout: 15))
 
@@ -3423,6 +3440,7 @@ import CryptoKit
 
   /// Waits for transitions to settle, then writes the full-screen PNG and attaches it to the result.
   private func capture(_ name: String) throws {
+    guard let directory else { return }
     Thread.sleep(forTimeInterval: 1.0)
     let screenshot = XCUIScreen.main.screenshot()
     try screenshot.pngRepresentation.write(to: directory.appendingPathComponent("\(name).png"))

@@ -11,6 +11,15 @@ case "$operation" in test|build|live) ;; *) echo 'Choose test, build, or live' >
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
 if [[ $# -ge 2 ]]; then shift 2; else shift; fi
 cd "$repo_dir"
+# Forward shared fixtures to XCTest, while allowing callers to select an alternate fixture.
+for fixture in "$repo_dir"/.agents/fixtures/*.json; do
+  [[ -f "$fixture" ]] || continue
+  name=$(basename "$fixture" .json)
+  name=${name%-design}
+  name=$(printf '%s' "$name" | tr '[:lower:]-' '[:upper:]_')
+  variable="TEST_RUNNER_AGENT_INTERFACE_DESIGN_${name}_PATH"
+  if [[ ! ${!variable+x} ]]; then export "$variable=$fixture"; fi
+done
 state_tool="$repo_dir/.agents/tools/ios-validation-state.py"
 request_options=("$@")
 source_before=$(python3 "$state_tool" source)

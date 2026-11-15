@@ -751,7 +751,7 @@ struct BotListView: View {
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : bot.shared ? "Shared assistant" : "Personal assistant")
               .font(unread ? .subheadline.weight(.medium) : .subheadline)
-              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+              .foregroundStyle(unread ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
           }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }.padding(.horizontal, 10).padding(.vertical, 12).contentShape(Rectangle())
