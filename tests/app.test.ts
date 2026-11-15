@@ -14,6 +14,7 @@ import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, 
 import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
+import { fileKeys, fileSigner, generateFileKey } from "../src/server/hermes-files.js";
 import { localLogin } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 // This is an isolated app contract double, not evidence of Hermes integration.
@@ -878,6 +879,22 @@ it("accepts long signed file identifiers in uploads, drafts, and authenticated d
   expect(
     (await app.inject({ url: `/api/files/${fileId}`, headers })).statusCode,
   ).toBe(200);
+  await app.close();
+});
+it("saves a draft whose attachment the app signed with its own key, and refuses an identifier of no known shape by field", async () => {
+  // #399 signs `v2.<key id>.<body>.<signature>`; a draft or send carrying one must not fail validation.
+  const { app } = await createApp(config(), runtimeDouble().runtime, { background: false });
+  const headers = await login(app);
+  const save = (id: string) => app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Draft", attachments: [{ id, name: "photo.webp", mime: "image/webp" }] } });
+  const signed = fileSigner(fileKeys(generateFileKey()), undefined).signFile({ path: "/staged/photo.webp", name: "photo.webp", mime: "image/webp", botId: "shared", kind: "upload", version: 1 }).id;
+  expect(signed.split(".")).toHaveLength(4);
+  const kept = await save(signed);
+  expect(kept.statusCode).toBe(200);
+  expect(kept.json().attachments[0].id).toBe(signed);
+  for (const id of ["onlyonepart", "v2.key.body", "v3.key.body.signature", "a.b.c", "v2.key.body.sig.extra", "v2.key.bo dy.sig", ""]) {
+    const refused = await save(id);
+    expect([id, refused.statusCode, refused.json().details[0].path]).toEqual([id, 400, ["attachments", 0, "id"]]);
+  }
   await app.close();
 });
 it("streams downloads under the shared cap and explains a file that is too large", async () => {

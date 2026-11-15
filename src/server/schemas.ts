@@ -10,7 +10,8 @@ export const fileRef = z.object({
     .string()
     .min(1)
     .max(8192)
-    .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/),
+    // `v2.<key id>.<body>.<signature>` since the app signs with its own key, or the earlier `<body>.<signature>`.
+    .regex(/^(?:v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/),
   name: z.string().max(255),
   mime: z.string().max(100),
   size: z.number().optional(),
