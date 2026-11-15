@@ -990,6 +990,14 @@ class LiveCheckoutTests(unittest.TestCase):
         subprocess.run(["sh", "-c", refusal.rpartition("without running git there: ")[2]], check=True)
         self.assertEqual(self.refusals(), [])
 
+    def test_the_printed_fix_works_on_a_config_whose_last_line_has_no_newline(self):
+        for key in ("gc.auto", "maintenance.auto"): self.git("config", "--local", "--unset-all", key)
+        config = self.live / ".git/config"
+        config.write_text(config.read_text().rstrip("\n"))
+        [refusal] = self.refusals()
+        subprocess.run(["sh", "-c", refusal.rpartition("without running git there: ")[2]], check=True)
+        self.assertEqual(self.refusals(), [])
+
     def test_missing_head_objects_are_counted_without_fetching_them(self):
         # Two blobs absent, their trees present: what the Nov 9, 2026 repack left (42 blobs).
         (self.upstream / "c").write_text("three\n"); (self.upstream / "d/e").write_text("four\n")

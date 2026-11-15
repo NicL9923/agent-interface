@@ -44,7 +44,8 @@ def live_clone_refusals(source, environment):
     refusals = []
     if any(read("config", "--local", "--type=" + kind, "--get", key).stdout.strip() != value
            for key, kind, value in CLONE_PROTECTION):
-        fix = "printf '[gc]\\n\\tauto = 0\\n[maintenance]\\n\\tauto = false\\n' >> " + shlex.quote(str(Path(source) / ".git/config"))
+        # The leading newline ends a last line that has none, which would otherwise swallow `[gc]`.
+        fix = "printf '\\n[gc]\\n\\tauto = 0\\n[maintenance]\\n\\tauto = false\\n' >> " + shlex.quote(str(Path(source) / ".git/config"))
         refusals.append(f"The live Hermes checkout {source} allows automatic gc or maintenance, and a repack "
                         f"drops objects from this promisor clone. Turn both off, without running git there: {fix}")
     listing = read("rev-list", "--objects", "--missing=print", "--no-walk", "HEAD")

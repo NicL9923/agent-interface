@@ -60,3 +60,15 @@ these helpers.
 ## Not exercised
 
 The production host's own git build and live checkout, and a real install or rollback there.
+
+## Review fix
+
+GPT-6.1 Sol's review found that the printed repair assumed `.git/config` ends with a newline: on a valid config
+without one, `[gc]` joined the last value, the command succeeded and qualification still refused. The printed line now
+starts with a newline, which also leaves an ordinary config valid.
+
+| Mutation | Result |
+| --- | --- |
+| The printed fix without its leading newline | failed: `test_the_printed_fix_works_on_a_config_whose_last_line_has_no_newline` |
+
+`LiveCheckoutTests` passed 5 of 5 on macOS (git from Xcode) after the restore.
