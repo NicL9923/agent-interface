@@ -511,9 +511,13 @@ export function expressionFor(state: ActivityState, t: number, plan: MotionPlan 
     default: return { open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0 };
   }
 }
-/** Frame-rate independent approach toward a target expression. */
+/**
+ * Frame-rate independent approach toward a target expression. A step of no time, or a negative one,
+ * changes nothing: a negative `dt` would push each feature past its target and away from it, which drew
+ * eyes with a negative height.
+ */
 export function approach(current: Expression, target: Expression, dt: number): Expression {
-  const k = 1 - Math.exp(-dt / 0.09);
+  const k = dt > 0 ? 1 - Math.exp(-dt / 0.09) : 0;
   return {
     open: current.open + (target.open - current.open) * k,
     tilt: current.tilt + (target.tilt - current.tilt) * k,
