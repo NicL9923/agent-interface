@@ -16,8 +16,6 @@ type Push = { token: string; payload: { aps: { event: string; timestamp: number;
 let clock: number, store: Store, pushes: Push[], failure: Error | undefined;
 let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, approvals: Record<string, Conversation["approvals"]>, live: LiveActivities;
 let duringSend: (() => void) | undefined;
-// Hermes down, as its adapter answers then: the last roster marked disconnected and incomplete, and no conversation.
-let hermesDown: boolean;
 const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({ id, name: id[0].toUpperCase() + id.slice(1), shared: true, model: "test", activity, ...extra });
 const set = (id: string, state: ActivityState, extra: Partial<Conversation["activity"]> = {}, botExtra: Partial<Bot> = {}) => {
   bots = bots.map(value => value.id === id ? { ...value, activity: state, ...botExtra } : value);
@@ -39,11 +37,11 @@ beforeEach(() => {
   }
   bots = [bot("kitchen"), bot("garden"), bot("secret")];
   conversations = {}; approvals = {};
-  pushes = []; failure = undefined; duringSend = undefined; hermesDown = false;
+  pushes = []; failure = undefined; duringSend = undefined;
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apns();
   const runtime = {
-    listBots: async () => hermesDown ? Object.assign(bots.map(value => ({ ...value, activity: "disconnected" as const })), { incomplete: true as const }) : bots,
-    conversation: async (botId: string) => hermesDown ? Promise.reject(new Error("Hermes is disconnected.")) : ({ botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } }) as Conversation,
+    listBots: async () => bots,
+    conversation: async (botId: string) => ({ botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } }) as Conversation,
   };
   live = new LiveActivities(store, runtime, config, async (target, payload, priority) => {
     duringSend?.();
@@ -75,22 +73,6 @@ describe("aggregate Live Activity", () => {
     expect(last().priority).toBe(10);
     expect(last().payload.aps["content-state"]).toMatchObject({ title: "Kitchen finished", activeCount: 0, rows: [{ phase: "done", detail: "Dinner is planned." }] });
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
-  });
-
-  it("keeps a running assistant as it was while Hermes is down, and ends only when Hermes is back and says it finished", async () => {
-    register("one", ["kitchen"]);
-    set("kitchen", "working");
-    await tick();
-    expect(rows()).toEqual(["kitchen:working"]);
-    hermesDown = true;
-    // Past the grace period and the heartbeat: nothing is sent, so the activity stays as it was and goes stale.
-    await tick(ARMED_MS + 5 * 60_000);
-    expect(pushes).toHaveLength(1);
-    expect(store.liveActivities("sandbox", clock).map(row => row.lastState?.rows.map(value => `${value.botId}:${value.phase}`))).toEqual([["kitchen:working"]]);
-    hermesDown = false;
-    set("kitchen", "idle", {}, { lastMessage: { text: "Dinner is planned.", at: new Date(clock).toISOString() } });
-    await tick(1_000);
-    expect([last().payload.aps.event, rows()]).toEqual(["end", ["kitchen:done"]]);
   });
 
   it("shows a run that finished between two looks as done", async () => {

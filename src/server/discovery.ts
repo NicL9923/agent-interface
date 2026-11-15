@@ -8,7 +8,7 @@ import type { Routine, Runtime } from '../shared/types.js';
 import { mapLimit } from './concurrency.js';
 import type { AutomationOverview, SearchHit, Starter, UsageSummary } from '../shared/discovery.js';
 import type { Store } from './store.js';
-import { notFound, redactAgents, Roster, rosterBot, routineById, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { httpError } from './http-error.js';
 import { snippetPlain } from '../shared/plain-text.js';
 import { id } from './schemas.js';
@@ -135,7 +135,7 @@ export async function installDiscoveryRoutes(app: FastifyInstance, runtime: Runt
   });
   apiRoute(app, "GET /bots/:id/starters", {}, async req => {
     const botId = z.object({ id }).parse(req.params).id;
-    if (!await rosterBot(runtime, botId)) throw httpError(404, notFound.error, { code: notFound.code });
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
     const tools = await runtime.tools(botId);
     const enabled = new Set(tools.filter(tool => tool.enabled).map(tool => tool.id));
     const starters: Starter[] = [{ id: 'meals', title: 'Plan dinners', prompt: 'Help me plan five easy dinners. Ask about our preferences, budget and what we already have before making the plan.' }];

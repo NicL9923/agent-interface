@@ -7,7 +7,7 @@ import type { Bot, DelegationPolicies, Preferences, RequireCapability, Routine, 
 import { withoutBotTag } from "../shared/event-copy.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
-import { completeRoster, notFound, rosterBot, visible } from "./bot-access.js";
+import { notFound, visible } from "./bot-access.js";
 import { allowedIdentity, type Config } from "./config.js";
 import { httpError } from "./http-error.js";
 import { quietLog, type Log } from "./logging.js";
@@ -169,9 +169,9 @@ export class MainAssistants {
   private async roster(): Promise<Bot[] | undefined> {
     const status = await this.runtime.status();
     if (!status.connected) return undefined;
-    // A runtime that cannot read its roster lists its last one as incomplete; it proves nothing.
-    const bots = await completeRoster(this.runtime).catch(() => undefined);
-    if (!bots) return undefined;
+    const bots = await this.runtime.listBots();
+    // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
+    if (bots.length && bots.every(bot => bot.activity === "disconnected")) return undefined;
     return bots.map(bot => ({ ...bot, ...this.store.presentation(bot.id) }));
   }
 
@@ -469,7 +469,7 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
 }) {
   const { runtime, store, mains, preferences, requireCapability } = collaborators;
   const eligibleBot = async (userId: string, botId: string) => {
-    const bot = await rosterBot(runtime, botId);
+    const bot = (await runtime.listBots()).find(row => row.id === botId);
     const shown = bot && { ...bot, ...store.presentation(bot.id) };
     if (!shown || !visible(shown, userId)) throw httpError(404, notFound.error, { code: notFound.code });
     const reason = mainIneligibleReason(shown, userId);

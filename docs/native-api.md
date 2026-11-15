@@ -439,7 +439,7 @@ since that stream announces roster changes and Hermes outages. The server shares
 assistant list, capabilities and connection status among bootstraps for 1.5
 seconds, so many devices answering one notice cost one Hermes round trip. It drops
 that read when this app writes an assistant, a routine, an integration, a Hermes
-upgrade or a connection retry, and never keeps a disconnected or incomplete one, so a change
+upgrade or a connection retry, and never keeps a disconnected one, so a change
 made outside this app can take up to 1.5 seconds longer to show.
 
 The household stream, with or without `?group=`, also sends `event: groups` with
@@ -488,13 +488,7 @@ that includes it exists only for its owner. Bootstrap preferences drop it from
 favorites, sections, followed assistants and the default assistant. Treat a 404
 for the open assistant as "no longer available": refresh bootstrap and leave
 that conversation. An assistant that is not in Hermes's roster answers the same
-404, so a private assistant cannot be told from a made-up ID. While a runtime is
-not answering, the roster is incomplete: `/api/bots` and bootstrap list every
-assistant that can be shown, the down runtime's from its last answer as
-`disconnected`, or not at all if it has not answered since the server started.
-An assistant this server has seen before is never called gone just because an
-incomplete roster leaves it out. Its routes answer 503, or the runtime's own
-error, until the runtime answers again, so keep the conversation and retry. A read that was
+404, so a private assistant cannot be told from a made-up ID. A read that was
 under way when an assistant became private to the caller answers 404 for that
 assistant's own route, or 503 with `code: "assistants_changed"` for anything
 else; retry it. Inside a shared assistant's conversation, history and search,

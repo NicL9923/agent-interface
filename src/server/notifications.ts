@@ -231,10 +231,9 @@ export class BackgroundWorker {
             if (!durable.supported) throw new Error(durable.reason ?? "Durable events are unavailable");
           }
           const discovery = await this.runtime.discoverEvents(this.store.cursor(source), source);
-          // Titles name the assistant; a roster failure keeps the previous names, and an incomplete one the names it lacks.
+          // Titles name the assistant; a roster failure keeps the previous names.
           if (discovery.events.length) try {
-            const bots = await this.runtime.listBots();
-            this.store.botNames = new Map([...bots.incomplete ? this.store.botNames : [], ...bots.map(bot => [bot.id, bot.name] as const)]);
+            this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
           } catch { /* Fall back to the last known names. */ }
           if (this.identify) await this.identify(discovery.events);
           this.store.recordEvents(discovery.events, discovery.cursor, source);

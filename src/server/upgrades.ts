@@ -6,7 +6,6 @@ import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
 import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
 import type { Config } from "./config.js";
-import { completeRoster } from "./bot-access.js";
 import { httpError } from "./http-error.js";
 
 type WorkerSettings = { python: string; workerConfig: string; stateDirectory: string };
@@ -205,8 +204,7 @@ export class HermesUpgrades {
       if (!status.connected) return ["Hermes connection unavailable"];
       // Another member's private assistant still blocks the update, as one unnamed entry however
       // many are busy. That entry shows some assistant is working, a documented privacy limit.
-      // A runtime that did not answer may have busy assistants, so an incomplete roster blocks the update too.
-      const busy = (await completeRoster(this.runtime)).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity));
+      const busy = (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity));
       const shown = busy.filter(bot => this.visibleTo(bot.id, user.id)).map(bot => bot.name);
       return shown.length < busy.length ? [...shown, "An assistant"] : shown;
     } catch { return ["Hermes activity unavailable"]; }

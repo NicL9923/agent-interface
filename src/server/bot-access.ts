@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { agentEnvelope } from "../shared/collaboration.js";
 import { assistantNotFoundMessage } from "../shared/errors.js";
-import type { Bot, BotListing, Message, Runtime, ToolCall } from "../shared/types.js";
+import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
@@ -27,27 +27,6 @@ export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Sto
 }
 
 export const notFound = { error: assistantNotFoundMessage, code: "assistant_not_found" } as const;
-
-const rosterIncomplete = () => httpError(503, "An assistant's runtime isn't answering, so WildBots can't tell which assistants exist right now. Try again in a moment.", { expose: true });
-/**
- * Every assistant, for a reader that deletes, prunes, reconciles or decides privacy by what the roster leaves out.
- * Refuses an `incomplete` listing, which lacks some runtime's fresh answer (see `BotListing`).
- */
-export async function completeRoster(runtime: Pick<Runtime, "listBots">): Promise<Bot[]> {
-  const bots = await runtime.listBots();
-  if (bots.incomplete) throw rosterIncomplete();
-  return bots;
-}
-/**
- * The assistant with this ID, or undefined when the roster proves there is none. An incomplete listing that lacks it
- * refuses rather than answer "not found", since the assistant may run on the runtime that did not answer.
- */
-export async function rosterBot(runtime: Pick<Runtime, "listBots">, botId: string): Promise<Bot | undefined> {
-  const bots = await runtime.listBots();
-  const bot = bots.find(row => row.id === botId);
-  if (!bot && bots.incomplete) throw rosterIncomplete();
-  return bot;
-}
 
 /**
  * The routine a route that names only its ID acts on. Hermes lets two assistants hold jobs with the same
@@ -75,11 +54,9 @@ export function fileBotId(runtime: Pick<Runtime, "fileBotId">, fileId: string) {
  * The last roster Hermes reported. A route naming an assistant that is not on it answers
  * the same 404 as a hidden one, so nobody can tell a private assistant from a made-up ID.
  * An ID missing from the cached roster refreshes it first, so a new assistant is never refused.
- * While the roster is incomplete, an ID it lacks that this server has seen before may run on
- * the runtime that did not answer, so it is let through; one it has never seen is still refused.
  */
 export class Roster {
-  private bots?: BotListing;
+  private bots?: Bot[];
   private at = 0;
   private refreshing?: Promise<void>;
   // Every name an assistant has had is stored, so an old agent message still matches after a rename or restart.
@@ -87,7 +64,7 @@ export class Roster {
   note(bots: unknown) {
     // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
     if (!Array.isArray(bots) || !bots.some(bot => bot?.activity !== "disconnected")) return;
-    this.bots = bots as BotListing;
+    this.bots = bots;
     this.at = Date.now();
     this.store?.rememberNames(bots as Bot[]);
   }
@@ -99,20 +76,17 @@ export class Roster {
     return this.refreshing;
   }
   private fresh() { return this.bots && Date.now() - this.at < 10_000; }
-  /** False only when Hermes's current roster lacks it, or lacks it incompletely and it was never seen. */
+  /** False only when Hermes's current roster lacks it. */
   async exists(botId: string) {
     if (this.fresh() && this.bots!.some(bot => bot.id === botId)) return true;
     if (typeof this.runtime.listBots !== "function") return true;
     await this.refresh();
-    if (!this.bots || this.bots.some(bot => bot.id === botId)) return true;
-    return !!this.bots.incomplete && (this.store?.nameHistory().has(botId) ?? true);
+    return !this.bots || this.bots.some(bot => bot.id === botId);
   }
-  /** True only when Hermes's current roster has it. An incomplete roster without it refuses instead of answering false. */
+  /** True only when Hermes's current roster has it. */
   async has(botId: string) {
     if (typeof this.runtime.listBots === "function") await this.refresh();
-    const found = !!this.bots?.some(bot => bot.id === botId);
-    if (!found && this.bots?.incomplete) throw rosterIncomplete();
-    return found;
+    return !!this.bots?.some(bot => bot.id === botId);
   }
   /** Each assistant's current and earlier names. */
   async names() {

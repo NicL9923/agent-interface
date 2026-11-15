@@ -10,7 +10,7 @@ import type { Store } from './store.js';
 import { isConversationReply } from '../shared/message-origin.js';
 import { HISTORY_PAGE_TURNS } from '../shared/history.js';
 import { markdownPlain } from '../shared/plain-text.js';
-import { notFound, redactAgents, Roster, rosterBot, routineById, visibleBots } from './bot-access.js';
+import { notFound, redactAgents, Roster, routineById, visibleBots } from './bot-access.js';
 import { nameRequesters } from './vault.js';
 import { contentEtag } from './etag.js';
 import { readMessage } from './conversation-view.js';
@@ -73,7 +73,7 @@ export async function installExperienceRoutes(app: FastifyInstance, runtime: Run
   // At most four assistants are read at once across every Today; the next starts as soon as one finishes.
   const reading = limiter(4);
   const bot = async (botId: string) => {
-    if (!await rosterBot(runtime, botId)) throw httpError(404, notFound.error, { code: notFound.code });
+    if (!(await runtime.listBots()).some(row => row.id === botId)) throw httpError(404, notFound.error, { code: notFound.code });
   };
   const request = async <R extends ExperienceRequest>(input: R): Promise<ExperienceResult<R["operation"]>> => {
     await bot(input.profile);

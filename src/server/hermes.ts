@@ -1,5 +1,5 @@
 import { botIdFor, reasoningLevels, serviceTiers } from "../shared/types.js";
-import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, BotListing, Capabilities, Conversation, ConversationOptions, Inflight, LiveTurn, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnRows, TurnWatcher } from '../shared/types.js';
+import type { ActivityState, InferenceSettings, Avatar, Bot, BotInput, Capabilities, Conversation, ConversationOptions, Inflight, LiveTurn, Message, ReadTiming, Routine, Runtime, RuntimeDiscovery, Skill, Submission, SubmissionReceipt, Tool, ToolCall, TurnRows, TurnWatcher } from '../shared/types.js';
 import ClientWebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 import { TALK_MODEL } from '../shared/voice.js';
@@ -855,12 +855,10 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       return contract.canonicalSubmit;
     },
     async listBots() {
-      // The last roster, marked as proving nothing: empty when Hermes has not answered since this server started.
-      const stale = () => Object.assign(botCache.map(row => ({...row, activity: 'disconnected' as const})), {incomplete: true as const});
-      try { await connect(); } catch { return stale(); }
+      try { await connect(); } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       if (rosterReuse && Date.now() - rosterReuse.at < ROSTER_REUSE_MS) return rosterReuse.bots.slice();
       if (rosterRequest) return rosterRequest;
-      let request!: Promise<BotListing>;
+      let request!: Promise<Bot[]>;
       request = (async () => {
         try {
           const roster = await rpc('profiles.list', {include_sessions: true}, false);
@@ -870,7 +868,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
           // A change reported meanwhile cleared rosterRequest, so this read is not reused.
           if (rosterRequest === request) { botCache = bots; rosterReuse = {at: Date.now(), bots}; }
           return bots;
-        } catch { return stale(); }
+        } catch { return botCache.map(row => ({...row, activity: 'disconnected' as const})); }
       })();
       rosterRequest = request;
       try { return await request; } finally { if (rosterRequest === request) rosterRequest = undefined; }

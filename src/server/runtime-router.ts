@@ -1,7 +1,7 @@
 import type { AutomationRequester } from "../shared/automation.js";
 import { Conflict } from "../shared/errors.js";
 import type { ExperienceRequester } from "../shared/experience.js";
-import type { Bot, BotListing, Runtime } from "../shared/types.js";
+import type { Runtime } from "../shared/types.js";
 
 /** The runtime ID Hermes is registered under. Its event cursor is the one stored before cursors were kept per runtime. */
 export const hermesRuntimeId = "hermes";
@@ -37,10 +37,9 @@ void everyOptionalListed;
  * the roster, routines, roster and turn watchers, a file's assistant, a receipt lookup without an assistant,
  * reconnecting and closing. Each runtime's events are read with its own cursor (`eventSources`).
  *
- * The roster outlasts one runtime's outage: it lists every other runtime's assistants and that runtime's last
- * complete answer, marked disconnected, and is marked `incomplete` (see `BotListing`). Display reads show it; readers
- * that prune or reconcile by absence go through `completeRoster`, which refuses it. The routine inventory has no
- * such marker, so it fails whole: check-in reconciliation and room checks prune by what it leaves out.
+ * The roster and the routine inventory are all or nothing: one runtime's failure fails the whole answer, as a lone
+ * runtime's failure does, because callers reconcile, prune and decide privacy by what an answer leaves out. Keeping
+ * the other runtimes' assistants listed through one runtime's outage is step 2 work in docs/RuntimePlan.md.
  *
  * An assistant whose runtime lacks an optional member another runtime has gets a 409 for it, nothing from a
  * synchronous read, and a watcher that never fires.
@@ -86,29 +85,6 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
   // All or nothing: callers reconcile and prune on this inventory, so one runtime's outage fails the whole answer.
   const fanOut = async <T>(read: (runtime: Runtime) => Promise<T[]>, botIdOf: (row: T) => string) =>
     (await Promise.all(ids.map(async id => mine(id, await read(byId(id)), botIdOf)))).flat();
-  // A runtime's last complete roster, for the outages that follow. A read that started earlier never replaces a later one.
-  const rosters = new Map<string, { read: number; bots: Bot[] }>();
-  let reads = 0;
-  // Every assistant that can be shown, so one runtime's outage hides no other runtime's assistants. A runtime that
-  // fails lists its last complete roster, marked disconnected as Hermes marks its own, or nothing before it has
-  // answered once. Either way the listing is marked incomplete, so callers that prune by absence refuse it.
-  const listBots = async (): Promise<BotListing> => {
-    let incomplete = false;
-    const bots = (await Promise.all(ids.map(async id => {
-      const read = ++reads;
-      try {
-        const listed = await byId(id).listBots();
-        const bots = mine(id, listed, bot => bot.id);
-        if (listed.incomplete) incomplete = true;
-        else if ((rosters.get(id)?.read ?? 0) < read) rosters.set(id, { read, bots });
-        return bots;
-      } catch {
-        incomplete = true;
-        return rosters.get(id)?.bots.map(bot => ({ ...bot, activity: "disconnected" as const })) ?? [];
-      }
-    }))).flat();
-    return incomplete ? Object.assign(bots, { incomplete: true as const }) : bots;
-  };
 
   // Required, so a member added to Runtime fails to compile until the router dispatches it.
   const router: Required<Runtime> = {
@@ -139,7 +115,7 @@ export function createRuntimeRouter(routes: RuntimeRoutes): Runtime {
     },
     capabilities: async (...args) => on(args[0]).capabilities(...args),
     canonicalSubmit: async (...args) => await on(args[0]).canonicalSubmit?.(...args) === true,
-    listBots,
+    listBots: async () => fanOut(runtime => runtime.listBots(), bot => bot.id),
     botDetail: async botId => member(botId, "botDetail")(botId),
     watchRoster: changed => subscribe(runtime => runtime.watchRoster?.(changed)),
     // A new assistant is created on the default runtime.

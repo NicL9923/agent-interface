@@ -163,3 +163,30 @@ break went red.
 ## Checks
 
 See the PR for the `check-all` table.
+
+## Narrowed to the seam
+
+GPT-6.1 Sol's third review found more gaps in the incomplete-roster design: `visibleBots()` in
+`src/server/collaboration.ts` dropped the marker, so a known omitted assistant's room answered 404 and iOS cleared it;
+`Roster.note` let a made-up ID through on an empty or all-disconnected incomplete roster; and Live Activity held rows
+had no bound. Roster availability with several runtimes is speculative until a second runtime exists, so it moves to
+step 2 in `docs/RuntimePlan.md`, with Sol's scenarios as its acceptance cases, and comes out of this change.
+
+The commit that adds this section reverts the previous section's code, then removes the router's cached-roster
+fallback from the first review round. Everything else from that round stays: durable events are checked inside each
+runtime's own failure boundary, a refused watcher undoes the ones already registered, and a stop tries every stop.
+
+- `listBots()` and `routines()` over several runtimes are all or nothing again: one runtime's failure fails the call,
+  as a lone runtime's does today. With Hermes alone nothing changes, since Hermes answers its own last roster marked
+  disconnected rather than failing.
+- `incomplete`, `BotListing`, `completeRoster`, `rosterBot` and the seen-before gate are gone. Every call site they
+  touched reads as it does on `origin/main`. `bot-access.ts`, `live-activity.ts`, `hermes.ts`, `upgrades.ts`,
+  `vault.ts` and `voice.ts` have no diff against `origin/main`.
+- The Live Activity unknown-state fix, which the previous section found is also a production bug with Hermes alone,
+  moves to its own PR from `origin/main`.
+
+The red runs in the previous section are kept as a record; their tests left with the code they covered.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| The router's `listBots` drops a failed runtime's answer instead of failing | `fails the roster and the routine inventory whole when one runtime fails` | 1 failed |

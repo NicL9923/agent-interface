@@ -96,12 +96,6 @@ it("requires exact qualification and idle verified Hermes before admitting an in
   expect(installation.launch).not.toHaveBeenCalled();
 });
 
-it("counts an incomplete roster as busy, since an assistant it leaves out may be working", async () => {
-  const installation = await setup(), headers = await login(installation.app);
-  installation.runtime.listBots = async () => Object.assign([{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" as const }], { incomplete: true as const });
-  expect((await installation.app.inject({ url: "/api/hermes/upgrade", headers })).json().busyBots).toEqual(["Hermes activity unavailable"]);
-});
-
 it("persists install idempotency and maintenance before launch, and never replays after app restart", async () => {
   const installation = await setup(), headers = await login(installation.app); installation.ready();
   const requestId = randomUUID(), payload = { candidateRevision: revision, requestId };

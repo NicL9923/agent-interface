@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { signedIn } from './auth.js';
 import type { Runtime } from '../shared/types.js';
 import type { SecureRequest, SecureRequestAnswer, VaultRequest } from '../shared/vault.js';
-import { rosterBot } from './bot-access.js';
 import { httpError } from './http-error.js';
 const source = z.enum(['onepassword', 'bitwarden']);
 const method = z.enum(['vault.save_login', 'vault.code', 'vault.unlock_prompt', 'secret']);
@@ -30,7 +29,7 @@ const login = z.object({
 export async function installVaultRoutes(app: FastifyInstance, runtime: Runtime) {
   const busy = new Set<string>();
   async function request(userId: string, input: VaultRequest) {
-    if (!await rosterBot(runtime, input.profile)) throw httpError(404, 'Assistant not found');
+    if (!(await runtime.listBots()).some(bot => bot.id === input.profile)) throw httpError(404, 'Assistant not found');
     if (!runtime.vaultRequest) throw httpError(409, 'The installed Hermes integration does not support secure credentials.');
     const key = userId + ':' + input.profile;
     if (input.operation !== 'overview' && busy.has(key)) throw httpError(429, 'A credential operation is already running. Wait for it to finish.');

@@ -1,4 +1,4 @@
-import type { ActivityState, Bot, BotListing, Conversation, Runtime } from "../shared/types.js";
+import type { ActivityState, Bot, Conversation, Runtime } from "../shared/types.js";
 import { allowedIdentity, type Config } from "./config.js";
 import type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration, Store } from "./store.js";
 import { visible } from "./bot-access.js";
@@ -73,12 +73,12 @@ export class LiveActivities {
     const startFor = new Map(starts.map(start => [start.deviceId, start]));
     for (const registration of registrations) {
       try {
-        const { state, active, unread, held } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
+        const { state, active, unread } = await this.build(registration.userId, roster, conversations, registration, registration.lastState);
         // Remember what this activity covers before delivery, which forgets a dismissed one, so
         // dismissing it keeps that work off the Lock Screen.
         const start = startFor.get(registration.deviceId);
         if (start) this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
-        await this.deliver(registration, state, held);
+        await this.deliver(registration, state);
       } catch (error) {
         this.push.failure(error);
       }
@@ -151,8 +151,7 @@ export class LiveActivities {
     this.store.liveActivityStartCovered(start.deviceId, start.token, remember(start.started, active, unread));
   }
 
-  /** `held`: some row is kept from an earlier pass because its run cannot be read now. */
-  private async deliver(registration: LiveActivityRegistration, state: LiveState, held: boolean) {
+  private async deliver(registration: LiveActivityRegistration, state: LiveState) {
     const now = this.now(), previous = registration.sentState;
     this.store.liveActivityObserved(registration.deviceId, registration.token, state, state.rows.filter(row => row.phase !== "starting").map(row => row.botId));
     registration.armed = registration.armed.filter(id => state.rows.some(row => row.botId === id && row.phase === "starting"));
@@ -170,8 +169,7 @@ export class LiveActivities {
     const urgent = !previous || state.attentionCount > previous.attentionCount || state.activeCount !== previous.activeCount
       || state.rows.some(row => terminal(row.phase) && !previous.rows.some(old => old.botId === row.botId && old.phase === row.phase));
     const since = now - registration.sentAt;
-    // No heartbeat for a held row: its stale date passes, so the Lock Screen shows it as out of date.
-    if (!(changed && (urgent || since >= THROTTLE_MS)) && (since < HEARTBEAT_MS || held)) return;
+    if (!(changed && (urgent || since >= THROTTLE_MS)) && since < HEARTBEAT_MS) return;
     const rising = !!previous && state.attentionCount > previous.attentionCount;
     await this.post(registration, { aps: { timestamp: seconds(now), event: "update", "content-state": state, "stale-date": seconds(now) + STALE_S } }, rising ? 10 : 5);
     this.store.liveActivitySent(registration.deviceId, registration.token, state, now);
@@ -195,9 +193,9 @@ export class LiveActivities {
 
   /** The person's aggregate, and every running assistant in it, including rows it has no room for. */
   private async build(
-    userId: string, roster: BotListing, conversations: Map<string, Promise<Conversation | undefined>>,
+    userId: string, roster: Bot[], conversations: Map<string, Promise<Conversation | undefined>>,
     armed?: Pick<LiveActivityRegistration, "armed" | "armedAt">, previous?: LiveState,
-  ): Promise<{ state: LiveState; active: CoveredRun[]; unread: Set<string>; held: boolean }> {
+  ): Promise<{ state: LiveState; active: CoveredRun[]; unread: Set<string> }> {
     const now = this.now();
     const follows = new Set(this.store.preferences(userId).followBots);
     const arming = armed && now - armed.armedAt < ARMED_MS ? new Set(armed.armed) : new Set<string>();
@@ -211,7 +209,6 @@ export class LiveActivities {
     const runs = new Map<string, string>();
     // Working assistants whose conversation could not be read, so whether they are this person's is unknown.
     const unread = new Set<string>();
-    let held = false;
     for (const bot of roster) {
       // Keep canonical IDs intact. An oversized ID cannot fit into a usable ActivityKit row.
       if (Buffer.byteLength(bot.id) > 256) continue;
@@ -224,15 +221,9 @@ export class LiveActivities {
         const current = await conversation(bot.id);
         if (!current && activeStates.has(bot.activity)) unread.add(bot.id);
         const state = current?.activity.state ?? bot.activity;
-        // Disconnected, from a stale roster row with no readable conversation or from the conversation itself, says
-        // nothing about the run: its row stays as it was until a fresh answer says the run finished.
-        const unknown = state === "disconnected";
         const mine = arming.has(bot.id) || follows.has(bot.id) || !!before
           || (!!current?.activity.runId && this.store.participants(current.activity.runId).includes(userId));
-        if (unknown && before && !terminal(before.phase)) {
-          row = { ...before, name: bot.name };
-          held = true;
-        } else if (mine && activeStates.has(state)) {
+        if (mine && activeStates.has(state)) {
           const phase = state as LivePhase;
           if (current?.activity.runId) runs.set(bot.id, current.activity.runId);
           row = { botId: bot.id, name: bot.name, phase, status: status[phase], detail: fit(current?.activity.detail, 80),
@@ -256,22 +247,13 @@ export class LiveActivities {
       if (avatar && avatar.mode !== "portrait" && /^#[0-9a-f]{6}$/i.test(avatar.color ?? "")) row.color = avatar.color;
       rows.push(row);
     }
-    // An incomplete roster says nothing about the assistants it leaves out, so their rows stay as they were.
-    if (roster.incomplete) {
-      const listed = new Set(roster.map(bot => bot.id));
-      for (const before of shown.values()) {
-        if (listed.has(before.botId) || !visible(this.store.presentation(before.botId), userId)) continue;
-        if (!terminal(before.phase)) held = true;
-        if (!terminal(before.phase) || now - (before.since ?? 0) * 1000 < FINISHED_MS) rows.push({ ...before });
-      }
-    }
     rows.sort((a, b) => rank[a.phase] - rank[b.phase] || (b.since ?? 0) - (a.since ?? 0));
     const active = rows.filter(row => !terminal(row.phase));
     const waiting = rows.filter(row => attention(row.phase));
     const state: LiveState = { title: fit(title(rows, active.length, waiting.length), 80) ?? "Assistant activity", activeCount: active.length, attentionCount: waiting.length,
       updatedAt: seconds(now), rows: rows.slice(0, MAX_ROWS) };
     // Reserve room for the APNs envelope.
-    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }), unread, held };
+    return { state: shed(state, 3500), active: active.map(row => runs.has(row.botId) ? { botId: row.botId, runId: runs.get(row.botId) } : { botId: row.botId }), unread };
   }
 }
 

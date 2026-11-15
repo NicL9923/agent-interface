@@ -188,12 +188,19 @@ Each step ships on its own and is accepted before the next.
    `src/server/index.ts` registers Hermes as the default, and the adapter is registered beside it, with
    `runtimeOf` naming the bots that run on it. Routes ask the bot's own runtime for capabilities
    (`requireCapability(key, botId)` in `src/server/app.ts`), steering included, and each runtime's events resume
-   from their own cursor (`src/server/store-events.ts`). While one runtime is down, the roster keeps its last
-   assistants marked disconnected, its events wait without holding up the others', and the routine inventory fails
-   whole, because check-in reconciliation prunes what it leaves out. Still for this step: where a bot's harness is stored, so
-   `runtimeOf` can read it; event IDs that cannot collide with Hermes's; and per-bot capabilities for clients,
-   which still get the default runtime's set (`src/server/runtime-snapshot.ts`). Group chats, the shared computer,
-   delegation limits and Talk sessions stay on the default runtime until step 6.
+   from their own cursor (`src/server/store-events.ts`). While one runtime is down, its events wait without holding
+   up the others'. The roster and the routine inventory fail whole when any runtime fails, as they do with Hermes
+   alone, because callers reconcile, prune and decide privacy by what they leave out. Still for this step: where a
+   bot's harness is stored, so `runtimeOf` can read it; event IDs that cannot collide with Hermes's; per-bot
+   capabilities for clients, which still get the default runtime's set (`src/server/runtime-snapshot.ts`); and
+   roster availability during one runtime's outage. That last one is accepted when:
+   - `/bots` stays up when a second runtime that has never answered fails.
+   - Reconciliation and privacy decisions never act on a partial roster: check-in and delivery pruning, main
+     assistant reconciliation, upgrade busy checks, bot access and room visibility.
+   - A room or routine of a known assistant the roster leaves out is not reported gone, so no client clears it.
+   - A made-up assistant ID is never admitted, even when the roster is empty or every assistant is disconnected.
+
+   Group chats, the shared computer, delegation limits and Talk sessions stay on the default runtime until step 6.
 3. **Other harnesses.** Claude Agent SDK, OpenCode with OpenRouter and Grok over ACP, each with capability flags and
    recorded replay fixtures for its protocol.
 4. **Memory and skills service,** with learning, cleaning and the review UI.
