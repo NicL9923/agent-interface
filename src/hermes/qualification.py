@@ -40,7 +40,7 @@ def live_clone_refusals(source, environment):
     environment = {**environment, **OFFLINE_GIT}
     def read(*args):
         return subprocess.run(["git", "-C", str(source), *args], env=environment,
-                              capture_output=True, text=True, timeout=600)
+                              capture_output=True, text=True, check=False, timeout=600)
     refusals = []
     if any(read("config", "--local", "--type=" + kind, "--get", key).stdout.strip() != value
            for key, kind, value in CLONE_PROTECTION):

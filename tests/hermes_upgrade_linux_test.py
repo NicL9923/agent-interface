@@ -82,12 +82,12 @@ def promisor_clone(origin, directory, revision):
     """(upstream, clone): a tree:0 promisor clone checked out at REVISION, as the live Hermes
     checkout is, and the full repository it lazily fetches from."""
     upstream, partial = directory / "upstream", directory / "partial"
-    quiet = dict(check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    subprocess.run(["git", "clone", "--no-hardlinks", str(origin), str(upstream)], **quiet)
+    quiet = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["git", "clone", "--no-hardlinks", str(origin), str(upstream)], check=True, **quiet)
     for name in ("uploadpack.allowFilter", "uploadpack.allowAnySHA1InWant"):
         subprocess.run(["git", "-C", str(upstream), "config", name, "true"], check=True)
-    subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", upstream.as_uri(), str(partial)], **quiet)
-    subprocess.run(["git", "-C", str(partial), "checkout", "--detach", revision], **quiet)
+    subprocess.run(["git", "clone", "--filter=tree:0", "--no-checkout", upstream.as_uri(), str(partial)], check=True, **quiet)
+    subprocess.run(["git", "-C", str(partial), "checkout", "--detach", revision], check=True, **quiet)
     return upstream, partial
 
 
@@ -965,8 +965,8 @@ class LiveCheckoutTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(repository), *argv], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return subprocess.check_output(["git", "-C", str(repository), "rev-parse", "HEAD"], text=True).strip()
 
-    def git(self, *args, **kwargs):
-        return subprocess.run(["git", "-C", str(self.live), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+    def git(self, *args, check=False, env=None):
+        return subprocess.run(["git", "-C", str(self.live), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check, env=env)
 
     def refusals(self):
         return linux.qualification.live_clone_refusals(self.live, os.environ)
