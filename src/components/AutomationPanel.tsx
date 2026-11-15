@@ -201,6 +201,13 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
   const [creating, setCreating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const createOpener = useRef<HTMLButtonElement>(null);
+  const [restoreCreateFocus, setRestoreCreateFocus] = useState(false);
+  useEffect(() => {
+    if (!creating && restoreCreateFocus && !control.disabled) {
+      createOpener.current?.focus();
+      setRestoreCreateFocus(false);
+    }
+  }, [creating, restoreCreateFocus, control.disabled]);
   const createMessage = useRef<HTMLParagraphElement>(null);
   const focusedCreateNotice = useRef("");
   const [attempt, setAttempt] = useState<{ knownIds: string[]; title: string; requestId: string; refreshCount: number; unconfirmed: boolean } | null>(null);
@@ -292,7 +299,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
           const created = result.overview.tasks.items.find(item => item.id === result.result?.id) ?? likelyCreatedTask(snapshot.knownIds, snapshot.title, result.overview.tasks.items);
           resetCreate();
           if (created) revealCreated(created, `Created. "${created.title}" stays blocked until you start it.`);
-          else { setAnnouncement("Created in Hermes. Refresh status to review the task."); requestAnimationFrame(() => createOpener.current?.focus()); }
+          else { setAnnouncement("Created in Hermes. Refresh status to review the task."); setRestoreCreateFocus(true); }
         } finally { setSubmitting(false); }
       }}>
         <h4 id="new-task-heading">New task</h4>
@@ -305,7 +312,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
         {(unconfirmed || likely) && <p ref={createMessage} tabIndex={-1} className="automation-task-callout">{likely ? "A task with this title appeared on the board. Hermes may have saved it. Close this form to review it." : "Not confirmed. Hermes may have created this task. Use Refresh status at the top of Work before trying again."}</p>}
         {resend && <p ref={createMessage} tabIndex={-1}>No new task with this title is visible. Create task sends the same request again.</p>}
         {createFeedback && <p className="form-error" role="alert">{createFeedback}</p>}
-        <div className="actions">{likely ? <Button className="primary" onClick={() => { resetCreate(); revealCreated(likely, `"${likely.title}" appeared on the board. Hermes may have saved it.`); }}>Close</Button> : <><Button type="submit" className="primary" disabled={control.disabled || !draft.title.trim()}>{submitting ? "Creating…" : "Create task"}</Button><Button disabled={control.disabled} onClick={() => { setCreating(false); setAttempt(null); setCreateFeedback(""); requestAnimationFrame(() => createOpener.current?.focus()); }}>Cancel</Button></>}</div>
+        <div className="actions">{likely ? <Button className="primary" onClick={() => { resetCreate(); revealCreated(likely, `"${likely.title}" appeared on the board. Hermes may have saved it.`); }}>Close</Button> : <><Button type="submit" className="primary" disabled={control.disabled || !draft.title.trim()}>{submitting ? "Creating…" : "Create task"}</Button><Button disabled={control.disabled} onClick={() => { setCreating(false); setAttempt(null); setCreateFeedback(""); setRestoreCreateFocus(true); }}>Cancel</Button></>}</div>
       </form>}
     </>}
   </section>;

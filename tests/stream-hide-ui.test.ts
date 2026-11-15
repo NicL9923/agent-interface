@@ -48,6 +48,7 @@ const reads: [string, () => unknown][] = [
 ];
 
 beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
   vi.useFakeTimers({ now: START });
   // The jitter's random source: the middle of every range, so the first retry waits 1.5 seconds.
   vi.spyOn(Math, "random").mockReturnValue(0.5);
