@@ -6,6 +6,7 @@ import { createInterface, emitKeypressEvents } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 import { loadConfig, loopback, parseAppOrigin } from '../src/server/config.js';
 import { createHermesRuntime } from '../src/server/hermes.js';
+import { fileKeys, fileSigner, generateFileKey } from '../src/server/hermes-files.js';
 import type { Runtime, RuntimeStatus } from '../src/shared/types.js';
 
 const settingKeys = ['NODE_ENV', 'HOST', 'PORT', 'APP_ORIGIN', 'APP_DATABASE', 'LOCAL_DEV_AUTH', 'GOOGLE_CLIENT_ID', 'HOUSEHOLD_EMAILS', 'HERMES_URL', 'HERMES_TOKEN', 'HERMES_AUTH_MODE', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'];
@@ -87,7 +88,9 @@ export async function savePrivateEnv(filename: string, original: string | undefi
 
 export async function checkSetup(
   values: NodeJS.ProcessEnv,
-  createRuntime: (options: {url?: string; token?: string; authMode?: 'static' | 'service'; qualificationFile?: string}) => Pick<Runtime, 'status' | 'close'> = createHermesRuntime,
+  createRuntime: (options: {url?: string; token?: string; authMode?: 'static' | 'service'; qualificationFile?: string}) => Pick<Runtime, 'status' | 'close'> =
+    // Only the connection is checked, so nothing is signed and a throwaway file key will do.
+    options => createHermesRuntime({...options, files: fileSigner(fileKeys(generateFileKey()), options.token)}),
 ): Promise<RuntimeStatus> {
   const config = loadConfig(values);
   if (!config.localDevAuth && (!config.googleClientId || !config.householdEmails.length))

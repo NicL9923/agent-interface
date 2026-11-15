@@ -17,7 +17,7 @@ const approvalSettingsUnsupported = "This Hermes integration can't list always-a
 import { createModelNames } from './model-names.js';
 import jobFields from '../shared/hermes-job-fields.json' with { type: 'json' };
 import { createHermesTransport, TransportError, type Connection, type HermesOptions, type Wire } from './hermes-transport.js';
-import { fileSigner, safeStagedPath, type RegisteredFile } from './hermes-files.js';
+import { safeStagedPath, type FileSigner, type RegisteredFile } from './hermes-files.js';
 import { deliverRooms, withDeliverRooms } from './delivery-targets.js';
 import { applyFrame, bot, emptyLiveState, historyRows, inflightMessage, nativePrompt, nativeStartedAt, openRequests, receipt, turnRows, turnStart, unbridged, withSeams, type LiveState } from './hermes-mapping.js';
 
@@ -118,7 +118,11 @@ async function readSpeed(setSpeed: (word: string) => Promise<Wire>, getSpeed: ()
   return value === 'cold' ? 'normal' : value;
 }
 
-export function createHermesRuntime(options: HermesOptions = {}): Runtime {
+/**
+ * `files` signs and verifies file identifiers. It holds the app database's file key, so the entry
+ * point builds it from the store; see fileSigner.
+ */
+export function createHermesRuntime(options: HermesOptions & {files: FileSigner}): Runtime {
   let discoveryFull = false;
   let discoveryGeneration = 0;
   let botCache: Bot[] = [];
@@ -252,7 +256,7 @@ export function createHermesRuntime(options: HermesOptions = {}): Runtime {
     rosterRequest = undefined;
     rosterReuse = undefined;
   }
-  const {signFile, fileValue, artifacts} = fileSigner(options.token);
+  const {signFile, fileValue, artifacts} = options.files;
   const toBot = (row: Wire, detail?: Wire) => bot(row, transient.get(live.get(row.name) ?? '')?.state ?? 'idle', detail);
   // Display names come from Hermes's models.dev cache through the add-on. An older add-on answers with an
   // error, and the formatter in model-names.ts names the model instead.

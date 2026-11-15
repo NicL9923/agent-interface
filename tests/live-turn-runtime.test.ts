@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHermesRuntime } from "../src/server/hermes.js";
+import { testFiles } from "./helpers/file-signer.js";
 import { nativeStartedAt, promptSaved, turnRows, turnStart, withSeams } from "../src/server/hermes-mapping.js";
 import { compareVersions } from "../src/shared/inflight.js";
 import type { Message, Runtime } from "../src/shared/types.js";
@@ -9,7 +10,7 @@ import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-her
 let hermes: FakeHermes, runtime: Runtime;
 beforeEach(() => {
   hermes = fakeHermes();
-  runtime = createHermesRuntime({ url: HERMES_URL, token: "isolated-contract-token" });
+  runtime = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
 });
 afterEach(async () => { await runtime.close(); vi.unstubAllGlobals(); });
 
@@ -163,7 +164,7 @@ describe("turn reads for streams that follow turns", () => {
   it("never orders versions from another runtime, whose generations restart", async () => {
     midTurn();
     const first = await runtime.conversation("shared", { history: false });
-    const other = createHermesRuntime({ url: HERMES_URL, token: "isolated-contract-token" });
+    const other = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
     try { expect(compareVersions((await other.conversation("shared", { history: false })).version, first.version)).toBeUndefined(); }
     finally { await other.close(); }
   });

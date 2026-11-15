@@ -7,9 +7,8 @@ const server = vi.hoisted(() => ({
 }));
 vi.mock("node:fs", () => ({ existsSync: () => false }));
 vi.mock("../src/server/app.js", () => ({ createApp: async () => ({ app: server }) }));
-vi.mock("../src/server/config.js", () => ({ loadConfig: () => ({}) }));
+vi.mock("../src/server/config.js", () => ({ loadConfig: () => ({ database: ":memory:" }) }));
 vi.mock("../src/server/hermes.js", () => ({ createHermesRuntime: () => ({}) }));
-vi.mock("../src/server/store.js", () => ({ schemaVersion: 1 }));
 vi.mock("../src/server/logging.js", () => ({ safeError: (error: unknown) => error }));
 
 const signals = new Map<string | symbol, () => void>();

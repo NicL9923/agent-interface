@@ -512,7 +512,10 @@ dialog as their portal container.
 
 Hermes runs separately from this application. Guided setup saves `HERMES_URL` and
 `HERMES_TOKEN` on the app server. An existing HTTPS gateway is supported; cleartext
-HTTP is restricted to loopback. Provider credentials remain in Hermes. Open
+HTTP is restricted to loopback. File links are signed with a key the app keeps in
+its own database, not with `HERMES_TOKEN`. Before rotating the token, read
+[Hosting](docs/Hosting.md#application-backups) for the order and what it covers.
+Provider credentials remain in Hermes. Open
 **Integrations** to inspect the selected profile's accounts, check their health,
 and connect or reconnect supported services. Connection changes require an
 integration administrator. An assistant that needs a service it lacks can ask in
