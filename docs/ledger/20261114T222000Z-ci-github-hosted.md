@@ -16,7 +16,6 @@ pinned to a SHA. `Checks` gained a manual trigger so main can be rechecked witho
 | Break | Test | Failure |
 | --- | --- | --- |
 | `audit.yml` `runs-on: ubuntu-latest-4-cores` | `run only on free GitHub-hosted runners with pinned GitHub-owned actions` | `audit.yml: runs on ubuntu-latest-4-cores, which is not a free GitHub-hosted runner` |
-
 | Removing the guard's refusal of `runs-on` or `uses` it cannot read | `refuses a flow-style job beside an allowed one`, `refuses an action wrapped onto the next line`, `refuses a self-hosted runner` | 3 failed |
 
 Each file was restored from a copy and the tests passed again (9 of 9).
