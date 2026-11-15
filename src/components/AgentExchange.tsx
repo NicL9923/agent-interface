@@ -38,7 +38,9 @@ function ExchangeRoute({ sender, receiver }: { sender: Participant; receiver: Pa
     ? <Avatar avatar={person.bot.avatar} botId={person.bot.id} name={person.name} size={28} reducedMotion />
     : <span className="agent-exchange-unknown" aria-hidden="true"><Icon name="robot" size={18} /></span>;
   return <span className="agent-exchange-route" role="group" aria-label={`${sender.name} to ${receiver.name}`}>
-    {face(sender)}<strong>{sender.name}</strong><span aria-hidden="true"> → </span>{face(receiver)}<strong>{receiver.name}</strong>
+    <span className="agent-exchange-person">{face(sender)}<strong>{sender.name}</strong></span>
+    <span aria-hidden="true"> → </span>
+    <span className="agent-exchange-person">{face(receiver)}<strong>{receiver.name}</strong></span>
   </span>;
 }
 /** Contiguous runs only. An intervening tool, human message or reply always breaks a run. */

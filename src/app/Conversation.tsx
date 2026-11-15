@@ -538,7 +538,7 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
     const reply = isReplyRow(message);
     // A progress line stands apart from the answer around it.
     const joins = (earlier: Message | undefined, later: Message | undefined) => !!later && isReplyRow(later) && earlier?.role === "assistant" && later.id !== block.replyAt
-      && !earlier.interim && !later.interim;
+      && !isAgentExchange(earlier) && !isAgentExchange(later) && !earlier.interim && !later.interim;
     const continued = joins(messages[position - 1], message);
     const endsRun = !joins(message, messages[position + 1]);
     const scheduled = messageOrigin(message)?.kind === "scheduled";
@@ -554,20 +554,19 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
     // Accepted, it reads as any other message until Hermes's own copy takes its place.
     const delivery = outgoingId === message.id && outgoing !== "accepted" ? outgoing : undefined;
     const streaming = message.id.endsWith("-inflight");
-    const exchange = isAgentExchange(message);
     const progress = message.interim === true;
     let when = message.createdAt;
     for (let at = position; !when && at > 0 && joins(messages[at - 1], messages[at]); at--) when = messages[at - 1].createdAt;
     const files = message.files?.map(file => <FileLink file={file} key={file.id} />);
     const article = <article
-      className={`message message-${exchange ? "agent" : message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
+      className={`message message-${message.role}${progress ? " message-interim" : ""}${continued ? " message-continued" : ""}${delivery ? ` message-outgoing message-${delivery}` : ""}`}
       key={rowKey(message)}
       data-message-id={message.id}
       aria-busy={delivery === "sending" || undefined}
     >
-      {!exchange && !continued && label && <div className="message-attribution">{label}</div>}
+      {!continued && label && <div className="message-attribution">{label}</div>}
       {/* Only a person's own message has a bubble, so its meta line can sit beneath it. */}
-      {exchange ? <AgentExchange message={message} recipient={name} /> : reply ? (
+      {reply ? (
         <ReplyMarkdown live={streaming} text={message.text} botId={botId} messageId={message.id} userId={userId} unavailable={unavailable && holdsCards(message)}
           inlineUi={message.role === "assistant" && (streaming || !progress)} />
       ) : message.role !== "tool" && (
@@ -577,7 +576,7 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
       {!own && files}
       {turnFiles?.replyId === message.id && !streaming && <ReplyFiles artifacts={turnFiles.artifacts} onOpen={onOpenFile} />}
       {/* A live reply holds its meta row's place, hidden, so nothing moves when it is saved. */}
-      {!exchange && !progress && (reply || own) && <MessageMeta message={message} own={own}
+      {!progress && (reply || own) && <MessageMeta message={message} own={own}
         when={endsRun ? when : undefined} delivery={delivery} pending={streaming}
         actions={!!message.text.trim() && (message.role === "assistant" || own)} />}
     </article>;

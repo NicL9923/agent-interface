@@ -5,7 +5,9 @@ for (const width of [320, 1280]) test(`bot exchanges collapse and reveal with a 
   await page.setViewportSize({ width, height: 900 });
   await page.emulateMedia({ colorScheme: width === 320 ? 'light' : 'dark', reducedMotion: 'reduce' });
   await page.route('**/api/bots/ranch/conversation**', async route => {
-    const response = await route.fetch();
+    const headers = { ...route.request().headers() };
+    delete headers['if-none-match'];
+    const response = await route.fetch({ headers });
     const data = await response.json();
     await route.fulfill({ response, json: { ...data, messages: [
       { id: 'human', role: 'user', text: 'Please coordinate the fence check.', sender: { id: 'local', name: 'Nicolas' } },

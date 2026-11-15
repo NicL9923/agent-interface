@@ -253,6 +253,21 @@ import XCTest
     XCTAssertEqual(WorkSummary(turn).detail, "1 tool call")
   }
 
+  func testOrdinaryRepliesDoNotJoinAcrossBotExchanges() throws {
+    let before = Message(id: "before", role: "assistant", text: "Checking the ranch.")
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
+    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut")
+    let after = Message(id: "after", role: "assistant", text: "All done", origin: MessageOrigin(kind: "human", visibility: "conversation"))
+    let turn = try XCTUnwrap(conversation([before, incoming, botReply, after], .idle).presentationTurns.first)
+    let shown = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
+    let indexes = turn.transcriptRows(advanced: false).compactMap { row -> Int? in
+      if case .message(let index, _) = row { return index }; return nil
+    }
+    XCTAssertEqual(indexes, [0, 3])
+    XCTAssertTrue(turn.replyRun(at: 0, in: shown).endsRun)
+    XCTAssertFalse(turn.replyRun(at: 3, in: shown).continued)
+  }
+
   func testWorkFoldsIntoOneRowWithItsDurationAndCounts() throws {
     let messages = [
       Message(id: "p", role: "user", text: "Check it", createdAt: "2026-10-24T15:00:00.000Z"),

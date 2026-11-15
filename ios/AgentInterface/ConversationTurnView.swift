@@ -112,7 +112,7 @@ struct ConversationTurnView: View, Equatable {
     a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live && a.files == b.files && a.revisions == b.revisions
   }
   var body: some View {
-    let visible = turn.visibleMessages
+    let visible = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
     VStack(alignment: .leading, spacing: 18) {
       ForEach(turn.transcriptRows(advanced: advanced)) { row in
         switch row {
@@ -367,7 +367,7 @@ extension ConversationTurn {
       }.first
     }
     let hasWork = activityGroups.contains { $0.messages.contains { !$0.isAgentExchange } } || advanced && !reasoning.isEmpty
-    let visible = Dictionary(uniqueKeysWithValues: visibleMessages.enumerated().map { ($0.element.id, $0.offset) })
+    let visible = Dictionary(uniqueKeysWithValues: messages.filter { $0.isConversationVisible || $0.isAgentExchange }.enumerated().map { ($0.element.id, $0.offset) })
     var result: [TranscriptRow] = []
     var placedWork = false
     var precedingExchange = false
@@ -396,6 +396,7 @@ extension ConversationTurn {
     func joins(_ earlier: Int, _ later: Int) -> Bool {
       visible.indices.contains(earlier) && visible.indices.contains(later)
         && visible[earlier].role == "assistant" && visible[later].role == "assistant" && visible[later].id != replyStart
+        && !visible[earlier].isAgentExchange && !visible[later].isAgentExchange
         // A progress line stands apart from the answer around it.
         && !visible[earlier].isProgressLine && !visible[later].isProgressLine
     }
