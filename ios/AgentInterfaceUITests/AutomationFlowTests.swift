@@ -212,7 +212,7 @@ import CryptoKit
   }
   func testTaskEditRefusalRefreshesRunningState() throws {
     let source = ProcessInfo.processInfo.environment["AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH"] ?? ""
-    try XCTSkipUnless(!source.isEmpty, "Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture.")
+    guard !source.isEmpty else { XCTFail("Set AGENT_INTERFACE_DESIGN_WORK_TASKS_PATH to the W2 fixture."); return }
     var fixture = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: source))) as? [String: Any])
     XCTAssertEqual((fixture["workFixture"] as? [String: Any])?["gate"] as? String, "W2-tasks")
     fixture["mode"] = "task-edit-refreshed-running"
@@ -494,7 +494,8 @@ import CryptoKit
   private func launchW3Flow(_ name: String, mode: String) throws -> W3Flow {
     let env = ProcessInfo.processInfo.environment
     let required = ["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH", "AGENT_INTERFACE_W3_FLOW_AUDIT_DIR", "AGENT_INTERFACE_DESIGN_STAGE", "AGENT_INTERFACE_DESIGN_DEVICE"]
-    try XCTSkipIf(required.allSatisfy { env[$0] == nil }, "W3 flow tests run only with their explicit fixture and audit environment.")
+    // The shared fixture is supplied by routine validation; the other variables opt into W3.
+    try XCTSkipIf(required.dropFirst().allSatisfy { env[$0] == nil }, "W3 flow tests run only with their explicit fixture and audit environment.")
     let source = try XCTUnwrap(env["AGENT_INTERFACE_DESIGN_WORK_TRIGGERS_PATH"], "W3 flow tests require the reviewed fixture path")
     let directory = try XCTUnwrap(env["AGENT_INTERFACE_W3_FLOW_AUDIT_DIR"], "W3 flow tests require an audit directory")
     guard env["AGENT_INTERFACE_DESIGN_STAGE"] == "after", let device = env["AGENT_INTERFACE_DESIGN_DEVICE"], ["ios", "ipad"].contains(device) else {

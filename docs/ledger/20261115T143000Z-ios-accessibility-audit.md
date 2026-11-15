@@ -1,0 +1,39 @@
+# November 15 iOS accessibility audit
+
+The focused audit ran on iPhone 18 Pro, iOS 27.0, with accessibility XL text, against uncommitted changes based on `834ef2f9ab4a943b702bd6be9437c828f0711cbc`. Frames are in simulator points. Empty identifiers are shown as none. XCTest reported no element for four findings.
+
+| Screen | XCUIAccessibilityAuditType | Label | Identifier | Frame | Compact description |
+| --- | --- | --- | --- | --- | --- |
+| home | `dynamicType` | LT | none | (26.0, 64.0, 40.0, 40.0) | Dynamic Type font sizes are unsupported |
+| home | `textClipped` | The north gate battery needs replacing. | none | (90.0, 687.3333333333334, 233.0, 129.0) | Text clipped |
+| settings | `contrast` | Close | none | (20.0, 82.0, 76.33333333333333, 36.0) | Contrast failed |
+| settings | `elementDetection` | nil | nil | nil | Potentially inaccessible text |
+| settings | `dynamicType` | Close | none | (20.0, 82.0, 76.33333333333333, 36.0) | Dynamic Type font sizes are partially unsupported |
+| settings | `sufficientElementDescription` | test@localhost.invalid | none | (98.0, 267.0, 177.66666666666663, 86.0) | Label not human-readable |
+| today | `dynamicType` | Today | none | (172.00000000000003, 61.83333333333334, 57.66666666666663, 25.33333333333333) | Dynamic Type font sizes are partially unsupported |
+| today | `dynamicType` | Your assistants, at a glance | none | (110.6666666666667, 88.16666666666667, 180.33333333333331, 18.0) | Dynamic Type font sizes are partially unsupported |
+| today | `dynamicType` | More results are waiting. Mark this page caught up to see them. | none | (16.0, 749.6666666666666, 370.0, 146.33333333333337) | Dynamic Type font sizes are partially unsupported |
+| today | `textClipped` | SINCE YOU WERE AWAY | none | (32.0, 412.3333333333333, 192.0, 77.33333333333337) | Text clipped |
+| chat | `dynamicType` | Ranch hand | none | (161.66666666666666, 95.5, 78.33333333333334, 17.0) | Dynamic Type font sizes are partially unsupported |
+| chat | `dynamicType` | Sep 30, 07:30 | none | (16.0, 601.6666666666665, 179.33333333333334, 34.666666666666515) | Dynamic Type font sizes are partially unsupported |
+| details | `contrast` | Done | closeBotProfile | (307.0, 82.0, 75.0, 36.0) | Contrast failed |
+| details | `dynamicType` | Done | closeBotProfile | (307.0, 82.0, 75.0, 36.0) | Dynamic Type font sizes are partially unsupported |
+| details | `textClipped` | nil | nil | nil | Text clipped |
+| details | `textClipped` | nil | nil | nil | Text clipped |
+| details | `textClipped` | nil | nil | nil | Text clipped |
+
+The unfiltered run failed with 15 unhandled findings. The two home findings were already filtered in that exploratory run.
+
+The focused audit passed with the tracked filters. Replacing the account menu label with `test@localhost.invalid` made it fail with "Label not human-readable" on `openSettings`. The original label was restored. An earlier mutation of the New label failed on an unrelated Today hit area, and an emoji label mutation passed, so neither counts as proof.
+
+The tracked findings are in [issue #412](https://github.com/NicL9923/agent-interface/issues/412).
+
+The full `validate-ios.sh 39F5329D-FA70-4259-9B8A-6AECECDE2227 test` run on source fingerprint `sha256:5fdc27ba4e3f0a1e0a2774b701c413604e62e161c5fdba272c33f1933a2927b0` finished with 935 passed, 13 failed, 10 skipped and 0 expected failures. XCTest reported 4,274 seconds of execution, excluding the lock queue. The November 13 baseline was 921 passed, 0 failed, 29 skipped and 1 expected failure. That record does not give a comparable duration, so the added run time cannot be calculated from it. The full result bundle is `.private/ios-test-20261115T151545Z-38719.xcresult`.
+
+All 13 failures were in newly enabled `ScreenshotTourTests`. Work goal and task tours crashed while accessing the absent capture directory. Both W3 trigger tours rejected the absent explicit capture stage and device. The approvals, avatar, conversation, memory, models caption, models, questions, recovery and settings tours failed assertions. The accessibility audit, the task-edit behavior test, and the home, Today and assistant-details design tests passed. The result is not a passing gate and needs the capture and assertion paths separated before it can be shipped.
+
+The 13 failing tours now require a screenshot directory again and refer to [issue #416](https://github.com/NicL9923/agent-interface/issues/416). The passing home, Today, assistant-details, avatar-creation and short-question assertions remain enabled, along with the accessibility audit and task-edit behavior test. Other tours retain their explicit stage requirements. The home preview fix removed its clipping finding from the audit filters.
+
+On final source fingerprint `sha256:d30ff355eecad8e428b77bb8d30ff2dd376463fba10381f2f987721be02d6232`, focused `validate-ios.sh` runs passed the accessibility audit and task-edit test. Five selected capture tours skipped without a screenshot directory, including both after-stage tours with `AGENT_INTERFACE_DESIGN_STAGE=after`. The full scheme was not rerun after restoring the skips.
+
+`check-all --keep-going` ran before the final two after-stage skip guards. Typecheck, lint, Ruff, build, all 79 browser tests, and 52 Python test files passed. Vitest had 4,046 passed and three failed because the Mac lacks the `127.0.0.2` loopback alias. Those guards only change UI-test selection; no web or Python inputs changed after the check.
