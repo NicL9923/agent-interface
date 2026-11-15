@@ -166,7 +166,7 @@ export async function installCollaborationRoutes(app: FastifyInstance, runtime: 
     const cached = runReads.get(botId);
     if (cached && Date.now() - cached.at < RUNS_CACHE_MS) return cached.value;
     const value = (async () => {
-      const routines = (await runtime.routines()).filter(routine => routine.botId === botId);
+      const routines = (await runtime.routines(botId)).filter(routine => routine.botId === botId);
       const runs: RoutineRun[] = [], unavailable: string[] = [];
       for (let index = 0; index < routines.length; index += 4) await Promise.all(routines.slice(index, index + 4).map(async routine => {
         try { runs.push(...(await runtime.routineResults!(botId, routine.id)).map(result => routineRun(routine, result))); }

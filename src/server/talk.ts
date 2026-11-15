@@ -4,7 +4,7 @@ import { withoutDraftClause } from "../shared/errors.js";
 import { cutText } from "../shared/cut-text.js";
 import { isConversationReply, isProgressLine } from "../shared/message-origin.js";
 import { markdownPlain } from "../shared/plain-text.js";
-import type { Bot, CapabilityKey, Conversation, Message, RealtimeSessionInput, Runtime, SubmissionReceipt } from "../shared/types.js";
+import type { Bot, Conversation, Message, RealtimeSessionInput, RequireCapability, Runtime, SubmissionReceipt } from "../shared/types.js";
 import { DEFAULT_TALK_VOICE, MAX_HEARD_LINES, MAX_TALK_ANSWER, MAX_TALK_PROGRESS, TALK_TOOL, type TalkAnswer, type TalkProgress } from "../shared/voice.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -197,7 +197,7 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
   store: Store;
   roster: Roster;
   directory: BotDirectory;
-  requireCapability: (key: CapabilityKey) => Promise<void>;
+  requireCapability: RequireCapability;
   send: (botId: string, requesterId: string, requestId: string, text: string) => Promise<SubmissionReceipt>;
   now?: () => number;
   waitMs?: number;
@@ -205,10 +205,10 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
   const { runtime, store, roster, directory, requireCapability, send } = collaborators;
   const now = collaborators.now ?? (() => Date.now()), waitMs = collaborators.waitMs ?? ASK_WAIT_MS;
   const limit = new MintLimit(now);
-  apiRoute(app, "POST /bots/:id/talk/session", { before: () => requireCapability("liveVoice") }, async (req, _body, reply) => {
+  apiRoute(app, "POST /bots/:id/talk/session", { before: req => requireCapability("liveVoice", req.params.id) }, async (req, _body, reply) => {
     if (!runtime.realtimeSession) throw httpError(409, "Live voice is unavailable on this Hermes connection.");
     limit.take(signedIn(req).id);
-    const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities()]);
+    const [bots, capabilities] = await Promise.all([runtime.listBots(), runtime.capabilities(req.params.id)]);
     const row = bots.find(bot => bot.id === req.params.id);
     if (!row) throw httpError(404, "Bot not found");
     const bot = directory.decorate(row, capabilities.avatarMetadata.supported);
@@ -232,12 +232,12 @@ export function installTalkRoutes(app: FastifyInstance, collaborators: {
     reply.header("Cache-Control", "no-store");
     // The same ID returns the recorded request instead of sending it twice.
     let receipt = await send(botId, userId, requestId, request);
-    const idempotent = (await runtime.capabilities()).idempotency.supported;
+    const idempotent = (await runtime.capabilities(botId)).idempotency.supported;
     // Hermes settles an admitted request's receipt, as when its work is interrupted; the recorded one stays as admitted.
     // A lookup never carries the admission's turn, so an accepted one keeps the turn this request was admitted with.
     const refresh = async () => {
       if (!idempotent || !["accepted", "uncertain"].includes(receipt.status)) return;
-      const known = await runtime.lookupSubmission(requestId).catch(() => null);
+      const known = await runtime.lookupSubmission(requestId, botId).catch(() => null);
       if (known && known.status !== "uncertain") { store.receipt(known); receipt = withAdmission(known, receipt); }
     };
     await refresh();

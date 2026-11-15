@@ -3,6 +3,13 @@ import type { NotificationRepository } from "./store-notifications.js";
 import type { PresentationRepository } from "./store-presentation.js";
 import type { StoreDatabase } from "./store-database.js";
 import type { CheckInRepository } from "./store-check-ins.js";
+import { hermesRuntimeId } from "./runtime-router.js";
+
+/**
+ * Each runtime's discovery cursor has its own metadata row. Hermes keeps the row it had before cursors were per
+ * runtime, so an upgrade resumes where it stopped and a release rolled back to reads the cursor this one advanced.
+ */
+export const cursorKey = (runtimeId: string) => runtimeId === hermesRuntimeId ? "event_cursor" : `event_cursor:${runtimeId}`;
 
 /** The durable Hermes event log, its discovery cursor, and each person's Today feed over it. */
 export class EventRepository {
@@ -10,16 +17,17 @@ export class EventRepository {
   constructor(private readonly database: StoreDatabase, private readonly notifications: NotificationRepository, readonly presentation: PresentationRepository,
     private readonly checkIns?: CheckInRepository) {}
   private get db() { return this.database.db; }
-  cursor(): string {
+  /** Where discovery resumes for this runtime's events. Empty before its first discovery. */
+  cursor(runtimeId = hermesRuntimeId): string {
     return (
       (
         this.db
-          .prepare("SELECT value FROM metadata WHERE key='event_cursor'")
-          .get() as { value: string } | undefined
+          .prepare("SELECT value FROM metadata WHERE key=?")
+          .get(cursorKey(runtimeId)) as { value: string } | undefined
       )?.value ?? ""
     );
   }
-  recordEvents(events: RuntimeEvent[], cursor: string) {
+  recordEvents(events: RuntimeEvent[], cursor: string, runtimeId = hermesRuntimeId) {
     this.database.transaction(() => {
       for (const found of events)
         if (found.kind !== "activity") {
@@ -35,9 +43,9 @@ export class EventRepository {
         }
       this.db
         .prepare(
-          "INSERT INTO metadata VALUES('event_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          "INSERT INTO metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         )
-        .run(cursor);
+        .run(cursorKey(runtimeId), cursor);
     });
   }
   enqueueKnownEvents(now = Date.now()) {

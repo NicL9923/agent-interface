@@ -10,6 +10,7 @@ import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
 import { badgeFor, rosterOnce } from "./badge.js";
 import { digestCopy } from "../shared/event-copy.js";
+import { hermesRuntimeId } from "./runtime-router.js";
 export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
@@ -193,35 +194,48 @@ export class BackgroundWorker {
   }
   private async reconcileRuntime() {
     try {
-      const capabilities = await this.runtime.capabilities();
-      if (capabilities.idempotency.supported)
-        for (const pending of this.store.pending()) {
-          const id = pending.input.requestId;
-          const previous = this.submissionChecks.get(id);
-          if (previous && previous.next > Date.now()) continue;
-          const count = (previous?.count ?? 0) + 1;
-          this.submissionChecks.set(id, { count, next: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(count - 1, 4)) });
-          try {
-            const receipt = await this.runtime.lookupSubmission(
-              pending.input.requestId,
-            );
-            if (receipt) this.store.receipt(receipt);
-          } catch {
-            /* Preserve uncertain intent, never replay. */
-          }
+      // Each assistant's runtime says whether it can look a request up, asked once per pass.
+      const asked = new Map<string, Promise<boolean>>();
+      const idempotent = (botId: string) => {
+        let known = asked.get(botId);
+        if (!known) asked.set(botId, known = this.runtime.capabilities(botId).then(capabilities => capabilities.idempotency.supported));
+        return known;
+      };
+      for (const pending of this.store.pending()) {
+        if (!(await idempotent(pending.input.botId))) continue;
+        const id = pending.input.requestId;
+        const previous = this.submissionChecks.get(id);
+        if (previous && previous.next > Date.now()) continue;
+        const count = (previous?.count ?? 0) + 1;
+        this.submissionChecks.set(id, { count, next: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(count - 1, 4)) });
+        try {
+          const receipt = await this.runtime.lookupSubmission(
+            pending.input.requestId,
+            pending.input.botId,
+          );
+          if (receipt) this.store.receipt(receipt);
+        } catch {
+          /* Preserve uncertain intent, never replay. */
         }
+      }
       for (const id of this.submissionChecks.keys()) if (this.store.submission(id)?.receipt.status !== "uncertain") this.submissionChecks.delete(id);
+      const capabilities = await this.runtime.capabilities();
       if (!capabilities.durableEvents.supported)
         throw new Error(capabilities.durableEvents.reason ?? "Durable events are unavailable");
-      const discovery = await this.runtime.discoverEvents(
-        this.store.cursor(),
-      );
-      // Titles name the assistant; a roster failure keeps the previous names.
-      if (discovery.events.length) try {
-        this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
-      } catch { /* Fall back to the last known names. */ }
-      if (this.identify) await this.identify(discovery.events);
-      this.store.recordEvents(discovery.events, discovery.cursor);
+      // Each runtime's events resume from its own cursor. One that fails keeps its cursor and holds up no other.
+      let failure: { error: unknown } | undefined;
+      for (const source of this.runtime.eventSources?.() ?? [hermesRuntimeId]) {
+        try {
+          const discovery = await this.runtime.discoverEvents(this.store.cursor(source), source);
+          // Titles name the assistant; a roster failure keeps the previous names.
+          if (discovery.events.length) try {
+            this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
+          } catch { /* Fall back to the last known names. */ }
+          if (this.identify) await this.identify(discovery.events);
+          this.store.recordEvents(discovery.events, discovery.cursor, source);
+        } catch (error) { failure ??= { error }; }
+      }
+      if (failure) throw failure.error;
       this.discovery.success();
     } catch (error) {
       // Preserve the discovery cursor while Hermes is unavailable.

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { assistantNameMessage, IncompleteCreationError, InvalidInput, NotFound } from "../shared/errors.js";
-import { botIdFor, reasoningLevels, serviceTiers, type Bot, type CapabilityKey, type Runtime } from "../shared/types.js";
+import { botIdFor, reasoningLevels, serviceTiers, type Bot, type RequireCapability, type Runtime } from "../shared/types.js";
 import { unreadSince } from "../shared/unread.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -72,21 +72,21 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
   store: Store;
   roster: Roster;
   directory: BotDirectory;
-  requireCapability: (key: CapabilityKey) => Promise<void>;
+  requireCapability: RequireCapability;
   /** Absent in tests that never touch a main assistant. */
   mains?: MainAssistants;
 }) {
   const { runtime, store, roster, directory, requireCapability, mains } = collaborators;
   // Main assistants hear about every roster change on their next turn, and lose any assistant that went.
   const rosterChanged = () => { if (mains?.relevant()) void mains.reconcile().catch(() => {}); };
-  const nativeAvatar = async () => (await runtime.capabilities()).avatarMetadata.supported;
+  const nativeAvatar = async (botId: string) => (await runtime.capabilities(botId)).avatarMetadata.supported;
   apiRoute(app, "GET /bots/:id/inference", {}, async req => {
     if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     return runtime.inferenceSettings(req.params.id);
   });
   const inference = z.object({ reasoning: z.enum(reasoningLevels).optional(), speed: z.enum(serviceTiers).optional() })
     .strict().refine(value => Object.keys(value).length > 0);
-  const configurable = { before: () => requireCapability("botConfiguration") };
+  const configurable = { before: (req: { params: { id: string } }) => requireCapability("botConfiguration", req.params.id) };
   apiRoute(app, "PATCH /bots/:id/inference", { ...configurable, body: inference }, async (req, update) => {
     if (!runtime.inferenceSettings) throw httpError(409, "Hermes inference controls are unavailable.");
     return runtime.inferenceSettings(req.params.id, update);
@@ -96,7 +96,8 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     return directory.rosterFor(signedIn(req).id, bots, capabilities.avatarMetadata.supported,
       (req.query as { roster?: string }).roster === "lean");
   });
-  apiRoute(app, "POST /bots", { ...configurable, body: botSaveRequest }, async (req, body) => {
+  // A new assistant is created on the default runtime.
+  apiRoute(app, "POST /bots", { before: () => requireCapability("botConfiguration", undefined), body: botSaveRequest }, async (req, body) => {
     const { confirmPrivate: _, confirmMainCleared: __, ...input } = body;
     const next = { shared: input.shared, ownerId: input.shared ? undefined : signedIn(req).id };
     // Its sharing is recorded before Hermes creates it, so a personal one is never briefly
@@ -131,14 +132,14 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     });
     roster.forget();
     rosterChanged();
-    return directory.decorate(directory.remember(bot), await nativeAvatar());
+    return directory.decorate(directory.remember(bot), await nativeAvatar(bot.id));
   });
   apiRoute(app, "GET /bots/:id", {}, async req => {
     const botId = req.params.id;
     const value = runtime.botDetail ? await runtime.botDetail(botId)
       : (await runtime.listBots()).find(bot => bot.id === botId);
     if (!value) throw httpError(404, "Bot not found");
-    return directory.decorate(directory.remember(value), await nativeAvatar());
+    return directory.decorate(directory.remember(value), await nativeAvatar(botId));
   });
   apiRoute(app, "PATCH /bots/:id", { ...configurable, body: botSaveRequest }, async (req, body) => {
     const { confirmPrivate, confirmMainCleared, ...input } = body;
@@ -177,10 +178,10 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
       if (moving) await mains?.release(id);
     }
     rosterChanged();
-    return directory.decorate(directory.remember(bot), await nativeAvatar());
+    return directory.decorate(directory.remember(bot), await nativeAvatar(bot.id));
   });
   apiRoute(app, "DELETE /bots/:id", {}, async req => {
-    await requireCapability("botConfiguration");
+    await requireCapability("botConfiguration", req.params.id);
     // Deleting only closes the rooms that list this assistant, so it needs no routine check, but it waits
     // its turn: a creation reusing the ID then checks the rooms after this record is gone.
     await serialDelivery(store, async () => {
@@ -197,7 +198,7 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
     const bot = (await runtime.listBots()).find((b) => b.id === req.params.id);
     if (!bot) throw httpError(404, "Bot not found");
     if (
-      (await runtime.capabilities()).avatarMetadata?.supported &&
+      (await runtime.capabilities(bot.id)).avatarMetadata?.supported &&
       runtime.setAvatar
     )
       await runtime.setAvatar(bot.id, value);
@@ -208,21 +209,21 @@ export function installBotRoutes(app: FastifyInstance, collaborators: {
   apiRoute(app, "PUT /bots/:id/voice", { body: z.object({ voice: z.enum(TALK_VOICES) }).strict() }, async (req, { voice }) => {
     const bot = (await runtime.listBots()).find(b => b.id === req.params.id);
     if (!bot) throw httpError(404, "Bot not found");
-    if (await nativeAvatar() && runtime.setVoice) await runtime.setVoice(bot.id, voice);
+    if (await nativeAvatar(bot.id) && runtime.setVoice) await runtime.setVoice(bot.id, voice);
     else store.saveVoice(bot.id, voice);
     return { voice };
   });
-  apiRoute(app, "POST /bots/:id/portrait", { before: () => requireCapability("portraitGeneration"),
+  apiRoute(app, "POST /bots/:id/portrait", { before: req => requireCapability("portraitGeneration", req.params.id),
     body: z.object({ prompt: z.string().min(1).max(2000) }) }, async (req, { prompt }) => {
     return runtime.generatePortrait(req.params.id, prompt);
   });
   const catalogIds = z.object({ ids: z.array(id).max(500) });
   for (const kind of ["tools", "skills"] as const) {
     apiRoute(app, `GET /bots/:id/${kind}`, {}, async req => {
-      await requireCapability(kind);
+      await requireCapability(kind, req.params.id);
       return runtime[kind](req.params.id);
     });
-    apiRoute(app, `PUT /bots/:id/${kind}`, { before: () => requireCapability(kind), body: catalogIds }, async (req, { ids }) => {
+    apiRoute(app, `PUT /bots/:id/${kind}`, { before: req => requireCapability(kind, req.params.id), body: catalogIds }, async (req, { ids }) => {
       await (kind === "tools"
         ? runtime.setTools(req.params.id, ids)
         : runtime.setSkills(req.params.id, ids));

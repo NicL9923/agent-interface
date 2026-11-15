@@ -5,7 +5,7 @@ import staticFiles from "@fastify/static";
 import websocket from "@fastify/websocket";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { CapabilityKey, Runtime } from "../shared/types.js";
+import type { RequireCapability, Runtime } from "../shared/types.js";
 import type { Config } from "./config.js";
 import { Store } from "./store.js";
 import { installAuth, signedIn } from "./auth.js";
@@ -107,8 +107,9 @@ export async function createApp(
   upgrades.visibleTo = (botId, userId) => visibleTo(store, botId, userId);
   installMaintenanceGate(app, upgrades);
   app.setErrorHandler(errorHandler({ production: config.production }));
-  const requireCapability = async (key: CapabilityKey) => {
-    const cap = (await runtime.capabilities())[key];
+  // Asked of the runtime the assistant runs on. A route that acts on no assistant passes undefined, for the default runtime.
+  const requireCapability: RequireCapability = async (key, botId) => {
+    const cap = (await runtime.capabilities(botId))[key];
     if (!cap?.supported)
       throw httpError(409, cap?.reason ?? `${key} is unavailable`);
   };

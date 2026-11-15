@@ -3,7 +3,7 @@ import { visiblePreferences } from "./bootstrap-routes.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { CHECK_IN_ROUTINE_NAME, checkInSchedule, scheduleMinutes, mainEligible, mainIneligibleReason, validCheckInHours } from "../shared/main-assistant.js";
-import type { Bot, CapabilityKey, DelegationPolicies, Preferences, Routine, Runtime, RuntimeEvent } from "../shared/types.js";
+import type { Bot, DelegationPolicies, Preferences, RequireCapability, Routine, Runtime, RuntimeEvent } from "../shared/types.js";
 import { withoutBotTag } from "../shared/event-copy.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
@@ -286,7 +286,7 @@ export class MainAssistants {
       if (job.running) {
         if (!this.runtime.stopRoutineRun) throw new Error("This Hermes can't stop a routine's run.");
         await this.runtime.stopRoutineRun(job.botId, job.id);
-        settled = !(await this.runtime.routines()).find(row => row.botId === job.botId && row.id === job.id)?.running;
+        settled = !(await this.runtime.routines(job.botId)).find(row => row.botId === job.botId && row.id === job.id)?.running;
         if (!settled) throw new Error("The routine's run is still going.");
       }
       await this.runtime.deleteRoutine(job.id, job.botId);
@@ -304,7 +304,7 @@ export class MainAssistants {
   /** Whether any check-in job, recorded here or signed in Hermes, is on this assistant. A failed read counts as yes. */
   async checkInsOn(botId: string) {
     if (this.store.checkIns.current().some(job => job.botId === botId)) return true;
-    try { return (await this.runtime.routines()).some(job => job.botId === botId && !!signedCheckInMember(this.store, job)); }
+    try { return (await this.runtime.routines(botId)).some(job => job.botId === botId && !!signedCheckInMember(this.store, job)); }
     catch { return true; }
   }
 
@@ -465,7 +465,7 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   store: Store;
   mains: MainAssistants;
   preferences(userId: string): Preferences;
-  requireCapability(key: CapabilityKey): Promise<void>;
+  requireCapability: RequireCapability;
 }) {
   const { runtime, store, mains, preferences, requireCapability } = collaborators;
   const eligibleBot = async (userId: string, botId: string) => {
@@ -483,10 +483,10 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
    * a copy of the routine as it was, which a change to the saved routine doesn't reach.
    */
   const assertRoutinesSettled = async (bot: Bot) => {
-    if (!(await runtime.capabilities()).routines.supported) return;
+    if (!(await runtime.capabilities(bot.id)).routines.supported) return;
     const unread = () => httpError(409, `WildBots couldn't check ${bot.name}'s routines, so it isn't your main assistant yet. Try again.`, { code: "main_routine_delivery" });
     let routines: Routine[];
-    try { routines = (await runtime.routines()).filter(routine => routine.botId === bot.id); }
+    try { routines = (await runtime.routines(bot.id)).filter(routine => routine.botId === bot.id); }
     catch { throw unread(); }
     const elsewhere = routines.filter(routine => !ownChatOnly(bot.id, routineTargets(routine)));
     if (elsewhere.length)
@@ -534,7 +534,8 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   // one that asked for identical settings.
   const checkInRevisions = new Map<string, number>();
   apiRoute(app, "PUT /preferences/check-ins", {
-    before: () => requireCapability("routines"),
+    // Check-ins run as routines of the member's main assistant.
+    before: req => requireCapability("routines", store.preferences(signedIn(req).id).mainBotId),
     body: z.object({ enabled: z.boolean(), everyHours: z.number(), timezone }).strict(),
   }, async (req, settings) => {
     const userId = signedIn(req).id;

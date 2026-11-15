@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { ApiBody } from "../shared/api.js";
 import { routineRoomId } from "../shared/collaboration.js";
-import type { CapabilityKey, Runtime } from "../shared/types.js";
+import type { RequireCapability, Runtime } from "../shared/types.js";
 import { apiRoute } from "./api-route.js";
 import { signedIn } from "./auth.js";
 import { routineById, visibleTo, type Roster } from "./bot-access.js";
@@ -22,11 +22,17 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
   runtime: Runtime;
   store: Store;
   roster: Roster;
-  requireCapability: (key: CapabilityKey) => Promise<void>;
+  requireCapability: RequireCapability;
 }) {
   const { config, runtime, store, roster, requireCapability } = collaborators;
+  // A save names its assistant before its body is parsed: a malformed one goes to the default runtime, then fails validation.
+  const namedBot = (body: unknown) => {
+    const botId = (body as { botId?: unknown } | undefined)?.botId;
+    return typeof botId === "string" ? botId : undefined;
+  };
+  // Every assistant's routines, so the default runtime decides whether there is a list at all.
   apiRoute(app, "GET /routines", {}, async (req) => {
-    await requireCapability("routines");
+    await requireCapability("routines", undefined);
     const userId = signedIn(req).id;
     const all = await runtime.routines();
     store.adoptLegacyRecipients(all);
@@ -58,7 +64,7 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     input: ApiBody<"POST /routines">,
     routineId?: string,
   ) => {
-    const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines() : [];
+    const all = routineId || input.contextFrom?.some(ref => ref !== 'self') ? await runtime.routines(input.botId) : [];
     // Hermes lets two assistants hold jobs with one ID; this save is for the named assistant's.
     const previous = routineId ? all.find(row => row.id === routineId && row.botId === input.botId) : undefined;
     if (routineId && (!previous || previous.botId !== input.botId)) throw httpError(404, "Routine not found");
@@ -104,7 +110,7 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     // with sharing changes, which recheck routine rooms.
     const routine = await serialDelivery(store, async () => {
       // Read again in this turn: a save or sharing change ahead in the queue may have changed its rooms.
-      const current = routineId ? (await runtime.routines()).find(row => row.id === routineId && row.botId === input.botId) : undefined;
+      const current = routineId ? (await runtime.routines(input.botId)).find(row => row.id === routineId && row.botId === input.botId) : undefined;
       if (routineId && (!current || current.botId !== input.botId)) throw httpError(404, "Routine not found");
       if (input.roomIds !== undefined) {
         const rooms = await routineRooms(runtime, store, userId, input, current?.roomIds);
@@ -124,15 +130,17 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     const [saved] = await routinesFor(runtime, store, roster, userId, [{ ...effective, ...routine, recipientIds: input.recipientIds }]);
     return saved;
   };
-  apiRoute(app, "POST /routines", { body: routineSchema, before: async () => requireCapability("routines") }, async (req, input) => saveRoutine(signedIn(req).id, input));
+  apiRoute(app, "POST /routines", { body: routineSchema, before: async req => requireCapability("routines", namedBot(req.body)) }, async (req, input) => saveRoutine(signedIn(req).id, input));
   // A save names its assistant, so a trial of another assistant's routine with the same ID never blocks it.
-  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines"); await assertRoutineEditable(runtime, store, req.params.id, (req.body as { botId?: unknown } | undefined)?.botId); } }, async (req, input) => saveRoutine(signedIn(req).id, input, req.params.id));
+  apiRoute(app, "PUT /routines/:id", { body: routineSchema, before: async req => { await requireCapability("routines", namedBot(req.body)); await assertRoutineEditable(runtime, store, req.params.id, (req.body as { botId?: unknown } | undefined)?.botId); } }, async (req, input) => saveRoutine(signedIn(req).id, input, req.params.id));
   apiRoute(app, "DELETE /routines/:id", {}, async (req) => {
-    await requireCapability("routines");
+    // The ID names its assistant only once the routines are read, so the default runtime answers first.
+    await requireCapability("routines", undefined);
     // Hermes lets two assistants hold jobs with one ID, so the ID means the copy this person can see,
     // and Hermes is told its assistant. Without that, Hermes picks the copy itself, which may be hidden.
     const routine = routineById(await runtime.routines(), req.params.id, store, signedIn(req).id);
     if (!routine) throw httpError(404, "Routine not found");
+    await requireCapability("routines", routine.botId);
     assertNotManaged(store, routine);
     await assertRoutineEditable(runtime, store, routine.id, routine.botId);
     // Hermes treats the profile as a hint and deletes another assistant's copy when this one is gone
@@ -140,7 +148,7 @@ export function installRoutineRoutes(app: FastifyInstance, collaborators: {
     // without changing the add-on. So deletions run one at a time with the other routine changes, and
     // each reads the routines again just before, deleting nothing unless this assistant's copy is still there.
     await serialDelivery(store, async () => {
-      const all = await runtime.routines();
+      const all = await runtime.routines(routine.botId);
       if (!all.some(other => other.id === routine.id && other.botId === routine.botId)) throw httpError(404, "Routine not found");
       store.adoptLegacyRecipients(all);
       await runtime.deleteRoutine(routine.id, routine.botId);

@@ -69,7 +69,7 @@ export function installPushRoutes(app: FastifyInstance, collaborators: {
     const user = action && store.getUser(action.userId);
     if (!action || !user || !allowedIdentity(config, user) || !visibleTo(store, action.botId, user.id))
       throw httpError(401, "This notification action expired. Open the chat to answer.");
-    if (!(await runtime.capabilities()).approvals.supported) throw httpError(409, "Approvals are unavailable");
+    if (!(await runtime.capabilities(action.botId)).approvals.supported) throw httpError(409, "Approvals are unavailable");
     await decideApproval(runtime, store, action.botId, action.approvalId, action.decision, user.id);
     return { ok: true };
   });

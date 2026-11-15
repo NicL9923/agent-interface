@@ -178,6 +178,8 @@ export type CapabilityKey =
   /** Live Talk: Hermes can mint OpenAI Realtime sessions on its ChatGPT sign-in. */
   | "liveVoice";
 export type Capabilities = Record<CapabilityKey, Capability>;
+/** Refuses with a 409 unless the runtime of `botId`, or the default runtime for undefined, supports `key`. */
+export type RequireCapability = (key: CapabilityKey, botId: string | undefined) => Promise<void>;
 export interface Bot {
   id: string;
   name: string;
@@ -575,8 +577,12 @@ export interface Runtime {
   connectionRequest?(input: ConnectionRequestSettle): Promise<ConnectionRequestResult>;
   status(): Promise<RuntimeStatus>;
   reconnect?(): Promise<RuntimeStatus>;
-  capabilities(): Promise<Capabilities>;
-  canonicalSubmit?(): Promise<boolean>;
+  /**
+   * What the runtime serving this assistant supports. Without an assistant, the default runtime's: the one set clients
+   * get for the whole roster, and the one a new assistant is created on.
+   */
+  capabilities(botId?: string): Promise<Capabilities>;
+  canonicalSubmit?(botId?: string): Promise<boolean>;
   listBots(): Promise<Bot[]>;
   botDetail?(botId: string): Promise<Bot>;
   watchRoster?(changed: () => void): () => void;
@@ -617,7 +623,8 @@ export interface Runtime {
   /** Reports the turn events a send is timed by, in frame order. Unsubscribe with the returned function. */
   watchTurns?(watcher: TurnWatcher): () => void;
   submit(input: Submission): Promise<SubmissionReceipt>;
-  lookupSubmission(requestId: string): Promise<SubmissionReceipt | null>;
+  /** `botId` names the assistant the request was sent to, when the caller knows it. Without it, every runtime is asked. */
+  lookupSubmission(requestId: string, botId?: string): Promise<SubmissionReceipt | null>;
   steer(input: Submission): Promise<SubmissionReceipt>;
   answerRequest(
     botId: string,
@@ -636,19 +643,29 @@ export interface Runtime {
     botId: string,
     input: { name: string; mime: string; data: Buffer },
   ): Promise<FileRef>;
-  /** The body never yields more than maxBytes; a larger file is refused with file_too_large. */
-  download(id: string, maxBytes: number): Promise<DownloadedFile>;
+  /**
+   * The body never yields more than maxBytes; a larger file is refused with file_too_large. `botId` is the assistant
+   * the ID's signature names (see `fileBotId`), when the caller already checked it.
+   */
+  download(id: string, maxBytes: number, botId?: string): Promise<DownloadedFile>;
   /** The assistant a file ID belongs to, only when its signature is genuine. */
   fileBotId?(id: string): string | undefined;
   tools(botId: string): Promise<Tool[]>;
   setTools(botId: string, ids: string[]): Promise<void>;
   skills(botId: string): Promise<Skill[]>;
   setSkills(botId: string, ids: string[]): Promise<void>;
-  routines(): Promise<Routine[]>;
+  /**
+   * With `botId`, only that assistant's runtime is asked. The list may still hold other assistants' routines, so a
+   * caller that wants one assistant's filters by `botId`.
+   */
+  routines(botId?: string): Promise<Routine[]>;
   saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
   /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
   deleteRoutine(id: string, botId: string): Promise<void>;
-  discoverEvents(cursor: string): Promise<RuntimeDiscovery>;
+  /** Events after `cursor` from one event source (see `eventSources`), the default runtime without one. */
+  discoverEvents(cursor: string, source?: string): Promise<RuntimeDiscovery>;
+  /** Each runtime whose events `discoverEvents` reads, with a cursor of its own. Absent: only the default runtime. */
+  eventSources?(): string[];
   /**
    * Who each assistant may see and reach, replacing every earlier policy. Resolves once Hermes holds
    * it, with the roster protocol Hermes enforces: 0 when this add-on has no gate, so nothing is
