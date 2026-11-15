@@ -217,8 +217,9 @@ tab's sign-in that began signed out is under way, is kept for the next sign-in. 
 the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
-is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
-reads and writes the record under one lock, so another tab's step cannot land between. Storage
+is shown or focused. Where the browser has the Web Locks API, sign-in and sign-out operations
+hold a separate lock through the request and record settlement, while record updates use their own
+lock. Without Web Locks, concurrent authentication requests in separate tabs can race. Storage
 that refuses writes leaves each tab on its own: it still takes its own changes, but cannot
 tell other tabs. See `src/app/account-epoch.ts`.
 
