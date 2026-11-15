@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Computes home's seasonal accents: each theme's --accent and --accent-soft shifted toward the season's
-// color at the base token's own WCAG luminance, so no contrast ratio drops below the unseasoned theme's.
+// color at the base token's own WCAG luminance, so no pair drawn directly with the tokens loses contrast to
+// the unseasoned theme. A translucent fill composited over a surface can move by a rounding hair.
 // `node .agents/tools/season-tint.mjs` prints the block; `--write` replaces it in src/motion.css.
 // tests/season-tint.test.ts fails when the CSS and this computation disagree.
 import { readFileSync, writeFileSync } from "node:fs";
