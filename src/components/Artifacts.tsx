@@ -196,7 +196,9 @@ async function readTextPreview(url: string, signal: AbortSignal): Promise<TextCo
   signal.addEventListener("abort", stop);
   try {
     const response = await fetch(url, { credentials: "same-origin", cache: "no-store", redirect: "error", signal: controller.signal });
-    if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file." : "This file could not be loaded. Try again when the connection is restored.");
+    if (!response.ok) throw new Error(response.status === 401 ? "Sign in again to open this file."
+      : response.status === 404 ? "This file is no longer available. Reload the chat to open it again."
+      : "This file could not be loaded. Try again when the connection is restored.");
     const chunks: Uint8Array[] = [];
     let length = 0;
     let truncated = false;

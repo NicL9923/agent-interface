@@ -10,7 +10,7 @@ import { decodeAutomation, decodeExperience, readOperationJson } from './hermes-
 import type { ExperienceRequest, ExperienceResult } from '../shared/experience.js';
 import type { AutomationRequest, AutomationResult } from '../shared/automation.js';
 import { formatBytes } from '../shared/uploads.js';
-import { hermesMaintenanceSendMessage, IncompleteCreationError, interruptionPendingMessage, nothingToStopMessage, runChangedMessage } from '../shared/errors.js';
+import { approvalNotPendingMessage, assistantNameMessage, assistantNotFoundMessage, Conflict, hermesMaintenanceSendMessage, IncompleteCreationError, interruptionPendingMessage, InvalidInput, NotFound, nothingToStopMessage, runChangedMessage } from '../shared/errors.js';
 import { httpError } from './http-error.js';
 
 const approvalSettingsUnsupported = "This Hermes integration can't list always-allowed commands. Update it to manage them here.";
@@ -419,7 +419,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     try {
       attachments = input.attachments.map(file => fileValue(file.id));
       if (attachments.some(file => file.botId !== input.botId))
-        throw new Error('Attachment belongs to a different Hermes bot.');
+        throw new InvalidInput('Attachment belongs to a different Hermes bot.');
     } catch (error) {
       // Validation has not contacted native admission. The caller can edit this draft.
       return { requestId: input.requestId, status: 'rejected', message:
@@ -465,7 +465,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     const state = transient.get(live.get(botId) ?? '');
     const requests = state?.requests ?? (await open(botId)).open_requests ?? [];
     if (!requests.some((request: Wire) => String(request.id) === id && request.method === method))
-      throw new Error(method === 'approval' ? 'That approval is stale or already resolved.' : 'That question is stale or already resolved.');
+      throw new Conflict(method === 'approval' ? approvalNotPendingMessage : 'This question is no longer pending', 'request_not_pending');
   }
   async function routineMutation(input: Omit<Routine, 'id'>, id?: string): Promise<Routine> {
     const profile = `?profile=${encodeURIComponent(input.botId)}`;
@@ -477,10 +477,11 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     // whole. The profile's job list is read, as routines() does: the service route admits no single-job read.
     if (id && input.roomIds !== undefined) {
       const jobs = await (await http(`/api/cron/jobs${profile}`)).json().catch(() => undefined) as Wire;
-      const current = Array.isArray(jobs) ? jobs.find((job: Wire) => (job.id ?? job.job_id) === id) : undefined;
-      if (!current) throw new Error('Hermes did not return the routine. Reload before retrying.');
+      if (!Array.isArray(jobs)) throw new Error('Hermes did not return the routine. Reload before retrying.');
+      const current = jobs.find((job: Wire) => (job.id ?? job.job_id) === id);
+      if (!current) throw new NotFound('This routine no longer exists in Hermes. Reload to see its routines.');
       const deliver = withDeliverRooms(current.deliver, input.roomIds);
-      if (deliver === undefined) throw new Error('Hermes returned a delivery setting the app cannot read. Edit this routine in Hermes.');
+      if (deliver === undefined) throw new Conflict('Hermes returned a delivery setting the app cannot read. Edit this routine in Hermes.');
       body.deliver = deliver;
     }
     // Native PUT merges updates. Omitted fields, including future native settings,
@@ -494,7 +495,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(id ? { updates: body } : { ...body, paused: !input.enabled }),
     })).json() as Wire;
-    if (job.error || job.success === false) throw new Error('Hermes refused the routine. Reload before retrying.');
+    if (job.error || job.success === false) throw new Conflict('Hermes refused the routine. Reload before retrying.');
     job = job.job ?? job;
     const jobId = job.id ?? job.job_id ?? id;
     if (!jobId) throw new Error('Hermes did not return a routine ID.');
@@ -832,7 +833,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     async setVoice(botId, voice) {
       const roster = await rpc('profiles.list', {include_sessions: false});
       const row = roster.profiles.find((x: Wire) => x.name === botId);
-      if (!row) throw new Error('Unknown Hermes bot.');
+      if (!row) throw new NotFound(assistantNotFoundMessage, 'assistant_not_found');
       const meta = row.ui_meta?.agent_interface ?? {};
       try {
         const result = await rpc('profiles.configure', {name: botId, ui_meta: {agent_interface: {...meta, voice}},
@@ -879,13 +880,13 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     async botDetail(botId) {
       const roster = await rpc('profiles.list', {include_sessions: true});
       const row = roster.profiles.find((row: Wire) => row.name === botId);
-      if (!row) throw new Error('Unknown Hermes bot.');
+      if (!row) throw new NotFound(assistantNotFoundMessage, 'assistant_not_found');
       return (await named([toBot(row, await describe(botId))]))[0];
     },
     async saveBot(input: BotInput, id?: string) {
       await connect();
       const name = id ?? botIdFor(input.name);
-      if (!name) throw new Error('Bot name needs letters or numbers.');
+      if (!name) throw new InvalidInput(assistantNameMessage, 'assistant_name_invalid');
       let created = false;
       try {
         if (!id) {
@@ -966,9 +967,9 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       await open(botId);
       const result = await rpc('image.generate', {prompt, aspect_ratio: 'square', max_bytes: 2_000_000});
       if (!result.success || !result.image_data) {
-        throw new Error(typeof result.error === 'string' && /no image generation backend configured/i.test(result.error)
-          ? 'No image generation backend configured.'
-          : 'Hermes image generation did not deliver image bytes. Review the provider settings before retrying.');
+        if (typeof result.error === 'string' && /no image generation backend configured/i.test(result.error))
+          throw new Conflict('No image generation backend configured.');
+        throw new Error('Hermes image generation did not deliver image bytes. Review the provider settings before retrying.');
       }
       const [, mime, base64] = /^data:([^;]+);base64,(.*)$/.exec(result.image_data) ?? [];
       if (!mime || !base64) throw new Error('Hermes returned an invalid generated image.');
@@ -977,19 +978,19 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
     async setAvatar(botId, avatar: Avatar) {
       const roster = await rpc('profiles.list', {include_sessions: false});
       const row = roster.profiles.find((x: Wire) => x.name === botId);
-      if (!row) throw new Error('Unknown Hermes bot.');
+      if (!row) throw new NotFound(assistantNotFoundMessage, 'assistant_not_found');
       let portraitData: string | undefined;
       if (avatar.mode === 'portrait') {
-        if (!avatar.src.startsWith('/api/files/') || /[?#]/.test(avatar.src)) throw new Error('Choose an image uploaded or generated through this app.');
+        if (!avatar.src.startsWith('/api/files/') || /[?#]/.test(avatar.src)) throw new InvalidInput('Choose an image uploaded or generated through this app.');
         const id = decodeURIComponent(avatar.src.slice('/api/files/'.length));
         const file = fileValue(id);
-        if (file.botId !== botId) throw new Error('Portrait belongs to a different Hermes bot.');
-        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mime)) throw new Error('Hermes portraits support PNG, JPEG, and WebP.');
+        if (file.botId !== botId) throw new InvalidInput('Portrait belongs to a different Hermes bot.');
+        if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.mime)) throw new InvalidInput('Hermes portraits support PNG, JPEG, and WebP.');
         const chunks: Uint8Array[] = [];
         try {
           for await (const chunk of (await this.download(id, 2_000_000)).body) chunks.push(chunk);
         } catch (error) {
-          throw (error as {code?: string}).code === 'file_too_large' ? new Error('Hermes portraits must be 2 MB or smaller.') : error;
+          throw (error as {code?: string}).code === 'file_too_large' ? new InvalidInput('Hermes portraits must be 2 MB or smaller.') : error;
         }
         portraitData = `data:${file.mime};base64,${Buffer.concat(chunks).toString('base64')}`;
       }
@@ -997,7 +998,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       const result = await rpc('profiles.configure', {name: botId, ui_meta: {agent_interface: {...meta, avatar}},
         ui_meta_expected_revisions: {agent_interface: row.ui_meta_revisions?.agent_interface ?? 0}});
       if (!result.ok || result.applied?.ui_meta === false || Object.keys(result.applied?.ui_meta_conflicts ?? {}).length)
-        throw new Error('The Hermes avatar changed on another client. Reload before saving.');
+        throw new Conflict('The Hermes avatar changed on another client. Reload before saving.');
       // Native assets do not support CAS. Never overwrite one after a rejected metadata revision.
       if (portraitData) {
         try {
@@ -1054,12 +1055,12 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       await checkRequest(botId, approvalId, 'approval');
       const result = await rpc('request.answer', {id: approvalId, profile: botId, result: {choice: decision === 'approved' ? scope : 'deny'}})
         .finally(() => touched(botId));
-      if (result.status === 'expired') throw new Error('That approval expired before it was answered.');
+      if (result.status === 'expired') throw new Conflict('That approval expired before it was answered.', 'request_not_pending');
     },
     async answerRequest(botId, requestId, answers) {
       await checkRequest(botId, requestId, 'clarify');
       const result = await rpc('request.answer', {id: requestId, profile: botId, result: {answers}}).finally(() => touched(botId));
-      if (result.status === 'expired') throw new Error('That question expired before it was answered.');
+      if (result.status === 'expired') throw new Conflict('That question expired before it was answered.', 'request_not_pending');
     },
     async upload(botId, input) {
       const state = await open(botId);
@@ -1189,7 +1190,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       const state = await open(botId);
       const catalog = await rpc('profiles.describe', {name: botId});
       const known = new Set(catalog.toolsets.map((x: Wire) => x.name));
-      if (ids.some(x => !known.has(x))) throw new Error('Unknown Hermes toolset selected.');
+      if (ids.some(x => !known.has(x))) throw new InvalidInput('Unknown Hermes toolset selected.');
       const disabling = catalog.toolsets.filter((x: Wire) => x.enabled && !ids.includes(x.name)).map((x: Wire) => x.name);
       const enabling = catalog.toolsets.filter((x: Wire) => !x.enabled && ids.includes(x.name)).map((x: Wire) => x.name);
       try {

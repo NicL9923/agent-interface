@@ -9,6 +9,7 @@ import {
   WORK_SCAN,
   WORK_SPIN,
   animatesAt,
+  approach,
   avatarPose,
   avatarProp,
   blinkAt,
@@ -36,6 +37,17 @@ const samples = (from: number, to: number, step = 0.02) =>
 const plan = (kind: GestureKind, start: number, side = -1): MotionPlan => ({ phase: 0, tempo: 1, gesture: { kind, side, start } });
 
 describe("avatar motion", () => {
+  it("leaves the face where it is for a frame step of no time or a negative one", () => {
+    // A frame timestamp from before the avatar's clock started once gave a negative step, which pushed
+    // the eyes' squint past its target and drew them with a negative height.
+    const squinting = { open: 1, tilt: 0, happy: 0, mouth: 0.1, dot: 1 };
+    const target = { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
+    expect(approach(squinting, target, -0.2)).toEqual(squinting);
+    expect(approach(squinting, target, 0)).toEqual(squinting);
+    const moved = approach(squinting, target, 0.016);
+    expect(moved.dot).toBeGreaterThan(0);
+    expect(moved.dot).toBeLessThan(1);
+  });
   it("positions the writing prop and preserves invalid colors", () => {
     expect(propMotion("write", 0)).toEqual({ x: 74, y: 79.2, rotate: 0 });
     // A quarter turn in: the pen is at its full 2.5 swing to the right.

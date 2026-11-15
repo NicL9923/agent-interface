@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FileRef } from '../shared/types.js';
-import { httpError, type HttpError } from './http-error.js';
+import { fileNotFoundMessage, NotFound } from '../shared/errors.js';
 import type { Wire } from './hermes-transport.js';
 
 /**
@@ -27,8 +27,8 @@ export function fileKeys(current: FileKey, others: FileKey[] = []): FileKeys {
 
 /** Why an identifier was refused. Every refusal answers 404 alike, so the reason is for logs and tests only. */
 export type FileRefusalReason = 'format' | 'key' | 'signature' | 'body' | 'path';
-export type FileRefusal = HttpError & {reason: FileRefusalReason};
-const refuse = (reason: FileRefusalReason): FileRefusal => Object.assign(httpError(404, 'File not found.'), {reason});
+export type FileRefusal = NotFound & {reason: FileRefusalReason};
+const refuse = (reason: FileRefusalReason): FileRefusal => Object.assign(new NotFound(fileNotFoundMessage, 'file_not_found'), {reason});
 
 const mimeByExtension: Record<string, string> = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
