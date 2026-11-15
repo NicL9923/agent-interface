@@ -431,10 +431,8 @@ test("a reply keeps growing across a tool call, and its saved segment never disa
     return length;
   };
   const lengths = seen.filter(view => view.text.includes("Post")).map(view => shown(view.text));
-  // Text resumed with the first words after the tool, a turn read later, not with the chat's next read, which would
-  // show the whole sentence. The client draws the deltas that arrive within one frame together, so on a loaded machine
-  // the first view can hold two or three words.
-  expect(lengths[0], lengths.join(" ")).toBeLessThanOrEqual("Post two is ".length);
+  // Text resumed with the first word after the tool, a turn read later, not with the chat's next read.
+  expect(lengths[0], lengths.join(" ")).toBeLessThanOrEqual("Post ".length);
   for (let index = 1; index < lengths.length; index++) expect(lengths[index], lengths.join(" ")).toBeGreaterThanOrEqual(lengths[index - 1]);
   const from = seen.find(view => view.text.includes("Post"))!.at, to = seen.find(view => view.text.includes(after))!.at;
   const steps = new Set(lengths).size, readsMeanwhile = reads.filter(at => at >= from && at <= to).length;

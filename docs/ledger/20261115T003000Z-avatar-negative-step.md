@@ -1,4 +1,4 @@
-# November 15 tool-call smoke test under load
+# November 15 avatar frame step never negative
 
 Branch `t3/svg-negative-height` from `origin/main` at `2144c0b`, on the Mac mini with Node 24.22.2. Nothing was
 deployed by this entry.
@@ -15,12 +15,12 @@ frame that can have begun earlier, by more under load. The step is now clamped a
 
 The link from the failure to this rect is inferred from the code; the failure was not reproduced on demand.
 
-The same test failed a third time on November 15, on its own assertion instead: the first view after the tool held
-"Post two" (8 characters) where it allowed "Post " (5). The scripted runtime streams a word every 200 ms, and the client
-draws the deltas that arrive within one frame together, so a stalled machine shows two or three words at once. That is
-correct behavior. The assertion guards against the text resuming with the chat's next read, which comes after the
-stream's one-a-second change-notice throttle and so would show about five words. The bound is now the first three
-words, "Post two is ", which still catches that.
+The same test failed a third time on November 15 on its own assertion: the first view after the tool held
+"Post two" (8 characters) where it allows "Post " (5), because the client draws deltas that arrive within one frame
+together and the machine was loaded. A first version of this change allowed three words. GPT-6.1 Sol's review showed
+that a resume from the chat's next read can surface exactly "Post two is " at about 2.3 s, so a looser bound cannot tell
+the two paths apart. The bound stays as it was; separating them needs fixture timing that other e2e tests share, which
+is left for its own change.
 
 ## Red runs
 
@@ -28,11 +28,9 @@ words, "Post two is ", which still catches that.
 | --- | --- | --- |
 | `approach` computes `k` from a negative step again | `leaves the face where it is for a frame step of no time or a negative one` | 1 failed |
 
-The file was restored and `tests/avatar-motion.test.ts` passed 39 of 39. The loosened e2e bound had no red run: making
-the client resume from a read instead of a turn read is not a one-line break.
+The file was restored and `tests/avatar-motion.test.ts` passed 39 of 39.
 
 ## Checks
 
 `check-all --keep-going --py never` passed typecheck, lint, ruff and build, failed only the three `127.0.0.2` Vitest
-tests, and failed this e2e test once on the 8-character first view before the bound changed. `check-all --only
-build,e2e` then passed 55 of 55.
+tests, and failed this e2e test once on the 8-character first view. `check-all --only build,e2e` then passed 55 of 55.
