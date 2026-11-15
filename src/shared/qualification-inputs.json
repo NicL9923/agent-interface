@@ -93,6 +93,7 @@
   "src/server/store-devices.ts",
   "src/server/store-drafts.ts",
   "src/server/store-events.ts",
+  "src/server/store-files.ts",
   "src/server/store-macs.ts",
   "src/server/store-notifications.ts",
   "src/server/store-personal.ts",

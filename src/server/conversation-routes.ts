@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { Readable } from "node:stream";
 import { z } from "zod";
-import { interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
+import { approvalNotPendingMessage, interruptionPendingMessage, submissionConflictMessage } from "../shared/errors.js";
 import { filesBefore, HISTORY_PAGE_TURNS, historyWindow, MAX_HISTORY_TURNS, windowFiles } from "../shared/history.js";
 import { messageOrigin } from "../shared/message-origin.js";
 import { isRetryRequestId, retryRequestId } from "../shared/retry-id.js";
@@ -108,8 +108,28 @@ export function unofferedChoice(approval: Approval, decision: "approved" | "deni
     : "Hermes didn't offer that choice for this request.";
 }
 
-/** Decides a pending approval for this person, as the chat and notification actions do. */
+/** The decision each store's app is sending now, per approval. */
+const deciding = new WeakMap<Store, Map<string, Promise<void>>>();
+const approvalNotPending = () => httpError(409, approvalNotPendingMessage, { code: "request_not_pending" });
+
+/**
+ * Decides a pending approval for this person, as the chat and notification actions do. When two members decide one
+ * shared approval at once, the second waits for the first to settle and then reads the approval again: it is refused
+ * as no longer pending when the first was recorded, and sent when the first failed. Refusing it at once would tell
+ * the second member the approval closed while it may still be pending.
+ */
 export async function decideApproval(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string, scope?: ApprovalScope) {
+  const claims = deciding.get(store) ?? new Map<string, Promise<void>>();
+  deciding.set(store, claims);
+  // Each waiter re-checks after waking, so only one decision is ever in flight for an approval.
+  for (let earlier = claims.get(approvalId); earlier; earlier = claims.get(approvalId))
+    await earlier.catch(() => undefined);
+  const decided = sendDecision(runtime, store, botId, approvalId, decision, userId, scope);
+  claims.set(approvalId, decided);
+  try { await decided; }
+  finally { if (claims.get(approvalId) === decided) claims.delete(approvalId); }
+}
+async function sendDecision(runtime: Runtime, store: Store, botId: string, approvalId: string, decision: "approved" | "denied", userId: string, scope?: ApprovalScope) {
   const readAt = Date.now();
   const conversation = await runtime.conversation(botId, { history: false });
   store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
@@ -120,7 +140,7 @@ export async function decideApproval(runtime: Runtime, store: Store, botId: stri
     store.approval(approvalId) ||
     (approval.expiresAt && Date.parse(approval.expiresAt) < Date.now())
   )
-    throw httpError(409, "This approval is no longer pending");
+    throw approvalNotPending();
   // Hermes runs an unoffered "always" as a one-time approval, so the person would believe in a grant that never existed.
   const refusal = unofferedChoice(approval, decision, scope);
   if (refusal) throw httpError(409, refusal, { code: "approval_choice_unavailable" });

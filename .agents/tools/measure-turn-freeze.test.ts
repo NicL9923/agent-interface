@@ -2,6 +2,7 @@ import { afterAll, expect, it, vi } from "vitest";
 import { createApp } from "../../src/server/app.js";
 import { loadConfig } from "../../src/server/config.js";
 import { createHermesRuntime } from "../../src/server/hermes.js";
+import { testFiles } from "../../tests/helpers/file-signer.js";
 import type { InflightDelta, TurnEvent } from "../../src/shared/types.js";
 import { fakeHermes, HERMES_URL, row } from "../../tests/helpers/fake-hermes.js";
 
@@ -19,7 +20,7 @@ afterAll(async () => { await close?.(); vi.unstubAllGlobals(); });
 
 it("measures the live text freeze after each tool", async () => {
   const hermes = fakeHermes();
-  const runtime = createHermesRuntime({ url: HERMES_URL, token: "isolated-contract-token" });
+  const runtime = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
   const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
   close = async () => { app.server.closeAllConnections(); await app.close(); };
   const base = await app.listen({ port: 0, host: "127.0.0.1" });

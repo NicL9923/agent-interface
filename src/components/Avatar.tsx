@@ -361,7 +361,8 @@ export function Avatar({
     let last = performance.now();
     return startFrames({
       advance: (now) => {
-        const dt = Math.min((now - last) / 1000, 0.05);
+        // A frame's timestamp can come from before this avatar started its clock, so a step is never negative.
+        const dt = Math.min(Math.max(0, (now - last) / 1000), 0.05);
         last = now;
         const clock = motion.current;
         const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);

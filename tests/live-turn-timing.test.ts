@@ -3,6 +3,7 @@ import { setTimeout as realDelay } from "node:timers/promises";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { createHermesRuntime } from "../src/server/hermes.js";
+import { testFiles } from "./helpers/file-signer.js";
 import { fakeHermes, HERMES_URL, row, type FakeHermes } from "./helpers/fake-hermes.js";
 
 /**
@@ -25,7 +26,7 @@ afterEach(async () => {
 });
 
 async function client(hermes: FakeHermes, mode: string) {
-  const runtime = createHermesRuntime({ url: HERMES_URL, token: "isolated-contract-token" });
+  const runtime = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
   const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
   apps.push(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });

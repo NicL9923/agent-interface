@@ -4,19 +4,28 @@ import { existsSync } from "node:fs";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createHermesRuntime } from "./hermes.js";
-import { schemaVersion } from "./store.js";
+import { Store, schemaVersion } from "./store.js";
+import { fileSigner } from "./hermes-files.js";
 import { safeError } from "./logging.js";
 import { SHUTDOWN_EXIT_MS } from "./shutdown.js";
 if (existsSync(".env")) loadEnvFile(".env");
 const config = loadConfig();
+const store = new Store(config.database);
+// File identifiers are signed with the database's own key. The Hermes token only verifies older ones,
+// and stored ones are re-signed here, before anything reads them, so a token rotation leaves them working.
+const files = fileSigner(store.fileKeys(), config.hermesToken);
+const references = store.upgradeFileReferences(files);
 const runtime = createHermesRuntime({
   url: config.hermesUrl,
   token: config.hermesToken,
   authMode: config.hermesAuthMode,
   qualificationFile: config.hermesQualificationFile,
+  files,
 });
 // pino writes JSON lines to stdout; systemd keeps them in journald.
-const { app, directRoutes } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime);
+const { app, directRoutes } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime, { store });
+if (references.upgraded) app.log.info(references, "Re-signed stored file identifiers with the app's file key");
+if (references.unreadable) app.log.warn(references, "Left stored file identifiers that could not be verified");
 await app.listen({ host: config.host, port: config.port });
 await directRoutes?.start();
 app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "WildBots started");

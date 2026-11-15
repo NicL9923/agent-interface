@@ -180,13 +180,17 @@ describe("conversation artifacts", () => {
 
   it("reports text download failures and retries only when asked", async () => {
     conversation.files = [file("missing", "notes.txt")];
-    fetchFile.mockResolvedValueOnce(new Response("Missing", { status: 404 }));
+    // A file ID the server no longer accepts is gone; any other failure may pass.
+    fetchFile.mockResolvedValueOnce(new Response("Missing", { status: 404 })).mockResolvedValueOnce(new Response("Failed", { status: 502 }));
+    const retry = () => act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Retry preview")!.click());
     await render(); await open();
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("could not be loaded");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("no longer available");
     expect(fetchFile).toHaveBeenCalledTimes(1);
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Retry preview")!.click());
+    await retry();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("could not be loaded");
+    await retry();
     expect(container.querySelector("pre")?.textContent).toBe("Plain preview");
-    expect(fetchFile).toHaveBeenCalledTimes(2);
+    expect(fetchFile).toHaveBeenCalledTimes(3);
   });
 
   it("bounds text previews and retains the full-file download", async () => {

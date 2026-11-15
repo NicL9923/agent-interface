@@ -15,6 +15,7 @@ import { gzipSync } from 'node:zlib';
 import { createApp } from '../src/server/app.js';
 import { loadConfig } from '../src/server/config.js';
 import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
+import { testFiles } from "./helpers/file-signer.js";
 import { retryRequestId } from '../src/shared/retry-id.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import { SendTimings } from '../src/server/send-timing.js';
@@ -115,7 +116,7 @@ beforeEach(()=>{
   snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;Object.assign(hermesSpeed,{tier:null,profileTier:null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined,echo:undefined});
   vi.stubGlobal('WebSocket',WireSocket);
   vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
-  runtime=createHermesRuntime({url:'http://127.0.0.1:19119',token});
+  runtime=createHermesRuntime({ files: testFiles(token), url:'http://127.0.0.1:19119',token});
 });
 afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals();});
 // Hermes reports a change on the session's socket before a later read can differ; shared reads rely on it.
@@ -172,7 +173,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       [{delegation:true, delegation_version:2}, {version:2, policies}, 2],
     ] as const) {
       delegation = reported; calls = [];
-      runtime = createHermesRuntime({url:'http://127.0.0.1:19119',token});
+      runtime = createHermesRuntime({ files: testFiles(token), url:'http://127.0.0.1:19119',token});
       await runtime.status();
       expect(await runtime.delegationPolicy!(policies)).toBe(enforced);
       expect(sent()).toEqual([expected]);
@@ -458,8 +459,8 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   it('lets native answers prove staleness without a second open', async () => {
     rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
     beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
-    await expect(runtime.approve('shared','stale','approved','person')).rejects.toThrow('expired');
-    await expect(runtime.answerRequest('shared','question',{})).rejects.toThrow('expired');
+    await expect(runtime.approve('shared','stale','approved','person')).rejects.toMatchObject({statusCode:409,code:'request_not_pending',message:'That approval expired before it was answered.'});
+    await expect(runtime.answerRequest('shared','question',{})).rejects.toMatchObject({statusCode:409,code:'request_not_pending',message:'That question expired before it was answered.'});
     expect(calls.map(call=>call.method)).toEqual(['request.answer','request.answer']);
   });
   it('lists bots without loading profile descriptions and loads detail lazily', async () => {
@@ -897,11 +898,11 @@ describe('Hermes adapter trust and recovery boundary',()=>{
   it('reports both qualified actual revisions and rejects unknown revisions', async () => {
     for (const actual of [revision, 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']) {
       await runtime.close(); reportedRevision = actual;
-      runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+      runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
       expect(await runtime.status()).toMatchObject({connected: true, version: actual});
     }
     await runtime.close(); reportedRevision = 'unknown-unqualified-revision';
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
     expect(await runtime.status()).toMatchObject({connected: false, code: 'incompatible'});
   });
 
@@ -910,7 +911,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const fetch = vi.fn(async (url: URL | string) => String(url).endsWith('/service-ticket')
       ? Response.json({ticket: 't'.repeat(43)}) : Response.json({profiles: []}));
     vi.stubGlobal('fetch', fetch);
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
     expect(await runtime.status()).toMatchObject({connected: true});
     expect(sockets[0].url.searchParams.get('ticket')).toBe('t'.repeat(43));
     expect(sockets[0].url.searchParams.has('token')).toBe(false);
@@ -929,7 +930,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
 
   it('fails service authentication without opening a socket when ticket issuance rejects the credential', async () => {
     await runtime.close(); vi.stubGlobal('fetch', vi.fn(async () => Response.json({error: 'Denied'}, {status: 401})));
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
     expect(await runtime.status()).toMatchObject({connected: false, code: 'unauthorized'});
     expect(sockets).toHaveLength(0);
   });
@@ -972,12 +973,20 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     expect(result.messages[1]).toMatchObject({text:'Please explain @image:/an/example/path',files:[]});
   });
 
-  it('rejects old unscoped signed file identifiers before fetching a path',async()=>{
+  it('answers a forged or unscoped file identifier with 404 before fetching a path',async()=>{
     const body=Buffer.from(JSON.stringify({path:'/etc/passwd',name:'passwd',mime:'text/plain',botId:'shared'})).toString('base64url');
-    const id=`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
-    const fetch=vi.fn();vi.stubGlobal('fetch',fetch);
-    await expect(runtime.download(id,1024)).rejects.toThrow('Unregistered file identifier');
-    expect(fetch).not.toHaveBeenCalled();
+    const unscoped=`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
+    const forged=`v2.test.${body}.${createHmac('sha256','guessed-secret').update(`v2.test.${body}`).digest('base64url')}`;
+    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    try {
+      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
+      const fetch=vi.fn(async(_url:unknown)=>Response.json({profiles:[]}));vi.stubGlobal('fetch',fetch);
+      for (const id of [unscoped,forged,'not-an-identifier']) {
+        const response=await app.inject({url:`/api/files/${encodeURIComponent(id)}`,headers:{cookie:`session=${login.cookies[0].value}`}});
+        expect([response.statusCode,response.json().error,response.json().code]).toEqual([404,'That file is no longer available.','file_not_found']);
+      }
+      expect(fetch.mock.calls.map(([url])=>String(url)).filter(url=>url.includes('/api/files/download'))).toEqual([]);
+    } finally { await app.close(); }
   });
 
   it('rejects invalid or cross-bot draft files before native admission', async () => {
@@ -1340,7 +1349,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
 
   it('keeps generation unavailable without a provider and uses native square aspect syntax',async()=>{
     expect((await runtime.capabilities()).portraitGeneration.supported).toBe(false);
-    await expect(runtime.generatePortrait('shared','A friendly portrait')).rejects.toThrow('No image generation backend configured');
+    await expect(runtime.generatePortrait('shared','A friendly portrait')).rejects.toMatchObject({statusCode:409,message:'No image generation backend configured.'});
     expect(calls.find(call=>call.method==='image.generate'&&!call.params.probe)?.params).toMatchObject({aspect_ratio:'square',max_bytes:2_000_000});
   });
 });
@@ -1352,7 +1361,7 @@ describe('Hermes transport liveness and diagnostics', () => {
     'https://example.com?', 'https://example.com#',
     'https://user:secret@example.com', 'not a URL',
   ])('rejects unsafe or malformed configured origins without making a request: %s', async url => {
-    runtime = createHermesRuntime({url, token});
+    runtime = createHermesRuntime({ files: testFiles(), url, token});
     expect(await runtime.status()).toMatchObject({connected: false, code: 'invalid_config'});
     expect(JSON.stringify(await runtime.status())).not.toContain('secret');
     expect(sockets).toHaveLength(0);
@@ -1360,9 +1369,9 @@ describe('Hermes transport liveness and diagnostics', () => {
   });
 
   it('distinguishes missing settings from a partial configuration', async () => {
-    runtime = createHermesRuntime();
+    runtime = createHermesRuntime({ files: testFiles() });
     expect(await runtime.status()).toMatchObject({code: 'not_configured', connected: false});
-    runtime = createHermesRuntime({url: 'https://hermes.example.com'});
+    runtime = createHermesRuntime({ files: testFiles(), url: 'https://hermes.example.com'});
     expect(await runtime.status()).toMatchObject({code: 'invalid_config', connected: false});
   });
 
@@ -1453,7 +1462,7 @@ describe('Hermes transport liveness and diagnostics', () => {
     vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
     })));
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
     const status = runtime.status();
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     await runtime.close();
@@ -1792,13 +1801,13 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   const native={id:'job-one',name:'[bot:shared] Morning',prompt:'Check',schedule_display:'1h',enabled:true,
     deliver:'bot-chat:shared,room:old,room:kept@other,telegram:123'};
   const requests:{url:string;method:string;body:Record<string,any>}[]=[];
-  let listed=true;
+  let listed: boolean | 'unreadable'=true;
   vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit={})=>{
     const method=init.method ?? 'GET';
     requests.push({url:String(url),method,body:JSON.parse(String(init.body || '{}'))});
     // The service route admits only the profile's job list for reads, never a single job.
     if(method==='GET')expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
-    return Response.json(method==='GET'?(listed?[native]:[]):native);
+    return Response.json(method==='GET'?(listed==='unreadable'?{error:'busy'}:listed?[native]:[]):native);
   }));
   const [routine]=await runtime.routines();
   expect(routine.roomIds).toEqual(['old']);
@@ -1817,8 +1826,13 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   // A routine Hermes cannot return is never rewritten from a guess.
   listed=false;
   const count=requests.length;
-  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toThrow('Hermes did not return the routine');
-  expect(requests.slice(count).map(request=>request.method)).toEqual(['GET']);
+  // A routine missing from the list is gone, which the person can act on; a list Hermes could not give is its failure.
+  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toMatchObject({statusCode:404,message:'This routine no longer exists in Hermes. Reload to see its routines.'});
+  listed='unreadable';
+  const unreadable=runtime.saveRoutine({...base,roomIds:[]},'job-one');
+  await expect(unreadable).rejects.toThrow('Hermes did not return the routine');
+  await expect(unreadable).rejects.not.toHaveProperty('statusCode');
+  expect(requests.slice(count).map(request=>request.method)).toEqual(['GET','GET']);
 });
 it('routes routine history and output through the private scoped native experience reader',async()=>{
   const fetcher=vi.fn(async()=>Response.json([]));vi.stubGlobal('fetch',fetcher);
@@ -2012,7 +2026,7 @@ describe('Hermes conversation and roster read costs', () => {
     deferredMethods.delete('agent-interface.open');
     answer(held, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
     expect((await read).approvals).toEqual([]);
-    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toThrow('stale');
+    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toMatchObject({statusCode: 409, code: 'request_not_pending'});
   });
   it('lets a later open answer stand when an earlier one arrives after it', async () => {
     await runtime.status();
@@ -2028,7 +2042,7 @@ describe('Hermes conversation and roster read costs', () => {
     answer(older, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
     expect((await first).approvals).toEqual([]);
     expect(opens()).toHaveLength(4);
-    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toThrow('stale');
+    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toMatchObject({statusCode: 409, code: 'request_not_pending'});
   });
   it('reports the add-on round trip and phases for timing, never in the conversation', async () => {
     await runtime.status();
@@ -2314,7 +2328,7 @@ describe('Review regressions for shared reads and credential negotiation', () =>
     expect(bodies.at(-1)).not.toHaveProperty('actor');
     await runtime.close();
     explicitCredentials = true;
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
     await runtime.status();
     await runtime.vaultRequest!(answer);
     expect(bodies.at(-1)).toMatchObject({actor: 'member-one'});
@@ -2497,7 +2511,7 @@ describe('approval scopes, question shapes and the steering decision on the wire
       {id: 'older', choices: undefined}, {id: 'unknown', choices: undefined}]);
     await runtime.close();
     capabilities({approval_settings: true});
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
     const {approvals} = await runtime.conversation('shared', {history: false});
     expect(approvals.map(({id, choices, patterns, command}) => ({id, choices, patterns, command}))).toEqual([
       {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete'], command: 'rm -rf build'},
@@ -2637,7 +2651,7 @@ describe('approval scopes, question shapes and the steering decision on the wire
     expect(fetched).not.toHaveBeenCalled();
     await runtime.close();
     capabilities({approval_settings: true});
-    runtime = createHermesRuntime({url: 'http://127.0.0.1:19119', token});
+    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
     expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
     expect(JSON.parse(String((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
   });
@@ -2749,5 +2763,45 @@ describe('send timing through the real runtime', () => {
     t.at(60); t.written();
     t.at(70); t.frame('message.complete');
     expect(t.timing('steer')).toMatchObject({firstFrameMs: 10, firstLiveMs: 30, ended: 'measured'});
+  });
+});
+
+describe('Hermes refusals over HTTP', () => {
+  it('reports a profile deleted since the roster read as a missing assistant, which the roster drops', async () => {
+    await expect(runtime.botDetail!('gone')).rejects.toMatchObject({statusCode:404,code:'assistant_not_found'});
+  });
+  it('refuses a new profile whose name makes no ID without creating anything', async () => {
+    await expect(runtime.saveBot({name:'🌵🐎',instructions:'',model:'test',shared:true}))
+      .rejects.toMatchObject({statusCode:400,code:'assistant_name_invalid'});
+    expect(calls.some(call=>call.method==='profiles.create')).toBe(false);
+  });
+  async function served() {
+    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
+    const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
+    return {app,headers};
+  }
+  it('answers a file ID this server did not issue with 404, never asking Hermes', async () => {
+    const {app,headers}=await served();
+    const signed=(body:string)=>`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
+    const body=(path:string)=>Buffer.from(JSON.stringify({path,name:'passwd',mime:'text/plain',botId:'shared',kind:'upload',version:1})).toString('base64url');
+    try {
+      // No signature, a signature this server did not make, and a genuine signature over a path it never vouches for.
+      for (const id of ['not-a-file', `${body('/etc/passwd')}.forged`, signed(body('/etc/../passwd'))]) {
+        const response=await app.inject({url:`/api/files/${encodeURIComponent(id)}`,headers});
+        expect([response.statusCode,response.json().error,response.json().code],id).toEqual([404,'That file is no longer available.','file_not_found']);
+      }
+      expect(vi.mocked(fetch).mock.calls.some(([url])=>String(url).includes('/api/files/download'))).toBe(false);
+    } finally { await app.close(); }
+  });
+  it('answers an approval Hermes no longer has open with 409 and the reason', async () => {
+    const {app,headers}=await served();
+    try {
+      snapshot.open_requests=[{id:'gate',method:'approval',description:'Open the gate'}];
+      // Hermes says the request expired while the decision was on its way.
+      beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
+      const response=await app.inject({method:'POST',url:'/api/bots/shared/approvals/gate',headers,payload:{decision:'approved'}});
+      expect([response.statusCode,response.json().error,response.json().code]).toEqual([409,'That approval expired before it was answered.','request_not_pending']);
+    } finally { await app.close(); }
   });
 });
