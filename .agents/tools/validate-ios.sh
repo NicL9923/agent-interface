@@ -164,6 +164,6 @@ summary=".private/ios-${run_id}.txt"
 } > "$summary"
 echo "Summary: $summary"
 if [[ $status == 0 && $can_reuse == 1 ]]; then
-  python3 "$state_tool" record "$inputs_before" "$result_path" "$summary" || echo 'Validation succeeded, but no reusable evidence was recorded.' >&2
+  python3 "$state_tool" record "$inputs_before" "$result_path" "$summary" ${request_options[@]+"${request_options[@]}"} || echo 'Validation succeeded, but no reusable evidence was recorded.' >&2
 fi
 exit "$status"

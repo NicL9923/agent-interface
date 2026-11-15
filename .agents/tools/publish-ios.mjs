@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { requireFullIosValidation, requireRepositoryRelease } from './ios-release-gate.mjs';
 import { all, app, appleApi, appGroup, bundleId, configuration, distribute, identifiers, runPrivate, setupIdentifiers, untilReady } from './apple-api.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -85,7 +86,7 @@ function checkSignedBundles(root, config, version, build) {
   }
 }
 
-async function archive(api, config, version, build) {
+async function archive(api, config, version, build, validation) {
   fail(!run('git', ['status', '--porcelain']).trim(), 'Commit reviewed changes before archiving');
   const commit = run('git', ['rev-parse', 'HEAD']).trim();
   const selectedApp = await app(api);
@@ -138,7 +139,7 @@ async function archive(api, config, version, build) {
     run('unzip', ['-q', ipa, '-d', join(destination, 'inspection')]);
     checkSignedBundles(join(destination, 'inspection/Payload/AgentInterface.app'), config, version, build);
     fail(!run('git', ['status', '--porcelain']).trim() && run('git', ['rev-parse', 'HEAD']).trim() === commit, 'Source changed during archive/export; do not upload this artifact');
-    privateJson(join(destination, 'release.json'), { appId: selectedApp.id, version, build, commit, ipa, sha256: digest(ipa) });
+    privateJson(join(destination, 'release.json'), { appId: selectedApp.id, version, build, commit, ipa, sha256: digest(ipa), validation });
     console.log(`Verified archive and IPA: ${destination}/release.json`);
   } finally {
     if (existsSync(certificateFile)) unlinkSync(certificateFile);
@@ -154,6 +155,15 @@ async function archive(api, config, version, build) {
 async function main() {
   const [command, version, number, ...flags] = process.argv.slice(2);
   fail(['status', 'setup', 'prepare', 'archive', 'upload', 'distribute'].includes(command) && flags.every(flag => command === 'distribute' && flag === '--no-wait'), 'Usage: node .agents/tools/publish-ios.mjs status|setup|prepare|archive VERSION BUILD|upload VERSION BUILD|distribute VERSION BUILD [--no-wait]');
+  // The release commands name a release. Archive proves the repository holds it, and that a full run
+  // passed for these iOS inputs, before the host check, the credentials or any Apple request.
+  const namesRelease = ['archive', 'upload', 'distribute'].includes(command);
+  if (namesRelease) fail(/^\d+\.\d+(?:\.\d+)?$/.test(version ?? '') && /^[1-9][0-9]{0,8}$/.test(number ?? ''), 'Supply VERSION and a positive whole-number BUILD of at most nine digits');
+  let validation;
+  if (command === 'archive') {
+    requireRepositoryRelease(repo, version, Number(number));
+    validation = requireFullIosValidation(repo);
+  }
   checkHost();
   const config = configuration(), api = appleApi(config);
   if (command === 'setup') { await setupIdentifiers(api); return; }
@@ -169,9 +179,8 @@ async function main() {
     console.log(JSON.stringify({ appId: selectedApp.id, builds: (await all(api, `/builds?filter[app]=${selectedApp.id}&include=buildBetaDetail&limit=200`)).map(item => ({ id: item.id, ...item.attributes, iconAssetToken: undefined })) }, null, 2));
     return;
   }
-  fail(/^\d+\.\d+(?:\.\d+)?$/.test(version ?? '') && /^[1-9][0-9]{0,8}$/.test(number ?? ''), 'Supply VERSION and a positive whole-number BUILD of at most nine digits');
   const build = Number(number), destination = join(scratch, `${version}-${build}`);
-  if (command === 'archive') { await archive(api, config, version, build); return; }
+  if (command === 'archive') { await archive(api, config, version, build, validation); return; }
   const receiptPath = join(destination, 'release.json');
   const release = JSON.parse(readFileSync(receiptPath, 'utf8'));
   fail(release.build === build && release.version === version && release.appId === (await app(api)).id && release.sha256 === digest(release.ipa), 'Release identity or artifact hash changed');
