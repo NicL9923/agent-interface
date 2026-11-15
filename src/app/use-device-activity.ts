@@ -24,7 +24,7 @@ function report(current: () => Report, generation: number) {
       if (waiting.generation !== accountGeneration()) continue;
       const body = { deviceId: deviceId(), ...waiting.current() };
       // Activity is a hint: a failed report only means this device's alerts follow the old rule a while longer.
-      await request("PUT /devices/activity", { body }).catch(() => {});
+      await request("PUT /devices/activity", { body, keepalive: true }).catch(() => {});
     }
     sending = false;
   })();

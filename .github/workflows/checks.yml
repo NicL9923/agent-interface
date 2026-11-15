@@ -62,7 +62,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       # Browsers come from the cache when present; the system libraries are installed either way.
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps webkit chromium
       - run: npm run test:e2e
       - name: Upload the report and traces
         if: failure()
