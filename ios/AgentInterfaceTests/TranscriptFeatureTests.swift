@@ -237,6 +237,22 @@ import XCTest
 
   // MARK: Folded work
 
+  func testBotMessagesStayInOrderAndGroupOnlyConsecutiveExchanges() throws {
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
+    let reply = Message(id: "reply", role: "assistant", text: "The gate is shut")
+    let tool = Message(id: "tool", role: "tool", text: "Done", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"))
+    let next = Message(id: "next", role: "user", text: "Message from Planner: Check the barn")
+    let human = Message(id: "human", role: "user", text: "Thanks", sender: Sender(id: "one", name: "One"))
+    let turn = try XCTUnwrap(conversation([incoming, reply, tool, next, human], .idle).presentationTurns.first)
+    let rows = turn.transcriptRows(advanced: false)
+    XCTAssertEqual(rows.map(\.id), ["exchange-in", "exchange-next", "work"])
+    let groups = rows.compactMap { row -> [String]? in
+      if case .exchanges(let messages) = row { return messages.map(\.id) }; return nil
+    }
+    XCTAssertEqual(groups, [["in", "reply"], ["next"]])
+    XCTAssertEqual(WorkSummary(turn).detail, "1 tool call")
+  }
+
   func testWorkFoldsIntoOneRowWithItsDurationAndCounts() throws {
     let messages = [
       Message(id: "p", role: "user", text: "Check it", createdAt: "2026-10-24T15:00:00.000Z"),

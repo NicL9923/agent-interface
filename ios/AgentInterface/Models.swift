@@ -280,7 +280,7 @@ struct Message: Codable, Identifiable, Equatable {
   var presentationOrigin: MessageOrigin? {
     if role == "user", sender != nil { return nil }
     if let origin { return origin }
-    if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name) }
+    if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name, handle: envelope.handle) }
     if role == "user" {
       if let kind = Self.originPatterns.first(where: { Self.matches($0.pattern, text) }) {
         return MessageOrigin(kind: kind.kind, visibility: kind.visibility)
@@ -307,14 +307,15 @@ struct Message: Codable, Identifiable, Equatable {
   var isConversationVisible: Bool {
     !isInternalActivity && role != "tool" && (role != "assistant" || isAgentExchange || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(files?.isEmpty ?? true))
   }
-  var agentEnvelope: (name: String, body: String)? {
+  var agentEnvelope: (name: String, body: String, handle: String?)? {
     guard role == "user", sender == nil else { return nil }
     guard text.hasPrefix("Message from ") || text.hasPrefix("[Message from agent "),
       let match = Self.envelopePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
       let bodyRange = Range(match.range(at: 4), in: text),
       let nameRange = Range(match.range(at: 1).location == NSNotFound ? match.range(at: 3) : match.range(at: 1), in: text)
     else { return nil }
-    return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]))
+    let handle = Range(match.range(at: 2), in: text).map { String(text[$0]) }
+    return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]), handle)
   }
   /// As the web's `isAgentExchange`: any message whose origin is another assistant, including an
   /// incoming "Message from" envelope and an outgoing `message_agent` call.

@@ -7,7 +7,7 @@ import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, uploadFile, write } from "../src/client-api";
 import { takeHeartbeats } from "./helpers/request-mock";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation } from "../src/shared/types";
+import type { Bootstrap, Conversation, Message } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
@@ -1420,16 +1420,40 @@ describe("conversation state", () => {
       { id: "handoff", role: "tool", text: "", toolCall: { id: "worker", name: "delegate_task", status: "running" } },
     ], approvals: [{ id: "decision", title: "Open the gate?", detail: "Your decision needed", status: "pending" }] };
     await render();
-    const bubbles = [...container.querySelectorAll(".message[data-message-id]")];
+    const bubbles = [...container.querySelectorAll(".message[data-message-id]:not(.message-agent)")];
     expect(bubbles.map(row => row.getAttribute("data-message-id"))).toEqual(["reminder", "human"]);
     expect(bubbles[0].querySelector(".message-attribution")?.textContent).toBe("Scheduled");
     expect(bubbles[1].textContent).toContain("Hello from Desktop");
     const groups = [...container.querySelectorAll(".tool-calls")];
-    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Bot messages2", "Subagents1Running"]);
+    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Subagents1Running"]);
     expect(groups.every(group => !group.hasAttribute("open"))).toBe(true);
+    const exchanges = container.querySelector<HTMLDetailsElement>('.conversation-turn > .agent-exchange-group')!;
+    expect(exchanges.open).toBe(false);
+    expect(exchanges.querySelector('summary')?.textContent).toContain('2 bot messages');
+    expect(exchanges.textContent).toContain('Check the gate.');
+    expect(exchanges.textContent).toContain('I will check it.');
     expect(container.querySelector(".approval-card")?.textContent).toContain("Open the gate?");
     await act(async () => { groups[0].setAttribute("open", ""); });
     expect(groups[0].textContent).toContain("Hay and water.");
+  });
+
+  it("keeps exchanges in saved order and starts a new run after an intervening tool or human message", async () => {
+    const incoming = (id: string): Message => ({ id, role: "user", text: "Message from Planner: Check the gate." });
+    conversation = { ...conversation, messages: [
+      { id: 'human', role: 'user', text: 'Check the ranch', sender: { id: 'one', name: 'One' } },
+      incoming('one'), { id: 'two', role: 'assistant', text: 'The gate is shut.' },
+      { id: 'tool', role: 'tool', text: 'Checked', toolCall: { id: 'call', name: 'read_file', status: 'completed' } },
+      incoming('three'), { id: 'four', role: 'assistant', text: 'The barn is shut too.' },
+      { id: 'human2', role: 'user', text: 'Thanks', sender: { id: 'one', name: 'One' } }, incoming('single'),
+    ] };
+    await render();
+    expect([...container.querySelectorAll('.conversation-turn article[data-message-id]')].map(item => item.getAttribute('data-message-id')))
+      .toEqual(['human', 'one', 'two', 'three', 'four', 'human2', 'single']);
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>('.agent-exchange-group')];
+    expect(groups.map(group => [...group.querySelectorAll('article')].map(item => item.getAttribute('data-message-id'))))
+      .toEqual([['one', 'two'], ['three', 'four']]);
+    expect(groups.every(group => !group.open)).toBe(true);
+    expect(container.querySelector('[data-message-id="single"]')?.closest('.agent-exchange-group')).toBeNull();
   });
 
   it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {

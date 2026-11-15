@@ -38,10 +38,10 @@ export function useSettledWindow(messages: Message[]): { settled: Message[]; liv
   return held.current;
 }
 
-export type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; replyAt?: string };
+export type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; order: string[]; replyAt?: string };
 /** Turns over the settled messages: as the reading left them, to continue, and as shown. */
 export type SettledTurns = { read: Turn[]; shown: Turn[]; prompt?: MessageOrigin; advanced: boolean };
-const blankTurn = (): Turn => ({ messages: [], tools: new Map(), reasoning: [] });
+const blankTurn = (): Turn => ({ messages: [], tools: new Map(), reasoning: [], order: [] });
 const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
 function visibleMessage(message: Message) {
   return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
@@ -55,6 +55,7 @@ function readTurns(turns: Turn[], messages: Message[], advanced: boolean, writab
     // Hermes files as user messages belong to the work of the turn they arrive in.
     if (!turns.length || startsTurn(message)) { turns.push(blankTurn()); own(turns.at(-1)!); }
     const turn = writable(turns.length - 1);
+    turn.order.push(message.id);
     // A turn's reasoning parts share one accordion instead of a block per reply row.
     if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) turn.reasoning.push(message.reasoning.trim());
     // A tool-call row with no reply text would render as an empty bubble.
@@ -85,7 +86,7 @@ export function continueTurns(settled: SettledTurns, live: Message[], calls: Too
   const writable: Writable = index => {
     if (!owned.has(turns[index])) {
       const turn = turns[index];
-      turns[index] = { messages: [...turn.messages], tools: new Map(turn.tools), reasoning: [...turn.reasoning], replyAt: turn.replyAt };
+      turns[index] = { messages: [...turn.messages], tools: new Map(turn.tools), reasoning: [...turn.reasoning], order: [...turn.order], replyAt: turn.replyAt };
       owned.add(turns[index]);
     }
     return turns[index];
@@ -100,7 +101,9 @@ export function continueTurns(settled: SettledTurns, live: Message[], calls: Too
       writable(index).tools.set(message.id, { ...message, toolCall: call });
     } else {
       if (!turns.length) { turns.push(blankTurn()); own(turns[0]); }
-      writable(turns.length - 1).tools.set(`live-${call.id}`, { id: `live-${call.id}`, role: "tool", text: "", toolCall: call });
+      const turn = writable(turns.length - 1), id = `live-${call.id}`;
+      if (!turn.tools.has(id)) turn.order.push(id);
+      turn.tools.set(id, { id, role: "tool", text: "", toolCall: call });
     }
   }
   return turns.map((turn, index) => {

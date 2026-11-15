@@ -124,6 +124,10 @@ struct ConversationTurnView: View, Equatable {
         let run = turn.replyRun(at: index, in: visible)
         MessageView(message: message, continued: run.continued, endsRun: run.endsRun, when: run.when,
           delivery: delivery?.id == message.id ? delivery?.status : nil, replyFiles: files[message.id]).id(message.id)
+        case .exchanges(let messages):
+          AgentExchangeGroupView(messages: messages, recipient: recipient) {
+            ForEach(messages) { message in MessageView(message: message).id(message.id) }
+          }
         }
       }
     }.environment(\.draftRevisions, revisions)
@@ -134,7 +138,10 @@ struct ConversationTurnView: View, Equatable {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 12) {
         if advanced && !turn.reasoning.isEmpty { reasoning }
-        ForEach(turn.activityGroups) { activityGroup($0) }
+        ForEach(turn.activityGroups.compactMap { group -> CoordinationGroup? in
+          let messages = group.messages.filter { !$0.isAgentExchange }
+          return messages.isEmpty ? nil : CoordinationGroup(id: group.id, messages: messages)
+        }) { activityGroup($0) }
       }
     } label: {
       WorkLabel(summary: WorkSummary(turn), live: live, connected: connected)
@@ -338,23 +345,41 @@ struct DeclinedStepView: View {
 /// one `work` row where the first of it would have been.
 enum TranscriptRow: Identifiable {
   case message(Int, Message)
+  case exchanges([Message])
   case work
   var id: String {
     switch self {
     case .message(_, let message): "message-" + message.id
+    case .exchanges(let messages): "exchange-" + (messages.first?.id ?? "")
     case .work: "work"
     }
   }
 }
 extension ConversationTurn {
   func transcriptRows(advanced: Bool) -> [TranscriptRow] {
-    var result: [TranscriptRow] = []
-    for row in rows(advanced: advanced) {
-      switch row {
-      case .message(let index, let message): result.append(.message(index, message))
-      case .activity, .reasoning: if !result.contains(where: { $0.id == "work" }) { result.append(.work) }
-      }
+    let original = rows(advanced: advanced)
+    let workAt = original.firstIndex { row in
+      switch row { case .activity, .reasoning: true; case .message: false }
     }
+    let anchor = workAt.flatMap { index in
+      original.dropFirst(index + 1).compactMap { row -> String? in
+        if case .message(_, let message) = row { return message.id }; return nil
+      }.first
+    }
+    let hasWork = activityGroups.contains { $0.messages.contains { !$0.isAgentExchange } } || advanced && !reasoning.isEmpty
+    let visible = Dictionary(uniqueKeysWithValues: visibleMessages.enumerated().map { ($0.element.id, $0.offset) })
+    var result: [TranscriptRow] = []
+    var placedWork = false
+    var precedingExchange = false
+    for message in messages {
+      if hasWork && message.id == anchor { result.append(.work); placedWork = true }
+      if message.isAgentExchange {
+        if precedingExchange, case .exchanges(let previous) = result.last { result[result.count - 1] = .exchanges(previous + [message]) }
+        else { result.append(.exchanges([message])) }
+      } else if let index = visible[message.id] { result.append(.message(index, message)) }
+      precedingExchange = message.isAgentExchange
+    }
+    if hasWork && !placedWork { result.append(.work) }
     return result
   }
 }
@@ -389,7 +414,10 @@ struct WorkSummary: Equatable {
   var started: Date?
   var ended: Date?
   init(_ turn: ConversationTurn) {
-    counts = turn.activityGroups.map { Count(group: $0.id, count: $0.messages.count) }
+    counts = turn.activityGroups.compactMap { group in
+      let count = group.messages.filter { !$0.isAgentExchange }.count
+      return count == 0 ? nil : Count(group: group.id, count: count)
+    }
     reasoning = !turn.reasoning.isEmpty
     let times = turn.messages.flatMap { message in
       [message.createdAt, message.toolCall?.startedAt, message.toolCall?.completedAt].compactMap { $0.flatMap(ServerDate.parse) }

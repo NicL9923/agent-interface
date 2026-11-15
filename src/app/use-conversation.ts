@@ -531,6 +531,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // Brings the opened message into view, a little below the top, and marks it briefly.
   const showFound = (item: HTMLElement, mark = true, needle?: string) => {
     const element = scroll.current!;
+    // Search and saved links can point inside a collapsed run of bot messages.
+    for (let parent = item.parentElement; parent && parent !== element; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
     const range = needle ? matchRanges(item, needle)[0] : undefined;
     const top = range?.getBoundingClientRect?.().top ?? item.getBoundingClientRect().top;
     element.scrollTop += top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);

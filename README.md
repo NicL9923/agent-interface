@@ -742,9 +742,12 @@ are discussing, and settings and routine posts stay hidden.
 Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
-without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,
-background processes, and diagnostics in separate collapsed sections in both
-presentations. Expand them to inspect the original input and results. Scheduled
+without creating a duplicate. Bot messages appear in chat with the sender's and recipient's
+avatars and names. Consecutive exchanges collapse into a counted group, with sending and
+failed delivery status visible in its summary. Single exchanges stay readable. Search opens
+the matching group, and known assistants offer a link to their chat. History uses the same display.
+Conversation activity keeps scheduled-job handoffs, subagents, background processes, and diagnostics
+in separate collapsed sections in both presentations. Expand them to inspect the original input and results. Scheduled
 answers stay in the conversation with a Scheduled label. Decisions and requests
 for input stay visible. Unknown messages from other clients remain in chat;
 only recognized automation sources move into activity.
