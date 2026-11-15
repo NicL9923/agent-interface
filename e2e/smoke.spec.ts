@@ -119,7 +119,6 @@ test.describe("a returning member's load", () => {
   test.use({ serviceWorkers: "block" });
 
   test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page, browserName }) => {
-    test.skip(browserName === "webkit", "WebKit reports a conversation fetch cancelled by the test reload as an uncaught access-control error.");
     await signIn(page);
     await chooseDark(page);
     // The theme as the app's first frame paints: a MutationObserver runs before the browser paints, after
@@ -153,7 +152,6 @@ test.describe("a returning member's load", () => {
   });
 
   test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page, browserName }) => {
-    test.skip(browserName === "webkit", "WebKit reports a conversation fetch cancelled by the test reload as an uncaught access-control error.");
     await signIn(page);
     // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
     await chooseDark(page);
