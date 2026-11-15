@@ -5,6 +5,8 @@ import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
 import { ApiError, pollWhileVisible, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
+import { rememberImageSize } from "./image-sizes";
+import { needsPreparation, optimizeImage } from "../image-upload";
 import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
@@ -183,6 +185,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const [uploads, setUploads] = useState<LocalUpload[]>([]);
   // Object URLs for attachments uploaded from this device, so chips show the image without a download.
   const [previews, setPreviews] = useState<Record<string, { url: string; botId: string }>>({});
+  // Why a photo could not be attached, by the assistant whose draft it was meant for. Like a failed upload's chip, a
+  // refusal belongs to that draft: it waits there while the person is in another chat, and shows again on return.
+  const [refusals, setRefusals] = useState<{ botId: string; userId: string; problem: string }[]>([]);
   const controllers = useRef(new Map<string, AbortController>());
   const queue = useRef(Promise.resolve());
   const patch = (id: string, change: Partial<LocalUpload>) =>
@@ -232,6 +237,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
       const live = () => !controller.signal.aborted && epoch === identityEpoch.current;
       if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, live)) return;
+      // The shrunk size is known without waiting for the chip's picture to load.
+      if (item.dimensions) rememberImageSize(result.id, { naturalWidth: item.dimensions.width, naturalHeight: item.dimensions.height });
       if (item.preview) setPreviews(current => ({ ...current, [result.id]: { url: item.preview!, botId: item.botId } }));
       setUploads(current => current.filter(entry => entry.id !== item.id));
     } catch (e) {
@@ -241,18 +248,45 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       controllers.current.delete(item.id);
     }
   };
+  const preparing = useRef(Promise.resolve());
+  // Shrinks a photo before it uploads, and returns the item as it should upload. Returns nothing when the upload was
+  // canceled, or when the photo can't be used: its chip leaves and a refusal says why.
+  const prepare = async (item: LocalUpload, controller: AbortController, epoch: number) => {
+    if (controller.signal.aborted || epoch !== identityEpoch.current) return;
+    patch(item.id, { status: "preparing" });
+    const result = await optimizeImage(item.file);
+    if (controller.signal.aborted || epoch !== identityEpoch.current) return;
+    if ("error" in result) {
+      controllers.current.delete(item.id);
+      setUploads(current => current.filter(entry => entry.id !== item.id));
+      setRefusals(current => current.some(entry => entry.botId === item.botId && entry.userId === item.userId && entry.problem === result.error)
+        ? current : [...current, { botId: item.botId, userId: item.userId, problem: result.error }]);
+      return;
+    }
+    const prepared: LocalUpload = { ...item, file: result.file, dimensions: result.size, prepared: true, status: "queued", preview: URL.createObjectURL(result.file) };
+    patch(item.id, { file: prepared.file, dimensions: prepared.dimensions, prepared: true, status: "queued", preview: prepared.preview });
+    return prepared;
+  };
   const start = (item: LocalUpload) => {
     const controller = new AbortController();
     controllers.current.set(item.id, controller);
     const epoch = identityEpoch.current;
+    // Photos shrink one at a time, so ten of them never sit decoded together, and the next shrinks while the last uploads.
+    const shrunk = !item.prepared && needsPreparation(item.file) ? preparing.current.then(() => prepare(item, controller, epoch)) : undefined;
+    if (shrunk) preparing.current = shrunk.then(() => {});
     // One at a time keeps a batch in the order it was added. A retried file joins after those already uploaded.
-    queue.current = queue.current.then(() => run(item, controller, epoch));
+    queue.current = queue.current.then(async () => {
+      const next = shrunk ? await shrunk : item;
+      if (next) await run(next, controller, epoch);
+      else controllers.current.delete(item.id);
+    });
   };
   const upload = (files: File[], target: string) => {
     if (!userId || !files.length) return;
     const added = files.map((file): LocalUpload => ({
       id: crypto.randomUUID(), botId: target, userId, file, status: "queued", progress: 0,
-      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+      // A photo to shrink shows its preview once it is shrunk, which also spares a HEIC the browser can't draw.
+      preview: file.type.startsWith("image/") && !needsPreparation(file) ? URL.createObjectURL(file) : undefined,
     }));
     setUploads(current => [...current, ...added]);
     added.forEach(start);
@@ -271,7 +305,9 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       return current.filter(entry => entry.id !== id);
     });
   };
+  const dismissRefusals = () => setRefusals(current => current.filter(entry => entry.botId !== botId || entry.userId !== userId));
   const clearUploads = () => {
+    setRefusals([]);
     controllers.current.forEach(controller => controller.abort());
     controllers.current.clear();
     setUploads(current => { current.forEach(item => item.preview && URL.revokeObjectURL(item.preview)); return []; });
@@ -297,7 +333,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const uploading = uploads.some(item => item.botId === botId);
   // One array per change, so the composer is not handed a new list every render.
   const shownUploads = useMemo(() => uploads.filter(item => item.botId === botId), [uploads, botId]);
-  return { draft, setDraft, draftReady, uploads: shownUploads, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
+  const shownRefusals = useMemo(() => refusals.filter(entry => entry.botId === botId && entry.userId === userId).map(entry => entry.problem), [refusals, botId, userId]);
+  return { draft, setDraft, draftReady, uploads: shownUploads, refusals: shownRefusals, dismissRefusals, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
 }
 export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
   draft: Draft;

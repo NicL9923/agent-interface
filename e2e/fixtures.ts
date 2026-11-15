@@ -14,6 +14,8 @@ export const deployNextRelease = ({ installs = true } = {}) =>
 /** Gives an assistant this roster activity from the next bootstrap on, such as "waiting", which counts on the app badge, until the next test starts. */
 export const setActivity = (botId: string, state: string) =>
   fetch(`http://127.0.0.1:${controlPort}/activity?bot=${encodeURIComponent(botId)}&state=${encodeURIComponent(state)}`, { method: "POST" });
+/** The files the browser uploaded since the test started, with their bytes as base64. */
+export const uploadedFiles = async () => await (await fetch(`http://127.0.0.1:${controlPort}/uploads`)).json() as { name: string; mime: string; base64: string }[];
 /** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */
 export const slowAdmission = (ms: number) => fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
 

@@ -27,10 +27,12 @@ export function prepareUpload(file: File): { file: File } | { error: string } {
       prepared = new File([file], name, { type: "text/plain", lastModified: file.lastModified });
     else return { error: `${name} can't be attached. Use ${UPLOAD_KINDS}.` };
   }
-  if (file.size > MAX_UPLOAD_BYTES)
-    return { error: `${name} is ${formatBytes(file.size)}. Each attachment can be up to ${formatBytes(MAX_UPLOAD_BYTES)}.` };
+  if (file.size > MAX_UPLOAD_BYTES) return { error: tooLarge(file) };
   return { file: prepared };
 }
+
+export const tooLarge = (file: File) =>
+  `${file.name || "Untitled file"} is ${formatBytes(file.size)}. Each attachment can be up to ${formatBytes(MAX_UPLOAD_BYTES)}.`;
 
 // Browsers name every pasted screenshot "image.png"; give each a name worth reading in the chat.
 export function namePastedFile(file: File, at: Date, index: number) {

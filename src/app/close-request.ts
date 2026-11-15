@@ -43,3 +43,12 @@ export function waitingOnClose<T>() {
     },
   };
 }
+
+/**
+ * Adds one more close request's "the person kept editing" callback to those already waiting on the question. A
+ * second request, such as Back pressed while a notification's question is open, must not replace the first, or
+ * Keep editing would cancel only the newest and the notification would go ahead after all.
+ */
+export function stayAlso(waiting: (() => void) | null, onStay: () => void): () => void {
+  return waiting ? () => { waiting(); onStay(); } : onStay;
+}

@@ -42,7 +42,7 @@ export function AttachmentTray({ attachments, uploads, previews, canOpen, onRemo
       })}
       {uploads.map(item => <AttachmentChip key={item.id} name={item.file.name} mime={item.file.type} url={item.preview}
         meta={item.status === "failed" ? "Didn't upload" : item.status === "queued" ? "Waiting…"
-          : item.status === "processing" ? "Finishing…" : `Uploading ${Math.round(item.progress * 100)}%`}
+          : item.status === "preparing" ? "Preparing…" : item.status === "processing" ? "Finishing…" : `Uploading ${Math.round(item.progress * 100)}%`}
         upload={item}
         onOpen={item.preview ? () => setPreview({ name: item.file.name, url: item.preview!, size: item.file.size }) : undefined}
         onRetry={item.status === "failed" ? () => onRetry(item.id) : undefined}
@@ -74,7 +74,7 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
   const thumb = <>
     {image ? <img src={url} alt="" draggable={false} decoding="async" onLoad={event => onImageLoad?.(event.currentTarget)} /> : <span className="attachment-badge"><Icon name="file" size={20} /><small>{kindLabel(name, mime)}</small></span>}
     {upload && upload.status !== "failed" && <span className="attachment-progress" aria-hidden="true">
-      {upload.status === "processing" ? <Icon name="spinner" className="spin" size={22} />
+      {upload.status === "processing" || upload.status === "preparing" ? <Icon name="spinner" className="spin" size={22} />
         : <svg viewBox="0 0 36 36" width={30} height={30}>
           <circle cx="18" cy="18" r="15" pathLength={100} className="track" />
           <circle cx="18" cy="18" r="15" pathLength={100} className="bar" strokeDasharray={`${Math.max(upload.progress * 100, 2)} 100`} />
