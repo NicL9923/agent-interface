@@ -12,7 +12,7 @@ Nothing was deployed by this entry.
   one, its deploy configuration's rollback target, any release named in its `dist/previous-release.json`, releases this
   checkout's manifests record as unsettled, and releases with an active or unreadable qualification stage marker. It
   then clears `release.tar.gz` and the qualification stage subdirectories of `operations/release-*` dirs whose release
-  is gone and that hold a `deploy-config.json`.
+  is gone and that hold a `deploy-config.json`. The review fixes below add the host-side settled rule.
 
 ## Application tests
 
@@ -73,8 +73,68 @@ The surviving mutant widens the `operations/release-*` glob. It is equivalent on
 release's own operation dir holds a `deploy-config.json`, and the strip step skips any dir without one. `continued-*`
 holds `result.json`, and `native-recovery-config-*` holds `config.json`.
 
+## Review fixes
+
+GPT-6.1 Sol reviewed `932748d8` and reproduced two defects against a temporary host layout:
+
+1. Pruning trusted only this checkout's manifests, so a stage another checkout was preparing or holding was deleted
+   once it fell outside the newest ten, with or without a deploy configuration.
+2. Stripping a gone release's operation deleted the source and runtime of a qualification stage still marked
+   `active`, or with an unreadable marker.
+
+The fix keeps any release the host cannot prove settled. The guarded deploy writes
+`operations/continued-<operationId>/result.json` only when an activation completes, and `discard` deletes the release
+and its operation, so that file is the only host-side proof. A release without it stays until its release dir, its
+operation dir and its `continued-<operationId>` dir have all gone 3 days without a change, or while any of their times
+cannot be read. The strip step skips an operation with an active or unreadable stage marker. `activate` now refuses a
+stage whose build was pruned, before changing anything, instead of failing in the guarded tool's `cd` and marking it
+needs-review. `REMOTE_LIVE` reports `releaseBuilt` for that.
+
+The final versions of the two tests that reproduce Sol's scenarios, run against `932748d8`'s `.agents/tools`:
+
+| Test | Result before the fix |
+| --- | --- |
+| `test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days` | failed: removed all eleven releases, expected only the activated and the abandoned one |
+| `test_prune_leaves_a_gone_release_s_operation_alone_while_its_qualification_runs_or_cannot_be_read` | failed: stripped the running and unreadable operations too |
+
+Both pass after the fix. Red runs:
+`python3 .agents/tools/mutate-py.py --batch ... --baseline -- sh -c 'cd tests && python3 -B release_app_test.py -k prune'`.
+
+| Mutation | Result |
+| --- | --- |
+| remove releases the host cannot prove settled (the earlier rule) | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days |
+| no activation proof, age only | failed: test_prune_clears_archives_and_stage_checkouts_only_from_operations_whose_release_is_gone |
+| no age-out, activation proof only | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_... |
+| a continued dir alone counts as activated | failed: same |
+| idle ignores the operation dir | failed: same |
+| idle ignores continued-<op> | failed: same |
+| hours, not days | failed: same |
+| a time it cannot read does not keep it | failed: same |
+| drop the config dict guard | failed: same |
+| drop the operationId string guard | failed: same, after its case moved from a null to a numeric `operationId`; null survived because it short-circuits before the guard |
+| an unparseable config stops the prune | failed: same |
+| strip an operation whose qualification runs or cannot be read | failed: test_prune_leaves_a_gone_release_s_operation_alone_... |
+| send a different window | failed: test_prune_protects_releases_this_checkout_has_not_settled |
+
+`-k releaseBuilt -k pruned -k still_built`:
+
+| Mutation | Result |
+| --- | --- |
+| activate a stage whose build is gone | failed: test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable |
+| report every release as built | failed: test_live_facts_say_whether_the_release_is_still_built |
+| send no release to the live check | failed: test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable |
+
+Checks on the fix merged with `origin/main` at `2144c0b8`, Node 24.22.2, Python 3.14.7:
+`.agents/tools/check-all --keep-going` passed typecheck, lint, ruff, build and e2e (55). Vitest failed only the three
+tests that need the `127.0.0.2` loopback alias. py failed `release_docs_pr_test.py`, whose prepared manifest lacked the
+`release` path that `activate` now reads; the fixture now carries it, as every real manifest does from the start of
+prepare. It also failed one `hermes_upgrade_linux_test.py` maintenance RPC case once with a `ConnectionResetError`;
+that file passed all 81 tests run alone. `check-all --only py,ruff` then passed all 52 Python files, including the two
+`serviceRuntime` facts tests that #398 fixed on main.
+
 ## Not exercised
 
 The production host. Nothing here ran over SSH, and the prune has not run against the live `releases/` and
-`operations/` trees. The first `release-app.py activate` after merge is that run; its output reports what it removed and
+`operations/` trees, so how many releases the 3-day rule keeps there is not measured. Directory times on the host's
+filesystem were not checked against what prepare, qualification and activation write. The first `release-app.py activate` after merge is that run; its output reports what it removed and
 the host's free space. `fs.statfs` on Linux ext4 was not measured against `shutil.disk_usage` on the host.
