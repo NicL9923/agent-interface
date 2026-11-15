@@ -144,7 +144,7 @@ async function answerSentAs(match: string, carried: Member | null, override?: { 
 // public/boot.js as the shell runs it, before the bundle: the browser's fetch, storage and window.
 const runBoot = () => window.eval(readFileSync("public/boot.js", "utf8"));
 const accountMenu = async (tab: Tab) => {
-  await act(async () => tab.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => tab.container.querySelector<HTMLButtonElement>(".home-account")!.click());
   return tab.container.querySelector('[role="menu"][aria-label="Account"]')?.textContent ?? "";
 };
 
@@ -179,7 +179,7 @@ async function signInAs(tab: Tab, member: Member) {
   await advance(0);
 }
 async function signOutFrom(tab: Tab) {
-  await act(async () => tab.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+  await act(async () => tab.container.querySelector<HTMLButtonElement>(".home-account")!.click());
   await act(async () => [...tab.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Sign out")!.click());
   await waitForUi(() => expect(document.querySelector('[role="alertdialog"] button.danger')).not.toBeNull());
   await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());

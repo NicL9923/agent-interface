@@ -66,7 +66,7 @@ export const ChatHeader = memo(function ChatHeader({ view, boot, selected, room,
             <Avatar avatar={selected.avatar} state={avatarState === "blocked" ? "idle" : avatarState} size={42} offline={offline} name={selected.name} botId={selected.id} />
           </span>
           <h1 className="chat-identity-heading">
-            <button ref={identityButton} className="chat-identity" aria-haspopup="dialog" aria-label={selected.name}
+            <button ref={identityButton} className="chat-identity" aria-haspopup="dialog"
               title="Details, pin, artifacts and settings" onClick={() => onDetails(selected)}>
               <span className="chat-title">
                 {/* The chevron follows the name, so it never floats between the name and a wider model chip. */}

@@ -222,8 +222,8 @@
 .bot-rail[data-season="spooky"] { --season-color: #d9752b; }
 .bot-rail[data-season="harvest"] { --season-color: #c46f2c; }
 .bot-rail[data-season] {
-  --season-accent: color-mix(in oklab, var(--accent) 88%, var(--season-color));
-  --season-accent-soft: color-mix(in oklab, var(--accent-soft) 82%, var(--season-color));
+  --season-accent: color-mix(in oklab, var(--accent) 96%, var(--season-color));
+  --season-accent-soft: color-mix(in oklab, var(--accent-soft) 96%, var(--season-color));
 }
 .bot-rail[data-season] > * { --accent: var(--season-accent); --accent-soft: var(--season-accent-soft); }
 .season-ambience {

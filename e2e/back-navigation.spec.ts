@@ -164,7 +164,7 @@ test.describe("on a phone", () => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
-    await page.getByRole("button", { name: "Ranch Hand", exact: true }).click();
+    await page.locator(".chat-identity").click();
     const details = page.getByRole("dialog").first();
     await expect(details).toBeVisible();
     await page.goBack();

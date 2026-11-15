@@ -216,7 +216,7 @@ describe("a notification tapped over unsaved work", () => {
   });
 
   async function openSettings() {
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith("Settings"))!.click());
     await settled();
   }

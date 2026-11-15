@@ -319,7 +319,7 @@ describe("what this browser remembers about its sign-in", () => {
     await open("/");
     await answerBootstrap(bootstrap);
     await answerChat("home", page("home", "Morning."));
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".home-account")!.click());
     await act(async () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent?.startsWith("Sign out"))!.click());
     await act(async () => { await vi.dynamicImportSettled(); });
     await act(async () => document.querySelector<HTMLButtonElement>('[role="alertdialog"] button.danger')!.click());

@@ -308,7 +308,7 @@ describe("undo toast", () => {
     await pinFromMenu("Shared", "Pin to top");
     expect(toast()).not.toBeNull();
     // The avatar opens the profile menu; Settings is one of its items.
-    await act(async () => mount.container.querySelector<HTMLButtonElement>('[aria-label="Account"]')!.click());
+    await act(async () => mount.container.querySelector<HTMLButtonElement>(".home-account")!.click());
     await act(async () => [...mount.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Settings")!.click());
     await loaded();
     await act(async () => [...mount.container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Sign out")!.click());

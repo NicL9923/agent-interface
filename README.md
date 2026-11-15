@@ -963,8 +963,10 @@ PLIST
 sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist
 ```
 
-`npm run test:e2e` runs a short Playwright smoke suite in real Chromium. Run `npm run build`
-first, and `npx playwright install chromium` once per Playwright version. `e2e/server.ts`
+`npm run test:e2e` runs Playwright against Chromium. Run `npm run build`
+first, and `npx playwright install chromium` once per Playwright version. The accessibility spec
+scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
+light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
 with local sign-in and a scripted assistant, so it never contacts Hermes, Google or the
 network. It covers sign-in, sending a message and receiving the reply over the live event
