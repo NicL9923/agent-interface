@@ -93,6 +93,23 @@ describe("aggregate Live Activity", () => {
     expect(pushes.length).toBe(sent);
   });
 
+  it("keeps the heartbeat while a running assistant past the fourth row is still fresh", async () => {
+    bots = ["a", "b", "c", "d", "fresh"].map(id => bot(id));
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    for (const id of ["a", "b", "c", "d", "fresh"]) set(id, "working");
+    register("one"); await tick();
+    const read = live["runtime"].conversation;
+    live["runtime"].conversation = async (id, options) => {
+      if (id !== "fresh") throw new Error("offline");
+      return read(id, options);
+    };
+    await tick(15_000);
+    const sent = pushes.length;
+    await tick(6 * 60_000);
+    expect(pushes.length).toBeGreaterThan(sent);
+    expect(last().payload.aps.event).toBe("update");
+  });
+
   it("does not claim an armed run finished when its conversation cannot be read", async () => {
     register("one", ["kitchen"]);
     set("kitchen", "idle", {}, { lastMessage: { text: "Old result", at: new Date(clock + 1000).toISOString() } });

@@ -20,3 +20,12 @@ every running row is held no heartbeat is sent, so the 15-minute stale date laps
 | Held row keeps its old detail | same test | the detail was not "Can't check on this right now" |
 
 Both restored; `tests/live-activity.test.ts` passed 42 of 42, with typecheck and lint clean.
+
+GPT-6.1 Sol's review of that fix found the held check read only the four displayed rows, so a fresh assistant past
+the fourth lost its heartbeat. It now reads every observed row.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| Held check over the displayed rows only | `keeps the heartbeat while a running assistant past the fourth row is still fresh` | no heartbeat in six minutes |
+
+Restored; 43 of 43 pass.

@@ -179,7 +179,9 @@ export class LiveActivities {
     const since = now - registration.sentAt;
     // While every running row is held unknown, no heartbeat: its stale date then lapses, and iOS shows the card as out of date.
     const held = observed.unknownSince ?? {};
-    const allHeld = state.rows.some(row => !terminal(row.phase)) && state.rows.every(row => terminal(row.phase) || row.botId in held);
+    // Every running row, not only the four shown: a fresh one past the fourth still needs its heartbeat.
+    const running = (observed.observedRows ?? state.rows).filter(row => !terminal(row.phase));
+    const allHeld = running.length > 0 && running.every(row => row.botId in held);
     if (!changed && allHeld) return;
     if (!(changed && (urgent || since >= THROTTLE_MS)) && since < HEARTBEAT_MS) return;
     const rising = !!previous && state.attentionCount > previous.attentionCount;
