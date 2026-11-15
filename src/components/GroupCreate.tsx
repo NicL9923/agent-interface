@@ -3,7 +3,7 @@ import { write } from '../client-api';
 import { useAction } from '../app/use-action';
 import { groupCreateKey } from '../app/storage';
 import { pendingGroup, type PendingGroup } from '../app/home-rooms';
-import { useCloseRequest, type SheetClose } from '../app/close-request';
+import { stayAlso, useCloseRequest, type SheetClose } from '../app/close-request';
 import { Dialog } from './ui/dialog';
 import { FormMessage } from './ui/form-message';
 import type { Bootstrap } from '../shared/types';
@@ -39,7 +39,7 @@ export function GroupCreate({ bootstrap, canSend, closer, onClose, onCreated }: 
   const stay = useRef<(() => void) | null>(null);
   useCloseRequest(closer, onStay => {
     if (!unsaved) return onClose();
-    stay.current = onStay;
+    stay.current = stayAlso(stay.current, onStay);
     setConfirmDiscard(true);
   });
   useEffect(() => {

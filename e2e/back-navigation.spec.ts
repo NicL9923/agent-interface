@@ -238,6 +238,27 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
+  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ context, page }) => {
+    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
+      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+    await page.goto("about:blank");
+    await signIn(page);
+    await page.getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New group chat" }).click();
+    const sheet = page.getByRole("dialog", { name: "New group chat" });
+    await sheet.getByRole("textbox", { name: "Name" }).fill("Fence crew");
+    await tapNotification(context, page, "/?bot=trail");
+    const question = sheet.getByRole("alert").filter({ hasText: "Discard your unsaved changes?" });
+    await expect(question).toBeVisible();
+    // A second close request while the question is open must not replace the notification's.
+    await page.goBack();
+    await sheet.getByRole("button", { name: "Keep editing" }).click();
+    await sheet.getByRole("button", { name: "Cancel" }).click();
+    await expect(sheet).toBeHidden();
+    await expect(assistants(page)).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeHidden();
+  });
+
   test("Back on a new group chat form with nothing entered closes it at once", async ({ page }) => {
     await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
       ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());

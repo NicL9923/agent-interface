@@ -56,3 +56,18 @@ ViewTransition started`; it passed 20 of 20 repeated alone and in the full run. 
   server hosts no group coordinator, so no spec opens one.
 - The service worker's `client.navigate` fallback (rule 4 in `scripts/service-worker.js`), a full navigation that adds an
   entry of the old document.
+
+## Second review round
+
+GPT-6.1 Sol found that a notification tapped over an edited New group form stored its "kept editing" callback, and a
+browser Back while that question was open replaced it with Back's own. Keep editing then cancelled only Back, and
+the next Cancel opened the notification's chat. The assistant settings sheet stored its callback the same way, and
+Back now reaches it too. Both now add each waiting request with `stayAlso` (`src/app/close-request.ts`), so Keep
+editing cancels every request that was waiting.
+
+| Break | Test | Failure |
+| --- | --- | --- |
+| The group form replaces the waiting callback again | `Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing` | Trail Cook's chat opened: `toBeHidden()` failed |
+
+`e2e/back-navigation.spec.ts` then passed 20 of 20. One full run before that failed `a chat opened again after Back
+takes the same two steps` while other worktrees ran suites; it passed in the next full run and 5 of 5 alone.
