@@ -103,6 +103,53 @@ it('creates a group from a name and two to six assistants, then hands the new ro
   expect(write).toHaveBeenCalledWith('/groups',{requestId:expect.any(String),name:'Garden crew',botIds:['ranch','planner']});
   expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({room_id:'new-room'}));
 });
+describe('closing the new group form with work in it',()=>{
+  const closer={current:null as null|{close(onStay:()=>void):void;sheet:object}};
+  const mount=async(onClose:()=>void)=>{
+    closer.current=null;
+    await act(async()=>root.render(createElement(GroupCreate,{bootstrap,canSend:true,closer,onClose,onCreated:vi.fn()})));
+  };
+  const fill=async()=>{
+    await typeInto(container.querySelector<HTMLInputElement>('.group-create input:not([type=checkbox])')!,'Garden crew');
+    await act(async()=>container.querySelector<HTMLInputElement>('.group-create input[type=checkbox]')!.click());
+  };
+  const question=()=>container.querySelector('[role="alert"]')?.textContent??'';
+  it('asks before the app closes it, keeps the form when told to keep editing, and closes it when told to discard',async()=>{
+    const onClose=vi.fn(),onStay=vi.fn();
+    await mount(onClose);await fill();
+    await act(async()=>closer.current!.close(onStay));
+    expect(question()).toContain('Discard your unsaved changes?');expect(onClose).not.toHaveBeenCalled();expect(onStay).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('.group-create input:not([type=checkbox])')!.value).toBe('Garden crew');
+    await click('Keep editing');
+    expect(question()).toBe('');expect(onStay).toHaveBeenCalledTimes(1);expect(onClose).not.toHaveBeenCalled();
+    await act(async()=>closer.current!.close(onStay));
+    await click('Discard changes');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+  it('closes at once, asking nothing, when the form has nothing entered or is a saved request',async()=>{
+    const onClose=vi.fn(),onStay=vi.fn();
+    await mount(onClose);
+    await act(async()=>closer.current!.close(onStay));
+    expect(onClose).toHaveBeenCalledTimes(1);expect(question()).toBe('');expect(onStay).not.toHaveBeenCalled();
+    // A name of spaces alone is nothing to keep.
+    await typeInto(container.querySelector<HTMLInputElement>('.group-create input:not([type=checkbox])')!,'   ');
+    await act(async()=>closer.current!.close(onStay));
+    expect(onClose).toHaveBeenCalledTimes(2);
+    localStorage.setItem('agent-interface:group-create:one',JSON.stringify({requestId:crypto.randomUUID(),name:'Garden crew',botIds:['ranch','planner']}));
+    onClose.mockClear();
+    await mount(onClose);
+    await act(async()=>closer.current!.close(onStay));
+    expect(onClose).toHaveBeenCalledTimes(1);expect(question()).toBe('');
+  });
+  it('asks for the close button, and Cancel discards without asking',async()=>{
+    const onClose=vi.fn();
+    await mount(onClose);await fill();
+    await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!.click());
+    expect(question()).toContain('Discard your unsaved changes?');expect(onClose).not.toHaveBeenCalled();
+    await click('Cancel');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
 it('leaves a group that disappears, tells home to refresh, and says that a personal assistant keeps a new group to its owner',async()=>{
   let exists=true,reads=0;
   vi.mocked(api).mockImplementation(async(path)=>{

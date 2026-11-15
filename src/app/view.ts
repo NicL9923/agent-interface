@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import type { Bot, Preferences } from "../shared/types";
+import { useStableCallback } from "./use-stable-callback";
 export type View = "conversation" | "today" | "group" | "find";
 /** An assistant's terminal card opened the shell; each opening is a new number. The command is pasted once, never run. */
 export type TerminalOpening = { at: number; command?: string };
@@ -43,16 +44,20 @@ export function hasDestination() {
 export function startsOnToday({ startPage, defaultBotId }: Preferences) {
   return !hasDestination() && (startPage === "today" || startPage !== "assistant" && !defaultBotId);
 }
+/** Keeps the address naming what the screen shows. Returns the write itself, for a pop that restores an older address. */
 export function useUrlSync(view: View, panel: Panel | null, botId: string, userId?: string, roomId = "") {
   const routineId = panel?.kind === "routine" ? panel.routineId : null;
-  useEffect(() => {
+  const sync = useStableCallback(() => {
     const url = new URL(location.href);
     if (view === "conversation") url.searchParams.delete("view"); else url.searchParams.set("view", view);
     if (view === "group" && roomId) url.searchParams.set("room", roomId); else url.searchParams.delete("room");
     if (routineId !== null) url.searchParams.set("routine", routineId); else url.searchParams.delete("routine");
     if (botId && userId) url.searchParams.set("bot", botId);
-    history.replaceState(null, "", url);
-  }, [view, routineId, botId, userId, roomId]);
+    // Replaces, never pushes: switching chats stays one history entry. The entry's state is kept (see history-nav.ts).
+    history.replaceState(history.state, "", url);
+  });
+  useEffect(sync, [sync, view, routineId, botId, userId, roomId]);
+  return sync;
 }
 /** A message a link opens the live conversation at: `?bot=<id>&message=<messageId>`. */
 export function initialMessage() {
