@@ -963,8 +963,8 @@ PLIST
 sudo launchctl bootstrap system /Library/LaunchDaemons/dev.agentinterface.loopback-alias.plist
 ```
 
-`npm run test:e2e` runs Playwright against Chromium. Run `npm run build`
-first, and `npx playwright install chromium` once per Playwright version. The accessibility spec
+`npm run test:e2e` runs Playwright against Chromium and WebKit. Run `npm run build`
+first, and `npx playwright install chromium webkit` once per Playwright version. The accessibility spec
 scans home, a chat with a reply, Settings, assistant details and Today at phone and desktop sizes in
 light and dark. It fails on serious and critical axe WCAG 2.2 AA violations. `e2e/server.ts`
 starts the real app server and built client on loopback ports 4173 and 4174, in memory,
@@ -979,7 +979,7 @@ another member's sign-in, and no page errors,
 console errors or CSP violation reports. It runs in full Chromium (`channel: "chromium"`, which
 `npx playwright install chromium` installs beside the headless shell): the shell crashes the
 page when a service worker calls the badge API, which the worker does for every page it controls,
-and it has no back-forward cache. It does not cover real Hermes behavior, push
+and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation, the two back-forward cache tests, and two reload-timing tests that report a cancelled fetch as an uncaught error. It uses a fake push service. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.
 

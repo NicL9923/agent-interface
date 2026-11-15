@@ -231,7 +231,7 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ context, page }) => {
+  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ page }) => {
     await enableGroupCatalog();
     await page.goto("about:blank");
     await signIn(page);
