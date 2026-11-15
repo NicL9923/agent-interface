@@ -202,12 +202,13 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
   const [submitting, setSubmitting] = useState(false);
   const createOpener = useRef<HTMLButtonElement>(null);
   const [restoreCreateFocus, setRestoreCreateFocus] = useState(false);
+  // Focus returns to "New task" once the form's close has committed and the button exists again. One try:
+  // a request left pending would pull focus there whenever the panel next re-rendered.
   useEffect(() => {
-    if (!creating && restoreCreateFocus && !control.disabled) {
-      createOpener.current?.focus();
-      setRestoreCreateFocus(false);
-    }
-  }, [creating, restoreCreateFocus, control.disabled]);
+    if (creating || !restoreCreateFocus) return;
+    createOpener.current?.focus();
+    setRestoreCreateFocus(false);
+  }, [creating, restoreCreateFocus]);
   const createMessage = useRef<HTMLParagraphElement>(null);
   const focusedCreateNotice = useRef("");
   const [attempt, setAttempt] = useState<{ knownIds: string[]; title: string; requestId: string; refreshCount: number; unconfirmed: boolean } | null>(null);
