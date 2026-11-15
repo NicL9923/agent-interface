@@ -1494,6 +1494,12 @@ the same rule as notifications. A private assistant appears only for its owner.
   drives the tint, the minimal Dynamic Island symbol and the tap target.
 - `activeCount` counts non-terminal rows, including any beyond the first four.
 
+The server retains previously observed work when its assistant disconnects or its conversation
+cannot be read, including work outside the four displayed rows. A fresh response can confirm
+completion. After eight hours continuously unknown, the server drops that hold; if no other
+work remains it removes the registration without sending a finished event. ActivityKit limits
+a Live Activity to eight hours, and the app uses a 15-minute stale date for missed updates.
+
 The first row gets one button while the activity is current: **Decline** for a `waiting`
 row with an `approvalId`, or **Stop** for a `thinking` or `working` row. Both need the
 phone unlocked and run in the app, never in the widget extension. The app acts only
