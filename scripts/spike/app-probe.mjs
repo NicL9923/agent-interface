@@ -14,6 +14,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { createApp } from "../../src/server/app.ts";
 import { createHermesRuntime } from "../../src/server/hermes.ts";
 import { loadConfig } from "../../src/server/config.ts";
+import { fileSigner } from "../../src/server/hermes-files.ts";
+import { Store } from "../../src/server/store.ts";
 import { probeScope } from "./app-probe-scope.mjs";
 const accessPath = process.env.HERMES_SPIKE_ACCESS;
 assert(
@@ -41,14 +43,20 @@ const config = loadConfig({
   LOCAL_DEV_AUTH: "true",
   APP_DATABASE: join(temporary, "app.sqlite"),
 });
-let server = await createApp(
-  config,
-  // This disposable loopback gateway uses native static-token authentication.
-  // Gated native service tickets are qualified separately by service_probe.py.
-  createHermesRuntime({ url: access.url, token: access.token, authMode: "static",
-    qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
-      ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
-);
+// Opens the app the way src/server/index.ts does: the database's file key signs file identifiers.
+// This disposable loopback gateway uses native static-token authentication.
+// Gated native service tickets are qualified separately by service_probe.py.
+const boot = () => {
+  const store = new Store(config.database);
+  return createApp(
+    config,
+    createHermesRuntime({ url: access.url, token: access.token, authMode: "static", files: fileSigner(store.fileKeys(), access.token),
+      qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
+        ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
+    { store },
+  );
+};
+let server = await boot();
 let origin;
 const start = async () => {
   await server.app.listen({ host: "127.0.0.1", port: 0 });
@@ -630,12 +638,7 @@ try {
       "Restart must begin during active execution",
     );
     await server.app.close();
-    server = await createApp(
-      config,
-      createHermesRuntime({ url: access.url, token: access.token, authMode: "static",
-        qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
-          ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
-    );
+    server = await boot();
     await start();
     const after = await waitCompleted(botId);
     assert.equal(after.sessionId, before.sessionId);

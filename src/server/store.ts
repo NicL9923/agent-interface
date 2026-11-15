@@ -12,10 +12,13 @@ import { EventRepository } from "./store-events.js";
 import { RetentionRepository } from "./store-retention.js";
 import { CheckInRepository } from "./store-check-ins.js";
 import { MacRepository } from "./store-macs.js";
+import { FileKeyRepository } from "./store-files.js";
+import type { FileSigner } from "./hermes-files.js";
 
 export { schemaVersion } from "./store-database.js";
 export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
 export type { RejectionReason } from "./store-submissions.js";
+export type { FileReferenceUpgrade } from "./store-files.js";
 export { maxDeliveryAttempts, presenceTtl, pushActionTtl, type ChatPresence, type PushAction } from "./store-notifications.js";
 
 /**
@@ -39,11 +42,14 @@ export class Store {
   readonly retention: RetentionRepository;
   readonly checkIns: CheckInRepository;
   readonly macs: MacRepository;
+  readonly files: FileKeyRepository;
   constructor(path: string) {
     this.database = new StoreDatabase(path);
     this.db = this.database.db;
     this.accounts = new AccountRepository(this.database);
     this.accounts.ensureFormSecret();
+    this.files = new FileKeyRepository(this.database);
+    this.files.ensureFileKey();
     this.devices = new DeviceRepository(this.database, this.accounts);
     this.personalState = new PersonalRepository(this.database);
     this.drafts = new DraftRepository(this.database);
@@ -70,6 +76,9 @@ export class Store {
   /** Assistant display names for notification titles, refreshed by the background worker. */
   get botNames() { return this.notifications.botNames; }
   set botNames(names: Map<string, string>) { this.notifications.botNames = names; }
+  // file keys
+  fileKeys() { return this.files.fileKeys(); }
+  upgradeFileReferences(files: Pick<FileSigner, "isCurrent" | "resign">) { return this.files.upgradeFileReferences(files); }
   // accounts
   user(...args: Parameters<AccountRepository["user"]>) { return this.accounts.user(...args); }
   formKey(userId: string) { return this.accounts.formKey(userId); }
