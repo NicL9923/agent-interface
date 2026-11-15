@@ -91,7 +91,7 @@ class DocsPullRequest(unittest.TestCase):
             (release_app.ROOT, release_app.MANIFESTS, release_app.guarded, release_app.verify_release, release_app.remote) = saved
         self.addCleanup(restore)
         release_app.ROOT, release_app.MANIFESTS = self.checkout, work / "manifests"
-        release_app.remote = lambda host, program, payload: {"current": "/srv/app/releases/old", "workerSha256": "worker"}
+        release_app.remote = lambda host, program, payload: {"current": "/srv/app/releases/old", "workerSha256": "worker", "releaseBuilt": True}
         release_app.guarded = lambda host, manifest, check: {"webBuild": "b" * 16}
         release_app.verify_release = lambda manifest: ({"maintenanceCleared": True}, None)
         self.prepare(NAME)
@@ -100,7 +100,7 @@ class DocsPullRequest(unittest.TestCase):
         release_app.save_manifest({"name": name, "status": "prepared", "host": "host",
             "commit": "7fac68e44e7d" + "0" * 28, "origin": "https://app.example.test", "webBuild": "b" * 16,
             "archiveSha256": "f" * 64, "hermesRevision": "1298c8e7" + "0" * 32, "qualification": "reused",
-            "pullRequest": 73, "helperChanged": True, "appBase": "/srv/app", "operationId": "op",
+            "pullRequest": 73, "helperChanged": True, "appBase": "/srv/app", "operationId": "op", "release": "/srv/app/releases/" + name,
             "expectedRelease": "/srv/app/releases/old", "workerSha256": "worker"})
 
     def worktree_paths(self):
