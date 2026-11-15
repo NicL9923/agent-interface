@@ -192,6 +192,7 @@ const signedInAs = (member: Member, id = "earlier") => {
 };
 
 beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
   vi.useFakeTimers({ now: NOW });
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
