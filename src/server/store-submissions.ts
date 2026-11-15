@@ -144,6 +144,7 @@ export class SubmissionRepository {
   participants(runId: string) {
     return (this.db.prepare("SELECT user_id FROM participants WHERE run_id=?").all(runId) as { user_id: string }[]).map(row => row.user_id);
   }
+  /** Records who decided an approval. The first decision recorded stands; a later one for the same approval is ignored. */
   attributeApproval(
     id: string,
     botId: string,
@@ -151,7 +152,7 @@ export class SubmissionRepository {
     decision: string,
   ) {
     this.db
-      .prepare("INSERT INTO approval_attribution VALUES(?,?,?,?,?)")
+      .prepare("INSERT INTO approval_attribution VALUES(?,?,?,?,?) ON CONFLICT(approval_id) DO NOTHING")
       .run(id, botId, userId, decision, Date.now());
   }
   /** Records who sent a group chat message, keyed by the event Hermes appended for it. */

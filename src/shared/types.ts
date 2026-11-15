@@ -553,6 +553,7 @@ export interface TurnWatcher {
   disconnected(): void;
 }
 
+/** One agent harness behind the app. A refusal the person can act on is a `RuntimeRefusal` (`shared/errors.ts`). */
 export interface Runtime {
   setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
   /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */

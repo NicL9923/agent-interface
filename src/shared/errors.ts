@@ -3,6 +3,12 @@ import type { RuntimeStatus } from "./types.js";
 /** Every `code` an error response carries. Clients, including the iOS app, match these exact strings. */
 export type ErrorCode =
   | "assistant_not_found"
+  // A new assistant's name has no letter or number, so it makes no ID.
+  | "assistant_name_invalid"
+  // A file ID whose signature or contents this server did not issue, or no longer accepts.
+  | "file_not_found"
+  // An approval or question already answered, by someone else or elsewhere, or one that expired.
+  | "request_not_pending"
   | "assistants_changed"
   | "created_incomplete"
   | "draft_conflict"
@@ -83,4 +89,40 @@ export class IncompleteCreationError extends Error {
     super(message, options);
     this.name = "IncompleteCreationError";
   }
+}
+
+/** Sent for a missing assistant, the same whether it never existed, was deleted, or is hidden from the caller. */
+export const assistantNotFoundMessage = "Assistant not found";
+/** Sent when a new assistant's name would make an empty ID, such as one of only emoji or punctuation. */
+export const assistantNameMessage = "Use at least one letter or number in the name.";
+/** Sent for an approval someone already answered, here or elsewhere, or that expired. */
+export const approvalNotPendingMessage = "This approval is no longer pending";
+/** Sent when a file ID is no longer valid, such as after the Hermes token changed. */
+export const fileNotFoundMessage = "That file is no longer available.";
+
+/** The statuses a refusal answers with: the request is malformed, names something that is gone, or conflicts with a change. */
+export type RefusalStatus = 400 | 404 | 409;
+/**
+ * A runtime turning a request down for a reason the person can act on. The app answers with its status, message and
+ * code, and does not log it as a failure. Every runtime adapter throws one of these for a refusal; an error without a
+ * status is an upstream failure, which the app answers with a 5xx and a generic message. `statusCode` is the name
+ * the app's error handler and its other error checks read.
+ */
+export class RuntimeRefusal extends Error {
+  constructor(readonly statusCode: RefusalStatus, message: string, readonly code?: ErrorCode, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "RuntimeRefusal";
+  }
+}
+/** A request the runtime cannot take as sent: fix it and send it again. */
+export class InvalidInput extends RuntimeRefusal {
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(400, message, code, options); }
+}
+/** The request names something that does not exist, or no longer does. */
+export class NotFound extends RuntimeRefusal {
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(404, message, code, options); }
+}
+/** The request was valid when it was made, but the state it acted on has changed: reload before trying again. */
+export class Conflict extends RuntimeRefusal {
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(409, message, code, options); }
 }
