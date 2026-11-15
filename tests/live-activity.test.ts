@@ -86,6 +86,11 @@ describe("aggregate Live Activity", () => {
     await tick(15_000);
     expect(last().payload.aps.event).toBe("update");
     expect(rows()).toEqual(["kitchen:working"]);
+    // The held row says it cannot be checked, and no heartbeat refreshes it, so its stale date lapses.
+    expect(last().payload.aps["content-state"].rows[0].detail).toBe("Can't check on this right now");
+    const sent = pushes.length;
+    await tick(30 * 60_000);
+    expect(pushes.length).toBe(sent);
   });
 
   it("does not claim an armed run finished when its conversation cannot be read", async () => {

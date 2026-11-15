@@ -38,6 +38,7 @@ const MAX_ROWS = 4;
 // ActivityKit ends an activity after eight hours. Stop retaining unknown work at that limit.
 const UNKNOWN_MS = 8 * 60 * 60_000;
 type ObservedState = LiveState & { observedRows?: LiveRow[]; unknownSince?: Record<string, number> };
+const heldDetail = "Can't check on this right now";
 
 /**
  * Builds each person's aggregate of assistant work and pushes it to their devices' Live
@@ -176,6 +177,10 @@ export class LiveActivities {
     const urgent = !previous || state.attentionCount > previous.attentionCount || state.activeCount !== previous.activeCount
       || state.rows.some(row => terminal(row.phase) && !previous.rows.some(old => old.botId === row.botId && old.phase === row.phase));
     const since = now - registration.sentAt;
+    // While every running row is held unknown, no heartbeat: its stale date then lapses, and iOS shows the card as out of date.
+    const held = observed.unknownSince ?? {};
+    const allHeld = state.rows.some(row => !terminal(row.phase)) && state.rows.every(row => terminal(row.phase) || row.botId in held);
+    if (!changed && allHeld) return;
     if (!(changed && (urgent || since >= THROTTLE_MS)) && since < HEARTBEAT_MS) return;
     const rising = !!previous && state.attentionCount > previous.attentionCount;
     await this.post(registration, { aps: { timestamp: seconds(now), event: "update", "content-state": state, "stale-date": seconds(now) + STALE_S } }, rising ? 10 : 5);
@@ -242,7 +247,8 @@ export class LiveActivities {
         } else if (before && !terminal(before.phase) && unknown) {
           const since = oldUnknown ?? now;
           if (now - since >= UNKNOWN_MS) { expired = true; unknownSince[bot.id] = since; unread.add(bot.id); }
-          else { row = { ...before }; unknownSince[bot.id] = since; unread.add(bot.id); }
+          // Held, not claimed: the row says it cannot be checked, so the card never reads as still working.
+          else { row = { ...before, detail: heldDetail }; unknownSince[bot.id] = since; unread.add(bot.id); }
         } else if (mine && activeStates.has(state)) {
           const phase = state as LivePhase;
           if (current?.activity.runId) runs.set(bot.id, current.activity.runId);
