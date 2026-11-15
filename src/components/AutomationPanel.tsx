@@ -95,7 +95,8 @@ function Status({ control, work = false }: { control: Controls; work?: boolean }
   const [resultKey, setResultKey] = useState("");
   if (receiptAnnounced && resultKey !== receiptKey) setResultKey(receiptKey);
   const statusText = receiptAnnounced || receiptKey === resultKey ? "" : receiptAnnouncement;
-  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span><Button disabled={control.loading || control.busy} onClick={() => void control.refresh()}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
+  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span>{/* aria-disabled, not disabled: a disabled button can't take focus, and keyboard users wait on this one while a change or refresh is busy. */}
+    <Button aria-disabled={control.loading || control.busy || undefined} onClick={() => { if (!control.loading && !control.busy) void control.refresh(); }}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
     {work && <><p className="sr-only" role="status" aria-label="Resume status" aria-live="polite" aria-atomic="true">{statusText}</p>
       <p className="sr-only" role="status" aria-label="Resume result" aria-live="polite" aria-atomic="true">{receiptAnnounced ? control.error : ""}</p></>}
     {control.error && !receiptAnnounced && <p className="form-error" role="alert">{control.error}</p>}
