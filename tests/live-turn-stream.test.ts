@@ -4,6 +4,7 @@ import { createApp } from "../src/server/app.js";
 import { TURN_HOLD_MS } from "../src/server/conversation-routes.js";
 import { loadConfig } from "../src/server/config.js";
 import { createHermesRuntime } from "../src/server/hermes.js";
+import { testFiles } from "./helpers/file-signer.js";
 import { compareVersions, placeTurn } from "../src/shared/inflight.js";
 import type { InflightDelta, Message, TurnEvent } from "../src/shared/types.js";
 import { fakeHermes, HERMES_URL, row } from "./helpers/fake-hermes.js";
@@ -22,7 +23,7 @@ const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = { toFake: ["setTime
 async function setup() {
   const hermes = fakeHermes();
   hermes.profiles = ["shared", "hidden"];
-  const runtime = createHermesRuntime({ url: HERMES_URL, token: "isolated-contract-token" });
+  const runtime = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
   const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
   apps.push(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });

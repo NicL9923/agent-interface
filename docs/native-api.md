@@ -78,12 +78,18 @@ guard it:
   or number, such as a name of only emoji, so it makes no assistant ID.
 - 404 `assistant_not_found` when an assistant was deleted while the request ran.
 - 404 `file_not_found` for a file ID this server did not issue or no longer
-  accepts, such as after the Hermes token changed. Reload the chat for current
-  file links.
+  accepts, such as an earlier ID after the Hermes token changed. Reload the chat
+  for current file links.
 - 409 `request_not_pending` from an approval or question answer that someone
   already answered, here or elsewhere, or that expired. Drop the card and refresh.
 - 409 without a code when a routine, an avatar or a delivery setting changed in
   Hermes, or Hermes refused a routine. The message says what to do.
+
+File identifiers are opaque: never parse or build one. Every read names a file with the same
+identifier. Since November 14, 2026 they start with `v2.`, so a file seen before then now has a
+second identifier; the earlier one keeps working while the server holds the Hermes token that
+signed it. An identifier this server did not sign, or one for an unsafe path, returns 404 with
+`"code": "file_not_found"` and `"error": "That file is no longer available."`.
 
 `GET /api/files/:id` streams the file. It sends `Content-Length` only when Hermes
 reports one for an uncompressed body, and the cap counts decoded bytes. A file over 100 MB returns 502 with `code: "file_too_large"` and a message
