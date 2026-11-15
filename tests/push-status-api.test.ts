@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { fakeRuntime, signIn } from "./helpers/server.js";

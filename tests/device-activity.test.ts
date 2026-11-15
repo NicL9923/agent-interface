@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { ApnsError } from "../src/server/apns.js";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
