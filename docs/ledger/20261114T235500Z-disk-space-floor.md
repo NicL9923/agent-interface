@@ -220,3 +220,13 @@ The production host. Nothing here ran over SSH, and the prune has not run agains
 filesystem were not checked against what prepare, qualification and activation write, and the walk's run time over
 the host's real operation dirs is not measured. The first `release-app.py activate` after merge is that run; its
 output reports what it removed and the host's free space. `fs.statfs` on Linux ext4 was not measured against `shutil.disk_usage` on the host.
+
+## Third review round
+
+GPT-6.1 Sol found that activation proof accepted a missing Hermes revision when both the deploy configuration and the
+result omitted it, or both held null: the comparison matched `None` to `None`, and a fresh release was deleted at once.
+Each compared field (`operationId`, `webBuild`, `hermesRevision`) must now be a non-empty string in the configuration.
+
+| Mutation | Result |
+| --- | --- |
+| Drop `hermesRevision` from the required fields | failed: `test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof` |

@@ -498,7 +498,8 @@ def activated(name):
     # Only a completed guarded activation leaves both records: a result naming the configured build
     # and Hermes revision, then the phase "complete" for this operation. Anything else keeps the release.
     config = read_json(operations / name / "deploy-config.json")
-    if not config or not isinstance(config.get("operationId"), str) or not isinstance(config.get("webBuild"), str):
+    # Each field compared must be a real value: two records that both lack one would otherwise match.
+    if not config or not all(isinstance(config.get(key), str) and config[key] for key in ("operationId", "webBuild", "hermesRevision")):
         return False
     continued = operations / ("continued-" + config["operationId"])
     result, phase = read_json(continued / "result.json"), read_json(continued / "phase.json")

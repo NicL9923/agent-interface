@@ -1185,6 +1185,14 @@ class HostPrograms(unittest.TestCase):
             "release-config-without-build": lambda ops: (
                 rewrite(ops / "result.json", webBuild=None),
                 rewrite(ops.parent / "release-config-without-build/deploy-config.json", webBuild=None)),
+            # Neither names a Hermes revision, or both name it as null, so they cannot be matched (Sol's second round).
+            "release-without-revision": lambda ops: (
+                (ops / "result.json").write_text(json.dumps({k: v for k, v in json.loads((ops / "result.json").read_text()).items() if k != "hermesRevision"})),
+                (ops.parent / "release-without-revision/deploy-config.json").write_text(json.dumps(
+                    {k: v for k, v in json.loads((ops.parent / "release-without-revision/deploy-config.json").read_text()).items() if k != "hermesRevision"}))),
+            "release-null-revision": lambda ops: (
+                rewrite(ops / "result.json", hermesRevision=None),
+                rewrite(ops.parent / "release-null-revision/deploy-config.json", hermesRevision=None)),
             # The tool held the activation for review after writing its result.
             "release-held-for-review": lambda ops: rewrite(ops / "phase.json", phase="admission-needs-review"),
             "release-other-operation": lambda ops: rewrite(ops / "phase.json", operationId="op-other"),
