@@ -143,6 +143,7 @@ if __name__ == "__main__":
                 return subprocess.check_output(['git', '-C', str(source), *args], stderr=subprocess.DEVNULL).decode().strip()
             git('init', '-q'); git('add', '.')
             git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture')
+            git('config', 'gc.auto', '0'); git('config', 'maintenance.auto', 'false')
             revision = git('rev-parse', 'HEAD')
             home = base / 'home'; (home / 'tools/chromium').mkdir(parents=True)
             pm = home / 'tools/chromium/chrome'; pm.write_text('#!/bin/sh\n'); pm.chmod(0o700)
@@ -185,6 +186,14 @@ if __name__ == "__main__":
             self.assertNotEqual(code, 0)
             self.assertIn(payload['node'] + ' is no longer the runtime the release was built with', error)
             self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            # A live checkout that git may repack automatically is refused before anything is staged.
+            git('config', '--unset', 'maintenance.auto')
+            code, _, error = run_remote(qualify_app.REMOTE, payload)
+            self.assertNotEqual(code, 0)
+            self.assertIn('Qualification refused before staging.\nThe live Hermes checkout ' + str(source)
+                          + ' allows automatic gc or maintenance', error)
+            self.assertEqual(sorted(base.rglob('.agent-interface-upgrade-stage')), stages)
+            git('config', 'maintenance.auto', 'false')
             # Without an explicit choice, the live receipt's selection carries over and is bound afresh,
             # so a browser update since the last qualification is picked up rather than refused.
             live = base / 'shared/hermes-qualified.json'

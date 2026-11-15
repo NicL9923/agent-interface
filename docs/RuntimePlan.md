@@ -35,6 +35,8 @@ WildBots owns the system of record. Harnesses only run turns.
 The app API stays. Clients gain a harness choice and drop Hermes-only screens: Hermes updates, the Discord status
 card and ChatGPT banked resets in Usage. The server's `Runtime` interface (`src/shared/types.ts`) gets one adapter
 per harness, with capability flags for what that harness supports, as `HarnessAssessment.md` already requires.
+An adapter turns a request down with `RuntimeRefusal` (`InvalidInput`, `NotFound` or `Conflict`, in
+`src/shared/errors.ts`), which reaches the person as a 4xx with its message. An error without a status is a 5xx.
 
 ## Harnesses
 

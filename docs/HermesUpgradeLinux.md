@@ -26,6 +26,60 @@ plugin compatibility decisions. A shallow installed checkout requires installer
 repair before qualification. The qualification record binds these history and tag facts, so
 changing them requires a fresh check.
 
+## Live checkout objects
+
+The live checkout, `~/.hermes/hermes-agent` on the host, is a promisor partial clone
+(`remote.origin.promisor = true`, `partialclonefilter = tree:0`). On the host's git 2.43,
+repacking it dropped objects that promisor objects link to: 12,763 objects of HEAD's tree on
+October 14, 2026, and 42 on November 9. Hermes kept running from its working files, but every
+offline read of HEAD failed. Any fetch, a lazy one included, can start that repack through
+automatic gc or maintenance. On November 9 an agent's git history commands in the checkout
+fetched lazily and maintenance then repacked, which is why `AGENTS.md` forbids running git there.
+
+So the checkout's own `.git/config` turns both off with `gc.auto = 0` and
+`maintenance.auto = false`. The install hook writes them after checking out the candidate, and
+rollback writes them again after restoring the archived `.git`, which can predate them. Neither
+write happens during object preparation, which refuses any configuration change it did not make.
+With `maintenance.auto = false`, `git fetch` does not start `git maintenance run --auto` at all.
+
+`qualify-app-release.py` checks the live checkout before any other git command reads it and
+before it stages anything. It refuses when either setting is missing or has another value, and
+prints the fix, which runs no git in the checkout:
+
+```sh
+printf '[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n' >> ~/.hermes/hermes-agent/.git/config
+```
+
+It then counts the objects of HEAD's tree that the checkout lacks:
+
+```sh
+GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0 git rev-list --objects --missing=print --no-walk HEAD
+```
+
+Each missing object is a line starting with `?`, and a missing tree hides the objects under
+it, so the count is a lower bound. Any missing object refuses with the count. Before this check,
+the November 9 run cloned the checkout and failed later, in `snapshot`, with
+`fatal: unable to read 4473f528...`. The listing walks no history, takes no optional lock and
+never fetches: on Ubuntu 24.04's git 2.43 (`2.43.0-1ubuntu7.4`, tested in a container), it prints missing trees and blobs and
+exits 0, while an object lookup with lazy fetch off dies in a promisor clone. A missing HEAD
+commit exits 128, which also refuses. The check reads live rather than the disposable clone
+because the clone holds only what live holds, and because the lazily fetching reads that follow
+in live must not run in a checkout that can still repack.
+
+To restore missing objects, add them without changing anything else, as on November 9. This
+runs git in the live checkout, so it needs Nicolas's approval first. Run every command there with
+`GIT_NO_LAZY_FETCH=1 GIT_OPTIONAL_LOCKS=0`.
+
+1. Record `git status --porcelain`, HEAD, the tracked repair hash, `git for-each-ref` and
+   `.git/config`.
+2. Save the missing names: the listing above, piped through `sed -n 's/^?//p'`.
+3. On another machine, clone upstream `NousResearch/hermes-agent` in full and run `git pack-objects --stdout < missing.txt > objects.pack`. A failed
+   qualification removes its disposable `source`, so it cannot supply them.
+4. Copy the pack to the host and run `git index-pack --stdin < objects.pack` in the live
+   checkout. It hashes every object it stores.
+5. Repeat the first step and compare, then confirm that
+   `git rev-list --objects --missing=error --no-walk HEAD` succeeds.
+
 ## Private configuration
 
 Keep both configuration files owned by the app/service user with mode `0600`.

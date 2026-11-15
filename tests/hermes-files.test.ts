@@ -88,7 +88,7 @@ describe("file identifiers", () => {
     ["a missing MIME type", v2({ ...file, mime: undefined }), "body"],
     ["an unscoped legacy body", v1({ path: "/etc/passwd", name: "passwd", mime: "text/plain", botId: "ranch" }), "body"],
   ])("refuses %s as not found", (_, id, reason) => {
-    expect(refusal(id)).toMatchObject({ statusCode: 404, message: "File not found.", reason });
+    expect(refusal(id)).toMatchObject({ statusCode: 404, message: "That file is no longer available.", code: "file_not_found", reason });
   });
 
   it("refuses a correctly signed identifier with an unsafe path", () => {

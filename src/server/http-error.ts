@@ -20,7 +20,11 @@ export function httpError(statusCode: number, message: string, options: HttpErro
   return Object.assign(new Error(message), { statusCode, ...options });
 }
 
-/** The app's error responses. Tests install this same handler, so they see production's status and body. */
+/**
+ * The app's error responses. Tests install this same handler, so they see production's status and body.
+ * A 4xx, including a runtime's `RuntimeRefusal`, sends its own message and code. A 5xx is logged and sends the
+ * generic message unless it is `expose`d.
+ */
 export function errorHandler(options: { production?: boolean } = {}) {
   const serverErrors = new RepeatFilter();
   return (error: FastifyError | Error, req: FastifyRequest, reply: FastifyReply) => {
