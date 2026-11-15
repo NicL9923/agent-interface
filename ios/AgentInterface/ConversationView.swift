@@ -1440,8 +1440,8 @@ struct ReplyWatch: Equatable {
   }
   static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
     let messages = conversation.messages
-    // A turn is named by the prompt that opened it, so the same words in a later turn are new.
-    func turn(at index: Int) -> String? { index < 0 ? nil : messages[...index].last { $0.role == "user" }?.id }
+    // Steered guidance belongs to the running turn; only a new prompt changes its identity.
+    func turn(at index: Int) -> String? { index < 0 ? nil : messages[...index].last { $0.role == "user" && $0.steered != true }?.id }
     let unsaved = messages.last.flatMap { !saved($0) && speakable($0) ? $0 : nil }
     let unsavedHeard = unsaved.map { Heard(text: $0.text, turn: turn(at: messages.count - 1)) }
     let lastId = messages.last(where: saved)?.id
@@ -1457,7 +1457,7 @@ struct ReplyWatch: Equatable {
     // saved row can grow in place while that lasts, so a held one is read again from the conversation. The
     // newest turn is the one the unsaved tail belongs to, or else the one of the newest saved row.
     let newest = unsaved != nil ? messages.count - 1 : arrivedAt ?? -1
-    let turnStart = messages.indices.last { $0 <= newest && messages[$0].role == "user" } ?? -1
+    let turnStart = messages.indices.last { $0 <= newest && messages[$0].role == "user" && messages[$0].steered != true } ?? -1
     let heldRow = watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting }
     var held: [String] = []
     if watch.waiting != nil, watch.waitingTurn == turn(at: newest) {

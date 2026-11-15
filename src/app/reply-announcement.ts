@@ -56,8 +56,8 @@ function afterHeard(parts: string[], heard: string): string[] {
  */
 export function watchReplies(watch: ReplyWatch, conversation: SavedConversation, baseline: boolean): { watch: ReplyWatch; reply?: Message } {
   const { messages } = conversation;
-  // A turn is named by the prompt that opened it, so a repeat of the same words in a later turn is new.
-  const turnAt = (index: number) => messages.slice(0, index + 1).findLast(message => message.role === "user")?.id;
+  // Steered guidance belongs to the running turn; only a new prompt changes its identity.
+  const turnAt = (index: number) => messages.slice(0, index + 1).findLast(message => message.role === "user" && message.steered !== true)?.id;
   const tail = messages.at(-1);
   const unsaved = tail && !saved(tail) && speakable(tail) ? tail : undefined;
   const unsavedHeard = unsaved && { text: unsaved.text, turn: turnAt(messages.length - 1) };
@@ -73,7 +73,7 @@ export function watchReplies(watch: ReplyWatch, conversation: SavedConversation,
   // can grow in place while that lasts, so a held one is read again from the conversation. The newest turn is
   // the one the unsaved tail belongs to, or else the one of the newest saved row.
   const newest = unsaved ? messages.length - 1 : arrivedAt;
-  const turnStart = messages.findLastIndex((message, index) => index <= newest && message.role === "user");
+  const turnStart = messages.findLastIndex((message, index) => index <= newest && message.role === "user" && message.steered !== true);
   const heldRow = watch.waiting && (messages.find(message => message.id === watch.waiting?.id) ?? watch.waiting);
   const held = watch.waiting && watch.waitingTurn === turnAt(newest)
     ? [...watch.waitingBefore ?? [], ...heldRow && saved(heldRow) ? [heldRow.text] : []] : [];
