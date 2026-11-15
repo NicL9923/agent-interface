@@ -1456,6 +1456,16 @@ describe("conversation state", () => {
     expect(container.querySelector('[data-message-id="single"]')?.closest('.agent-exchange-group')).toBeNull();
   });
 
+  it("shows the outgoing route and body when a handoff shares a row with a normal reply", async () => {
+    conversation = { ...conversation, messages: [{ id: 'narration', role: 'assistant', text: 'I asked Planner to check the gate.',
+      toolCall: { id: 'call', name: 'message_agent', status: 'completed', arguments: '{"target":"Planner","message":"Check the north gate."}', result: 'Queued' } }] };
+    await render();
+    expect(container.querySelector('[data-message-id="narration"]')?.textContent).toContain('I asked Planner to check the gate.');
+    expect(container.querySelector('[data-message-id="agent-call:narration"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('[data-message-id="agent-call:narration"] .message-text')?.textContent).toBe('Check the north gate.');
+    expect(container.querySelector('.turn-work')).toBeNull();
+  });
+
   it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {
     const call = { id: "reused", name: "terminal", status, result: "Result" };
     conversation = { ...conversation, activity: { state: status === "running" ? "working" : "done" }, messages: [

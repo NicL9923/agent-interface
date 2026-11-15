@@ -454,7 +454,7 @@ struct HistoryMessageRow: View {
       AgentExchangeView(message: message, recipient: recipient, botId: botId)
     } else if message.isInternalActivity {
       DisclosureGroup(message.presentationOrigin?.title ?? "Activity details") { MarkdownView(text: message.text) }
-    } else if let call = message.toolCall {
+    } else if let call = message.toolCall, call.name != "message_agent" {
       ActionReceiptView(call: call)
     } else if message.isReply {
       MarkdownView(text: message.text)

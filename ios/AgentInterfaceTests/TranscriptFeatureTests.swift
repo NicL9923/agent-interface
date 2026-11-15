@@ -268,6 +268,17 @@ import XCTest
     XCTAssertFalse(turn.replyRun(at: 3, in: shown).continued)
   }
 
+  func testNarratedHandoffKeepsTheReplyAndShowsItsOutgoingMessage() throws {
+    let narration = Message(id: "narration", role: "assistant", text: "I asked Planner to check the gate.", toolCall: ToolCall(id: "call", name: "message_agent", arguments: #"{"target":"Planner","message":"Check the north gate."}"#, status: "completed"))
+    let turn = try XCTUnwrap(conversation([narration], .idle).presentationTurns.first)
+    XCTAssertEqual(turn.transcriptRows(advanced: false).map(\.id), ["message-narration", "exchange-agent-call:narration"])
+    XCTAssertEqual(turn.displayMessages.map(\.text), [narration.text, ""])
+    let call = try XCTUnwrap(turn.displayMessages.last)
+    XCTAssertEqual(AgentHandoff(message: call).body, "Check the north gate.")
+    XCTAssertEqual(AgentHandoff.runs([narration]).map { $0.map(\.id) }, [["narration"], ["agent-call:narration"]])
+    XCTAssertTrue(WorkSummary(turn).counts.isEmpty)
+  }
+
   func testWorkFoldsIntoOneRowWithItsDurationAndCounts() throws {
     let messages = [
       Message(id: "p", role: "user", text: "Check it", createdAt: "2026-10-24T15:00:00.000Z"),

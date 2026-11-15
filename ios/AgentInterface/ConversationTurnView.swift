@@ -112,7 +112,7 @@ struct ConversationTurnView: View, Equatable {
     a.turn == b.turn && a.advanced == b.advanced && a.delivery == b.delivery && a.live == b.live && a.files == b.files && a.revisions == b.revisions
   }
   var body: some View {
-    let visible = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
+    let visible = turn.displayMessages.filter { $0.isConversationVisible || $0.isAgentExchange }
     VStack(alignment: .leading, spacing: 18) {
       ForEach(turn.transcriptRows(advanced: advanced)) { row in
         switch row {
@@ -139,7 +139,7 @@ struct ConversationTurnView: View, Equatable {
       VStack(alignment: .leading, spacing: 12) {
         if advanced && !turn.reasoning.isEmpty { reasoning }
         ForEach(turn.activityGroups.compactMap { group -> CoordinationGroup? in
-          let messages = group.messages.filter { !$0.isAgentExchange }
+          let messages = group.messages.filter { !AgentHandoff.isExchangeActivity($0) }
           return messages.isEmpty ? nil : CoordinationGroup(id: group.id, messages: messages)
         }) { activityGroup($0) }
       }
@@ -356,6 +356,9 @@ enum TranscriptRow: Identifiable {
   }
 }
 extension ConversationTurn {
+  var displayMessages: [Message] {
+    AgentHandoff.displayMessages(messages)
+  }
   func transcriptRows(advanced: Bool) -> [TranscriptRow] {
     let original = rows(advanced: advanced)
     let workAt = original.firstIndex { row in
@@ -366,12 +369,13 @@ extension ConversationTurn {
         if case .message(_, let message) = row { return message.id }; return nil
       }.first
     }
-    let hasWork = activityGroups.contains { $0.messages.contains { !$0.isAgentExchange } } || advanced && !reasoning.isEmpty
-    let visible = Dictionary(uniqueKeysWithValues: messages.filter { $0.isConversationVisible || $0.isAgentExchange }.enumerated().map { ($0.element.id, $0.offset) })
+    let hasWork = activityGroups.contains { $0.messages.contains { !AgentHandoff.isExchangeActivity($0) } } || advanced && !reasoning.isEmpty
+    let shown = displayMessages
+    let visible = Dictionary(uniqueKeysWithValues: shown.filter { $0.isConversationVisible || $0.isAgentExchange }.enumerated().map { ($0.element.id, $0.offset) })
     var result: [TranscriptRow] = []
     var placedWork = false
     var precedingExchange = false
-    for message in messages {
+    for message in shown {
       if hasWork && message.id == anchor { result.append(.work); placedWork = true }
       if message.isAgentExchange {
         if precedingExchange, case .exchanges(let previous) = result.last { result[result.count - 1] = .exchanges(previous + [message]) }
@@ -416,7 +420,7 @@ struct WorkSummary: Equatable {
   var ended: Date?
   init(_ turn: ConversationTurn) {
     counts = turn.activityGroups.compactMap { group in
-      let count = group.messages.filter { !$0.isAgentExchange }.count
+      let count = group.messages.filter { !AgentHandoff.isExchangeActivity($0) }.count
       return count == 0 ? nil : Count(group: group.id, count: count)
     }
     reasoning = !turn.reasoning.isEmpty

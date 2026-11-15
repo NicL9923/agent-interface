@@ -10,7 +10,7 @@ import { Icon } from "../components/Icon";
 import { NotificationOnboarding } from "../components/DeviceNotifications";
 import type { useDeviceNotifications } from "../components/use-device-notifications";
 import { openComputer, usesComputer } from "../components/ComputerHandoffCard";
-import { AgentExchange, AgentExchangeGroup, ExchangeBots, isAgentExchange } from "../components/AgentExchange";
+import { AgentExchange, AgentExchangeGroup, ExchangeBots, exchangeMessage, isAgentExchange } from "../components/AgentExchange";
 import { ActionReceipt } from "../components/ActionReceipt";
 import { T3ThreadCard } from "../components/T3ThreadCard";
 import { t3ThreadLaunch } from "../shared/t3-code";
@@ -499,12 +499,16 @@ const sameFiles = (a: TurnProps["files"], b: TurnProps["files"]) => a === b || !
   && a.artifacts.length === b.artifacts.length && a.artifacts.every((artifact, index) => sameFile(artifact.file, b.artifacts[index].file));
 const TurnView = memo(function TurnView({ block, advanced, unavailable, disconnected, name, botId, userId, sharedChat, ownRows, live: running, outgoingId, outgoing, files: turnFiles, onOpenFile }: TurnProps) {
   const allWork = [...block.tools.values()];
-  const work = allWork.filter(message => !isAgentExchange(message));
+  const work = allWork.filter(message => !exchangeMessage(message));
   // Keep bot messages in saved order beside ordinary replies, without changing Hermes's origin
   // classification or duplicating a tool-call row that is already conversation-visible.
-  const byId = new Map(block.messages.map(message => [message.id, message]));
-  for (const message of allWork) if (isAgentExchange(message)) byId.set(message.id, message);
-  const messages = block.order.flatMap(id => byId.has(id) ? [byId.get(id)!] : []);
+  const byId = new Map(block.messages.map(message => [message.id, [message]]));
+  for (const message of allWork) {
+    const exchange = exchangeMessage(message);
+    if (exchange) byId.set(message.id, exchange.id === message.id ? [exchange] : [...(byId.get(message.id) ?? []), exchange]);
+  }
+  const ordered = block.order.flatMap(id => byId.get(id) ?? [{ id }]);
+  const messages = ordered.filter((message): message is Message => 'role' in message);
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
   // first reply when there is only reasoning, or at the end.
   const fold = work.length || block.reasoning.length ? <TurnWork key="turn-work" work={work} reasoning={block.reasoning}
@@ -523,7 +527,7 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
   const handoff = useRef(emptyReplyKeys());
   const { key: rowKey, record } = replyKeys(handoff.current, block.messages);
   useLayoutEffect(() => { handoff.current = record; });
-  const positions = new Map(block.order.map((id, index) => [id, index]));
+  const positions = new Map(ordered.map((message, index) => [message.id, index]));
   const consecutive = (earlier: Message, later: Message) => positions.get(later.id) === positions.get(earlier.id)! + 1;
   const rows = messages.flatMap((message, position) => {
     if (isAgentExchange(message)) {

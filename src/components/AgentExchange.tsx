@@ -12,6 +12,13 @@ import './collaboration.css';
 export function isAgentExchange(message: Message) {
   return messageOrigin(message)?.kind === 'agent';
 }
+/** An assistant can narrate a handoff and make its tool call in the same saved row. Keep both. */
+export function exchangeMessage(message: Message): Message | undefined {
+  if (isAgentExchange(message)) return message;
+  if (message.toolCall?.name !== 'message_agent') return undefined;
+  return { ...message, id: `agent-call:${message.id}`, role: 'tool', text: '', files: undefined,
+    origin: { kind: 'agent', visibility: 'activity' } };
+}
 /** Opens another assistant's chat from a transcript; App.tsx listens. */
 export const OPEN_CHAT_EVENT = 'wildbots:open-chat';
 /** This person's assistants and the open chat, so a handoff deep in a turn's fold can offer the other chat. */
@@ -46,7 +53,11 @@ function ExchangeRoute({ sender, receiver }: { sender: Participant; receiver: Pa
 /** Contiguous runs only. An intervening tool, human message or reply always breaks a run. */
 export function exchangeRuns(messages: Message[]): Message[][] {
   const runs: Message[][] = [];
-  for (const message of messages) {
+  const shown = messages.flatMap(message => {
+    const call = exchangeMessage(message);
+    return call && call.id !== message.id ? [message, call] : [message];
+  });
+  for (const message of shown) {
     const last = runs.at(-1);
     if (last && isAgentExchange(message) && isAgentExchange(last[0])) last.push(message);
     else runs.push([message]);

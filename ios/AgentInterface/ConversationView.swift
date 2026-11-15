@@ -1341,6 +1341,25 @@ enum RoleDiscussion {
 /// A message between assistants. Incoming ones carry an envelope; outgoing ones are a
 /// `message_agent` call whose arguments name the target, as the web's AgentExchange reads them.
 struct AgentHandoff {
+  static func isExchangeActivity(_ message: Message) -> Bool { message.isAgentExchange || message.toolCall?.name == "message_agent" }
+  /// The tool call can share a saved row with a normal reply. Its narration stays in chat.
+  static func exchangeMessage(_ message: Message) -> Message? {
+    if message.isAgentExchange { return message }
+    guard message.toolCall?.name == "message_agent" else { return nil }
+    var exchange = message
+    exchange.id = "agent-call:" + message.id
+    exchange.role = "tool"
+    exchange.text = ""
+    exchange.files = nil
+    exchange.origin = MessageOrigin(kind: "agent", visibility: "activity")
+    return exchange
+  }
+  static func displayMessages(_ messages: [Message]) -> [Message] {
+    messages.flatMap { message in
+      if let exchange = exchangeMessage(message), exchange.id != message.id { return [message, exchange] }
+      return [message]
+    }
+  }
   var incoming: (name: String, body: String)?
   var target = "another assistant"
   var body = ""
@@ -1375,7 +1394,7 @@ struct AgentHandoff {
   }
   static func runs(_ messages: [Message]) -> [[Message]] {
     var result: [[Message]] = []
-    for message in messages {
+    for message in displayMessages(messages) {
       if message.isAgentExchange, result.last?.first?.isAgentExchange == true { result[result.count - 1].append(message) }
       else { result.append([message]) }
     }
