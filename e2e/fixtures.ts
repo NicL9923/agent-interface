@@ -42,6 +42,8 @@ export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void 
     const watch = (page: Page) => {
       page.on("pageerror", error => problems.push(`Uncaught error: ${error.message}`));
       page.on("console", message => {
+        // Linux WebKit ignores this Chromium viewport extension and reports the ignored key as an error.
+        if (browserName === "webkit" && message.text() === 'Viewport argument key "interactive-widget" not recognized and ignored.') return;
         if (message.type() !== "error" || signedOutProbe(message) || allowConsoleError.some(allowed => allowed.test(message.text()))) return;
         problems.push(`Console error: ${message.text()} (${message.location().url})`);
       });

@@ -118,9 +118,11 @@ test.describe("a returning member's load", () => {
   // Routes see only what the page itself fetches, so the worker must not answer the bundle from its cache.
   test.use({ serviceWorkers: "block" });
 
-  test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page, browserName }) => {
+  test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page }) => {
     await signIn(page);
     await chooseDark(page);
+    // Let the previous document finish its startup reads before this test reloads it.
+    await page.waitForLoadState("networkidle");
     // The theme as the app's first frame paints: a MutationObserver runs before the browser paints, after
     // React's layout effects and before its other effects.
     await page.addInitScript(() => {
@@ -151,10 +153,12 @@ test.describe("a returning member's load", () => {
     expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("system");
   });
 
-  test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page, browserName }) => {
+  test("starts bootstrap before the app's code arrives, reads it once, and opens in the saved dark theme", async ({ page }) => {
     await signIn(page);
     // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
     await chooseDark(page);
+    // Let the previous document finish its startup reads before this test reloads it.
+    await page.waitForLoadState("networkidle");
 
     // The bundle is held back, so a bootstrap that waits for the app's code comes after it.
     const order: string[] = [];

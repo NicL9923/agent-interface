@@ -62,9 +62,13 @@ async function openAssistant(page: Page) {
 }
 const picker = (page: Page) => page.locator('input[type="file"]');
 
-test("a phone photo uploads at 2048 px, upright, in a fraction of its size", async ({ page, browserName }) => {
-  const name = browserName === "webkit" ? "IMG_4242.jpg" : "IMG_4242.webp";
-  const mime = browserName === "webkit" ? "image/jpeg" : "image/webp";
+test("a phone photo uploads at 2048 px, upright, in a fraction of its size", async ({ page }) => {
+  // WebKit can encode WebP on Linux but falls back to JPEG on macOS.
+  const webp = await page.evaluate(() => new Promise<boolean>(resolve => {
+    document.createElement("canvas").toBlob(blob => resolve(blob?.type === "image/webp"), "image/webp");
+  }));
+  const name = webp ? "IMG_4242.webp" : "IMG_4242.jpg";
+  const mime = webp ? "image/webp" : "image/jpeg";
   await openAssistant(page);
   const original = await photo(page);
   expect(original.length).toBeGreaterThan(2_000_000);
@@ -73,7 +77,7 @@ test("a phone photo uploads at 2048 px, upright, in a fraction of its size", asy
 
   const [sent] = await uploadedFiles();
   expect([sent!.name, sent!.mime]).toEqual([name, mime]);
-  expect(Buffer.from(sent!.base64, "base64").length).toBeLessThan(original.length / (browserName === "webkit" ? 2 : 3));
+  expect(Buffer.from(sent!.base64, "base64").length).toBeLessThan(original.length / (webp ? 3 : 2));
   // The tag said 90 degrees clockwise, so the upright photo is 3000 by 4000 and shrinks to 1536 by 2048, and its red
   // corner moved from the top-left to the top-right.
   const topRight = await decoded(page, sent!.base64, sent!.mime, [1536 - 20, 20]);

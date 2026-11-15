@@ -979,7 +979,7 @@ another member's sign-in, and no page errors,
 console errors or CSP violation reports. It runs in full Chromium (`channel: "chromium"`, which
 `npx playwright install chromium` installs beside the headless shell): the shell crashes the
 page when a service worker calls the badge API, which the worker does for every page it controls,
-and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation, the two back-forward cache tests, and two reload-timing tests that report a cancelled fetch as an uncaught error. It uses a fake push service. It does not cover real Hermes behavior, push
+and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation and the two back-forward cache tests. It uses a fake push service. It does not cover real Hermes behavior, push
 delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
 and uploads the report and traces when it fails.
 
