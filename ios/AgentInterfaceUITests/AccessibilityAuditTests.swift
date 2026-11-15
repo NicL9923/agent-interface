@@ -6,9 +6,10 @@ import XCTest
     try app.performAccessibilityAudit { issue in
       let label = issue.element?.label ?? ""
       let identifier = issue.element?.identifier ?? ""
-      // Known findings are tracked in #412. Limit no-element matches to the
-      // observed count so another identical report still fails the audit.
+      // #412: XCTest supplies nil even for debugDescription, so these remain unidentified.
+      // Limit matches to the observed count until the views can be isolated.
       if issue.element == nil {
+        print("#412 missing element: \(screen), \(issue.detailedDescription); element: \(issue.element?.debugDescription ?? "nil")")
         let key = "\(screen)|\(issue.auditType.rawValue)|\(issue.compactDescription)"
         let limits = [
           "settings|2|Potentially inaccessible text": 1,
@@ -19,20 +20,18 @@ import XCTest
         return missingElementCounts[key, default: 0] <= limit
       }
       switch (screen, issue.auditType, label, identifier) {
-      // #412: decorative account initials use a fixed font.
+      // #412: system-styled initials remain reported as partially unsupported.
       case ("home", .dynamicType, "LT", _): return true
-      // #412: Settings close button contrast and font scaling.
+      // #412: system toolbar Close still reports contrast and font scaling.
       case ("settings", .contrast, "Close", _), ("settings", .dynamicType, "Close", _): return true
-      // #412: the fixture email is reported as not human-readable.
-      case ("settings", .sufficientElementDescription, "test@localhost.invalid", _): return true
-      // #412: Today heading and notice font scaling and section heading clipping.
+      // #412: Today heading and notice scaling and section clipping remain under investigation.
       case ("today", .dynamicType, "Today", _),
            ("today", .dynamicType, "Your assistants, at a glance", _),
            ("today", .dynamicType, "More results are waiting. Mark this page caught up to see them.", _),
            ("today", .textClipped, "SINCE YOU WERE AWAY", _): return true
-      // #412: the chat heading and timestamp do not scale fully.
+      // #412: chat heading and timestamp still report partial scaling.
       case ("chat", .dynamicType, "Ranch hand", _), ("chat", .dynamicType, "Sep 30, 07:30", _): return true
-      // #412: assistant details Done button contrast and font scaling.
+      // #412: system toolbar Done still reports contrast and partial scaling.
       case ("details", .contrast, _, "closeBotProfile"), ("details", .dynamicType, _, "closeBotProfile"): return true
       default: return false
       }
