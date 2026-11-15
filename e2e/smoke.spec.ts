@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, chooseDark, conversation, deployNextRelease, expect, signIn, slowAdmission, test } from "./fixtures.js";
+import { assistants, chooseDark, conversation, deployNextRelease, expect, releaseChat, signIn, slowAdmission, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -412,6 +412,9 @@ test("a reply keeps growing across a tool call, and its saved segment never disa
   });
   await page.getByRole("textbox", { name: "Message Trail Cook" }).fill("Walk the fence line");
   await page.getByRole("button", { name: "Send message" }).click();
+  try {
+    await expect(conversation(page).getByText(/Post two/)).toBeVisible({ timeout: 10_000 });
+  } finally { await releaseChat(); }
   await expect(conversation(page).getByText(after, { exact: true })).toBeVisible();
   const seen = await page.evaluate(() => (window as unknown as { seen: { at: number; text: string }[] }).seen);
 
@@ -431,8 +434,7 @@ test("a reply keeps growing across a tool call, and its saved segment never disa
     return length;
   };
   const lengths = seen.filter(view => view.text.includes("Post")).map(view => shown(view.text));
-  // Text resumed with the first word after the tool, a turn read later, not with the chat's next read.
-  expect(lengths[0], lengths.join(" ")).toBeLessThanOrEqual("Post ".length);
+  // Post-tool text appeared while chat reads were held, regardless of how many deltas shared a frame.
   for (let index = 1; index < lengths.length; index++) expect(lengths[index], lengths.join(" ")).toBeGreaterThanOrEqual(lengths[index - 1]);
   const from = seen.find(view => view.text.includes("Post"))!.at, to = seen.find(view => view.text.includes(after))!.at;
   const steps = new Set(lengths).size, readsMeanwhile = reads.filter(at => at >= from && at <= to).length;
