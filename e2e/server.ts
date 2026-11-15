@@ -14,6 +14,8 @@ import { controlPort, port } from "./ports.js";
  */
 if (!existsSync("dist/client/index.html")) throw new Error("Run `npm run build` first: the suite serves dist/client.");
 
+/** What the browser uploaded through POST /bots/:id/uploads, bytes included, until the next test starts. */
+const uploads: { name: string; mime: string; base64: string }[] = [];
 const bots = [
   botFixture({ id: "ranch", name: "Ranch Hand", lastMessage: { text: "Fence check is done." } }),
   botFixture({ id: "trail", name: "Trail Cook" }),
@@ -100,11 +102,16 @@ const unscripted = (name: string) => async (): Promise<never> => { throw new Err
 const runtime: Runtime = {
   saveBot: unscripted("saveBot"), deleteBot: unscripted("deleteBot"), stop: unscripted("stop"),
   generatePortrait: unscripted("generatePortrait"), steer: unscripted("steer"), answerRequest: unscripted("answerRequest"),
-  approve: unscripted("approve"), upload: unscripted("upload"), download: unscripted("download"), tools: unscripted("tools"),
+  approve: unscripted("approve"), download: unscripted("download"), tools: unscripted("tools"),
   setTools: unscripted("setTools"), skills: unscripted("skills"), setSkills: unscripted("setSkills"),
   saveRoutine: unscripted("saveRoutine"), deleteRoutine: unscripted("deleteRoutine"),
+  // Keeps what the browser uploaded, for GET /uploads on the control port to report.
+  upload: async (_botId, { name, mime, data }) => {
+    uploads.push({ name, mime, base64: data.toString("base64") });
+    return { id: randomUUID(), name, mime, size: data.length };
+  },
   status: async () => ({ connected: true, code: "ready" }),
-  capabilities: async () => capabilitiesFixture({ chat: { supported: true }, durableEvents: { supported: true }, idempotency: { supported: true } }),
+  capabilities: async () => capabilitiesFixture({ chat: { supported: true }, durableEvents: { supported: true }, idempotency: { supported: true }, uploads: { supported: true } }),
   listBots: async () => bots,
   experienceRequest,
   botDetail: async botId => bots.find(bot => bot.id === botId)!,
@@ -185,11 +192,11 @@ app.addHook("onRequest", async (req, reply) => {
 await app.listen({ host: "127.0.0.1", port });
 
 // GET reads the violations. DELETE starts the next test from a clean slate. POST /next-release deploys a new worker.
-// POST /admission-delay?ms=N slows each send's admission. POST /activity?bot=ID&state=STATE gives that assistant
+// GET /uploads reads the files the browser uploaded. POST /admission-delay?ms=N slows each send's admission. POST /activity?bot=ID&state=STATE gives that assistant
 // the roster activity from the next bootstrap on, such as "waiting", which the app badge counts.
 const control = createServer((req, res) => {
   if (req.method === "DELETE") {
-    violations.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
+    violations.length = 0; uploads.length = 0; messages = seedMessages(); running = undefined; nextRelease = "none"; admissionDelay = 0;
     bots.splice(0, bots.length, ...initialBots.map(bot => ({ ...bot })));
   }
   if (req.method === "POST" && req.url?.startsWith("/activity")) {
@@ -199,7 +206,7 @@ const control = createServer((req, res) => {
   if (req.method === "POST" && req.url?.startsWith("/admission-delay")) admissionDelay = Number(new URL(req.url, "http://localhost").searchParams.get("ms")) || 0;
   if (req.method === "POST" && req.url?.startsWith("/next-release")) nextRelease = req.url.endsWith("?install=fail") ? "broken" : "ready";
   res.setHeader("content-type", "application/json");
-  res.end(JSON.stringify(violations));
+  res.end(JSON.stringify(req.method === "GET" && req.url === "/uploads" ? uploads : violations));
 });
 control.listen(controlPort, "127.0.0.1");
 

@@ -226,6 +226,86 @@ describe("space reserved for transcript images", () => {
     await waitForUi(() => expect(container.querySelector(".message-user .file-link img")).not.toBeNull());
     expect(reserved(".message-user")).toBe("");
   });
+  describe("a photo shrunk before it uploads", () => {
+    /** The browser's decoder and encoder, which jsdom lacks: a 4000 by 3000 picture that encodes to 300 KB WebP. */
+    function stubCodec(decodes: boolean, encodedBytes = 300_000) {
+      vi.stubGlobal("createImageBitmap", vi.fn(async () => {
+        if (!decodes) throw new DOMException("The source image could not be decoded.", "InvalidStateError");
+        return { width: 4000, height: 3000, close: vi.fn() };
+      }));
+      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+      vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation(callback => callback(new Blob([new Uint8Array(encodedBytes)], { type: "image/webp" })));
+    }
+    const choose = async (photo: File) => {
+      await open();
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      await act(async () => {
+        Object.defineProperty(input, "files", { configurable: true, value: [photo] });
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    };
+    afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+    it("uploads the shrunk file, and reserves its size in the transcript without waiting for the preview to load", async () => {
+      stubCodec(true);
+      await choose(new File([new Uint8Array(5_000_000)], "IMG_0042.JPG", { type: "image/jpeg" }));
+      await waitForUi(() => expect(uploadFile).toHaveBeenCalled());
+      const sent = vi.mocked(uploadFile).mock.calls[0]![1];
+      expect([sent.name, sent.type, sent.size]).toEqual(["IMG_0042.webp", "image/webp", 300_000]);
+      await act(async () => finishUpload!({ id: "uploaded-photo", name: "IMG_0042.webp", mime: "image/webp", size: 300_000 }));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.click());
+      await waitForUi(() => expect(container.querySelector(".message-user .file-link img")).not.toBeNull());
+      expect(reserved(".message-user")).toBe("2048 / 1536");
+    });
+
+    it("keeps Send unavailable while the photo is being prepared", async () => {
+      stubCodec(true);
+      let decoded!: (bitmap: unknown) => void;
+      vi.stubGlobal("createImageBitmap", vi.fn(() => new Promise(resolve => { decoded = resolve; })));
+      await choose(new File([new Uint8Array(5_000_000)], "IMG_0042.jpg", { type: "image/jpeg" }));
+      await waitForUi(() => expect(container.querySelector(".attachment-preparing")).not.toBeNull());
+      expect(container.querySelector(".attachment-tray")!.textContent).toContain("IMG_0042.jpg");
+      expect(uploadFile).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLButtonElement>('[aria-label="Send message"]')!.disabled).toBe(true);
+      await act(async () => decoded({ width: 4000, height: 3000, close: vi.fn() }));
+      await waitForUi(() => expect(uploadFile).toHaveBeenCalled());
+    });
+
+    it("retries a failed upload with the shrunk file, without decoding the photo again", async () => {
+      // Over 1 MB even shrunk, so only the retry rule, not the size rule, keeps it from being shrunk a second time.
+      stubCodec(true, 1_200_000);
+      vi.mocked(uploadFile).mockRejectedValueOnce(new Error("Network down"));
+      await choose(new File([new Uint8Array(5_000_000)], "IMG_0042.jpg", { type: "image/jpeg" }));
+      await waitForUi(() => expect(container.querySelector(".attachment-retry")).not.toBeNull());
+      await act(async () => container.querySelector<HTMLButtonElement>(".attachment-retry")!.click());
+      await waitForUi(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(uploadFile).mock.calls[1]![1]).toBe(vi.mocked(uploadFile).mock.calls[0]![1]);
+      expect(vi.mocked(uploadFile).mock.calls[1]![1].name).toBe("IMG_0042.webp");
+      expect(createImageBitmap).toHaveBeenCalledTimes(1);
+    });
+
+    it("explains a HEIC photo the browser cannot open, and uploads nothing", async () => {
+      stubCodec(false);
+      await choose(new File([new Uint8Array(3_000_000)], "IMG_0001.HEIC", { type: "image/heic" }));
+      await waitForUi(() => expect(container.querySelector('.attachment-notice[role="alert"]')).not.toBeNull());
+      expect(container.querySelector(".attachment-notice")!.textContent).toContain("IMG_0001.HEIC is a HEIC photo, and this browser can't open it.");
+      expect(container.querySelector(".attachment-tray")).toBeNull();
+      expect(uploadFile).not.toHaveBeenCalled();
+    });
+
+    it("offers HEIC files in the file picker", async () => {
+      await open();
+      expect(container.querySelector<HTMLInputElement>('input[type="file"]')!.accept).toEqual(expect.stringContaining("image/heic"));
+    });
+
+    it("uploads a JPEG the browser cannot decode as it is", async () => {
+      stubCodec(false);
+      await choose(new File([new Uint8Array(5_000_000)], "odd.jpg", { type: "image/jpeg" }));
+      await waitForUi(() => expect(uploadFile).toHaveBeenCalled());
+      expect([vi.mocked(uploadFile).mock.calls[0]![1].name, vi.mocked(uploadFile).mock.calls[0]![1].size]).toEqual(["odd.jpg", 5_000_000]);
+    });
+  });
+
   // A reshape waiting for the reader is applied as soon as nothing being read would move: the row left the view, the
   // reader is back at the end, or the row can never leave the view at all.
   describe("a reshape that waits for the reader", () => {

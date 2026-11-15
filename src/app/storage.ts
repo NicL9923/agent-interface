@@ -33,8 +33,12 @@ export type LocalUpload = {
   userId: string;
   file: File;
   preview?: string;
+  /** The image's size once shrunk for upload, so the sent message can reserve its space before it loads. */
+  dimensions?: { width: number; height: number };
+  /** True once the file has been through `optimizeImage`, so a retry uploads it as it is instead of shrinking it again. */
+  prepared?: boolean;
   progress: number;
-  status: "queued" | "uploading" | "processing" | "failed";
+  status: "queued" | "preparing" | "uploading" | "processing" | "failed";
   error?: string;
 };
 export type Pending = {

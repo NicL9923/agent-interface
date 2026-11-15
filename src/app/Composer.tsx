@@ -8,7 +8,8 @@ import { VoiceControls } from "../components/VoiceControls";
 import { TalkPanel } from "../components/TalkPanel";
 import { useTalk } from "./use-talk";
 import { request } from "../client-api";
-import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, prepareUpload, UPLOAD_ACCEPT } from "../shared/uploads";
+import { MAX_ATTACHMENTS, namePastedFile, pastedFiles, UPLOAD_ACCEPT } from "../shared/uploads";
+import { HEIC_ACCEPT, prepareAttachment } from "../image-upload";
 import { AttachmentTray, DropOverlay } from "./AttachmentTray";
 import type { Draft, LocalUpload, Pending } from "./storage";
 import { sendingDraft } from "./sent-echo";
@@ -179,7 +180,8 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   uploads: LocalUpload[];
   previews: Record<string, { url: string }>;
   uploading: boolean;
-  upload(files: File[], botId: string): void;
+  /** `refused` hears why a photo that looked attachable could not be shrunk or converted, after its chip is gone. */
+  upload(files: File[], botId: string, refused?: (problem: string) => void): void;
   retryUpload(id: string): void;
   cancelUpload(id: string): void;
   pending: Pending | null;
@@ -230,14 +232,14 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
     const problems: string[] = [];
     const accepted: File[] = [];
     for (const file of files) {
-      const prepared = prepareUpload(file);
+      const prepared = prepareAttachment(file);
       if ("error" in prepared) problems.push(prepared.error);
       else accepted.push(prepared.file);
     }
     if (accepted.length > slots)
       problems.push(`A message can carry up to ${MAX_ATTACHMENTS} attachments, so ${accepted.length - slots} of these ${accepted.length - slots === 1 ? "wasn't" : "weren't"} added.`);
     setAttachNotice(problems);
-    upload(accepted.slice(0, slots), botId);
+    upload(accepted.slice(0, slots), botId, problem => setAttachNotice(current => current.includes(problem) ? current : [...current, problem]));
   };
   const footer = useRef<HTMLElement>(null);
   const drop = useFileDrop(footer, addFiles);
@@ -356,7 +358,7 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
             ref={fileInput}
             hidden
             type="file"
-            accept={UPLOAD_ACCEPT}
+            accept={`${UPLOAD_ACCEPT},${HEIC_ACCEPT}`}
             multiple
             disabled={!!attachUnavailable}
             onChange={(event) => {

@@ -5,6 +5,8 @@ import type { FileRef, SavedDraft } from "../shared/types";
 import { routeUrl, type ApiResponse } from "../shared/api";
 import { ApiError, pollWhileVisible, request, uploadFile, write } from "../client-api";
 import { contentHash, mergeDraft, nextSeq, savedDraft } from "./draft-merge";
+import { rememberImageSize } from "./image-sizes";
+import { needsPreparation, optimizeImage } from "../image-upload";
 import { draftKey, isSentCopy, localRead, localSave, sameDraft } from "./storage";
 import type { Draft, LocalUpload, Pending } from "./storage";
 type Epoch = RefObject<number>;
@@ -232,6 +234,8 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
       const live = () => !controller.signal.aborted && epoch === identityEpoch.current;
       if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, live)) return;
+      // The shrunk size is known without waiting for the chip's picture to load.
+      if (item.dimensions) rememberImageSize(result.id, { naturalWidth: item.dimensions.width, naturalHeight: item.dimensions.height });
       if (item.preview) setPreviews(current => ({ ...current, [result.id]: { url: item.preview!, botId: item.botId } }));
       setUploads(current => current.filter(entry => entry.id !== item.id));
     } catch (e) {
@@ -241,21 +245,47 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       controllers.current.delete(item.id);
     }
   };
-  const start = (item: LocalUpload) => {
+  const preparing = useRef(Promise.resolve());
+  // Shrinks a photo before it uploads, and returns the item as it should upload. Returns nothing when the upload was
+  // canceled, or when the photo can't be used: its chip leaves and `refused` says why.
+  const prepare = async (item: LocalUpload, controller: AbortController, epoch: number, refused?: (problem: string) => void) => {
+    if (controller.signal.aborted || epoch !== identityEpoch.current) return;
+    patch(item.id, { status: "preparing" });
+    const result = await optimizeImage(item.file);
+    if (controller.signal.aborted || epoch !== identityEpoch.current) return;
+    if ("error" in result) {
+      controllers.current.delete(item.id);
+      setUploads(current => current.filter(entry => entry.id !== item.id));
+      refused?.(result.error);
+      return;
+    }
+    const prepared: LocalUpload = { ...item, file: result.file, dimensions: result.size, prepared: true, status: "queued", preview: URL.createObjectURL(result.file) };
+    patch(item.id, { file: prepared.file, dimensions: prepared.dimensions, prepared: true, status: "queued", preview: prepared.preview });
+    return prepared;
+  };
+  const start = (item: LocalUpload, refused?: (problem: string) => void) => {
     const controller = new AbortController();
     controllers.current.set(item.id, controller);
     const epoch = identityEpoch.current;
+    // Photos shrink one at a time, so ten of them never sit decoded together, and the next shrinks while the last uploads.
+    const shrunk = !item.prepared && needsPreparation(item.file) ? preparing.current.then(() => prepare(item, controller, epoch, refused)) : undefined;
+    if (shrunk) preparing.current = shrunk.then(() => {});
     // One at a time keeps a batch in the order it was added. A retried file joins after those already uploaded.
-    queue.current = queue.current.then(() => run(item, controller, epoch));
+    queue.current = queue.current.then(async () => {
+      const next = shrunk ? await shrunk : item;
+      if (next) await run(next, controller, epoch);
+      else controllers.current.delete(item.id);
+    });
   };
-  const upload = (files: File[], target: string) => {
+  const upload = (files: File[], target: string, refused?: (problem: string) => void) => {
     if (!userId || !files.length) return;
     const added = files.map((file): LocalUpload => ({
       id: crypto.randomUUID(), botId: target, userId, file, status: "queued", progress: 0,
-      preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+      // A photo to shrink shows its preview once it is shrunk, which also spares a HEIC the browser can't draw.
+      preview: file.type.startsWith("image/") && !needsPreparation(file) ? URL.createObjectURL(file) : undefined,
     }));
     setUploads(current => [...current, ...added]);
-    added.forEach(start);
+    added.forEach(item => start(item, refused));
   };
   const retryUpload = (id: string) => {
     const item = uploads.find(entry => entry.id === id);
