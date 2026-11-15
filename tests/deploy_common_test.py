@@ -302,7 +302,9 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
     def gateway(self, **changes):
         """The gateway's published record. Each Discord turn changes its count at the turn's boundaries.
         A change of ABSENT leaves that key out of the record."""
-        record = {"pid": 4242, "gateway_state": "running", "active_agents": 0, "active_work": None, **changes}
+        record = {"pid": 4242, "gateway_state": "running", "active_agents": 0, "active_work": None,
+                  "agent_interface_gateway_guard": {"schemaVersion": 1, "maintenanceFile": str(self.d.lease), "pendingIngress": 0},
+                  **changes}
         (self.host.home / "gateway_state.json").write_text(json.dumps({key: value for key, value in record.items() if value is not ABSENT}))
 
     def in_turn(self, *answers):
@@ -407,15 +409,23 @@ for path, text in json.loads(Path({str(self.on_stop)!r}).read_text()).items(): P
             ("no count", {"active_agents": None}),
             # The guarded preflight requires the key, so this check cannot take a record that never lists its work.
             ("no work list", {"active_work": ABSENT}),
+            ("pending ingress before an agent slot is claimed", {"agent_interface_gateway_guard": {
+                "schemaVersion": 1, "maintenanceFile": str(self.d.lease), "pendingIngress": 1}}),
+            ("a boolean ingress count", {"agent_interface_gateway_guard": {
+                "schemaVersion": 1, "maintenanceFile": str(self.d.lease), "pendingIngress": False}}),
+            ("a missing guard", {"agent_interface_gateway_guard": ABSENT}),
+            ("a malformed guard", {"agent_interface_gateway_guard": None}),
+            ("a guard for another lease", {"agent_interface_gateway_guard": {
+                "schemaVersion": 1, "maintenanceFile": "/another/maintenance.json", "pendingIngress": 0}}),
         )
         for name, record in cases:
             with self.subTest(name):
                 self.status.write_bytes(self.PREVIOUS)
                 self.events.unlink(missing_ok=True)
                 self.answers.update(acquire=acquired_with(**record), release=self.released)
-                with self.assertRaisesRegex(deploy_common.Refused, "^The gateway has an active agent") as caught:
+                with self.assertRaisesRegex(deploy_common.Refused, "^The gateway has active work or pending ingress") as caught:
                     self.run_steps()
-                self.assertEqual(str(caught.exception.__cause__), "gateway reports no active agents or work after maintenance was acquired")
+                self.assertEqual(str(caught.exception.__cause__), "gateway reports no active agents, work or pending ingress after maintenance was acquired")
                 self.assertEqual([event[0] for event in self.recorded()], ["acquire", "release"])
                 # The release removed the lease the acquire took, and the household's status is back.
                 self.assertEqual((self.status.read_bytes(), self.phase(), self.d.lease.exists()), (self.PREVIOUS, "maintenance-refused", False))

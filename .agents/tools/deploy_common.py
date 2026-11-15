@@ -225,12 +225,17 @@ class Deployment:
                    for path in (Path(self.c["upgradeStateDir"]) / "requests").glob("*.json"))
 
     def gateway_reports_idle(self):
-        """Whether the gateway's last published record counts no active agent and lists no active work.
+        """Whether the guarded gateway counts no active agent, active work or pending ingress.
 
         A Discord turn runs in the gateway runner, not in the add-on's sessions, so the add-on's busy
-        list omits it. The gateway rewrites this count at every turn boundary."""
+        list omits it. A plugin handler can also await work before claiming an agent slot, so the
+        guard required by preflight must still count no ingress before the app is stopped."""
         record = self.gateway_state()
-        return type(record.get("active_agents")) is int and record["active_agents"] == 0 and "active_work" in record and record["active_work"] in (None, [])
+        stamp = record.get("agent_interface_gateway_guard")
+        return (type(record.get("active_agents")) is int and record["active_agents"] == 0
+            and "active_work" in record and record["active_work"] in (None, [])
+            and isinstance(stamp, dict) and type(stamp.get("pendingIngress")) is int
+            and stamp == {"schemaVersion": 1, "maintenanceFile": str(self.lease), "pendingIngress": 0})
 
     def acquire_deadline(self, rpc):
         """(ACQUIRE_DEADLINE, executor_epoch) when the running add-on says it honors a deadline, else (None, None).
@@ -326,9 +331,9 @@ class Deployment:
             self.refuse(rpc, status, blocked, previous, unexpected, "Hermes's maintenance answer was not this operation's lease.")
         try:
             # The lease admits nothing new, so a Discord turn counted now is the last one to wait for.
-            fence(self.gateway_reports_idle(), "gateway reports no active agents or work after maintenance was acquired")
+            fence(self.gateway_reports_idle(), "gateway reports no active agents, work or pending ingress after maintenance was acquired")
         except Exception as active:
-            self.refuse(rpc, status, blocked, previous, active, "The gateway has an active agent or its state is unreadable.")
+            self.refuse(rpc, status, blocked, previous, active, "The gateway has active work or pending ingress, or its state is unreadable.")
         self.journal("owned-maintenance-acquired")
         self.system("stop", "agent-interface.service")
         fence(self.requests_complete(), "pending update requests complete after the app stopped")
