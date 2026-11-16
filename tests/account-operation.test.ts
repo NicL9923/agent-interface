@@ -22,6 +22,36 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); delete (navigator as { locks?: unknown }).locks; });
 
+it("still tells the worker it is signed out when cleanup rewrites the pending record before registration arrives", async () => {
+  localStorage.setItem(authEpochKey, JSON.stringify({ id: "offline", at: Date.now(), signedOut: true, logout: true, user: "one" }));
+  const a = await tab();
+  const posted: object[] = [];
+  const registration = { active: { postMessage: (message: object) => { posted.push(message); } } };
+  const waiting = deferred<typeof registration>();
+  const getRegistration = vi.fn().mockResolvedValue(registration).mockImplementationOnce(() => waiting.promise);
+  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: { controller: {}, getRegistration } });
+  const fetcher = vi.fn(async (url: string) => {
+    expect(url).toBe("/api/bootstrap?roster=lean");
+    return json({ error: "Signed out" }, 401);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  try {
+    expect(a.epoch.accountStart()).toMatchObject({ start: "signed-out" });
+    await vi.waitFor(() => expect(getRegistration).toHaveBeenCalled());
+    await a.change.finishSignOut();
+    expect(a.epoch.pendingSignOut()).toBeNull();
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ signedOut: true, user: "one" });
+    expect(JSON.parse(localStorage.getItem(authEpochKey)!)).not.toHaveProperty("logout");
+    // A badge request after cleanup must follow the replacement account word, not an obsolete one.
+    expect(a.epoch.tellWorkerInOrder({ type: "BADGE", user: null, count: 0 })).toBe(true);
+    waiting.resolve(registration);
+    await vi.waitFor(() => expect(posted).toEqual([{ type: "ACCOUNT", user: null }, { type: "BADGE", user: null, count: 0 }]));
+  } finally {
+    waiting.resolve(registration);
+    Reflect.deleteProperty(navigator, "serviceWorker");
+  }
+});
+
 it("serializes the cookie-changing sign-ins through settlement across tabs", async () => {
   const a = await tab(), b = await tab();
   a.epoch.accountStart();

@@ -468,17 +468,23 @@ export function signOutFinished() {
   const mine = stored() === held;
   const now = store(settled({ signedOut: true, user: record.user }));
   if (mine) held = seen = now;
+  // A queued word bound to the old record is now stale, even though the account is still null.
+  tellWorker(null, true);
 }
 
 let told: string | null | undefined;
 let telling = Promise.resolve();
 const workerContainer = () => typeof navigator === "undefined" ? undefined : navigator.serviceWorker;
 /** Posts `message` to the active worker after everything this tab posted before it, so the worker hears them in the order this tab said them. */
-function post(message: object, ports: MessagePort[] = []) {
+function post(message: object, ports: MessagePort[] = [], accountRecord?: string) {
   const container = workerContainer();
   if (!container) return;
   telling = telling.then(() => container.getRegistration())
-    .then(registration => registration?.active?.postMessage(message, ports))
+    .then(registration => {
+      // Another tab may settle a newer account while this worker lookup waits.
+      if (accountRecord !== undefined && accountRecord !== stored()) return;
+      registration?.active?.postMessage(message, ports);
+    })
     .catch(() => {});
 }
 /**
@@ -486,11 +492,12 @@ function post(message: object, ports: MessagePort[] = []) {
  * it can read it after the browser stops and restarts it, and drops a push, or refuses a notification's
  * action, for any other account (see scripts/service-worker.js). Each tab tells it in order, once per
  * generation for each account it names, so a bootstrap on every focus does not repeat it.
+ * Cleanup can force a fresh word after replacing the record a queued word belongs to.
  */
-function tellWorker(user: string | null) {
-  if (told === user) return;
+function tellWorker(user: string | null, force = false) {
+  if (!force && told === user) return;
   told = user;
-  post({ type: "ACCOUNT", user });
+  post({ type: "ACCOUNT", user }, [], stored());
 }
 /**
  * Posts a message the worker handles in order with this tab's account words, such as the app badge
