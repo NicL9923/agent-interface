@@ -42,7 +42,7 @@ function exchange(message: Message, recipient: string, bots: Bot[], currentBotId
 type Participant = { bot?: Bot; name: string };
 function ExchangeRoute({ sender, receiver }: { sender: Participant; receiver: Participant }) {
   const face = (person: Participant) => person.bot
-    ? <Avatar avatar={person.bot.avatar} botId={person.bot.id} name={person.name} size={28} reducedMotion />
+    ? <span aria-hidden="true"><Avatar avatar={person.bot.avatar} botId={person.bot.id} name={person.name} size={28} reducedMotion /></span>
     : <span className="agent-exchange-unknown" aria-hidden="true"><Icon name="robot" size={18} /></span>;
   return <span className="agent-exchange-route" role="group" aria-label={`${sender.name} to ${receiver.name}`}>
     <span className="agent-exchange-person">{face(sender)}<strong>{sender.name}</strong></span>
