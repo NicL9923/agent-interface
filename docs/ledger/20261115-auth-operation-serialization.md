@@ -108,3 +108,24 @@ account-transitions and saved-roster suites passed. Typecheck, lint and diff che
 Output: `.private/auth-closed-tab-account-green.log`. Application code is unchanged from
 e545abd3. The queued old-head full check was canceled before acquisition or any test execution;
 a final-head full check replaces it. Independent review remains incomplete.
+
+
+## Completed full validation at `6574bfcb2f34436c5404f4a737a6db1304102fdc`
+
+Final-head `.agents/tools/check-all --skip e2e --keep-going` passed typecheck, lint,
+Ruff, all 4,102 JavaScript tests in 224 files, and the 896-module build. Python correctly
+skipped because none of its inputs changed against main. The prior simulated closed-tab
+CI failure is resolved with all assertions retained.
+
+The subsequent real Chromium/WebKit suite in the Playwright 1.65.0 Noble container,
+using Node 24.22.2, passed 171 tests with 3 existing skips. It ran through the current
+app/server and startup scripts, so the final browser result covers the required-lock
+policy and pending-logout prefetch changes. The earlier manual missing-API browser
+acceptance remains the specific evidence for the device-only sign-out flow.
+
+The combined check queued for 4,541.371 seconds and held the machine lock for 355.219
+seconds. Output: `.private/auth-policy-final-check-all.log`. All five GitHub checks also
+passed at this source commit. A final ledger-only commit changes no application or test
+input. All requested local validation is complete. Independent review outside OpenAI
+remains incomplete, so the PR stays draft and the original #330/#333 labels stay until
+review and merge. The storage propagation limitation remains documented. No deployment ran.
