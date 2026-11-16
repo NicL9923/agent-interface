@@ -1,4 +1,5 @@
 """Security/ownership checks with no native dependency or live credential requirement."""
+import contextvars
 import json
 import os
 import sys
@@ -341,6 +342,47 @@ class IntegrationTests(unittest.TestCase):
             folder.symlink_to(moved)
             with self.assertRaises(OSError):
                 integrations.selected_file(self.home, "0/note.txt")
+
+
+class MCPFlowScopeTests(unittest.TestCase):
+    def setUp(self):
+        self.home = contextvars.ContextVar("native-home", default="ambient-home")
+        self.secrets = contextvars.ContextVar("native-secrets", default=None)
+        self.addCleanup(self.secrets.reset, self.secrets.set({"TOKEN": "ambient"}))
+        self.values = {Path("/fixture/one"): {"TOKEN": "one"}, Path("/fixture/two"): {"TOKEN": "two"},
+                       Path("/fixture/unavailable"): OSError("secret source unavailable")}
+        def build(home):
+            self.assertEqual(self.home.get(), str(home))
+            result = self.values[home]
+            if isinstance(result, Exception):
+                raise result
+            return result
+        def bind(values, *, profile_home):
+            self.assertEqual(self.home.get(), profile_home)
+            return self.secrets.set(values)
+        scope = types.ModuleType("agent.secret_scope")
+        scope.build_profile_secret_scope, scope.set_secret_scope, scope.reset_secret_scope = build, bind, self.secrets.reset
+        homes = types.ModuleType("hermes_constants")
+        homes.set_hermes_home_override, homes.reset_hermes_home_override = self.home.set, self.home.reset
+        self.modules = {"agent": types.ModuleType("agent"), "agent.secret_scope": scope, "hermes_constants": homes}
+
+    def test_the_captured_home_owns_reads_and_nested_failures_restore_both_scopes(self):
+        with patch.dict(sys.modules, self.modules):
+            with integrations.mcp_flow_scope("/fixture/one"):
+                self.assertEqual((self.home.get(), self.secrets.get()), ("/fixture/one", {"TOKEN": "one"}))
+                with self.assertRaisesRegex(RuntimeError, "native read failed"):
+                    with integrations.mcp_flow_scope("/fixture/two"):
+                        self.assertEqual((self.home.get(), self.secrets.get()), ("/fixture/two", {"TOKEN": "two"}))
+                        raise RuntimeError("native read failed")
+                self.assertEqual((self.home.get(), self.secrets.get()), ("/fixture/one", {"TOKEN": "one"}))
+            self.assertEqual((self.home.get(), self.secrets.get()), ("ambient-home", {"TOKEN": "ambient"}))
+
+    def test_a_secret_source_failure_restores_the_prior_home(self):
+        with patch.dict(sys.modules, self.modules):
+            with self.assertRaisesRegex(OSError, "secret source unavailable"):
+                with integrations.mcp_flow_scope("/fixture/unavailable"):
+                    self.fail("The failed native scope must not enter its body")
+            self.assertEqual((self.home.get(), self.secrets.get()), ("ambient-home", {"TOKEN": "ambient"}))
 
 
 if __name__ == "__main__":

@@ -51,3 +51,26 @@ triggers a real routine and requires zero tool schemas in its provider request. 
 restores the skills-only restriction and retains the exact three-schema execution check.
 WildBots's existing rejection of new empty selections is unchanged, preserving safety on
 older supported dashboards. No client capability or routine-setting behavior changes.
+
+## Native OAuth flow ownership
+
+The current `DashboardOAuthFlow` constructor no longer accepts `profile`. The probe now
+passes that legacy argument only when the real constructor declares it. This exposed a
+production `flow.profile` read in the disconnect-race fence. Running the real integration
+probe against the staged SDK reproduced its `AttributeError` before the fix.
+
+The preflight read now binds `flow.hermes_home` through the same public home and secret-scope
+APIs the native OAuth worker uses in both inspected Hermes versions. Both scopes are
+restored after normal work, nested failures and secret-source failures. The worker's
+maintenance reservation and disconnect fences remain in place.
+
+All 19 offline integration tests passed. Three mutations each failed: losing home restoration,
+losing secret-scope restoration and reading the ambient profile instead of the captured owner.
+The helper restored the source. Outputs are `.private/oauth-home-green.log` and
+`.private/oauth-home-mutations.log`. The real pre-fix failure is in
+`.private/oauth-home-baseline.log`.
+
+With the fix, the real staged SDK passed all 15 integration checks, including external
+OAuth-worker settlement, rejection of starts during removal or after a stale read, original
+authentication preservation and Google PKCE/cancellation. No live account or external OAuth
+provider was contacted. Output: `.private/oauth-home-native-green.log`.

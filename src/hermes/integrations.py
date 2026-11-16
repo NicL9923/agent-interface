@@ -4,6 +4,7 @@ Only the private service-auth prefix admits these operations. No generic URL
 proxy, shell installation, environment editor, or credential reveal is exposed.
 """
 import asyncio
+import contextlib
 import datetime
 import hashlib
 import hmac
@@ -740,6 +741,22 @@ def lookup_flow(key, profile):
         return entry
 
 
+@contextlib.contextmanager
+def mcp_flow_scope(home):
+    """Bind the captured owner exactly as Hermes's OAuth worker does, restoring both scopes on failure."""
+    from agent.secret_scope import build_profile_secret_scope, reset_secret_scope, set_secret_scope
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    home_token = set_hermes_home_override(home)
+    try:
+        secret_token = set_secret_scope(build_profile_secret_scope(Path(home)), profile_home=home)
+        try:
+            yield
+        finally:
+            reset_secret_scope(secret_token)
+    finally:
+        reset_hermes_home_override(home_token)
+
+
 def cancel_mcp_workers(native, server_name, home, timeout=5):
     """Cancel app and original-dashboard flows, then wait for their final writes."""
     with native._mcp_oauth_flows_lock:
@@ -1064,7 +1081,7 @@ def install(web):
                     flow.mark_worker_done()
                     return
                 from hermes_cli.mcp_config import _get_mcp_servers
-                with mcp._profile_secret_scope(flow.profile):
+                with mcp_flow_scope(flow.hermes_home):
                     if flow.server_name not in _get_mcp_servers():
                         flow.mark_error("MCP connection was removed before authorization started.", cancelled=True)
                         flow.mark_worker_done()
