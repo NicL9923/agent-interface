@@ -538,7 +538,7 @@ import CryptoKit
 
   /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
   private func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
-    // Profile has both a fixed preview and Save bar, outside the form's frame.
+    // Profile's fixed preview and Save bar cover parts of its reported form frame.
     if form.identifier == "settings.profile" {
       revealFormControl(element, in: form, app: XCUIApplication(), up: up)
       return
