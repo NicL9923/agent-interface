@@ -250,7 +250,7 @@ import XCTest
 
   func testBotMessagesStayInOrderAndGroupOnlyConsecutiveExchanges() throws {
     let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
-    let reply = Message(id: "reply", role: "assistant", text: "The gate is shut")
+    let reply = Message(id: "reply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner"))
     let tool = Message(id: "tool", role: "tool", text: "Done", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"))
     let next = Message(id: "next", role: "user", text: "Message from Planner: Check the barn")
     let human = Message(id: "human", role: "user", text: "Thanks", sender: Sender(id: "one", name: "One"))
@@ -267,7 +267,7 @@ import XCTest
   func testOrdinaryRepliesDoNotJoinAcrossBotExchanges() throws {
     let before = Message(id: "before", role: "assistant", text: "Checking the ranch.")
     let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
-    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut")
+    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner"))
     let after = Message(id: "after", role: "assistant", text: "All done", origin: MessageOrigin(kind: "human", visibility: "conversation"))
     let turn = try XCTUnwrap(conversation([before, incoming, botReply, after], .idle).presentationTurns.first)
     let shown = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
@@ -276,7 +276,8 @@ import XCTest
     }
     XCTAssertEqual(indexes, [0, 3])
     XCTAssertTrue(turn.replyRun(at: 0, in: shown).endsRun)
-    XCTAssertFalse(turn.replyRun(at: 3, in: shown).continued)
+    let afterIndex = try XCTUnwrap(shown.firstIndex { $0.id == "after" })
+    XCTAssertFalse(turn.replyRun(at: afterIndex, in: shown).continued)
   }
 
   func testNarratedHandoffKeepsTheReplyAndShowsItsOutgoingMessage() throws {
@@ -292,10 +293,11 @@ import XCTest
 
   func testBotRepliesKeepTheirTextAndSeparateHandoffsFromOrdinaryTools() throws {
     let incoming = Message(id: "in", role: "user", text: "Message from Planner: Coordinate dinner")
-    let sent = Message(id: "sent", role: "assistant", text: "I will ask Kitchen.", toolCall: ToolCall(id: "send", name: "message_agent", arguments: #"{"target":"Kitchen","message":"Handle dinner"}"#, status: "completed"))
-    let checked = Message(id: "checked", role: "assistant", text: "The gate is shut", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"))
-    let file = Message(id: "file", role: "assistant", text: "", files: [FileRef(id: "report", name: "report.txt", mime: "text/plain", size: 12)], toolCall: ToolCall(id: "write", name: "write_file", status: "completed"))
-    let empty = Message(id: "tool-only", role: "assistant", text: "", toolCall: ToolCall(id: "search", name: "web_search", status: "completed"))
+    let origin = MessageOrigin(kind: "agent", visibility: "activity", name: "Planner")
+    let sent = Message(id: "sent", role: "assistant", text: "I will ask Kitchen.", toolCall: ToolCall(id: "send", name: "message_agent", arguments: #"{"target":"Kitchen","message":"Handle dinner"}"#, status: "completed"), origin: origin)
+    let checked = Message(id: "checked", role: "assistant", text: "The gate is shut", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"), origin: origin)
+    let file = Message(id: "file", role: "assistant", text: "", files: [FileRef(id: "report", name: "report.txt", mime: "text/plain", size: 12)], toolCall: ToolCall(id: "write", name: "write_file", status: "completed"), origin: origin)
+    let empty = Message(id: "tool-only", role: "assistant", text: "", toolCall: ToolCall(id: "search", name: "web_search", status: "completed"), origin: origin)
     let turn = try XCTUnwrap(conversation([incoming, sent, checked, file, empty], .idle).presentationTurns.first)
     let replies = turn.displayMessages.filter(\.isAgentExchange)
     XCTAssertEqual(replies.map(\.id), ["in", "sent", "agent-call:sent", "checked", "file"])
