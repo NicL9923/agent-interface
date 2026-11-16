@@ -24,7 +24,7 @@ const FOUND_MS = 2400;
  * order, so a binary search measures a handful of them instead of every one on each scroll.
  */
 export function firstMessageBelow(container: HTMLElement, y: number, selector = "[data-message-id]") {
-  const items = container.querySelectorAll<HTMLElement>(selector);
+  const items = container.querySelectorAll<HTMLElement>(`:is(${selector}):not(details:not([open]) *)`);
   let low = 0, high = items.length;
   while (low < high) {
     const middle = (low + high) >> 1;
@@ -531,6 +531,10 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
   // Brings the opened message into view, a little below the top, and marks it briefly.
   const showFound = (item: HTMLElement, mark = true, needle?: string) => {
     const element = scroll.current!;
+    // Search and saved links can point inside a collapsed run of bot messages.
+    for (let parent = item.parentElement; parent && parent !== element; parent = parent.parentElement) {
+      if (parent instanceof HTMLDetailsElement) parent.open = true;
+    }
     const range = needle ? matchRanges(item, needle)[0] : undefined;
     const top = range?.getBoundingClientRect?.().top ?? item.getBoundingClientRect().top;
     element.scrollTop += top - element.getBoundingClientRect().top - Math.min(120, element.clientHeight / 4);
@@ -723,7 +727,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
     const visibleMessage = latest ? undefined : firstMessageBelow(element, element.getBoundingClientRect().top + 8);
-    const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
+    const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.sourceMessageId ?? visibleMessage?.dataset.messageId;
     // Saving the scroll position is best effort; a failure leaves the previous position in place.
     positionTimer.current = setTimeout(
       () =>

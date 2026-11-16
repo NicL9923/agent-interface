@@ -235,7 +235,86 @@ import XCTest
     XCTAssertEqual(FindMatches.status(position: nil, count: 0), "0 matches")
   }
 
+  func testFindIncludesBotMessageBodiesAndExcludesOtherInternalActivity() {
+    let messages = [
+      Message(id: "incoming", role: "user", text: "Message from Planner: Check the gate"),
+      Message(id: "reply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner")),
+      Message(id: "narrated", role: "assistant", text: "I sent Planner a message", toolCall: ToolCall(id: "call", name: "message_agent", arguments: #"{"target":"Planner","message":"Check the gate"}"#, status: "completed")),
+      Message(id: "diagnostic", role: "assistant", text: "Gate diagnostic", origin: MessageOrigin(kind: "diagnostic", visibility: "activity")),
+    ]
+    XCTAssertEqual(FindMatches.merge(loaded: messages, query: "gate", hits: [], botId: "bot", sessionId: nil).map(\.id),
+      ["incoming", "reply", "agent-call:narrated"])
+  }
+
   // MARK: Folded work
+
+  func testBotMessagesStayInOrderAndGroupOnlyConsecutiveExchanges() throws {
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
+    let reply = Message(id: "reply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner"))
+    let tool = Message(id: "tool", role: "tool", text: "Done", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"))
+    let next = Message(id: "next", role: "user", text: "Message from Planner: Check the barn")
+    let human = Message(id: "human", role: "user", text: "Thanks", sender: Sender(id: "one", name: "One"))
+    let turn = try XCTUnwrap(conversation([incoming, reply, tool, next, human], .idle).presentationTurns.first)
+    let rows = turn.transcriptRows(advanced: false)
+    XCTAssertEqual(rows.map(\.id), ["exchange-in", "exchange-next", "work"])
+    let groups = rows.compactMap { row -> [String]? in
+      if case .exchanges(let messages) = row { return messages.map(\.id) }; return nil
+    }
+    XCTAssertEqual(groups, [["in", "reply"], ["next"]])
+    XCTAssertEqual(WorkSummary(turn).detail, "1 tool call")
+  }
+
+  func testOrdinaryRepliesDoNotJoinAcrossBotExchanges() throws {
+    let before = Message(id: "before", role: "assistant", text: "Checking the ranch.")
+    // Conversation-visible exchanges do not create a work anchor. Their provenance must break the reply run.
+    let origin = MessageOrigin(kind: "agent", visibility: "conversation", name: "Planner")
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate", origin: origin)
+    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut", origin: origin)
+    let after = Message(id: "after", role: "assistant", text: "All done", origin: MessageOrigin(kind: "human", visibility: "conversation"))
+    let turn = try XCTUnwrap(conversation([before, incoming, botReply, after], .idle).presentationTurns.first)
+    let shown = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
+    let indexes = turn.transcriptRows(advanced: false).compactMap { row -> Int? in
+      if case .message(let index, _) = row { return index }; return nil
+    }
+    XCTAssertEqual(indexes, [0, 3])
+    XCTAssertTrue(turn.replyRun(at: 0, in: shown).endsRun)
+    let afterIndex = try XCTUnwrap(shown.firstIndex { $0.id == "after" })
+    XCTAssertFalse(turn.replyRun(at: afterIndex, in: shown).continued)
+  }
+
+  func testNarratedHandoffKeepsTheReplyAndShowsItsOutgoingMessage() throws {
+    let narration = Message(id: "narration", role: "assistant", text: "I asked Planner to check the gate.", toolCall: ToolCall(id: "call", name: "message_agent", arguments: #"{"target":"Planner","message":"Check the north gate."}"#, status: "completed"))
+    let turn = try XCTUnwrap(conversation([narration], .idle).presentationTurns.first)
+    XCTAssertEqual(turn.transcriptRows(advanced: false).map(\.id), ["message-narration", "exchange-agent-call:narration"])
+    XCTAssertEqual(turn.displayMessages.map(\.text), [narration.text, ""])
+    let call = try XCTUnwrap(turn.displayMessages.last)
+    XCTAssertEqual(AgentHandoff(message: call).body, "Check the north gate.")
+    XCTAssertEqual(AgentHandoff.runs([narration]).map { $0.map(\.id) }, [["narration"], ["agent-call:narration"]])
+    XCTAssertTrue(WorkSummary(turn).counts.isEmpty)
+  }
+
+  func testBotRepliesKeepTheirTextAndSeparateHandoffsFromOrdinaryTools() throws {
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Coordinate dinner")
+    let origin = MessageOrigin(kind: "agent", visibility: "activity", name: "Planner")
+    let sent = Message(id: "sent", role: "assistant", text: "I will ask Kitchen.", toolCall: ToolCall(id: "send", name: "message_agent", arguments: #"{"target":"Kitchen","message":"Handle dinner"}"#, status: "completed"), origin: origin)
+    let checked = Message(id: "checked", role: "assistant", text: "The gate is shut", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"), origin: origin)
+    let file = Message(id: "file", role: "assistant", text: "", files: [FileRef(id: "report", name: "report.txt", mime: "text/plain", size: 12)], toolCall: ToolCall(id: "write", name: "write_file", status: "completed"), origin: origin)
+    let empty = Message(id: "tool-only", role: "assistant", text: "", toolCall: ToolCall(id: "search", name: "web_search", status: "completed"), origin: origin)
+    let turn = try XCTUnwrap(conversation([incoming, sent, checked, file, empty], .idle).presentationTurns.first)
+    let replies = turn.displayMessages.filter(\.isAgentExchange)
+    XCTAssertEqual(replies.map(\.id), ["in", "sent", "agent-call:sent", "checked", "file"])
+    let sentReply = try XCTUnwrap(replies.first { $0.id == "sent" })
+    let outgoing = try XCTUnwrap(replies.first { $0.id == "agent-call:sent" })
+    let checkedReply = try XCTUnwrap(replies.first { $0.id == "checked" })
+    XCTAssertEqual(sentReply.text, "I will ask Kitchen.")
+    XCTAssertNil(sentReply.toolCall)
+    XCTAssertEqual(AgentHandoff(message: outgoing).body, "Handle dinner")
+    XCTAssertEqual(checkedReply.text, "The gate is shut")
+    XCTAssertNil(checkedReply.toolCall)
+    XCTAssertEqual(replies.first { $0.id == "file" }?.files?.map(\.name), ["report.txt"])
+    XCTAssertEqual(turn.intermediateGroups.map(\.id), ["Tool calls"])
+    XCTAssertEqual(WorkSummary(turn).detail, "3 tool calls")
+  }
 
   func testWorkFoldsIntoOneRowWithItsDurationAndCounts() throws {
     let messages = [
