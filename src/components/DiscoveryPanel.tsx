@@ -5,7 +5,7 @@ import { useAction } from '../app/use-action';
 import { FormMessage } from './ui/form-message';
 import type { Bootstrap, Message } from '../shared/types';
 import type { AutomationOverview, HistoryPage, SavedItem, SearchHit, UsageSummary } from '../shared/discovery';
-import { AgentExchange, isAgentExchange } from "./AgentExchange";
+import { AgentExchange, AgentExchangeGroup, ExchangeBots, exchangeRuns, isAgentExchange } from "./AgentExchange";
 import { ActionReceipt } from "./ActionReceipt";
 import { MessageMarkdown } from './MessageMarkdown';
 import { isActivityMessage, messageOrigin } from '../shared/message-origin';
@@ -89,7 +89,12 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       setPage(value);
     });
   }
-  useEffect(()=>{if(savedMessage&&page)document.getElementById(`history-${savedMessage}`)?.scrollIntoView?.({block:"center"});},[page,savedMessage]);
+  useEffect(()=>{
+    if(!savedMessage||!page)return;
+    const item=document.getElementById(`history-${savedMessage}`);
+    for(let parent=item?.parentElement;parent;parent=parent.parentElement)if(parent instanceof HTMLDetailsElement)parent.open=true;
+    item?.scrollIntoView?.({block:"center"});
+  },[page,savedMessage]);
   useEffect(()=>{if(!page&&returning.current){activeTab.current?.focus();returning.current=false;}},[page]);
   const back = () => { reset();setSavingKey(null);returning.current=true;setPage(null); };
   /** Saves a conversation, or a reply titled from `reply`, its Markdown. */
@@ -116,7 +121,7 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       {(['search','saved','automations'] as const).map(value=><button key={value} ref={tab===value?activeTab:undefined} aria-pressed={tab===value} onClick={()=>changeTab(value)}>{value==='search'?'Search':value==='saved'?'Saved items':'Automations'}</button>)}
     </nav>
     {!page&&(error||searchError)&&<FormMessage tone="error">{error||searchError}</FormMessage>}{notice&&<FormMessage tone="notice">{notice}</FormMessage>}{busy&&<p role="status">Loading...</p>}
-    {page ? <section className="discovery-history">
+    {page ? <ExchangeBots.Provider value={{bots:bootstrap.bots,currentBotId:page.botId}}><section className="discovery-history">
       <header className="history-heading">
         <button className="discovery-back" onClick={back}>‹ Back to results</button>
         <h2>{pageTitle}</h2><p>{name(page.botId)} · Read-only history</p>
@@ -124,16 +129,16 @@ export function DiscoveryPanel({ bootstrap, search, onRoutine, onOpenMessage }: 
       </header>
       <p className="muted discovery-hint">Read from Hermes. This view does not change the assistant's active conversation.</p>
       {saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,title:conversationTitle(page.botId,page.sessionId).slice(0,120)})}
-      {page.messages.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}>
+      {exchangeRuns(page.messages).map(run=>{const rows=run.map(message=><article className="history-message" id={`history-${message.id}`} key={message.id} style={savedMessage===message.id?{borderLeft:"3px solid var(--accent)",paddingLeft:12}:undefined}>
         {(speaker(message)||message.role==='assistant'&&!isActivityMessage(message))&&<div className="history-message-heading">
           {speaker(message)&&<small>{speaker(message)}</small>}
           {message.role==='assistant'&&!message.interim&&!isActivityMessage(message)&&saveControl({kind:'session',botId:page.botId,sessionId:page.sessionId,messageId:message.id,offset:page.offset,title:'Saved reply'},message.text)}
         </div>}
-        {isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:message.toolCall?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
+        {isAgentExchange(message)?<AgentExchange message={message} recipient={name(page.botId)}/>:isActivityMessage(message)?<details><summary>{withoutBotTag(messageOrigin(message)?.title ?? "") || "Activity details"}</summary><MessageMarkdown text={message.text}/></details>:message.toolCall&&message.toolCall.name!=='message_agent'?<ActionReceipt call={message.toolCall}/>:<MessageMarkdown text={message.text}/>}
         {message.files?.map(file=><a key={file.id} href={`/api/files/${encodeURIComponent(file.id)}`} target="_blank" rel="noreferrer">{file.name}</a>)}
-      </article>)}
+      </article>);return isAgentExchange(run[0])?<AgentExchangeGroup key={run[0].id} messages={run} recipient={name(page.botId)}>{rows}</AgentExchangeGroup>:rows;})}
       <div className="discovery-actions"><button disabled={busy||page.offset===0} onClick={()=>void history(page.botId,page.sessionId,Math.max(0,page.offset-100))}>Previous page</button><button disabled={busy||!page.hasMore} onClick={()=>void history(page.botId,page.sessionId,page.offset+100)}>Next page</button></div>
-    </section> : <>
+    </section></ExchangeBots.Provider> : <>
       {tab==='search'&&<>
         <form className="discovery-search" role="search" onSubmit={event=>{event.preventDefault();void find(query);}}>
           <div className="discovery-search-control"><input ref={searchInput} type="search" aria-label="Search conversations" placeholder="Answers, files, or a topic" maxLength={200} value={query} onChange={event=>setQuery(event.target.value)}/>

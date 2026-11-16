@@ -1,5 +1,23 @@
-.agent-exchange { padding: 12px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 12px 12px 0; }
-.agent-exchange-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: .8rem; margin-bottom: 8px; }
+.agent-exchange { padding: 12px 16px; border-inline-start: 2px solid var(--line); background: var(--surface); border-radius: 0 12px 12px 0; min-width: 0; }
+.agent-exchange-label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: .8125rem; margin-bottom: 8px; }
+.agent-exchange-route { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0 6px; min-width: 0; overflow-wrap: anywhere; }
+.agent-exchange-person { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.agent-exchange-person > [aria-hidden] { display: inline-flex; justify-content: center; flex: none; }
+.agent-exchange-route .avatar-wrap { flex: none; }
+.agent-exchange-route strong { min-width: 0; }
+.agent-exchange-unknown { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 50%; color: var(--muted); flex: none; }
+.agent-exchange-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; font-size: .75rem; color: var(--muted); }
+.agent-exchange-footer:empty { display: none; }
+.agent-exchange-open { min-height: 36px; }
+.agent-exchange-group { min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; }
+.agent-exchange-group > summary { min-height: 44px; padding: 8px 0; cursor: pointer; font-size: .8125rem; overflow-wrap: anywhere; }
+.agent-exchange-routes { display: inline-flex; flex-direction: column; gap: 8px; vertical-align: middle; }
+.agent-exchange-count { display: inline-block; margin-inline-start: 8px; color: var(--muted); }
+.agent-exchange-group > summary > .danger, .agent-exchange-group > summary > .muted { margin-inline-start: 8px; }
+.agent-exchange-group > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.agent-exchange-messages { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
+.agent-exchange-messages > .message { margin: 0; }
+.conversation-turn > .agent-exchange-group { margin-bottom: 28px; }
 .agent-exchange pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
 .message-agent { background: transparent; padding: 0; }
 .routine-results-dialog { width: min(760px, calc(100vw - 32px)); max-height: 85dvh; overflow: auto; padding: 24px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }

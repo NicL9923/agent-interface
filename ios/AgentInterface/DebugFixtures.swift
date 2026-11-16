@@ -151,6 +151,8 @@
             ["id": "cron", "role": "user", "text": "Scheduled job handoff: hay, water, and bunny check", "origin": ["kind": "scheduled", "visibility": "activity", "title": "Bunny care"]],
             ["id": "answer", "role": "assistant", "text": "Start with the bunnies, then choose one small task.\n\n- Top up hay.\n- Refresh water.", "origin": ["kind": "scheduled", "visibility": "conversation"]],
             ["id": "dm", "role": "user", "text": "Message from 🤖 Planner (@planner): Peppers are covered.", "origin": ["kind": "agent", "visibility": "activity", "name": "Planner"]],
+            ["id": "dm-reply", "role": "assistant", "text": "Thanks, I will check the gate.", "origin": ["kind": "agent", "visibility": "activity", "name": "Planner"]],
+            ["id": "dm-out", "role": "tool", "text": "", "toolCall": ["id": "dm-kitchen", "name": "message_agent", "status": "failed", "arguments": "{\"target\":\"kitchen\",\"message\":\"Peppers are covered.\"}", "error": "Kitchen companion is offline."]],
             ["id": "child", "role": "user", "text": "Hay and pellets are stocked.", "origin": ["kind": "subagent", "visibility": "activity", "title": "Supply check completed"]],
             ["id": "process", "role": "user", "text": "Inventory process exited successfully.", "origin": ["kind": "process", "visibility": "activity"]],
             ["id": "diagnostic", "role": "assistant", "text": "Internal delivery retry details.", "origin": ["kind": "diagnostic", "visibility": "activity"]],
