@@ -93,7 +93,7 @@ import XCTest
     let always = app.buttons["Always allow…"]
     guard always.waitForFrame() else { XCTFail("The approval menu must offer Always allow"); return }
     always.waitForStableFrame()
-    // The menu can retain its anchor's XCTest activation point. Use its visible row.
+    // Target the settled menu row directly, without its computed activation point.
     always.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     let alert = app.alerts.firstMatch
     XCTAssertTrue(alert.waitForExistence(timeout: 5))
