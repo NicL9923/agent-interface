@@ -82,3 +82,29 @@ Earlier c1accf27 checks cannot validate this new policy. Both implementers are O
 eligible non-OpenAI independent review is still required before merge. No Apple or physical-device
 validation was needed for this web-only change. No production deployment ran; a release is needed
 after merge.
+
+
+### CI correction for the simulated closed tab
+
+At `e545abd3ae047bae5d064b04fff307e3fec54565`, CI passed 4,101 tests and failed
+one saved-roster test on both Node versions. The test unmounted React while leaving its
+jsdom document and the hung sign-in's fake auth lock alive, then treated that document as
+a new page. The actual browser releases locks when the old document closes, as specified
+in https://www.w3.org/TR/web-locks/#termination.
+
+A real Chromium probe confirmed that the second page stays queued while the first owns
+a never-settling lock, then acquires it after the first page closes. Both pages had no
+remaining locks afterward. Output: `.private/auth-lock-close-browser.log`, replay script:
+`.private/auth-lock-close-probe.js`. The owned browser and loopback server were closed.
+
+The test now replaces the browser-lock I/O fake at the simulated tab close. Its hung fetch
+and every original storage, request and privacy assertion remain. The original test still
+failed before this fixture correction. Removing pending-logout propagation then made the
+corrected test fail, showing that the original security regression remains covered.
+Outputs: `.private/auth-closed-tab-red.log`, `.private/auth-closed-tab-mutation.log`.
+
+After the correction, all 179 tests in the four account-operation, account-epoch,
+account-transitions and saved-roster suites passed. Typecheck, lint and diff checks passed.
+Output: `.private/auth-closed-tab-account-green.log`. Application code is unchanged from
+e545abd3. The queued old-head full check was canceled before acquisition or any test execution;
+a final-head full check replaces it. Independent review remains incomplete.
