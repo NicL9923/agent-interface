@@ -152,6 +152,19 @@ sys.exit('unexpected xcrun call: '+repr(args))
                 self.assertEqual(evidence.returncode, 1)
                 self.assertIn('No passing iOS validation exists', evidence.stderr)
 
+    def test_ignored_default_fixture_changes_invalidate_evidence(self):
+        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('{"questions":["original"]}')
+        (self.repo / '.git/info/exclude').write_text('/.agents/fixtures/questions-design.json\n')
+        result = self.run_validation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.full_run().returncode, 0)
+        fixture.write_text('{"questions":["changed"]}')
+        stale = self.full_run()
+        self.assertEqual(stale.returncode, 1, 'A fixture exported by the runner is an input even when Git ignores it')
+        self.assertIn('No passing iOS validation exists', stale.stderr)
+
     def test_summary_source_change_never_certifies_new_source(self):
         p = self.run_validation(TEST_SUMMARY_CHANGE='1')
         self.assertEqual(p.returncode, 75, p.stderr)

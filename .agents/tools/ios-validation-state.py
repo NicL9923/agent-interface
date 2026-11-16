@@ -21,8 +21,15 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def design_fixtures():
+    return [path for path in sorted((ROOT / '.agents/fixtures').glob('*.json'))
+            if not path.name.startswith('.') and path.is_file()]
+
+
 def source_state():
     paths = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT).split(b'\0')
+    # The runner exports every default JSON fixture, including locally ignored files.
+    paths.extend(os.fsencode(path.relative_to(ROOT)) for path in design_fixtures())
     entries = []
     for name in sorted(set(paths)):
         if not name:
@@ -55,9 +62,7 @@ def cacheable(operation, options):
     # Their contents are fingerprinted above. Custom files, capture switches and
     # variant selections must still run fresh and cannot certify the default suite.
     fixtures = {}
-    for path in sorted((ROOT / '.agents/fixtures').glob('*.json')):
-        if path.name.startswith('.') or not path.is_file():
-            continue
+    for path in design_fixtures():
         name = path.stem.removesuffix('-design').upper().replace('-', '_')
         fixtures.setdefault('TEST_RUNNER_AGENT_INTERFACE_DESIGN_' + name + '_PATH', path)
     for key, value in os.environ.items():
