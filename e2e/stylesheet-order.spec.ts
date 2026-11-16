@@ -33,7 +33,8 @@ const SCREENS: [string, (page: Page) => Promise<void>][] = [
     await expect(page.locator(".settings-notifications .notification-settings.is-blocked .notification-toggle")).toBeVisible();
   }],
   ["the command palette", async page => {
-    await page.keyboard.press("Control+k");
+    const apple = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent));
+    await page.keyboard.press(apple ? "Meta+k" : "Control+k");
     await page.locator(".command-palette[open]").waitFor();
   }],
   ["a chat", async page => {

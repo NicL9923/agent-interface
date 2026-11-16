@@ -40,6 +40,7 @@ struct PreferencesView: View {
             VStack(alignment: .leading, spacing: 4) {
               Text(store.bootstrap?.user.name ?? "").font(.headline)
               Text(store.bootstrap?.user.email ?? "").font(.subheadline).foregroundStyle(.secondary)
+                .accessibilityLabel("Signed in as \(store.bootstrap?.user.email ?? "")")
             }
           }.padding(.vertical, 8)
         }

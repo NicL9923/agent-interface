@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { Profiler, createElement, createRef } from "react";
 import type { ComponentProps } from "react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bootstrap, Message, ToolCall } from "../src/shared/types";
 import type { SavedConversation } from "../src/app/storage";
 import { mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia } from "./ui-harness";
@@ -69,6 +69,9 @@ let mount: Mount;
 beforeEach(() => {
   for (const map of Object.values(renders)) map.clear();
   seen.clear();
+  // Every timestamp is a real When, which renders again on each minute tick. On the real clock a minute that turns between a test's
+  // baseline and its assertions adds a render to every stamp, so the clock stays put. tests/setup-ui.ts restores real timers after each test.
+  vi.useFakeTimers({ now: Date.UTC(2026, 9, 25, 12) });
   // Reduced motion shows a live reply as it arrives, so a streamed update is one render, not a paced run of them.
   stubMatchMedia(reducedMotionOnly);
   mount = mountRoot();

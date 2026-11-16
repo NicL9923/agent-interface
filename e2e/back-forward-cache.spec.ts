@@ -8,6 +8,9 @@ import { assistants, chooseDark, conversation, expect, signIn, test } from "./fi
 // Playwright turns the back-forward cache off in every Chromium it launches. The project runs full Chromium
 // (see playwright.config.ts), which has one once that switch is left out. These run in a file of their own
 // because a browser option needs a worker of its own.
+test.beforeEach(async ({ browserName }) => {
+  test.skip(browserName === "webkit", "Playwright disables WebKit back-forward cache and exposes no option to enable it.");
+});
 test.use({ launchOptions: { ignoreDefaultArgs: ["--disable-back-forward-cache"] } });
 type Seen = { covered: boolean; rowsVisible: boolean; theme?: string };
 // What the page holds at `resume`, the first moment script runs on a restored page, before the app's listeners.

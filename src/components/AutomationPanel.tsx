@@ -95,7 +95,8 @@ function Status({ control, work = false }: { control: Controls; work?: boolean }
   const [resultKey, setResultKey] = useState("");
   if (receiptAnnounced && resultKey !== receiptKey) setResultKey(receiptKey);
   const statusText = receiptAnnounced || receiptKey === resultKey ? "" : receiptAnnouncement;
-  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span><Button disabled={control.loading || control.busy} onClick={() => void control.refresh()}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
+  return <><div className="automation-toolbar"><span className="muted">Managed by Hermes</span>{/* aria-disabled, not disabled: a disabled button can't take focus, and keyboard users wait on this one while a change or refresh is busy. */}
+    <Button aria-disabled={control.loading || control.busy || undefined} onClick={() => { if (!control.loading && !control.busy) void control.refresh(); }}>{control.loading ? "Refreshing..." : "Refresh status"}</Button></div>
     {work && <><p className="sr-only" role="status" aria-label="Resume status" aria-live="polite" aria-atomic="true">{statusText}</p>
       <p className="sr-only" role="status" aria-label="Resume result" aria-live="polite" aria-atomic="true">{receiptAnnounced ? control.error : ""}</p></>}
     {control.error && !receiptAnnounced && <p className="form-error" role="alert">{control.error}</p>}
@@ -201,6 +202,14 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
   const [creating, setCreating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const createOpener = useRef<HTMLButtonElement>(null);
+  const [restoreCreateFocus, setRestoreCreateFocus] = useState(false);
+  // Focus returns to "New task" once the form's close has committed and the button exists again. One try:
+  // a request left pending would pull focus there whenever the panel next re-rendered.
+  useEffect(() => {
+    if (creating || !restoreCreateFocus) return;
+    createOpener.current?.focus();
+    setRestoreCreateFocus(false);
+  }, [creating, restoreCreateFocus]);
   const createMessage = useRef<HTMLParagraphElement>(null);
   const focusedCreateNotice = useRef("");
   const [attempt, setAttempt] = useState<{ knownIds: string[]; title: string; requestId: string; refreshCount: number; unconfirmed: boolean } | null>(null);
@@ -292,7 +301,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
           const created = result.overview.tasks.items.find(item => item.id === result.result?.id) ?? likelyCreatedTask(snapshot.knownIds, snapshot.title, result.overview.tasks.items);
           resetCreate();
           if (created) revealCreated(created, `Created. "${created.title}" stays blocked until you start it.`);
-          else { setAnnouncement("Created in Hermes. Refresh status to review the task."); requestAnimationFrame(() => createOpener.current?.focus()); }
+          else { setAnnouncement("Created in Hermes. Refresh status to review the task."); setRestoreCreateFocus(true); }
         } finally { setSubmitting(false); }
       }}>
         <h4 id="new-task-heading">New task</h4>
@@ -305,7 +314,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
         {(unconfirmed || likely) && <p ref={createMessage} tabIndex={-1} className="automation-task-callout">{likely ? "A task with this title appeared on the board. Hermes may have saved it. Close this form to review it." : "Not confirmed. Hermes may have created this task. Use Refresh status at the top of Work before trying again."}</p>}
         {resend && <p ref={createMessage} tabIndex={-1}>No new task with this title is visible. Create task sends the same request again.</p>}
         {createFeedback && <p className="form-error" role="alert">{createFeedback}</p>}
-        <div className="actions">{likely ? <Button className="primary" onClick={() => { resetCreate(); revealCreated(likely, `"${likely.title}" appeared on the board. Hermes may have saved it.`); }}>Close</Button> : <><Button type="submit" className="primary" disabled={control.disabled || !draft.title.trim()}>{submitting ? "Creating…" : "Create task"}</Button><Button disabled={control.disabled} onClick={() => { setCreating(false); setAttempt(null); setCreateFeedback(""); requestAnimationFrame(() => createOpener.current?.focus()); }}>Cancel</Button></>}</div>
+        <div className="actions">{likely ? <Button className="primary" onClick={() => { resetCreate(); revealCreated(likely, `"${likely.title}" appeared on the board. Hermes may have saved it.`); }}>Close</Button> : <><Button type="submit" className="primary" disabled={control.disabled || !draft.title.trim()}>{submitting ? "Creating…" : "Create task"}</Button><Button disabled={control.disabled} onClick={() => { setCreating(false); setAttempt(null); setCreateFeedback(""); setRestoreCreateFocus(true); }}>Cancel</Button></>}</div>
       </form>}
     </>}
   </section>;

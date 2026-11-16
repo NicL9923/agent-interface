@@ -42,7 +42,7 @@ jobs:
     # A real Chromium against the built client and the real server, over a scripted assistant runtime.
     name: Browser smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -62,7 +62,7 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       # Browsers come from the cache when present; the system libraries are installed either way.
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps webkit chromium
       - run: npm run test:e2e
       - name: Upload the report and traces
         if: failure()

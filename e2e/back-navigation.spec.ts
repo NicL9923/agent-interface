@@ -1,5 +1,5 @@
 import type { BrowserContext, Page } from "@playwright/test";
-import { assistants, conversation, expect, signIn, test } from "./fixtures.js";
+import { assistants, conversation, enableGroupCatalog, expect, signIn, tapNotification, test } from "./fixtures.js";
 
 /**
  * On a phone one step in from home, a chat, Today, Search or a sheet over home, is one history entry, so the
@@ -10,12 +10,6 @@ const phone = { width: 390, height: 844 }, desktop = { width: 1280, height: 800 
 const row = (page: Page, name: RegExp) => assistants(page).getByRole("button", { name });
 const ranchRow = (page: Page) => row(page, /Ranch Hand/);
 const leaves = async (page: Page) => { await page.goBack(); expect(page.url()).toBe("about:blank"); };
-// The worker's own tap handler, minus the notification: Playwright cannot click one.
-const tapNotification = async (context: BrowserContext, page: Page, url: string) => {
-  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
-  const [worker] = context.serviceWorkers();
-  await worker.evaluate(address => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: address } }), url);
-};
 /** Signs the account out from a second tab, which signs out every tab of the profile. */
 async function signOutElsewhere(context: BrowserContext) {
   const other = await context.newPage();
@@ -113,7 +107,7 @@ test.describe("on a phone", () => {
   test("a notification tapped on the home list opens its chat in place, and Back goes home", async ({ context }) => {
     const page = await signedInTab(context);
     await expect(assistants(page)).toBeVisible();
-    await tapNotification(context, page, "/?bot=trail");
+    await tapNotification(page, "/?bot=trail");
     await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
     await page.goBack();
     await expect(assistants(page)).toBeVisible();
@@ -126,7 +120,7 @@ test.describe("on a phone", () => {
     await ranchRow(page).click();
     await expect(page.getByRole("textbox", { name: "Message Ranch Hand" })).toBeVisible();
     const length = await page.evaluate(() => history.length);
-    await tapNotification(context, page, "/?bot=trail");
+    await tapNotification(page, "/?bot=trail");
     await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
     expect(await page.evaluate(() => history.length)).toBe(length);
     expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
@@ -213,8 +207,7 @@ test.describe("on a phone", () => {
 
   test("a group chat form with a name and an assistant asks before Back discards it", async ({ page }) => {
     // The e2e server hosts no group coordinator, so its catalog is the one thing scripted: at the network edge.
-    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
-      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+    await enableGroupCatalog();
     await page.goto("about:blank");
     await signIn(page);
     await page.getByRole("button", { name: "New", exact: true }).click();
@@ -238,16 +231,15 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ context, page }) => {
-    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
-      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ page }) => {
+    await enableGroupCatalog();
     await page.goto("about:blank");
     await signIn(page);
     await page.getByRole("button", { name: "New", exact: true }).click();
     await page.getByRole("menuitem", { name: "New group chat" }).click();
     const sheet = page.getByRole("dialog", { name: "New group chat" });
     await sheet.getByRole("textbox", { name: "Name" }).fill("Fence crew");
-    await tapNotification(context, page, "/?bot=trail");
+    await tapNotification(page, "/?bot=trail");
     const question = sheet.getByRole("alert").filter({ hasText: "Discard your unsaved changes?" });
     await expect(question).toBeVisible();
     // A second close request while the question is open must not replace the notification's.
@@ -260,8 +252,7 @@ test.describe("on a phone", () => {
   });
 
   test("Back on a new group chat form with nothing entered closes it at once", async ({ page }) => {
-    await page.route(/\/api\/groups(\?.*)?$/, route => route.request().method() === "GET"
-      ? route.fulfill({ json: { supported: true, canSend: true, rooms: [] } }) : route.fallback());
+    await enableGroupCatalog();
     await page.goto("about:blank");
     await signIn(page);
     await page.getByRole("button", { name: "New", exact: true }).click();

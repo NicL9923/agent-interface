@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { assistants, chooseDark, conversation, deployNextRelease, expect, releaseChat, signIn, slowAdmission, test } from "./fixtures.js";
+import { assistants, chooseDark, conversation, deployNextRelease, expect, releaseChat, signIn, slowAdmission, tapNotification, test } from "./fixtures.js";
 
 test("a member opens an assistant, sends a message, and the reply arrives without a reload", async ({ page }) => {
   await signIn(page);
@@ -18,7 +18,7 @@ test("a member opens an assistant, sends a message, and the reply arrives withou
 
 test("the app opens offline from the service worker, then recovers when the network returns", async ({ context, page, allowConsoleError }) => {
   // Chromium logs each request it refuses while the network is off. Nothing else is excused.
-  allowConsoleError.push(/ERR_INTERNET_DISCONNECTED/);
+  allowConsoleError.push(/ERR_INTERNET_DISCONNECTED/, /WebKit encountered an internal error/); // WebKit reports intentionally offline requests with this network error.
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
@@ -87,7 +87,9 @@ test("a member opens Usage from the profile menu and sees each account once", as
   await expect(chatgpt.getByText("2 banked resets")).toBeVisible();
 });
 
-test("a link to a chat shows sign-in when signed out, then reads the chat beside bootstrap once signed in", async ({ page }) => {
+test.describe("a chat link without a controlling worker", () => {
+  test.use({ serviceWorkers: "block" });
+  test("a link to a chat shows sign-in when signed out, then reads the chat beside bootstrap once signed in", async ({ page }) => {
   // Signed out, the link costs one refused bootstrap (which the fixture excuses) and nothing else.
   await page.goto("/?bot=ranch");
   await page.getByRole("button", { name: "Enter local workspace" }).click();
@@ -105,6 +107,7 @@ test("a link to a chat shows sign-in when signed out, then reads the chat beside
   await page.goto("/?bot=ranch");
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
   expect(heldUntil[0]).toBe(true);
+  });
 });
 
 /** What home's rail says of its connection, read as a person reads it beside the account button. */
@@ -118,6 +121,8 @@ test.describe("a returning member's load", () => {
   test("draws its first frame in the system's theme when the member signed out between boot.js and the app's code", async ({ page }) => {
     await signIn(page);
     await chooseDark(page);
+    // Let the previous document finish its startup reads before this test reloads it.
+    await page.waitForLoadState("networkidle");
     // The theme as the app's first frame paints: a MutationObserver runs before the browser paints, after
     // React's layout effects and before its other effects.
     await page.addInitScript(() => {
@@ -152,6 +157,8 @@ test.describe("a returning member's load", () => {
     await signIn(page);
     // The person chose dark while the system is light, so a theme known only after bootstrap would flash light.
     await chooseDark(page);
+    // Let the previous document finish its startup reads before this test reloads it.
+    await page.waitForLoadState("networkidle");
 
     // The bundle is held back, so a bootstrap that waits for the app's code comes after it.
     const order: string[] = [];
@@ -258,7 +265,7 @@ test.describe("a returning member's home", () => {
   });
 });
 
-test("a sign-out or sign-in in one tab changes the account every other tab shows, without a reload", async ({ context, page }) => {
+test("a sign-out or sign-in in one tab changes the account every other tab shows, without a reload", async ({ context, page, browserName }) => {
   await signIn(page);
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
   const other = await context.newPage();
@@ -266,15 +273,19 @@ test("a sign-out or sign-in in one tab changes the account every other tab shows
   await expect(assistants(other).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
   await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
 
-  await other.bringToFront();
+  if (browserName !== "webkit") await other.bringToFront();
   await other.getByRole("button", { name: "Account" }).click();
   await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
   await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click();
+  await expect(other.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
+  if (browserName === "webkit") await page.bringToFront();
   await expect(page.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
   await expect(page.getByText("Ranch Hand")).toHaveCount(0);
 
+  if (browserName === "webkit") await other.bringToFront();
   await other.getByLabel("Sign in as").selectOption("two");
   await other.getByRole("button", { name: "Enter local workspace" }).click();
+  if (browserName === "webkit") await page.bringToFront();
   await expect(assistants(page).getByRole("button", { name: /Ranch Hand/ })).toBeVisible();
   await page.getByRole("button", { name: "Account" }).click();
   await expect(page.getByRole("menu", { name: "Account" })).toContainText("two@localhost.invalid");
@@ -285,13 +296,13 @@ test.describe("after a deploy retires a lazy screen's file", () => {
   // The worker would answer from its own cache, so the browser asks the server, which no longer has the file.
   test.use({ serviceWorkers: "block" });
 
-  test("the screen offers Reload and leaves the page alone until the person takes it", async ({ page, allowConsoleError }) => {
+  test("the screen offers Reload and leaves the page alone until the person takes it", async ({ page, allowConsoleError, browserName }) => {
     // Chromium logs the refused file, and React the screen error the prompt handles. Nothing else is excused.
-    allowConsoleError.push(/status of 404/, /dynamically imported module/);
+    allowConsoleError.push(/status of 404/, /dynamically imported module/, /Importing a module script failed/);
     await signIn(page);
     // The page asks for a name this build never had, as a page from the previous release would, and the real server answers.
     const retired = /\/assets\/UsagePanel-[^/]+\.js$/;
-    await page.route(retired, route => route.continue({ url: route.request().url().replace(/UsagePanel-[^/]+\.js$/, "UsagePanel-retired0.js") }));
+    await page.route(retired, route => route.fulfill({ status: 404, headers: { "cache-control": "no-store" } }));
     let loads = 0;
     page.on("load", () => { loads++; });
     const openUsage = async () => {
@@ -309,6 +320,12 @@ test.describe("after a deploy retires a lazy screen's file", () => {
 
     // Reload asks the server for the app again, and the screen opens from what it has now.
     await page.unroute(retired);
+    if (browserName === "webkit") await page.route(/\/assets\/index-[^/]+\.js$/, async route => {
+      // A real new release names a new chunk. Safari remembers a failed module URL across reloads.
+      const response = await route.fetch();
+      const body = (await response.text()).replace(/UsagePanel-([\w-]+)\.js/g, "UsagePanel-$1.js?new-release");
+      await route.fulfill({ response, body });
+    });
     await prompt.getByRole("button", { name: "Reload" }).click();
     await expect.poll(() => loads).toBe(1);
     await openUsage();
@@ -441,7 +458,7 @@ test("a reply keeps growing across a tool call, and its saved segment never disa
   expect(steps, `${steps} growth steps, ${readsMeanwhile} reads`).toBeGreaterThan(readsMeanwhile + 3);
 });
 
-test("a notification tapped while the app is open switches its chat without reloading it", async ({ context, page }) => {
+test("a notification tapped while the app is open switches its chat without reloading it", async ({ page }) => {
   await signIn(page);
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
   await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
@@ -449,8 +466,7 @@ test("a notification tapped while the app is open switches its chat without relo
   await page.evaluate(() => { (window as unknown as { sameDocument: boolean }).sameDocument = true; });
 
   // The worker's own tap handler, minus the notification: Playwright cannot click one.
-  const [worker] = context.serviceWorkers();
-  await worker.evaluate(() => (self as unknown as { openChat(notification: { data: { url: string } }): Promise<void> }).openChat({ data: { url: "/?bot=trail" } }));
+  await tapNotification(page, "/?bot=trail");
   await expect(page.getByRole("textbox", { name: "Message Trail Cook" })).toBeVisible();
   expect(new URL(page.url()).searchParams.get("bot")).toBe("trail");
   expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
@@ -502,6 +518,9 @@ test.describe("on a phone held sideways with its on-screen keyboard up", () => {
   });
 });
 
+test.describe("transcript image responses", () => {
+  // Page routes must see the conversation and image requests.
+  test.use({ serviceWorkers: "block" });
 test("a transcript image that fails to load keeps the space it held while loading", async ({ page, allowConsoleError }) => {
   // Chromium logs the image's 404. Nothing else is excused.
   allowConsoleError.push(/status of 404/);
@@ -565,3 +584,5 @@ for (const [width, height] of [[1280, 800], [390, 844]]) {
     }
   });
 }
+
+});

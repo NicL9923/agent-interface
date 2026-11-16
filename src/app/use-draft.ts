@@ -55,7 +55,7 @@ async function saveDraft(options: {
   if (budgeted) keepaliveBytes += bytes;
   try {
     server = savedDraft(await (budgeted
-      // request() has no keepalive option, so this one save writes to the same route by hand.
+      // This save uses write() to preserve its explicit keepalive budget.
       ? write<ApiResponse<"PUT /bots/:id/draft">>(routeUrl("PUT /bots/:id/draft", { id: botId }), body, "PUT", { keepalive: true })
       : request("PUT /bots/:id/draft", { params: { id: botId }, body })));
   } catch (e) {

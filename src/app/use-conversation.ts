@@ -724,6 +724,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     const positionBot = botId;
     const visibleMessage = latest ? undefined : firstMessageBelow(element, element.getBoundingClientRect().top + 8);
     const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
+    // Saving the scroll position is best effort; a failure leaves the previous position in place.
     positionTimer.current = setTimeout(
       () =>
         void request("PUT /bots/:id/read-position", { params: { id: positionBot }, body: { scrollTop: top, messageId } }).catch(() => {}),

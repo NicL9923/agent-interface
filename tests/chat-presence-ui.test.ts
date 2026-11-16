@@ -72,3 +72,11 @@ it("sends one report at a time, so leaving a chat never lands after arriving in 
   await act(async () => finish());
   expect(states()).toEqual(["/bots/ranch/presence active", "/bots/ranch/presence left", "/bots/barn/presence active"]);
 });
+
+it("keeps the left report alive after the page hides and tolerates a failed report", async () => {
+  vi.mocked(write).mockRejectedValueOnce(new Error("offline"));
+  await render("ranch");
+  visibility = "hidden";
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(vi.mocked(write).mock.calls.at(-1)).toEqual(["/bots/ranch/presence", expect.objectContaining({ state: "left" }), "PUT", { keepalive: true }]);
+});

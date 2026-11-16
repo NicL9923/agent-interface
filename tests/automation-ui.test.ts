@@ -504,6 +504,21 @@ it("keeps other actions out of a reviewed create attempt and its busy labels", a
   expect(write).toHaveBeenCalledTimes(2);
 });
 
+it("keeps Refresh status focusable while a change is busy, without refreshing on a press", async () => {
+  const value = initial();
+  vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
+  await work(); await click("New task"); await input("Task title", "A new fence");
+  let finish!: (result: unknown) => void;
+  vi.mocked(write).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  await submit();
+  const refresh = button("Refresh status"), reads = vi.mocked(api).mock.calls.length;
+  refresh.focus();
+  expect(document.activeElement).toBe(refresh);
+  await click("Refresh status");
+  expect(vi.mocked(api).mock.calls.length).toBe(reads);
+  await act(async () => finish({ ...task("new", "blocked"), title: "A new fence" }));
+});
+
 it("waits for the create review result before moving focus from Refresh status", async () => {
   const value = initial();
   vi.mocked(api).mockImplementation(async path => path === "/routines" ? [] : value);
@@ -512,6 +527,11 @@ it("waits for the create review result before moving focus from Refresh status",
   let finish!: (result: AutomationOverview) => void;
   vi.mocked(api).mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
   const refresh = button("Refresh status"); refresh.focus(); await click("Refresh status");
+  // Still focused, and a second press while it refreshes reads nothing more.
+  const reads = vi.mocked(api).mock.calls.length;
+  await click("Refreshing...");
+  expect(vi.mocked(api).mock.calls.length).toBe(reads);
+  expect(refresh.getAttribute("aria-disabled")).toBe("true");
   expect(document.activeElement).toBe(refresh);
   await act(async () => finish(value));
   expect(document.activeElement?.textContent).toContain("No new task with this title is visible.");

@@ -27,6 +27,7 @@ const member = (id: string, name: string) => ({ member_id: id, profile: id, hand
 const room: GroupRoom = { room_id: 'supper', name: 'Supper', members: [member('shared', 'Shared'), member('other', 'Other')] };
 
 beforeEach(() => {
+  vi.spyOn(document, "hasFocus").mockReturnValue(false);
   vi.useFakeTimers({ now: START });
   FakeEventSource.reset(); vi.stubGlobal('EventSource', FakeEventSource);
   stubMatchMedia();

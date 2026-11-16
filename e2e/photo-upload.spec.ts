@@ -63,6 +63,12 @@ async function openAssistant(page: Page) {
 const picker = (page: Page) => page.locator('input[type="file"]');
 
 test("a phone photo uploads at 2048 px, upright, in a fraction of its size", async ({ page }) => {
+  // WebKit can encode WebP on Linux but falls back to JPEG on macOS.
+  const webp = await page.evaluate(() => new Promise<boolean>(resolve => {
+    document.createElement("canvas").toBlob(blob => resolve(blob?.type === "image/webp"), "image/webp");
+  }));
+  const name = webp ? "IMG_4242.webp" : "IMG_4242.jpg";
+  const mime = webp ? "image/webp" : "image/jpeg";
   await openAssistant(page);
   const original = await photo(page);
   expect(original.length).toBeGreaterThan(2_000_000);
@@ -70,8 +76,8 @@ test("a phone photo uploads at 2048 px, upright, in a fraction of its size", asy
   await expect.poll(async () => (await uploadedFiles()).length).toBe(1);
 
   const [sent] = await uploadedFiles();
-  expect([sent!.name, sent!.mime]).toEqual(["IMG_4242.webp", "image/webp"]);
-  expect(Buffer.from(sent!.base64, "base64").length).toBeLessThan(original.length / 3);
+  expect([sent!.name, sent!.mime]).toEqual([name, mime]);
+  expect(Buffer.from(sent!.base64, "base64").length).toBeLessThan(original.length / (webp ? 3 : 2));
   // The tag said 90 degrees clockwise, so the upright photo is 3000 by 4000 and shrinks to 1536 by 2048, and its red
   // corner moved from the top-left to the top-right.
   const topRight = await decoded(page, sent!.base64, sent!.mime, [1536 - 20, 20]);
@@ -80,14 +86,14 @@ test("a phone photo uploads at 2048 px, upright, in a fraction of its size", asy
   expect(topRight.color[1]).toBeLessThan(80);
   expect((await decoded(page, sent!.base64, sent!.mime, [20, 20])).color[0]).toBeLessThan(120);
   // The chip in the message box shows the shrunk file, under its new name.
-  await expect(page.getByRole("button", { name: "Preview IMG_4242.webp" })).toBeVisible();
+  await expect(page.getByRole("button", { name: `Preview ${name}` })).toBeVisible();
   // The server keeps the uploaded photo in the draft: its identifier passes the draft route, which refused a bare id
   // with a 400. The chip comes back after a reload only if the server's copy holds it.
-  await expect.poll(() => serverDraft(page)).toEqual(["IMG_4242.webp"]);
+  await expect.poll(() => serverDraft(page)).toEqual([name]);
   await page.evaluate(() => localStorage.clear());
   await page.reload();
   await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
-  await expect(page.getByRole("list", { name: "Attachments" }).getByRole("listitem", { name: /IMG_4242\.webp/ })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Attachments" }).getByRole("listitem", { name: new RegExp(name.replace(".", "\\.")) })).toBeVisible();
 });
 
 test("an image the server takes whole is left alone: a small photo, a GIF, and a PNG screenshot", async ({ page }) => {

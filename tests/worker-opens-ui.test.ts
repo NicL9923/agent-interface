@@ -75,7 +75,8 @@ beforeEach(async () => {
       "GET /mac/devices": { available: false, reason: "Not in this test.", devices: [] },
     };
     if (call in empty) return json(empty[call]);
-    if (/^GET \/bots\/[^/]+\/(draft|routines\/[^/]+\/results.*)$/.test(call)) return json(null);
+    if (/^GET \/bots\/[^/]+\/draft$/.test(call)) return json(null);
+    if (/^GET \/bots\/[^/]+\/routines\/[^/]+\/results$/.test(call)) return json([]);
     if (/^GET \/bots\/[^/]+\/routine-runs$/.test(call)) return json({ runs: [], unavailable: [] });
     if (call === "PATCH /preferences") return json((bodies[call]!.at(-1) as object));
     // Reading reports, which these tests do not inspect.
@@ -128,6 +129,7 @@ describe("a notification tapped while the app is open", () => {
     await settled();
     expect(new URLSearchParams(location.search).get("routine")).toBe("morning check");
     expect(transcript()).toContain("ranch says howdy");
+    expect(container.textContent).toContain("No saved runs yet.");
   });
 
   it("opens Today for a digest", async () => {
