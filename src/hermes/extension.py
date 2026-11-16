@@ -1142,6 +1142,8 @@ class Bridge:
         # The receipt whose prompt this thread's native turn runs, or None. Set around Hermes's
         # _run_prompt_submit, whose turn thread runs with a copy of the caller's context.
         self.turn_claim = contextvars.ContextVar("agent_interface_turn_claim", default=None)
+        self.queue_capture = contextvars.ContextVar("agent_interface_queue_capture", default=None)
+        self.queue_busy = contextvars.ContextVar("agent_interface_queue_busy", default=False)
         # Request IDs whose intent is written but whose admission Hermes has not answered yet. An open
         # names no run for them, so it shows what it showed before the admission began. journal.lock.
         self.admitting = set()
@@ -1668,32 +1670,40 @@ class Bridge:
         except Exception:
             logging.getLogger(__name__).exception("Checking a send's photos at its turn's start failed")
 
-    def photos_not_sent(self, sid, staged, turn, text):
-        """The photos of a send whose prompt found a turn running that did not go with it.
+    def install_queue_capture(self):
+        # Hermes binds both functions to the server module. Busy submit calls enqueue synchronously
+        # under history_lock, and enqueue returns the actual envelope, including a merged head.
+        server = self.server
+        if not hasattr(server, "_handle_busy_submit") or not hasattr(server, "_enqueue_prompt"):
+            return
+        busy, enqueue = server._handle_busy_submit, server._enqueue_prompt
+        def capture_busy(rid, sid, session, *args, **kwargs):
+            capture = self.queue_capture.get()
+            token = self.queue_busy.set(capture is not None and capture["rid"] == rid and capture["session"] is session)
+            try:
+                return busy(rid, sid, session, *args, **kwargs)
+            finally:
+                self.queue_busy.reset(token)
+        def capture_enqueue(session, *args, **kwargs):
+            envelope = enqueue(session, *args, **kwargs)
+            capture = self.queue_capture.get()
+            if self.queue_busy.get() and capture is not None and capture["session"] is session:
+                capture["images"] = list(envelope.get("image_paths") or []) if isinstance(envelope, dict) else None
+            return envelope
+        server._handle_busy_submit, server._enqueue_prompt = capture_busy, capture_enqueue
 
-        Hermes puts a prompt into a running turn as text only, so every photo of a ``joined`` send stayed behind, and
-        is taken back here: it would otherwise run in the next turn, whoever's it is. A ``queued`` prompt keeps the
-        photos staged when it arrived with it, in its own queue entry (``_handle_busy_submit``, ``session_auto_continue.py:
-        418-439`` at ``ed1afb0``), so one found in neither the session's list nor that entry went to the turn that
-        took the session first.
-
-        Another client's prompt that was handled as busy first moved every staged photo into its own entry, so only
-        our entry counts: the last one added, the one whose text ends with ours (``_enqueue_prompt`` appends a new
-        entry, or merges text-only into the head). When the last entry is not ours, ours was never queued or has
-        drained already, and nothing is said. The one window left is another entry that ends with the very same text.
-        """
+    def photos_not_sent(self, sid, staged, turn, captured):
+        """Count missing photos only when this submission actually received a queue envelope."""
         session = self.server._sessions.get(sid)
         if session is None:
             return []
         if turn == "joined":
             self.unstage_images(sid, staged)
             return list(staged)
+        if captured is None:
+            return []
         with session["history_lock"]:
-            entries = [entry for entry in (session.get("queued_prompt"), *(session.get("queued_prompts") or [])) if isinstance(entry, dict)]
-            ours = entries[-1] if entries else None
-            if ours is None or not isinstance(ours.get("text"), str) or not ours["text"].rstrip().endswith(text.rstrip()):
-                return []
-            kept = [*session.get("attached_images", []), *(ours.get("image_paths") or [])]
+            kept = [*session.get("attached_images", []), *captured]
         gone = []
         for image in staged:
             if image in kept:
@@ -1887,6 +1897,7 @@ class Bridge:
             memoize_shell_summary(display)
         self.install_inline_guidance()
         self.install_turn_claims()
+        self.install_queue_capture()
         self.native_write = server.write_json
         server.write_json = self.write
         self.native_followups = server._run_post_turn_followups
@@ -2971,7 +2982,12 @@ class Bridge:
             # running turn, whose route is already bound, so it carries no voice mark.
             if params.get("voice_turn") is True and not steering:
                 native["voice_turn"] = True
-            result = self.native(method, native, native_rid)
+            capture = {"rid": native_rid, "session": session, "images": None}
+            token = self.queue_capture.set(capture)
+            try:
+                result = self.native(method, native, native_rid)
+            finally:
+                self.queue_capture.reset(token)
         except Exception as exc:
             timed("native", mark)
             mark = time.perf_counter()
@@ -3005,7 +3021,7 @@ class Bridge:
             # next turn would take them (methods_prompt.py:835-836 at ed1afb0, :580 at b9cb268 and d23cc6b). An
             # unknown answer keeps them: a turn Hermes started takes them on its own thread after it answers.
             self.unstage_images(sid, staged)
-        if staged and turn in ("queued", "joined") and (unsent := self.photos_not_sent(sid, staged, turn, text)):
+        if staged and turn in ("queued", "joined") and (unsent := self.photos_not_sent(sid, staged, turn, capture["images"])):
             # A turn that was running when the prompt arrived: the photos did not go with it. Said in the receipt below.
             logging.getLogger(__name__).warning("A send Hermes answered %s went without %d of its %d photos", result.get("status"), len(unsent), len(staged))
             journal.note_images_missing(request_id, len(unsent))
