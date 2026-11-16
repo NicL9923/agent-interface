@@ -16,3 +16,38 @@ Base: `62ea8cb992ad38fd4cd58e1612e98f8fc8df21ae`. The application and test diff 
 - Recall limitation reproduced with `ownSentRows` and `ownPrompts`: an unattributed steer can be claimed for display while `ownPrompts` returns no entry, because recall requires a sender ID. This affects existing composer sends too and is outside this change.
 
 No browser or physical-device acceptance was run. The account guard uses the existing account mark, but an account-switch form regression was not verified. The native iOS form posts through `store.attempt` directly, rather than the central AppStore send path, and has the same ownership gap.
+
+
+## Coordinator follow-up: uncertain acceptance after a chat remount
+
+GPT-6.1 Sol reproduced a missed path at `aea70c8a`: send a form, receive an uncertain
+receipt, switch chats, then reopen the original chat after acceptance. The form's local
+ownership callback was gone, so the accepted anonymous row read "Household member".
+The new real-App regression failed with that exact label before the follow-up fix.
+
+The app now keeps callbacks by request ID while a form is unresolved. Each callback keeps
+the original anchor and account mark. A remounted form settles the same callback, and a
+terminal receipt removes it. Registration still occurs only after request-ID generation
+and its account check. A receipt known to belong to another copy does not record ownership,
+including when the receipt has no text. These callbacks remain in memory for this account's
+mounted app, as the existing own-send list does. This adds no persisted data or server contract.
+
+At source diff fingerprint `sha256:96cf22d7900b8d1186291e879a23f3a6108dc72ffbcc7e0b251d5f78f186d01f` from
+`git diff --binary aea70c8a -- src tests`, the app, form retry, sent-echo and account suites
+passed 262 tests in five files. Typecheck, lint and diff checks passed. Logs are in
+`.private/form-reopen-red.log`, `.private/form-reopen-green.log`,
+`.private/form-account-green.log`, `.private/form-conflict-green.log`, and
+`.private/form-followup-mutations.log`.
+
+Three individual mutations failed their respective tests: dropping a remounted form's
+receipt, removing the account check after the real crypto digest, and recording an accepted
+conflicting receipt despite its ownership flag. Source bytes were restored after each run.
+The account test holds only the WebCrypto I/O result, changes the account record, then resumes;
+it verifies that the old answers never reach the message POST. This supplies the form-specific
+account-switch regression missing from the initial validation.
+
+The earlier full 4,069-test run applies to the earlier implementation only. Full local and
+Chromium/WebKit validation must run on this follow-up. Both implementers are OpenAI, so
+independent review outside OpenAI remains incomplete. Native forms still bypass AppStore
+send bookkeeping, a pre-existing native gap outside this web-only diff. No Apple validation
+or production deployment ran.

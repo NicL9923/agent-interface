@@ -22,7 +22,8 @@ export type TranscriptTools = {
   reviewedInterruption?: boolean;
   /** This person's form key from bootstrap, for form request IDs. */
   formKey?: string;
-  startFormSend?: (botId: string, senderId: string, text: string) => (receipt: SubmissionReceipt) => void;
+  startFormSend?: (botId: string, senderId: string, text: string) => (requestId: string) => void;
+  settleFormSend?: (receipt: SubmissionReceipt, own: boolean) => void;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 

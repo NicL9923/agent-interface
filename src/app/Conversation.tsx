@@ -60,7 +60,7 @@ const noChips = new Map<string, Artifact[]>();
  * Memoized, with stable callbacks from App, so a keystroke in the composer, which changes App's draft,
  * does not re-render the transcript, its decisions, or its activity avatar.
  */
-export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, ownRows, echo, state, showActivity, avatarState, connectionLost, connectionShown, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, startFormSend, computerOpen = false, reviewed = false }: {
+export const Conversation = memo(function Conversation({ boot, selected, botId, conversation, canonical, ownRows, echo, state, showActivity, avatarState, connectionLost, connectionShown, offline, appUnavailable, checkingConnection, reconnect, error, setError, notifications, scroll, endSpace, content, history, reply, onScroll, onCreate, onDraft, onRoutineResults, onHideRoutineRuns, startFormSend, settleFormSend, computerOpen = false, reviewed = false }: {
   boot: Bootstrap;
   selected?: Bot;
   botId: string;
@@ -71,6 +71,7 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   /** The saved messages with no sender that are this person's own sends; see ownSentRows. */
   ownRows: ReadonlySet<string>;
   startFormSend: TranscriptTools["startFormSend"];
+  settleFormSend: TranscriptTools["settleFormSend"];
   echo: SentEcho | null;
   state: ActivityState;
   showActivity: boolean;
@@ -176,8 +177,8 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   const talking = useTalkLive();
   // A reply already playing stops only once the chat shows it is disconnected; starting one is refused at once (`tools.unavailable`).
   const speech = useReplySpeech(botId, connectionShown || talking);
-  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey, startFormSend }),
-    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey, startFormSend]);
+  const tools = useMemo<TranscriptTools>(() => ({ botId, sessionId: conversation?.sessionId, unavailable: connectionLost, quote, announce, speech, reviewedInterruption: reviewed, formKey: boot.formKey, startFormSend, settleFormSend }),
+    [botId, conversation?.sessionId, connectionLost, quote, announce, speech, reviewed, boot.formKey, startFormSend, settleFormSend]);
   const frame = useRef<HTMLDivElement>(null);
   // The row reads as thinking before Hermes reports the new turn (see awaitingTurn), so the failed turn's retry steps aside.
   const startingTurn = activeStates.includes(state) && !activeStates.includes(canonical?.activity.state ?? "idle");
