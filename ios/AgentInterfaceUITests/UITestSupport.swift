@@ -174,7 +174,11 @@ extension XCUIApplication {
     guard let page = route.page else { return }
     let link = buttons["settingsPage.\(page)"]
     // Work sits below the routines, so a long list can push it off screen.
-    for _ in 0..<8 where !link.canTap { collectionViews.firstMatch.swipeUp() }
+    let list = collectionViews[route.section == "memory" ? "settings.memoryAndLearning" : "settings.\(route.section)"]
+    for _ in 0..<8 {
+      if link.hasFrame && list.hasFrame && link.frame.minY >= navigationBars.firstMatch.frame.maxY && link.frame.maxY <= list.frame.maxY - 12 { break }
+      list.swipeUp()
+    }
     link.tapWhenReady(file: file, line: line)
     XCTAssertTrue(link.waitForDisappearance(), "Settings opens \(title)", file: file, line: line)
   }
