@@ -1,0 +1,54 @@
+# Bot exchange display validation
+
+Final source: `f647086826efe8de73b7499c4f72e1bc60a4ad96`. Base: `62ea8cb992ad38fd4cd58e1612e98f8fc8df21ae`.
+
+Bot messages show sender and recipient avatars with a direction arrow in chat and history. Consecutive messages collapse by default, with message counts, failed deliveries, and sending status in the summary. Single messages stay readable. Known assistants offer their chat; unresolved assistants use a neutral icon. Names label the route, and the still avatars are decorative for assistive technology.
+
+The rendering preserves incoming envelopes, inherited replies, outgoing calls, and calls sharing a saved row with narration or files. Ordinary tools remain in Work and break exchange runs. Find reveals collapsed groups. Projected rows keep their original history IDs for reading positions. Closed groups do not enter the geometry search for the first visible message. Native bot prompts stay in the same turn so successive incoming messages can collapse together.
+
+## Checks
+
+| Check | Code state | Result | Evidence |
+| --- | --- | --- | --- |
+| Initial avatar and inherited-reply regressions | Parent of `76a69d39` | Failed for the intended reasons before implementation | Tool output, November 15 at 23:34 UTC |
+| Reply that also sends another handoff | `869def81` plus its regression | Failed before the fix because the outgoing request replaced the reply text | Tool output, November 16 at 00:25 UTC |
+| Reading-position regressions | `382844d1` plus the regressions | Both failed before the fix. Closed content broke the ordered search, and a projected handoff ID was sent as a history position | Tool output, November 16 at 00:38 UTC |
+| Focused web suites | `7dc9207a` | Unit-passed: 293 tests in 8 files | `.private/bot-exchanges/focused.log` |
+| Seven deliberate web mutations | `382844d1` | Each went red: lost reply text, lost file-only replies, lost narrated handoffs, forced-open groups, ignored run boundaries, disabled find reveal, and missing history avatars. Source restored byte for byte | `.private/bot-exchanges/red-*.log`; runner `.private/bot-exchanges/mutate.py` |
+| Same-name route regression | Parent of `7dc9207a` plus the regression | Failed before the stable-ID fix. Distinct bots sharing a display name now keep separate routes | Tool output and focused suite |
+| Full Linux battery | `ddd24f83` | Typecheck compiled; lint and ruff passed; release built. Vitest ran 4078 tests: 4077 passed, one obsolete fixture failed. The command exited 1. Python skipped automatically because no Python inputs changed | `.private/bot-exchanges/check-all.log`; full Vitest output in `/home/nic/.cache/agent-interface/check-all/logs/20261115T200459-4143199-t3-5347ef4c-bb0c51ad43f75359/test.log` |
+| Corrected hidden-row fixture | `7530237b` | Unit-passed: all 19 live-reply tests. Internal process activity preserves the original hidden-row identity and action assertions. The former bot fixture conflicts with the requested visible bot messages | `.private/bot-exchanges/live-reply-fixed.log` |
+| Full browser suite | Production logic of `ddd24f83` | Runtime-exercised: 174 passed, 3 skipped across Chromium and WebKit | `.private/bot-exchanges/check-all.log` and check-all's e2e log |
+| Final icon centering | `3543b31b` | Compiled and built; lint passed. Four focused Chromium/WebKit cases passed at 320 px and 1280 px, including keyboard toggles, axe scans, and 200% text without horizontal overflow | `.private/bot-exchanges/final-build.log`, `final-lint.log`, `final-browser.log` |
+| Stable native unit and affected UI run | `fa9b5bf7` | 812 selected: 809 passed, 1 upload test failed, 2 skipped. Both affected UI flows and all new unit tests passed. Validated input hash matched before and after | `.private/bot-exchanges/native/native-green.log`; Mac `.private/ios-test-20261116T005831Z-44156.xcresult` |
+| Full baseline native unit target | `62ea8cb9` | 804 selected, 2 skipped, no failures | `.private/bot-exchanges/native/native-baseline-full.log` |
+| Diagnostic full native unit target | `fa9b5bf7` plus read-only test instrumentation described below | 810 selected, 2 skipped, no failures. The upload test passed without changing application code, so its earlier result is flaky rather than established as a baseline failure | `.private/bot-exchanges/native/native-diagnose-upload.log`, `native-diagnostic-driver.log` |
+| Corrected reply-boundary and find tests | Native production at `fa9b5bf7`, test fixture from `ddd24f83` | Both passed, then each failed under its targeted mutation | `.private/bot-exchanges/native/native-remaining-green.log`, `native-red-reply-boundary.log`, `native-red-find.log` |
+| Six native display mutations | Native production at `fa9b5bf7`, with the corrected boundary fixture for its final proof | Turn boundary, content preservation, recipient resolution, grouping, reply joining, and find all went red. Production source restored byte for byte | `.private/bot-exchanges/native/native-followup.log`, `native-diagnostic-driver.log`, `native-red-*.log` |
+| Clean-cache upload fixture | Native production at `fa9b5bf7`, corrected transcript fixture plus the `value.draft = Draft()` assignment committed in `f6470868` | Targeted test passed with every assertion unchanged. Removing `draftReady` from `attachUploaded` then failed on both cached and visible attachments. Production and experimental test source restored afterward | `.private/bot-exchanges/native/native-upload-clean-green.log`, `native-red-upload-readiness.log` |
+
+The final web fixture and native upload fixture corrections are separate test-only commits. Unaffected successful checks were reused. No clean full Linux battery is claimed after the targeted fixture correction.
+
+The focused web command was `npx vitest run tests/agent-exchange-ui.test.ts tests/app-ui.test.ts tests/transcript-ui.test.ts tests/discovery-ui.test.ts tests/transcript-window.test.ts tests/transcript-position.test.ts tests/collaboration-ui.test.ts tests/main-assistant-ui.test.ts`.
+
+The full Linux command was `~/.agents/tools/linux-heavy-lock.sh bash .private/bot-exchanges/validate.sh`. It ran `.agents/tools/check-all --skip e2e --keep-going`, then `.agents/tools/check-all --only e2e` in the installed Playwright container, under the same machine lock. It queued for 7352.741 seconds and executed for 358.272 seconds. Fedora lacks the ICU 74 and JPEG 8 libraries that Playwright WebKit requires. The existing `mcr.microsoft.com/playwright:v1.65.0-noble` container supplied them; no host packages changed. The final four browser cases are a single-file check and use check-all's free-port lease. The response-routing fixture blocks service workers because worker requests bypass page routing in WebKit, and removes conditional cache headers before parsing intercepted JSON.
+
+## Native evidence
+
+The Mac validation checkout is `/Volumes/DevSSD/scratch/bot-exchanges-b4bf45e8`. Native production files at the final source SHA are identical to `fa9b5bf7`. The only subsequent iOS changes strengthen two test fixtures. The full diagnostic run added a read-only mock-server request-method accessor and a print at the failing assertion. The instrumented `NativeContractTests.swift` has SHA-256 `4569dfd62fce71e339129784e905ada2458a4ac381f9095effd237822844c492`. Instrumentation was restored byte for byte before the remaining checks.
+
+The upload fixture starts with a dirty draft by default. Leaving the chat schedules a PUT on the same path that `holdNext` later uses to hold the returning GET. A dirty cached draft also intentionally becomes ready immediately. The passing diagnostic recorded `held=GET ready=false cachedDirty=Optional(false) methods=["PUT", "GET"]`. Starting this one test with a clean draft removes the outgoing save and makes it exercise the loading branch. Its clean-fixture mutation proof failed on lost attachments, without weakening any assertion or changing production readiness behavior.
+
+The first reply-boundary mutation survived because an activity-visible fixture created a work anchor that already prevented reply joining. Commit `ddd24f83` uses conversation-visible exchanges, removing that shortcut. The corrected test passed normally and failed when the provenance guard was removed.
+
+Native commands use `.agents/tools/validate-ios.sh 251FA44D-D10C-4679-8015-741FC41C8AEF test` under `mac-heavy-lock.sh`. The full unit target is `-only-testing:AgentInterfaceTests`. The affected UI flows are `AgentInterfaceUITests/NativeFlowTests/testCoordinationActivityKeepsScheduledAnswerVisible` and `AgentInterfaceUITests/MainAssistantFlowTests/testTheMainAssistantLeadsHomeChecksInAndHandsOff`. These are simulator runs, not physical-device verification.
+
+The original Mac delegate preserved another task's dirty checkout. All accepted validation used a separate copy on the verified DevSSD volume. An initial run invalidated by a source update during acquisition is excluded. Subsequent source updates and deliberate mutations ran only between completed test invocations. The diagnostic and remaining proofs held one machine slot, queued for 1062.617 seconds, then executed for 231.987 seconds.
+
+## Other entry points and limits
+
+Traced and exercised: Simple and Advanced chat, saved history, legacy and explicit origins, incoming and outgoing messages, narration and file-only replies, tools within bot conversations, search reveal, and reading-position persistence. The signed-in roster controls avatar resolution and chat navigation. Server privacy notices remain redacted; inaccessible bots use a neutral icon. Group-room posts retain their room author display because their recipients are room members. The wire contract and backend origin classification do not change.
+
+Normal and large-text web screenshots were inspected in `.private/bot-exchanges/webkit-review.png`. Native collapsed and expanded groups, single messages, and light/dark appearances were inspected in `.private/bot-exchanges/native-review.png`. Native Dynamic Type and manual screen-reader checks were not run.
+
+Independent cross-provider review remains incomplete. Provider status recorded Anthropic's weekly usage limit until November 17 and xAI's exhausted balance until November 16. No same-provider review is represented as independent. No PR, deployment, or paid CI work was performed.
