@@ -23,7 +23,7 @@ import XCTest
     XCTAssertEqual(app.descendants(matching:.any).matching(NSPredicate(format:"identifier BEGINSWITH %@","savedReplyMarker-")).count,1)
     for _ in 0..<20 where !app.staticTexts["Fixture: five easy dinners."].canTap { app.swipeDown() }
     XCTAssertTrue(app.staticTexts["Use **only** pantry staples"].exists,app.debugDescription)
-    XCTAssertTrue(app.staticTexts["Kitchen companion → Ranch hand"].exists,app.debugDescription)
+    XCTAssertTrue(app.otherElements["Kitchen companion to Ranch hand"].exists,app.debugDescription)
     let attachment=XCTAttachment(screenshot:app.screenshot());attachment.name="Native saved reply history";attachment.lifetime = .keepAlways;add(attachment)
   }
   func testSearchSavedItemsAutomationAndEditableStarter() {
