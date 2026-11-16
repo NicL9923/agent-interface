@@ -636,6 +636,23 @@ describe("reply actions", () => {
   });
 });
 
+it("saves the original history row when reading a handoff projected from a reply", async () => {
+  conversation = { ...conversation, messages: [{ id: 'narration', role: 'assistant', text: 'I asked Planner.',
+    toolCall: { id: 'send', name: 'message_agent', status: 'completed', arguments: '{"target":"Planner","message":"Check the gate."}' } }] };
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    const id = this.getAttribute('data-message-id');
+    return { top: 0, bottom: id === 'narration' ? 0 : 400, height: 400, left: 0, right: 400, width: 400 } as DOMRect;
+  });
+  await render();
+  const transcript = container.querySelector<HTMLElement>('.transcript')!;
+  Object.defineProperties(transcript, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 } });
+  transcript.scrollTop = 200;
+  await act(async () => transcript.dispatchEvent(new Event('scroll')));
+  await advance(400);
+  const position = vi.mocked(write).mock.calls.filter(([path]) => path === '/bots/shared/read-position').at(-1)?.[1];
+  expect(position).toMatchObject({ messageId: 'narration' });
+});
+
 describe("find in chat", () => {
   beforeEach(() => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
@@ -648,6 +665,20 @@ describe("find in chat", () => {
   });
   const find = () => container.querySelector<HTMLInputElement>('.find-bar input')!;
   const count = () => container.querySelector(".find-count")?.textContent;
+
+  it("opens a collapsed bot exchange when its message matches", async () => {
+    conversation = { ...conversation, messages: [
+      { id: 'bot-in', role: 'user', text: 'Message from Planner: Check the north gate.' },
+      { id: 'bot-reply', role: 'assistant', text: 'The north gate is shut.' },
+    ] };
+    await render();
+    const group = container.querySelector<HTMLDetailsElement>('.agent-exchange-group')!;
+    expect(group.open).toBe(false);
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true, cancelable: true })));
+    await typeInto(find(), 'north gate');
+    expect(count()).toBe('2 of 2');
+    expect(group.open).toBe(true);
+  });
 
   it("leaves Control+F alone on Mac and uses it on non-Apple platforms", async () => {
     await render();

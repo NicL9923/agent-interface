@@ -136,3 +136,21 @@ Red run: `Deployment.execute` temporarily ran `subprocess.run(["sleep", "0.05"],
 loop every time. With the shared module patched: `deploy_common_test` failed 1 test and `deploy_guarded_release_test` 3. With the fix:
 both pass. The injected line was removed.
 
+
+## November 15: the held-lock test bounds the lock wait again
+
+A GPT-6.1 Sol review of #363 found that the held-lock test's fake clock moved only at each look, never while `stop()` sat
+blocked on the session lock. `LOCK_SECONDS` raised from 0.05 to 1 s still passed, after about 3 s, with `wait=0.3`: the test
+no longer bounded how long an input waits behind a held lock.
+
+The session lock in that test is now `ChargedLock`, the same real `RLock` behind a wrapper that moves the fake clock by the
+whole timeout of any `acquire` that blocks, and fails the test on an `acquire` with no timeout. Hermes's own `with` on the lock
+still waits as Hermes does. The test asserts the input waited at most 0.6 s on that clock: the 0.3 s bound, two looks and one
+short lock wait. A lock timeout of about 0.5 s or more fails it.
+
+Red runs with `python3 .agents/tools/mutate-py.py`, the test alone and then the whole file through `scripts/run-python-tests.py`:
+
+| Mutation | Result |
+| --- | --- |
+| `LOCK_SECONDS = 1` | failed: `1.2000000000000002 not less than or equal to 0.6`. The test as it stood on `origin/main` survived the same mutant |
+| `lock.acquire()` with no timeout | failed at once: `The session lock was taken with no timeout`. It used to fail only at the 10 s release |

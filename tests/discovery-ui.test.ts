@@ -9,6 +9,23 @@ import { mountRoot, typeInto, click } from './ui-harness';
 vi.mock('../src/client-api', async original => (await import("./helpers/request-mock")).withRequest(await (async(importOriginal)=>({...await importOriginal<typeof import('../src/client-api')>(),api:vi.fn(),write:vi.fn()}))(original)));
 let root:Root;let container:HTMLDivElement;
 beforeEach(()=>{vi.mocked(api).mockReset();vi.mocked(write).mockReset();({container,root}=mountRoot());});
+it('shows bot avatars in history and reveals the matched exchange',async()=>{
+  const messages:Message[]=[
+    {id:'in',role:'user',text:'Check the gate',origin:{kind:'agent',visibility:'activity',name:'Planner'}},
+    {id:'reply',role:'assistant',text:'The gate is closed',origin:{kind:'agent',visibility:'activity',name:'Planner'}},
+  ];
+  vi.mocked(api).mockImplementation(async path=>path.startsWith('/search')?{hits:[{botId:'ranch',botName:'Ranch',sessionId:'history',title:'Gates',snippet:'Gate',messageId:'reply'}],unavailableBots:[]}:path.includes('/history/')?{botId:'ranch',sessionId:'history',messages,offset:0,hasMore:false,targetMessageId:'reply'}:[]);
+  const bootstrap={user:{id:'one'},bots:[{id:'ranch',name:'Ranch'},{id:'planner',name:'Planner'}],household:[]} as unknown as Bootstrap;
+  await act(async()=>root.render(createElement(DiscoveryPanel,{bootstrap,onRoutine:()=>{}})));
+  await act(async()=>container.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));
+  await act(async()=>container.querySelector<HTMLButtonElement>('.today-row')!.click());
+  const group=container.querySelector<HTMLDetailsElement>('.agent-exchange-group')!;
+  expect(group.open).toBe(true);
+  expect(container.querySelector('#history-in [role="group"]')?.getAttribute('aria-label')).toBe('Planner to Ranch');
+  expect([...container.querySelectorAll('#history-in .avatar-wrap')].map(avatar=>avatar.getAttribute('aria-label'))).toEqual(['Planner: Ready','Ranch: Ready']);
+  expect(container.querySelector('#history-reply [role="group"]')?.getAttribute('aria-label')).toBe('Ranch to Planner');
+  expect(container.querySelector('#history-reply .message-text')?.textContent).toBe('The gate is closed');
+});
 it('does not let a late history response replace the selected automation view',async()=>{
   let resolve!:(value:unknown)=>void;const history=new Promise(done=>resolve=done);
   vi.mocked(api).mockImplementation(async(path)=>path.startsWith('/search')?{hits:[{botId:'ranch',botName:'Ranch',sessionId:'history',title:'Dinners',snippet:'Plan'}],unavailableBots:[]}:path.includes('/history/')?history:path==='/automations'?{routines:[],usage:[],unavailableBots:[]}:[]);

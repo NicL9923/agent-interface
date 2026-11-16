@@ -54,13 +54,12 @@ import XCTest
       main.tap()
       // A check-in that found something is a message in the chat.
       XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "dentist moved to 4 PM")).firstMatch.waitForExistence(timeout: 15), app.debugDescription)
-      // The hand-off sits in the turn's work, as Hermes reports it.
-      app.buttons["turnWork"].tapWhenReady()
-      let group = app.buttons["Bot messages"].exists ? app.buttons["Bot messages"] : app.buttons["Tool calls"]
-      group.tapWhenReady()
+      // A single handoff is readable directly in chat.
       let open = app.buttons["openExchangeChat.ranch"]
       XCTAssertTrue(open.waitForExistence(timeout: 10), app.debugDescription)
-      XCTAssertTrue(app.staticTexts["My assistant → Ranch hand"].exists, "The label names the other assistant, not its ID")
+      open.revealAboveComposer()
+      XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "My assistant to Ranch hand")).firstMatch.exists, "The route names both assistants")
+      XCTAssertTrue(app.staticTexts["Can you fix the north gate on Tuesday morning?"].exists)
       XCTAssertEqual(open.label, "Open Ranch hand's chat")
       try capture("ios-chat-checkin-handoff-\(theme)")
       app.openBotProfile("My assistant")
