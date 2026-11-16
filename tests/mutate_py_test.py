@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """`.agents/tools/mutate-py.py` against real files and real child processes, never a patched function of its own."""
+import fcntl
 import json
 import os
 import py_compile
+import runpy
 import shutil
 import signal
 import subprocess
@@ -271,6 +273,22 @@ class ToolTest(unittest.TestCase):
         imported = subprocess.run([sys.executable, "-c", "import m; print(m.value())"], cwd=self.repo, env=ENV, capture_output=True, text=True, check=True)
         self.assertEqual(imported.stdout, "1\n", "an ordinary import ran the mutant's bytecode")
 
+    def test_a_lock_still_publishing_its_pid_refuses_without_running_a_mutant(self):
+        before = self.snapshot("m.py")
+        # Use the real key function, but hold the external lock before its owner has written the PID.
+        key = runpy.run_path(str(TOOL))["pending_key"]((self.repo / "m.py").resolve())
+        directory = self.scratch / f"mutate-py-{os.getuid()}"
+        directory.mkdir(mode=0o700)
+        ran = self.repo / "ran"
+        with (directory / f"{key}.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.tool("m.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c",
+                               f"open({str(ran)!r}, 'w').write('ran')", check_exit=2)
+        self.assertEqual(self.rows(result), ["| m.py: 'return 1' | error: another mutate-py run (pid unknown) is mutating this file |"])
+        self.assertFalse(ran.exists())
+        self.assertEqual(self.snapshot("m.py"), before)
+        self.assertEqual(list(self.scratch.rglob("*.json")) + list(self.scratch.rglob("*.orig")), [])
+
     def test_two_runs_started_together_on_one_file_let_only_one_mutate_it(self):
         # A module that takes about a second to compile holds both runs between the ownership check and the snapshot,
         # which is where two unlocked runs both pass the check.
@@ -283,7 +301,8 @@ class ToolTest(unittest.TestCase):
         for run in runs:
             self.addCleanup(lambda run=run: run.poll() is None and run.kill())
         refused, mutated = sorted(line for run in runs for line in run.communicate(timeout=60)[0].splitlines()[2:])
-        self.assertRegex(refused, r"^\| m\.py: 'return 1' \| error: another mutate-py run \(pid \d+\) is mutating this file \|$")
+        # The kernel lock can refuse this run before its holder publishes the PID; that diagnostic is optional.
+        self.assertRegex(refused, r"^\| m\.py: 'return 1' \| error: another mutate-py run \(pid (?:\d+|unknown)\) is mutating this file \|$")
         self.assertEqual(mutated, "| m.py: 'return 1' | failed: exit 1 |")
         self.assertEqual(len(ran.read_text().split()), 1)
         self.assertEqual(self.snapshot("m.py"), before)
