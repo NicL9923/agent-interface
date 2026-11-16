@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """`.agents/tools/mutate-py.py` against real files and real child processes, never a patched function of its own."""
+import fcntl
 import json
 import os
 import py_compile
+import runpy
 import shutil
 import signal
 import subprocess
@@ -173,6 +175,23 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(marker.read_text(), "x")  # the baseline ran once; the mutant never did
         self.assertEqual((self.repo / "m.py").read_text(), MODULE)
 
+    def test_a_baseline_runs_every_distinct_batch_command_and_stops_on_a_later_one_that_fails(self):
+        ran = self.repo / "ran"
+        passes = [sys.executable, "-c", f"open({str(ran)!r}, 'a').write('a')"]
+        fails = [sys.executable, "-c", f"import sys; open({str(ran)!r}, 'a').write('b'); sys.exit(1)"]
+        self.write("batch.json", json.dumps([
+            {"file": "m.py", "old": "return 1", "new": "return 2", "command": passes},
+            {"file": "m.py", "old": "return 1", "new": "return 3", "command": passes},
+            {"file": "m.py", "old": "return 1", "new": "return 4", "command": fails},
+        ]))
+        result = self.tool("--batch", "batch.json", "--baseline", check_exit=2)
+        self.assertIn("the unmutated command did not pass (failed: exit 1)", result.stderr)
+        self.assertIn("sys.exit(1)", result.stderr)
+        self.assertEqual(result.stdout, "")
+        # Each distinct command ran once, unmutated; no mutant ran.
+        self.assertEqual(ran.read_text(), "ab")
+        self.assertEqual((self.repo / "m.py").read_text(), MODULE)
+
     def test_a_child_killed_by_a_signal_is_a_failed_row_and_the_file_is_restored(self):
         before = self.snapshot("m.py")
         script = "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"
@@ -193,11 +212,11 @@ class ToolTest(unittest.TestCase):
         wait_for(lambda: not alive(child) and not alive(grandchild), "the command's process group ending")
         self.assertEqual(self.snapshot("m.py"), before)
 
-    def start_hanging_run(self, *extra, name="m.py"):
-        """The tool, running a command that reports its pid and then waits; returns once the mutant is on disk."""
+    def start_hanging_run(self, *extra, name="m.py", prelude=""):
+        """The tool, running a command that runs prelude, reports its pid and then waits; returns once the mutant is on disk."""
         pids = self.repo / "hang.pids"
         pids.unlink(missing_ok=True)
-        script = f"import os, time; open({str(pids)!r}, 'w').write(str(os.getpid())); time.sleep(600)"
+        script = f"{prelude}\nimport os, time; open({str(pids)!r}, 'w').write(str(os.getpid())); time.sleep(600)"
         tool = subprocess.Popen([sys.executable, str(TOOL), name, "--old", "return 1", "--new", "return 2", *extra, "--", sys.executable, "-c", script],
                                 cwd=self.repo, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: tool.poll() is None and tool.kill())
@@ -238,6 +257,56 @@ class ToolTest(unittest.TestCase):
         self.assertIn("restored", result.stderr)
         self.assertEqual(self.rows(result), ["| m.py: 'return 1' | failed: test_value (exit 1) |"])
         self.assertEqual(self.snapshot("m.py"), before)
+
+    def test_recovery_clears_bytecode_a_killed_run_compiled_from_its_same_size_mutant(self):
+        # The killed run's command compiled the mutant beside the source, as an ordinary import does; --keep-mtime gave the
+        # mutant the original's mtime, and the mutant has the original's size, so that .pyc stays valid after the restore.
+        compile_mutant = f"import py_compile; py_compile.compile('m.py', cfile='__pycache__/m.{sys.implementation.cache_tag}.pyc', doraise=True)"
+        tool, child = self.start_hanging_run("--keep-mtime", prelude=compile_mutant)
+        tool.kill()
+        tool.communicate(timeout=30)
+        os.killpg(child, signal.SIGKILL)
+        self.write("b.py", MODULE)
+        # A run that never reaches its own clearing, because its mutation cannot apply, still recovers m.py.
+        result = self.tool("b.py", "--old", "missing", "--new", "x", "--", "true", check_exit=2)
+        self.assertIn(f"restored {self.repo / 'm.py'}", result.stderr)
+        imported = subprocess.run([sys.executable, "-c", "import m; print(m.value())"], cwd=self.repo, env=ENV, capture_output=True, text=True, check=True)
+        self.assertEqual(imported.stdout, "1\n", "an ordinary import ran the mutant's bytecode")
+
+    def test_a_lock_still_publishing_its_pid_refuses_without_running_a_mutant(self):
+        before = self.snapshot("m.py")
+        # Use the real key function, but hold the external lock before its owner has written the PID.
+        key = runpy.run_path(str(TOOL))["pending_key"]((self.repo / "m.py").resolve())
+        directory = self.scratch / f"mutate-py-{os.getuid()}"
+        directory.mkdir(mode=0o700)
+        ran = self.repo / "ran"
+        with (directory / f"{key}.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.tool("m.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c",
+                               f"open({str(ran)!r}, 'w').write('ran')", check_exit=2)
+        self.assertEqual(self.rows(result), ["| m.py: 'return 1' | error: another mutate-py run (pid unknown) is mutating this file |"])
+        self.assertFalse(ran.exists())
+        self.assertEqual(self.snapshot("m.py"), before)
+        self.assertEqual(list(self.scratch.rglob("*.json")) + list(self.scratch.rglob("*.orig")), [])
+
+    def test_two_runs_started_together_on_one_file_let_only_one_mutate_it(self):
+        # A module that takes about a second to compile holds both runs between the ownership check and the snapshot,
+        # which is where two unlocked runs both pass the check.
+        self.write("m.py", MODULE + "".join(f"x{i} = {i}\n" for i in range(400_000)))
+        before = self.snapshot("m.py")
+        ran = self.repo / "ran"
+        script = f"import os, sys, time; open({str(ran)!r}, 'a').write(f'{{os.getpid()}} '); time.sleep(1); sys.exit(1)"
+        runs = [subprocess.Popen([sys.executable, str(TOOL), "m.py", "--old", "return 1", "--new", "return 2", "--", sys.executable, "-c", script],
+                                 cwd=self.repo, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(2)]
+        for run in runs:
+            self.addCleanup(lambda run=run: run.poll() is None and run.kill())
+        refused, mutated = sorted(line for run in runs for line in run.communicate(timeout=60)[0].splitlines()[2:])
+        # The kernel lock can refuse this run before its holder publishes the PID; that diagnostic is optional.
+        self.assertRegex(refused, r"^\| m\.py: 'return 1' \| error: another mutate-py run \(pid (?:\d+|unknown)\) is mutating this file \|$")
+        self.assertEqual(mutated, "| m.py: 'return 1' | failed: exit 1 |")
+        self.assertEqual(len(ran.read_text().split()), 1)
+        self.assertEqual(self.snapshot("m.py"), before)
+        self.assertEqual(list(self.scratch.rglob("*.json")) + list(self.scratch.rglob("*.orig")), [])
 
     def kill_a_run_on_m_py(self):
         """A run killed mid-mutation: m.py stays mutated and its original waits in the pending record."""

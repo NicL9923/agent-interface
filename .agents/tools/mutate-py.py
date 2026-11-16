@@ -27,13 +27,17 @@ Restore on every exit path. The mutation is undone in a `finally`, and SIGINT, S
 process group and then restore. SIGKILL cannot be caught, so before touching a file the tool records its original
 bytes in a private directory under the system temp directory, written to a temporary file and renamed so a kill mid-write
 leaves no half record. Every run starts by restoring every file whose record names a dead process, whichever file this
-run targets, and says so. A record whose directory is gone is discarded, unless the volume it was on is not mounted. It refuses a file another live run is mutating. An unreadable record is reported and kept,
+run targets, and says so. A record whose directory is gone is discarded, unless the volume it was on is not mounted. A per-file lock, held from the ownership
+check through the restore and taken by recovery too, makes a run on a file another run holds fail at once. Recovery
+clears the repository's bytecode after it restores a file. An unreadable record is reported and kept,
 because its saved original may be the only copy; it blocks a run on that file only. A mutant that does not compile is an
 `error:` row, not a caught mutant, because every test would fail on the import.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -140,9 +144,35 @@ def read_record(record: Path) -> dict:
     return info
 
 
+def pending_key(path: Path) -> str:
+    return hashlib.sha256(str(path).encode()).hexdigest()[:24]
+
+
 def pending_names(path: Path) -> tuple[Path, Path]:
-    key = hashlib.sha256(str(path).encode()).hexdigest()[:24]
+    key = pending_key(path)
     return pending_dir() / f"{key}.json", pending_dir() / f"{key}.orig"
+
+
+@contextlib.contextmanager
+def file_lock(key: str):
+    """Hold the file's lock, or yield the pid that holds it. The kernel drops the lock when its holder dies, even by
+    SIGKILL, so a killed run never leaves the file locked. The descriptor is not inherited, so the command cannot keep it.
+
+    It covers the ownership check, the snapshot, the mutation and the restore, and recovery takes it too: two runs that
+    both passed the check could otherwise each snapshot the other's mutant and restore that as the original."""
+    descriptor = os.open(pending_dir() / f"{key}.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            holder = os.pread(descriptor, 32, 0).decode(errors="replace").strip()
+            yield int(holder) if holder.isdigit() else 0
+            return
+        os.ftruncate(descriptor, 0)
+        os.pwrite(descriptor, str(os.getpid()).encode(), 0)
+        yield None
+    finally:
+        os.close(descriptor)
 
 
 def nearest_existing(path: Path) -> Path:
@@ -155,35 +185,45 @@ def recover_dead_runs() -> list[str]:
     A record of a live run is left alone. An unreadable record is reported and kept, because its `.orig` may be the only copy."""
     notes = []
     for record in sorted(pending_dir().glob("*.json")):
-        backup = record.with_suffix(".orig")
-        try:
-            info = read_record(record)
-        except (OSError, ValueError) as error:
-            notes.append(f"the pending record {record} is unreadable ({error}); its original bytes may be in {backup}, so check them and delete both")
-            continue
-        if alive(info["pid"]):
-            continue
-        path = Path(info["path"])
-        if not path.parent.is_dir():
-            # A volume that is not mounted hides a checkout that still exists, so its record waits for the volume to come back.
-            if isinstance(info.get("dev"), int) and nearest_existing(path).stat().st_dev != info["dev"]:
-                notes.append(f"kept the record of {path}: its directory is missing and the volume it was on is not mounted; the original bytes are in {backup}")
-                continue
-            # A throwaway checkout deleted after a killed run: nothing can be restored, and the record would warn forever.
-            record.unlink(missing_ok=True)
-            backup.unlink(missing_ok=True)
-            notes.append(f"discarded the record of {path}: its directory no longer exists")
-            continue
-        if backup.exists():
-            try:
-                write_original(path, backup.read_bytes(), info["mode"], info["mtime_ns"])
-            except OSError as error:
-                notes.append(f"{path} could not be restored from the unfinished run of pid {info['pid']} ({error}); the original bytes are in {backup}")
-                continue
+        with file_lock(record.stem) as holder:
+            # A held lock means a live run owns the file, or another run is recovering it right now.
+            if holder is None:
+                note = recover_record(record)
+                if note:
+                    notes.append(note)
+    return notes
+
+
+def recover_record(record: Path) -> str | None:
+    """Restore one dead run's file under its lock, or say why not. None when there is nothing to say."""
+    backup = record.with_suffix(".orig")
+    if not record.exists():
+        return None  # another run recovered it between the listing and the lock
+    try:
+        info = read_record(record)
+    except (OSError, ValueError) as error:
+        return f"the pending record {record} is unreadable ({error}); its original bytes may be in {backup}, so check them and delete both"
+    if alive(info["pid"]):
+        return None
+    path = Path(info["path"])
+    if not path.parent.is_dir():
+        # A volume that is not mounted hides a checkout that still exists, so its record waits for the volume to come back.
+        if isinstance(info.get("dev"), int) and nearest_existing(path).stat().st_dev != info["dev"]:
+            return f"kept the record of {path}: its directory is missing and the volume it was on is not mounted; the original bytes are in {backup}"
+        # A throwaway checkout deleted after a killed run: nothing can be restored, and the record would warn forever.
         record.unlink(missing_ok=True)
         backup.unlink(missing_ok=True)
-        notes.append(f"restored {path} from the unfinished run of pid {info['pid']}")
-    return notes
+        return f"discarded the record of {path}: its directory no longer exists"
+    if backup.exists():
+        try:
+            write_original(path, backup.read_bytes(), info["mode"], info["mtime_ns"])
+        except OSError as error:
+            return f"{path} could not be restored from the unfinished run of pid {info['pid']} ({error}); the original bytes are in {backup}"
+        # The restored file has the original's size and mtime, so a .pyc compiled from the mutant would still look valid.
+        clear_pycache(repository_root(path))
+    record.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+    return f"restored {path} from the unfinished run of pid {info['pid']}"
 
 
 class Pending:
@@ -314,7 +354,18 @@ def stop_group(child: subprocess.Popen) -> None:
 
 def mutate_once(path: Path, root: Path, old: str | None, new: str, line: int | None, command: list[str], timeout: float | None,
                 keep_mtime: bool) -> Result:
-    """Apply one mutation, run the command, and restore the file whatever happens."""
+    """Apply one mutation, run the command, and restore the file whatever happens.
+
+    A second run on a file another run holds fails at once instead of waiting: the holder can keep the file for a whole
+    test suite, a run that waits silently looks hung, and the error row says exactly which file to run again."""
+    with file_lock(pending_key(path)) as holder:
+        if holder is not None:
+            raise ToolError(f"another mutate-py run (pid {holder or 'unknown'}) is mutating this file")
+        return mutate_locked(path, root, old, new, line, command, timeout, keep_mtime)
+
+
+def mutate_locked(path: Path, root: Path, old: str | None, new: str, line: int | None, command: list[str], timeout: float | None,
+                  keep_mtime: bool) -> Result:
     Pending.guard(path)
     if not path.is_file():
         return Result("error", f"{path} is not a file")
@@ -431,7 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--line", type=int, help="1-based line number")
     parser.add_argument("--name", help="the Mutation column for this row")
     parser.add_argument("--batch", help="JSON list of mutations")
-    parser.add_argument("--baseline", action="store_true", help="run the command once unmutated first and stop if it fails, so a red suite cannot read as a caught mutant")
+    parser.add_argument("--baseline", action="store_true", help="run every distinct command once unmutated first and stop if any fails, so a red suite cannot read as a caught mutant")
     parser.add_argument("--timeout", type=float, help="seconds a command may run before it counts as an error")
     parser.add_argument("--keep-mtime", action="store_true", help="write the mutant with the original's mtime, to reproduce the same-second bytecode trap")
     return parser
@@ -458,18 +509,21 @@ def main(argv: list[str]) -> int:
         print(f"mutate-py: {note}", file=sys.stderr)
     status = 0
     if args.baseline:
+        # Every distinct command and repository, before any mutation: one that already fails would read as a caught mutant.
+        baselines: dict[tuple[tuple[str, ...], Path], None] = {}
         try:
-            first = parse_command(specs[0].get("command"), command)
+            for spec in specs:
+                baselines[(tuple(parse_command(spec.get("command"), command)), repository_root(spec["path"]))] = None
         except ToolError as error:
             print(f"mutate-py: {error}", file=sys.stderr)
             return EXIT_ERROR
-        root = repository_root(specs[0]["path"])
-        clear_pycache(root)
-        base = run_command(first, root, args.timeout, root, {"child": None})
-        clear_pycache(root)
-        if base.kind != "survived":
-            print(f"mutate-py: the unmutated command did not pass ({base.cell()}); no mutation was run", file=sys.stderr)
-            return EXIT_ERROR
+        for unmutated, root in baselines:
+            clear_pycache(root)
+            base = run_command(list(unmutated), root, args.timeout, root, {"child": None})
+            clear_pycache(root)
+            if base.kind != "survived":
+                print(f"mutate-py: the unmutated command did not pass ({base.cell()}): {shlex.join(unmutated)} in {root}; no mutation was run", file=sys.stderr)
+                return EXIT_ERROR
     rows: list[tuple[str, Result]] = []
     try:
         for spec in specs:
