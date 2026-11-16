@@ -77,6 +77,10 @@ import XCTest
     try audit(app, screen: "home")
     app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+    let account = app.descendants(matching: .any).matching(identifier: "signedInAccount").firstMatch
+    XCTAssertTrue(account.waitForExistence(timeout: 5))
+    XCTAssertTrue(account.label.contains("Local test member"), "The account description includes the member name")
+    XCTAssertTrue(account.label.contains("test@localhost.invalid"), "The account description includes the email")
     try audit(app, screen: "settings")
     app.buttons["Close"].tap()
     app.buttons["openToday"].tap()
