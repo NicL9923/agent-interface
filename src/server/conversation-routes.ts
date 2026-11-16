@@ -534,8 +534,8 @@ export function installConversationRoutes(app: FastifyInstance, collaborators: {
       let receipt: SubmissionReceipt;
       try {
         receipt = await (steering
-          ? runtime.steer({ ...input, reviewedInterruption })
-          : runtime.submit({ ...input, reviewedInterruption, ...(voice ? { voice: true } : {}) }));
+          ? runtime.steer({ ...input, reviewedInterruption, ...(reviewedUncertain ? { reviewedUncertain: true } : {}) })
+          : runtime.submit({ ...input, reviewedInterruption, ...(reviewedUncertain ? { reviewedUncertain: true } : {}), ...(voice ? { voice: true } : {}) }));
       } catch (error) { timings.discard(timing); throw error; }
       phases.admitted = performance.now();
       if (receipt.status === "accepted")
