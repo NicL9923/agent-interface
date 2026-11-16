@@ -52,3 +52,7 @@ Traced and exercised: Simple and Advanced chat, saved history, legacy and explic
 Normal and large-text web screenshots were inspected in `.private/bot-exchanges/webkit-review.png`. Native collapsed and expanded groups, single messages, and light/dark appearances were inspected in `.private/bot-exchanges/native-review.png`. Native Dynamic Type and manual screen-reader checks were not run.
 
 Independent cross-provider review remains incomplete. Provider status recorded Anthropic's weekly usage limit until November 17 and xAI's exhausted balance until November 16. No same-provider review is represented as independent. No PR, deployment, or paid CI work was performed.
+
+## PR preflight
+
+Merged `origin/main` at `cf3c9688` into the published branch with merge commit `65e548c8`. Its two newer commits change only test fixtures and validation documentation. Native and web production inputs are unchanged. On that merge, `npx vitest run tests/bot-details-ui.test.ts tests/sidebar-ui.test.ts tests/transcript-rerender.test.ts tests/live-reply-ui.test.ts` unit-passed all 42 tests. `python3 tests/hermes_compaction_test.py PreemptTests.test_a_held_session_lock_cannot_keep_an_input_past_the_bound` passed its one test. Logs are `.private/bot-exchanges/pr-focused.log` and `pr-python.log`. Both independent review providers remained unavailable at the November 16 02:30 UTC preflight check.
