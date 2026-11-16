@@ -235,6 +235,17 @@ import XCTest
     XCTAssertEqual(FindMatches.status(position: nil, count: 0), "0 matches")
   }
 
+  func testFindIncludesBotMessageBodiesAndExcludesOtherInternalActivity() {
+    let messages = [
+      Message(id: "incoming", role: "user", text: "Message from Planner: Check the gate"),
+      Message(id: "reply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner")),
+      Message(id: "narrated", role: "assistant", text: "I sent Planner a message", toolCall: ToolCall(id: "call", name: "message_agent", arguments: #"{"target":"Planner","message":"Check the gate"}"#, status: "completed")),
+      Message(id: "diagnostic", role: "assistant", text: "Gate diagnostic", origin: MessageOrigin(kind: "diagnostic", visibility: "activity")),
+    ]
+    XCTAssertEqual(FindMatches.merge(loaded: messages, query: "gate", hits: [], botId: "bot", sessionId: nil).map(\.id),
+      ["incoming", "reply", "agent-call:narrated"])
+  }
+
   // MARK: Folded work
 
   func testBotMessagesStayInOrderAndGroupOnlyConsecutiveExchanges() throws {

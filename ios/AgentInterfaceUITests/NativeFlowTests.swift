@@ -59,6 +59,11 @@ import XCTest
     expanded.name = "Scheduled job details expanded"
     expanded.lifetime = .keepAlways
     add(expanded)
+    app.openBotProfile("Ranch hand")
+    app.buttons["profileFind"].tapWhenReady()
+    app.textFields["findConversation"].typeWhenFocused("Thanks, I will check the gate.")
+    XCTAssertTrue(app.staticTexts["findStatus"].wait(until: "label == %@", "1 of 1"))
+    XCTAssertTrue(app.staticTexts["Thanks, I will check the gate."].waitUntilHittable(timeout: 15), "Find reveals the collapsed bot message")
   }
   func testOnboardingValidatesAddressWithoutDroppingEnteredText() {
     let app = app(fixture: false)

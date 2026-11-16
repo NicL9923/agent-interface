@@ -1677,8 +1677,13 @@ enum FindMatches {
   }
   static func merge(loaded messages: [Message], query: String, hits: [SearchHit], botId: String, sessionId: String?) -> [Match] {
     guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-    let local = messages.filter(\.isConversationVisible).filter {
-      $0.text.localizedStandardContains(query) || ($0.files ?? []).contains { $0.name.localizedStandardContains(query) }
+    let local = AgentHandoff.displayMessages(messages).filter { $0.isConversationVisible || $0.isAgentExchange }.filter {
+      let text: String
+      if $0.isAgentExchange {
+        let handoff = AgentHandoff(message: $0)
+        text = handoff.incoming?.body ?? ($0.toolCall == nil ? $0.text : handoff.body)
+      } else { text = $0.text }
+      return text.localizedStandardContains(query) || ($0.files ?? []).contains { $0.name.localizedStandardContains(query) }
     }.map { Match(id: $0.id, loaded: true) }
     // Only the canonical session's hits open the live chat; other sessions keep their history views.
     guard let sessionId else { return local }
