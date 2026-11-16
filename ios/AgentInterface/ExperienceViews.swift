@@ -136,7 +136,7 @@ struct TodayView: View {
             }.accessibilityIdentifier("today.event." + event.id)
           }
           if value.hasMore {
-            Text("More results are waiting. Mark this page caught up to see them.").font(.caption).foregroundStyle(Palette.muted)
+            Text("More results are waiting. Mark this page caught up to see them.").font(.caption).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
           }
           Button(value.hasMore ? "Mark this page caught up" : "Mark caught up") { markCaughtUp(value) }
             .font(.subheadline.weight(.medium)).tint(Palette.accent)
@@ -196,7 +196,7 @@ struct TodayView: View {
     .pollWhileActive(id: store.scope ?? "", every: .seconds(30)) { await load() }
   }
   private func sectionTitle(_ title: String) -> some View {
-    Text(title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase).foregroundStyle(Palette.muted)
+    Text(title).font(.caption.weight(.semibold)).tracking(1.1).textCase(.uppercase).foregroundStyle(Palette.muted).fixedSize(horizontal: false, vertical: true)
   }
   @ViewBuilder private func counts(_ value: TodayOverview) -> some View {
     if attention(value).isEmpty {
