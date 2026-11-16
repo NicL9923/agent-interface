@@ -48,3 +48,22 @@ contain this closure. The previous baseline and isolated results do not validate
 A fresh exact-commit focused and complete three-suite run is required on the Mac.
 The queued Linux job prints the checked-out commit before execution; its scope cannot
 compile Swift and does not replace this required native check.
+
+
+## Completed native validation at `80580e154aa1a26bdb14df8ca5445da1de00413b`
+
+The compiler correction built successfully with Xcode 27.2, build 27B52, on an iPhone 17e
+simulator running iOS 27.0. Both test invocations compiled. The focused outgoing regression
+passed 1 test with 0 skips. The complete NativeContractTests, OwnSendsTests and
+ConversationParityTests selection passed all 189 tests with 0 failures and 0 skips.
+The result bundle recorded one AVAudioSession main-thread runtime warning. This was
+simulator validation, not physical-device acceptance.
+
+Logs: `/Volumes/DevSSD/scratch/ios-validation-task-20261116/pr430-corrected-single.log`
+and `pr430-corrected-full.log` in that directory. Scratch result copies are
+`ios-test-20261116T044312Z-51110.xcresult` and
+`ios-test-20261116T044439Z-51926.xcresult`, with their separate `-build.xcresult` bundles.
+The Mac checkout was restored to its original clean state. No independent review ran.
+The earlier upload/draft failure did not recur in this complete selection; its earlier
+cause remains unknown. Full Linux validation remains queued. The eligible independent
+review requirement and production release requirement remain unchanged.
