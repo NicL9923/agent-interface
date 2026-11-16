@@ -51,3 +51,22 @@ Chromium/WebKit validation must run on this follow-up. Both implementers are Ope
 independent review outside OpenAI remains incomplete. Native forms still bypass AppStore
 send bookkeeping, a pre-existing native gap outside this web-only diff. No Apple validation
 or production deployment ran.
+
+
+## Final full validation at `1f179b27f737e37f684688e0fe8af14cfa39d8d4`
+
+The Linux machine lock queued for 6,705.243 seconds; the combined check executed for
+348.624 seconds. `.agents/tools/check-all --skip e2e --keep-going` passed typecheck,
+lint, Ruff, all 4,072 JavaScript tests in 221 files, and the 896-module build. Python
+was correctly skipped because no Python input changed against main.
+
+The subsequent Playwright 1.65.0 Noble container ran the real Chromium/WebKit suite
+through `.agents/tools/check-all --only e2e` with Node 24.22.2. It passed 167 cases,
+with 3 existing skips, in 5 minutes 30 seconds. This replaces the earlier host WebKit
+launch failures as the final browser result. Output: `.private/form-ownership-check-all.log`.
+All five GitHub CI checks also passed at this source commit. A ledger-only commit does
+not change the inputs these checks covered.
+
+Independent non-OpenAI review remains incomplete; the PR stays draft. The native form
+limitation and lack of physical-device or manual acceptance remain as recorded above.
+A production release is required after merge; none ran.
