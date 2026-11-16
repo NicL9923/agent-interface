@@ -105,6 +105,10 @@ class Held:
         self.fd, self.path = fd, path
         self.info = {}
 
+    @property
+    def fds(self):
+        return () if self.fd is None else (self.fd,)
+
     def write_info(self, info):
         self.info = dict(info)
         os.ftruncate(self.fd, 0)
@@ -127,6 +131,31 @@ class Held:
 
     def __exit__(self, *exc):
         self.release()
+
+
+class HeldPorts:
+    """The individual locks for an app port and its adjacent control port."""
+
+    def __init__(self, app, control):
+        self.locks = (app, control)
+
+    @property
+    def fds(self):
+        return tuple(fd for held in self.locks for fd in held.fds)
+
+    def write_info(self, info):
+        for held in self.locks:
+            held.write_info(info)
+
+    def update_info(self, **changes):
+        for held in self.locks:
+            held.update_info(**changes)
+
+    def release(self):
+        try:
+            self.locks[0].release()
+        finally:
+            self.locks[1].release()
 
 
 def try_lock(path):
@@ -212,25 +241,40 @@ def port_candidates(seed, base=PORT_BASE, pairs=PORT_PAIRS):
 
 
 def pick_e2e_port(directory, seed, requested=None, base=PORT_BASE, pairs=PORT_PAIRS, bindable=can_bind):
-    """Lock a free app port and control port pair for the browser suite. Returns (Held, port).
+    """Lock a free app port and control port pair for the browser suite. Returns (HeldPorts, port).
 
     With `requested` (the caller's own E2E_PORT) only that pair is considered, and a busy one is an error rather
-    than a quiet move to another port. The lock file is named for the app port; candidates never overlap, so two
-    runs cannot hold pairs that share a control port.
+    than a quiet move to another port. Each number has its own lock because requested pairs may overlap.
+    Both descriptors stay with the suite, and both are released together.
     """
     candidates = [requested] if requested else port_candidates(seed, base, pairs)
     busy = []
     for port in candidates:
-        held = try_lock(directory / f"e2e-port-{port}.lock")
-        if not held:
+        app = try_lock(directory / f"e2e-port-{port}.lock")
+        if not app:
             busy.append(f"{port} (locked by another check-all)")
             continue
-        taken = [number for number in (port, port + 1) if not bindable(number)]
-        if not taken:
-            held.write_info({"pid": os.getpid(), "port": port, "since": time.time()})
-            return held, port
+        try:
+            control = try_lock(directory / f"e2e-port-{port + 1}.lock")
+        except BaseException:
+            app.release()
+            raise
+        if not control:
+            app.release()
+            busy.append(f"{port} (locked by another check-all)")
+            continue
+        held = HeldPorts(app, control)
+        try:
+            taken = [number for number in (port, port + 1) if not bindable(number)]
+            if not taken:
+                held.write_info({"pid": os.getpid(), "port": port, "since": time.time()})
+                return held, port
+        except BaseException:
+            held.release()
+            raise
         held.release()
         busy.append(f"{port} (port {taken[0]} is in use)")
+
     if requested:
         raise Refusal(f"E2E_PORT={requested} is not usable: {busy[0]}. Unset E2E_PORT to let check-all choose, or free that port and the next one.")
     raise Refusal(f"No free app and control port pair in {base}-{base + 2 * pairs - 1}.")
@@ -759,7 +803,7 @@ def run_one(root, name, argv, env, logs, cache, slots, args, requested, log):
             for lease in leases:
                 lease.update_info(pid=pid)
 
-        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose, inherit=[lease.fd for lease in leases],
+        code, output = run_process(argv, root, env, log_path, args.check_timeout, args.verbose, inherit=[fd for lease in leases for fd in lease.fds],
                                    on_start=name_the_child)
         seconds = time.monotonic() - started
     except Refusal as error:
