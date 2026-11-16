@@ -266,8 +266,10 @@ import XCTest
 
   func testOrdinaryRepliesDoNotJoinAcrossBotExchanges() throws {
     let before = Message(id: "before", role: "assistant", text: "Checking the ranch.")
-    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate")
-    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner"))
+    // Conversation-visible exchanges do not create a work anchor. Their provenance must break the reply run.
+    let origin = MessageOrigin(kind: "agent", visibility: "conversation", name: "Planner")
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Check the gate", origin: origin)
+    let botReply = Message(id: "botReply", role: "assistant", text: "The gate is shut", origin: origin)
     let after = Message(id: "after", role: "assistant", text: "All done", origin: MessageOrigin(kind: "human", visibility: "conversation"))
     let turn = try XCTUnwrap(conversation([before, incoming, botReply, after], .idle).presentationTurns.first)
     let shown = turn.messages.filter { $0.isConversationVisible || $0.isAgentExchange }
