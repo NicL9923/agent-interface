@@ -353,13 +353,13 @@ bash .agents/tools/validate-ios.sh SIMULATOR_UUID test
 ```
 
 Run it with no `-only-testing` or `-skip-testing` filter. A filtered run never counts toward a
-release. Skipped tests and the one expected failure are normal; a failure is not. Then publish,
+release. Skipped tests are reported separately; any unexpected failure blocks release. Then publish,
 typing the version and build the repository holds:
 
 ```sh
-node .agents/tools/publish-ios.mjs archive 1.0 28
-node .agents/tools/publish-ios.mjs upload 1.0 28
-node .agents/tools/publish-ios.mjs distribute 1.0 28
+node .agents/tools/publish-ios.mjs archive 1.0 29
+node .agents/tools/publish-ios.mjs upload 1.0 29
+node .agents/tools/publish-ios.mjs distribute 1.0 29
 ```
 
 `archive` refuses, before it reads credentials or calls Apple, unless the typed VERSION and
