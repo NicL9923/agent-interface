@@ -31,5 +31,5 @@ The tool cannot run red steps on itself, so each was a temporary local edit, res
 
 ## Checks
 
-`python3 scripts/run-python-tests.py tests/mutate_py_test.py` passed, 27 tests, and `.agents/tools/check-all` passed (see the PR).
+`python3 scripts/run-python-tests.py tests/mutate_py_test.py` passed, 34 tests, and `.agents/tools/check-all` passed (see the PR).
 Not exercised: macOS, where `fcntl.flock` has the same semantics; the Mac mini was not needed for a Python tool change.
