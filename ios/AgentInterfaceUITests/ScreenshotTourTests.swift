@@ -561,7 +561,12 @@ import CryptoKit
       let navigationBottom = app.navigationBars.allElementsBoundByIndex
         .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
       let top = max(form.frame.minY, navigationBottom) + 12
-      let bottom = min(form.frame.maxY - 12, keyboard.exists ? keyboard.frame.minY - 8 : form.frame.maxY - 12)
+      // Form frames extend beneath the fixed Save bar. XCTest reports covered
+      // rows as hittable, so keep their whole frame above it before tapping.
+      let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
+      let formBottom = saveBar.hasFrame && element.identifier != "saveChanges"
+        ? min(form.frame.maxY - 12, saveBar.frame.minY - 8) : form.frame.maxY - 12
+      let bottom = min(formBottom, keyboard.exists ? keyboard.frame.minY - 8 : formBottom)
       print("DESIGN_MODELS_REVEAL target=\(element) attempt=\(attempt) exists=\(element.exists) frame=\(element.hasFrame ? String(describing: element.frame) : "none") band=\(top)...\(bottom) upHint=\(up)")
       if element.hasFrame && element.frame.minY >= top && element.frame.maxY <= bottom {
         print("DESIGN_MODELS_TARGET type=\(element.elementType.rawValue) frame=\(element.frame)"); return
