@@ -30,9 +30,24 @@ import XCTest
     collapsed.name = "Scheduled answer with coordination collapsed"
     collapsed.lifetime = .keepAlways
     add(collapsed)
+    let botMessages = app.buttons["botMessages"]
+    XCTAssertTrue(botMessages.waitForExistence(timeout: 5), app.debugDescription)
+    XCTAssertEqual(botMessages.value as? String, "Collapsed")
+    XCTAssertTrue(botMessages.label.contains("3 bot messages"), botMessages.label)
+    XCTAssertTrue(botMessages.label.contains("1 failed"), botMessages.label)
+    XCTAssertFalse(app.staticTexts["Thanks, I will check the gate."].exists)
+    botMessages.revealAboveComposer()
+    botMessages.tapWhenReady()
+    XCTAssertTrue(app.staticTexts["Thanks, I will check the gate."].waitForExistence(timeout: 5))
+    let exchange = XCTAttachment(screenshot: app.screenshot())
+    exchange.name = "Bot exchange routes expanded"
+    exchange.lifetime = .keepAlways
+    add(exchange)
+    botMessages.tapWhenReady()
+    XCTAssertFalse(app.staticTexts["Thanks, I will check the gate."].exists)
     // Each turn folds its work into one row; opened, the groups show as before.
     app.expandWork()
-    for group in ["Bot messages", "Scheduled jobs", "Subagents", "Background processes", "Diagnostics"] {
+    for group in ["Scheduled jobs", "Subagents", "Background processes", "Diagnostics"] {
       XCTAssertTrue(app.buttons[group].exists, "Missing activity group: " + group)
     }
     let scheduled = app.buttons["Scheduled jobs"]
