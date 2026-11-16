@@ -17,3 +17,7 @@ The hook is installed only when both native functions exist. If a future unquali
 Source state for the focused pass: `extension.py` SHA-256 `888b42b3d041dbfc9de802d50ac98a6fdcfcffe6d9d3d2392015d8b8617488a4`, `hermes_photo_staging_test.py` `76beba42b36c97edba449c16d4dabec78ef7c2f6d0b1c92021b5f601afe536e5`, `hermes_turn_binding_test.py` `d5356634fc31fa36c7e6af26bbec807c81b30af32c39a5c060fc5f0d8f8d3465`. The fixture subsequently received its `typing.Any` import and upstream MIT license notice. Logs: `/tmp/photo-test.log`, `/tmp/photo-upstream-repro.log`. Full validation is queued under the machine lock.
 
 `python3 tests/hermes_turn_binding_test.py` passed 42 tests at `91489670`. Log: `/tmp/photo-turn-test.log`.
+
+## Full local check
+
+At `d8e9f6cc6c4182da47d79e2a2b9e5354f6faed1d`, `~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going` waited 6983.908 seconds for the machine lock and ran for 9 minutes 29 seconds. Typecheck compiled; lint and Ruff passed; the unit suite passed 4064 tests in 221 files; build produced 896 modules; the Python suite passed 52 files. Chromium passed 85 tests. All 85 WebKit tests failed to launch because this Fedora host lacks `libicu74` and `libjpeg-turbo8`. The overall command exited 1 for e2e. The parent arranged a compatible WebKit environment separately. The first queued attempt received SIGTERM before acquiring the lock and ran no checks. Full output: `/tmp/photo-check-all-retry.log`; individual logs: `/home/nic/.cache/agent-interface/check-all/logs/20261115T195528-4075856-t3-419d55c4-532197819e9c44a3/`.
