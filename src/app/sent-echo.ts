@@ -307,6 +307,18 @@ export const advance = (current: EchoState, input: EchoInput): EchoState => {
 export function useSentEchoes(input: Omit<EchoInput, "now">) {
   const { pending, receipt, sending, conversation, sender } = input;
   const [{ echoes, sends }, setState] = useState<EchoState>({ echoes: [], sends: [] });
+  // Capture the anchor and account at the instant the form is sent, before its asynchronous ID or receipt.
+  const beginFormSend = (botId: string, senderId: string, text: string) => {
+    const anchor = conversation?.botId === botId ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined;
+    return (receipt: SubmissionReceipt) => {
+      if (receipt.status !== "accepted" || receipt.turn === "none" || receipt.text !== undefined && receipt.text !== text) return;
+      setState(current => {
+        const echo: SentEcho = { request: { requestId: receipt.requestId, botId, text, attachments: [], reviewedInterruption: false }, sender: { id: senderId, name: "" }, sentAt: "", status: "sending", after: anchor };
+        const next = nextSends(current.sends, [echo], [echo], { receipt, sender: { id: senderId, name: "" }, conversation: null });
+        return next === current.sends ? current : { ...current, sends: next };
+      });
+    };
+  };
   const step = () => setState(current => advance(current, { pending, receipt, sending, conversation, sender, now: Date.now() }));
   useEffect(step, [pending, receipt, sending, conversation, sender?.id]);
   const waiting = echoes.some(echo => echo.status === "accepted" && !echo.ran);
@@ -324,5 +336,5 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
     const timer = setTimeout(step, Math.max(0, deadline - Date.now()));
     return () => clearTimeout(timer);
   }, [deadline, pending, receipt, sending, conversation, sender?.id]);
-  return { echoes, sends };
+  return { echoes, sends, beginFormSend };
 }

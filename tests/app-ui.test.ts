@@ -11,8 +11,9 @@ import type { Bootstrap, Conversation, Message } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
+import { authEpochKey } from "../src/app/storage";
 import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
-import { advance, mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia, typeInto } from "./ui-harness";
+import { advance, mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -849,6 +850,170 @@ describe("conversation state", () => {
       conversation = { ...conversation, activity: { state: "working", runId: "run" }, messages: [{ id: "earlier", role: "assistant", text: "On it" }, ...messages] };
     };
     afterEach(() => { vi.mocked(write).mockReset().mockResolvedValue({}); });
+
+    it("keeps an accepted form answer as the viewer's steer", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "trip", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text", required: true }] }] }) + '\n```';
+      working({ id: "form", role: "assistant", text: form });
+      let finish!: (answer: unknown) => void;
+      vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+        ? await new Promise<T>(resolve => { finish = answer => resolve(answer as T); }) : {} as T);
+      await render();
+      await act(async () => { await vi.dynamicImportSettled(); });
+      await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+      await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+      await waitForUi(() => expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/shared/messages")).toBe(true));
+      const body = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string; text: string };
+      await act(async () => finish({ requestId: body.requestId, status: "accepted", steered: true }));
+      working({ id: "form", role: "assistant", text: form }, { id: "steer-row", role: "user", text: body.text, steered: true },
+        { id: "other-row", role: "user", text: body.text, sender: { id: "two", name: "Two" } });
+      await changed();
+      expect(labels()).toEqual(["steer-row:", "other-row:Two"]);
+    });
+
+    it.each(["rejected", "uncertain"])("does not claim a form answer with a %s receipt", async status => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "no-claim", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-no-claim", role: "assistant", text: form });
+      vi.mocked(write).mockImplementation(async <T>(path: string, body?: unknown) => path === "/bots/shared/messages"
+        ? { requestId: (body as { requestId: string }).requestId, status } as T : {} as T);
+      await render();
+      await act(async () => { await vi.dynamicImportSettled(); });
+      await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+      await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+      await waitForUi(() => expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/shared/messages")).toBe(true));
+      const body = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { text: string };
+      working({ id: "form-no-claim", role: "assistant", text: form }, { id: "other-row", role: "user", text: body.text });
+      await changed();
+      expect(labels()).toEqual(["other-row:Household member"]);
+    });
+
+    it("does not claim a different answer accepted under the same form request", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "other-answer", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-other-answer", role: "assistant", text: form });
+      vi.mocked(write).mockImplementation(async <T>(path: string, body?: unknown) => path === "/bots/shared/messages"
+        ? { requestId: (body as { requestId: string }).requestId, status: "accepted", text: "Different answers" } as T : {} as T);
+      await render();
+      await act(async () => { await vi.dynamicImportSettled(); });
+      await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+      await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+      await waitForUi(() => expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/shared/messages")).toBe(true));
+      const body = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { text: string };
+      working({ id: "form-other-answer", role: "assistant", text: form }, { id: "other-row", role: "user", text: body.text });
+      await changed();
+      expect(labels()).toEqual(["other-row:Household member"]);
+    });
+
+    it("keeps a form answer's ownership when its uncertain receipt settles after reopening the chat", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "reopen", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-reopen", role: "assistant", text: form });
+      bootstrap.bots.push({ ...bootstrap.bots[0], id: "other", name: "Other" });
+      const serve = vi.mocked(api).getMockImplementation()!;
+      let body: { requestId: string; text: string } | undefined;
+      let accepted = false;
+      vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => {
+        if (path.startsWith("/bots/other/conversation?")) return { ...conversation, botId: "other", messages: [{ id: "other-anchor", role: "assistant", text: "Other chat" }] } as T;
+        if (path.startsWith("/submissions/")) return (body ? { requestId: body.requestId, status: accepted ? "accepted" : "uncertain", text: body.text, steered: true } : null) as T;
+        return (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest);
+      });
+      vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => {
+        if (path !== "/bots/shared/messages") return {} as T;
+        body = value as typeof body;
+        return { requestId: body!.requestId, status: "uncertain" } as T;
+      });
+      try {
+        await render();
+        await act(async () => { await vi.dynamicImportSettled(); });
+        await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+        await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+        await waitForUi(() => expect(body?.text).toContain("Marfa"));
+        const open = (name: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>('.bot-item')].find(button => button.textContent?.includes(name))!.click());
+        await open('Other');
+        accepted = true;
+        working({ id: "form-reopen", role: "assistant", text: form }, { id: "steer-row", role: "user", text: body!.text, steered: true });
+        await open('Shared');
+        await advance(0);
+        expect(labels()).toEqual(["steer-row:"]);
+      } finally { bootstrap.bots.pop(); }
+    });
+
+    it("does not send form answers after the account changes while their request ID is being derived", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "account-switch", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-account", role: "assistant", text: form });
+      await render();
+      await act(async () => { await vi.dynamicImportSettled(); });
+      await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+      const digest = crypto.subtle.digest.bind(crypto.subtle);
+      let release!: () => void, held = false;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      vi.spyOn(crypto.subtle, "digest").mockImplementationOnce(async (algorithm, input) => {
+        const answer = await digest(algorithm, input);
+        held = true;
+        await gate;
+        return answer;
+      });
+      const previous = bootstrap.user;
+      try {
+        await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+        await waitForUi(() => expect(held).toBe(true));
+        await act(async () => {
+          bootstrap.user = { ...previous, id: "two", name: "Two" };
+          localStorage.setItem(authEpochKey, JSON.stringify({ id: "changed-during-form", at: Date.now(), user: "two" }));
+          release();
+        });
+        expect(vi.mocked(write).mock.calls.filter(([path]) => path === "/bots/shared/messages")).toEqual([]);
+      } finally { release(); bootstrap.user = previous; }
+    });
+
+    it("does not claim answers accepted elsewhere when a conflicting form receipt omits text", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "conflict", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-conflict", role: "assistant", text: form });
+      const serve = vi.mocked(api).getMockImplementation()!;
+      let body: { requestId: string; text: string } | undefined;
+      vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => path.startsWith("/submissions/")
+        ? (body ? { requestId: body.requestId, status: "accepted", steered: true } : null) as T
+        : (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest));
+      vi.mocked(write).mockImplementation(async <T>(path: string, value?: unknown) => {
+        if (path !== "/bots/shared/messages") return {} as T;
+        body = value as typeof body;
+        throw new ApiError("Another copy sent different answers", 409, "submission_conflict");
+      });
+      await render();
+      await act(async () => { await vi.dynamicImportSettled(); });
+      await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+      await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+      await waitForUi(() => expect(body?.text).toContain("Marfa"));
+      working({ id: "form-conflict", role: "assistant", text: form }, { id: "other-row", role: "user", text: body!.text });
+      await changed();
+      expect(labels()).toEqual(["other-row:Household member"]);
+    });
+
+    it("records the original chat's form answer when acceptance arrives after switching chats", async () => {
+      const form = '```agent-ui\n' + JSON.stringify({ version: 1, cards: [{ id: "switch", type: "form", title: "Trip", fields: [{ id: "city", label: "City", kind: "text" }] }] }) + '\n```';
+      working({ id: "form-switch", role: "assistant", text: form });
+      bootstrap.bots.push({ ...bootstrap.bots[0], id: "other", name: "Other" });
+      const serve = vi.mocked(api).getMockImplementation()!;
+      vi.mocked(api).mockImplementation(async <T,>(path: string, ...rest: unknown[]) => path.startsWith("/bots/other/conversation?")
+        ? { ...conversation, botId: "other", messages: [{ id: "other-anchor", role: "assistant", text: "Other chat" }] } as T
+        : (serve as (path: string, ...rest: unknown[]) => Promise<T>)(path, ...rest));
+      let finish!: (answer: unknown) => void;
+      vi.mocked(write).mockImplementation(async <T>(path: string) => path === "/bots/shared/messages"
+        ? await new Promise<T>(resolve => { finish = answer => resolve(answer as T); }) : {} as T);
+      try {
+        await render();
+        await act(async () => { await vi.dynamicImportSettled(); });
+        await typeInto(container.querySelector<HTMLInputElement>('.form-reply input')!, 'Marfa');
+        await act(async () => container.querySelector<HTMLFormElement>('.form-reply')!.requestSubmit());
+        await waitForUi(() => expect(vi.mocked(write).mock.calls.some(([path]) => path === "/bots/shared/messages")).toBe(true));
+        const body = vi.mocked(write).mock.calls.find(([path]) => path === "/bots/shared/messages")![1] as { requestId: string; text: string };
+        const open = (name: string) => act(async () => [...container.querySelectorAll<HTMLButtonElement>('.bot-item')].find(button => button.textContent?.includes(name))!.click());
+        await open('Other');
+        await act(async () => finish({ requestId: body.requestId, status: "accepted", steered: true }));
+        working({ id: "form-switch", role: "assistant", text: form }, { id: "steer-row", role: "user", text: body.text });
+        await open('Shared');
+        await advance(0);
+        expect(labels()).toEqual(["steer-row:"]);
+      } finally { bootstrap.bots.pop(); }
+    });
+
 
     it("keeps a steer unlabeled when Hermes's copy replaces its echo, and labels another member's same words", async () => {
       working();

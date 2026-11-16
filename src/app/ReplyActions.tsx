@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import type { Message } from "../shared/types";
+import type { Message, SubmissionReceipt } from "../shared/types";
 import { request as apiRequest } from "../client-api";
 import { Icon } from "../components/Icon";
 import { When } from "../components/When";
@@ -22,6 +22,8 @@ export type TranscriptTools = {
   reviewedInterruption?: boolean;
   /** This person's form key from bootstrap, for form request IDs. */
   formKey?: string;
+  startFormSend?: (botId: string, senderId: string, text: string) => (requestId: string) => void;
+  settleFormSend?: (receipt: SubmissionReceipt, own: boolean) => void;
 };
 export const TranscriptTools = createContext<TranscriptTools | null>(null);
 
