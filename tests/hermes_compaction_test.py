@@ -63,6 +63,46 @@ class Fence:
         return answer
 
 
+class SteppedClock:
+    """A monotonic clock that moves ``step`` seconds at each look and can be moved on by hand."""
+    def __init__(self, step):
+        self.step, self.now = step, 0.0
+
+    def look(self):
+        value, self.now = self.now, self.now + self.step
+        return value
+
+
+class ChargedLock:
+    """Hermes's session lock, still the real lock, that moves ``clock`` by the timeout of every acquire that blocks.
+
+    An ``acquire`` without a timeout fails the test: a holder could keep the input waiting for as long as it likes.
+    Hermes's own ``with`` on the lock waits as long as it needs, as it does in Hermes.
+    """
+    def __init__(self, lock, clock):
+        self.lock, self.clock = lock, clock
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self.lock.acquire(blocking=False):
+            return True
+        if not blocking:
+            return False
+        if timeout is None or timeout < 0:
+            raise AssertionError("The session lock was taken with no timeout")
+        self.clock.now += timeout
+        return self.lock.acquire(timeout=timeout)
+
+    def release(self):
+        self.lock.release()
+
+    def __enter__(self):
+        self.lock.acquire()
+        return self
+
+    def __exit__(self, *_):
+        self.release()
+
+
 class Native:
     """Hermes's ``session.compress``: holds the session running like _manual_compress_turn, publishes its
     commit fence on the agent, and returns when the fence is cancelled or the summary is released."""
@@ -377,9 +417,11 @@ class PreemptTests(unittest.TestCase):
         fixture = Fixture(self)
         thread, _ = fixture.running()
         # The bound runs on a clock that moves a tenth of a second at each look, so preempt gives up after a few polls
-        # whatever the machine's speed. The lock stays held until the test lets it go.
-        reads = itertools.count()
-        fixture.idle.monotonic = lambda: next(reads) * 0.1
+        # whatever the machine's speed. A wait for Hermes's session lock moves the same clock by its whole timeout, so
+        # time the input spends blocked on the lock counts against the bound. The lock stays held until the test lets it go.
+        clock = SteppedClock(0.1)
+        fixture.idle.monotonic = clock.look
+        fixture.session["history_lock"] = ChargedLock(fixture.session["history_lock"], clock)
         held, release, finished = threading.Event(), threading.Event(), threading.Event()
 
         def hold():
@@ -391,9 +433,13 @@ class PreemptTests(unittest.TestCase):
         with self.assertLogs(compaction.log, logging.WARNING):
             holder.start()
             self.assertTrue(held.wait(5))
+            started = clock.now
             self.assertTrue(fixture.idle.preempt("sid", wait=0.3))
+            waited = clock.now - started
         # Preempt returned while the lock was still held, so it did not wait for the lock.
         self.assertFalse(finished.is_set())
+        # Past the 0.3 s bound by at most two looks and one short lock wait. A 1 s lock wait overshoots by 0.8 s.
+        self.assertLessEqual(waited, 0.6)
         release.set()
         holder.join(5)
         thread.join(5)
