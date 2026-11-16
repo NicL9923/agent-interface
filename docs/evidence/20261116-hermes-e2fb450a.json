@@ -1,0 +1,34 @@
+{
+  "hermesRevision": "e2fb450adcf74421fe9514f048319dfcbb5af6c1",
+  "upstreamCommittedAt": "2026-11-16T18:29:52+00:00",
+  "previousHermesRevision": "ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df",
+  "trackedPatchSha256": "d555e25f8b6d8dc94129bcb99c5d69bc9750aac862fa3e0d8e86214b5c708433",
+  "integrationDigest": "2c141dfc564e9079b8b340615f812c1f8ace80646057725eef0c7267ad307020",
+  "qualifiedAt": "2026-11-16T19:38:16.652088+00:00",
+  "phase": "succeeded",
+  "checks": [
+    "source: passed",
+    "repair: passed",
+    "upstream: passed",
+    "staging: passed (Re-applied over nearby upstream edits. The repair's own changes are identical.)",
+    "dependencies: passed",
+    "integration: passed",
+    "regressions: passed",
+    "quiescence: passed",
+    "backup: passed",
+    "install: passed",
+    "verify: passed",
+    "release: passed"
+  ],
+  "appSourceCommit": "1981660d024bf8e173e48c6d4ff8be0b0d0658d6",
+  "nativeAvailability": {
+    "checkedAt": "2026-11-16T19:52:33.425Z",
+    "authenticatedBootstrap": true,
+    "nativeConnected": true,
+    "latestBuild": 28,
+    "updateUrl": "https://testflight.apple.com/v1/app/6823644380",
+    "webBuild": "ed6e9cc2c51c509f",
+    "temporarySessionRemoved": true
+  },
+  "independentReview": "incomplete: eligible providers unavailable under recorded usage or balance limits"
+}
