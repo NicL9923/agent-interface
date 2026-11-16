@@ -346,7 +346,17 @@ if sys.argv[1:3] == ["--user", "show"]: print("4242")
         active = {"active_agents": 1, "active_work": [{"kind": "chat", "session": "discord:dm"}]}
         self.script(acquire=[self.acquired(**{str(self.home / "gateway_state.json"): json.dumps({**json.loads(self.gateway_record), **active})})],
                     release=[self.released()])
-        self.assert_refused(self.run_tool(), r"The gateway has an active agent or its state is unreadable\. Busy work at release: \[\]")
+        self.assert_refused(self.run_tool(), r"The gateway has active work or pending ingress, or its state is unreadable\. Busy work at release: \[\]")
+        self.assertEqual(self.rpc_calls(), ["status", "acquire", "release"])
+        self.assertEqual(self.sleeps.call_count, 0)
+
+    def test_pending_ingress_after_acquire_refuses_without_stopping_the_app(self):
+        # The plugin handler has begun but has not claimed an agent slot, so both work fields still look idle.
+        record = json.loads(self.gateway_record)
+        record["agent_interface_gateway_guard"]["pendingIngress"] = 1
+        self.script(acquire=[self.acquired(**{str(self.home / "gateway_state.json"): json.dumps(record)})],
+                    release=[self.released()])
+        self.assert_refused(self.run_tool(), r"The gateway has active work or pending ingress, or its state is unreadable\. Busy work at release: \[\]")
         self.assertEqual(self.rpc_calls(), ["status", "acquire", "release"])
         self.assertEqual(self.sleeps.call_count, 0)
 
