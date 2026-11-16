@@ -47,9 +47,10 @@ export function dropStartupRead() {
  * The startup read of `path`, if boot.js made one and nothing has taken it. `signal` is the caller's
  * request deadline and cancellation, which abort it too. A read that failed or was aborted on its own
  * hands over to `fallback`, the caller's own request, so a failure costs only the head start. Each read
- * is taken once; the others stay for their own paths.
+ * is taken once; the others stay for their own paths. The caller releases abort forwarding only after
+ * consuming the body, since fetch resolves when headers arrive.
  */
-export function takeStartupRead(path: string, signal: AbortSignal, fallback: () => Promise<Response>): Promise<Response> | undefined {
+export function takeStartupRead(path: string, signal: AbortSignal, fallback: () => Promise<Response>): { response: Promise<Response>; release(): void } | undefined {
   if (typeof window === "undefined" || window.__wildbotsStartup === undefined) return undefined;
   const startup = parse(window.__wildbotsStartup);
   if (!startup) {
@@ -69,7 +70,9 @@ export function takeStartupRead(path: string, signal: AbortSignal, fallback: () 
   if (signal.aborted) abort();
   else signal.addEventListener("abort", abort, { once: true });
   // An answer that arrives after the record changed is discarded by api(), as any answer is.
-  return Promise.resolve(read.response)
-    .then(response => response, error => signal.aborted ? Promise.reject(error) : fallback())
-    .finally(() => signal.removeEventListener("abort", abort));
+  return {
+    response: Promise.resolve(read.response)
+      .then(response => response, error => signal.aborted ? Promise.reject(error) : fallback()),
+    release: () => signal.removeEventListener("abort", abort),
+  };
 }

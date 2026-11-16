@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResponseCache, request } from "../src/client-api";
 import { firstPage, firstQuery } from "../src/app/conversation-page";
@@ -9,6 +11,7 @@ import { STARTUP_READ_VERSION } from "../src/startup-read";
 // public/boot.js runs here as the browser runs it, as a classic script, against the app's real client
 // API. fetch is the edge: each call is recorded and answered by the test.
 const BOOT = readFileSync("public/boot.js", "utf8");
+const networkFetch = globalThis.fetch;
 const runBoot = () => window.eval(BOOT);
 const NOW = Date.UTC(2026, 10, 10, 15);
 const LEAN = "/bootstrap?roster=lean";
@@ -166,6 +169,42 @@ describe("the read boot.js starts", () => {
     await failure;
     expect(signal?.aborted).toBe(true);
     expect(calls).toHaveLength(1);
+  });
+
+  it("aborts a startup response whose headers arrived but whose body stalled", async () => {
+    // Real fetch resolves on headers. The server leaves a JSON body unfinished until cancellation.
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.write('{"user":');
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected a loopback port");
+    let headersArrived!: () => void;
+    const headers = new Promise<void>(resolve => { headersArrived = resolve; });
+    let settled = false, failure: unknown;
+    answers.push(async () => {
+      const response = await networkFetch(`http://127.0.0.1:${address.port}/api${LEAN}`, { signal: calls[0].init.signal });
+      headersArrived();
+      return response;
+    });
+    try {
+      runBoot();
+      void leanBootstrap().then(() => { settled = true; }, error => { failure = error; settled = true; });
+      await headers;
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await nextTurn();
+      await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
+      expect(failure).toMatchObject({ status: 504, code: "CONNECTION_UNAVAILABLE" });
+      expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`]);
+      expect(calls[0].init.signal?.aborted).toBe(true);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
   });
 
   describe("for a linked chat", () => {
