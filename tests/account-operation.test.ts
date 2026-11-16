@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authEpochKey } from "../src/app/storage";
+import { browserLocks } from "./helpers/web-locks";
 
 type Tab = { change: typeof import("../src/app/account-change"); epoch: typeof import("../src/app/account-epoch"); api: typeof import("../src/client-api") };
 async function tab(): Promise<Tab> {
@@ -13,19 +14,11 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
-function locks() {
-  const tails = new Map<string, Promise<unknown>>();
-  return { request<T>(name: string, work: () => Promise<T> | T): Promise<T> {
-    const next = (tails.get(name) ?? Promise.resolve()).catch(() => {}).then(work);
-    tails.set(name, next);
-    return next;
-  } };
-}
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
 let cookie: string;
 beforeEach(() => {
   localStorage.clear(); cookie = "";
-  Object.defineProperty(navigator, "locks", { configurable: true, value: locks() });
+  Object.defineProperty(navigator, "locks", { configurable: true, value: browserLocks() });
 });
 afterEach(() => { vi.unstubAllGlobals(); delete (navigator as { locks?: unknown }).locks; });
 
@@ -101,8 +94,7 @@ it("propagates a denied lock without sending an authentication request", async (
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("keeps the newer CSRF token when an old offline logout finishes without Web Locks", async () => {
-  delete (navigator as { locks?: unknown }).locks;
+it("keeps the newer CSRF token when an old offline logout finishes after a new account record settles", async () => {
   localStorage.setItem(authEpochKey, JSON.stringify({ id: "offline", at: Date.now(), signedOut: true, logout: true, user: "one" }));
   const a = await tab();
   const gate = deferred<void>(), calls: string[] = [];
@@ -114,7 +106,8 @@ it("keeps the newer CSRF token when an old offline logout finishes without Web L
   });
   const out = a.change.finishSignOut();
   await vi.waitFor(() => expect(calls).toContain("/api/auth/logout"));
-  await a.change.signInWith("/auth/login", {});
+  const change = await a.epoch.beginAccountChange();
+  await change.settle({ user: "two" });
   a.api.setCsrf("newtoken");
   gate.resolve(); await out;
   expect(a.api.hasSession()).toBe(true);
@@ -163,8 +156,7 @@ it("does not send a stale offline logout after a queued sign-in settles", async 
   expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ user: "two" });
 });
 
-it("keeps a newer token after a failed same-generation sign-in advances the era", async () => {
-  delete (navigator as { locks?: unknown }).locks;
+it("keeps a newer token after an undone account change advances the era", async () => {
   localStorage.setItem(authEpochKey, JSON.stringify({ id: "offline", at: Date.now(), signedOut: true, logout: true, user: "one" }));
   const a = await tab();
   const gate = deferred<void>(), calls: string[] = [];
@@ -176,7 +168,8 @@ it("keeps a newer token after a failed same-generation sign-in advances the era"
   });
   const out = a.change.finishSignOut();
   await vi.waitFor(() => expect(calls).toContain("/api/auth/logout"));
-  await expect(a.change.signInWith("/auth/login", {})).rejects.toMatchObject({ status: 401 });
+  const change = await a.epoch.beginAccountChange();
+  await change.undo();
   a.api.setCsrf("newtoken");
   gate.resolve(); await out;
   expect(a.api.hasSession()).toBe(true);
@@ -193,8 +186,7 @@ it("keeps the offline logout pending if access to the operation lock is denied",
   expect(fetcher).not.toHaveBeenCalled();
 });
 
-it("does not use a late offline bootstrap after another sign-in starts", async () => {
-  delete (navigator as { locks?: unknown }).locks;
+it("does not use a late offline bootstrap after an undone account change advances the era", async () => {
   localStorage.setItem(authEpochKey, JSON.stringify({ id: "offline", at: Date.now(), signedOut: true, logout: true, user: "one" }));
   const a = await tab();
   const gate = deferred<void>(), calls: string[] = [];
@@ -206,9 +198,57 @@ it("does not use a late offline bootstrap after another sign-in starts", async (
   });
   const out = a.change.finishSignOut();
   await vi.waitFor(() => expect(calls.some(url => url.includes("/bootstrap"))).toBe(true));
-  await a.change.signInWith("/auth/login", {});
+  const change = await a.epoch.beginAccountChange();
+  await change.undo();
   a.api.setCsrf("newtoken");
   gate.resolve(); await out;
   expect(calls).not.toContain("/api/auth/logout");
   expect(a.api.hasSession()).toBe(true);
+});
+
+
+it("refuses cookie changes when Web Locks are absent", async () => {
+  delete (navigator as { locks?: unknown }).locks;
+  const a = await tab();
+  const before = JSON.stringify({ id: "one", at: Date.now(), user: "one" });
+  localStorage.setItem(authEpochKey, before);
+  const fetcher = vi.fn(() => { throw new Error("Authentication must not reach fetch"); });
+  vi.stubGlobal("fetch", fetcher);
+  await expect(a.change.signInWith("/auth/login", {})).rejects.toThrow("safely change accounts");
+  await expect(a.change.signOutOf("one")).rejects.toThrow("safely change accounts");
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(localStorage.getItem(authEpochKey)).toBe(before);
+});
+
+it("leaves logout pending when Web Locks are absent", async () => {
+  delete (navigator as { locks?: unknown }).locks;
+  const before = JSON.stringify({ id: "offline", at: Date.now(), signedOut: true, logout: true, user: "one" });
+  localStorage.setItem(authEpochKey, before);
+  const a = await tab();
+  const fetcher = vi.fn(() => { throw new Error("Pending logout must not reach fetch"); });
+  vi.stubGlobal("fetch", fetcher);
+  await expect(a.change.finishSignOut()).resolves.toBeUndefined();
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(localStorage.getItem(authEpochKey)).toBe(before);
+});
+
+it("keeps device-only sign-out available without Web Locks", async () => {
+  delete (navigator as { locks?: unknown }).locks;
+  localStorage.setItem(authEpochKey, JSON.stringify({ id: "one", at: Date.now(), user: "one" }));
+  const a = await tab();
+  a.epoch.accountStart();
+  const fetcher = vi.fn(() => { throw new Error("Device-only sign-out must not reach fetch"); });
+  vi.stubGlobal("fetch", fetcher);
+  await expect(a.change.signOutHere("one")).resolves.toBe(true);
+  expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ user: "one", signedOut: true, logout: true });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+
+it("refuses cookie changes outside a browser without touching fetch", async () => {
+  const a = await tab();
+  vi.stubGlobal("navigator", undefined);
+  const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+  await expect(a.change.signInWith("/auth/login", {})).rejects.toThrow("safely change accounts");
+  expect(fetcher).not.toHaveBeenCalled();
 });

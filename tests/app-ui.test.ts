@@ -620,7 +620,7 @@ describe("conversation state", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
     const order: string[] = [];
     const endpoint = "https://push.example.invalid/this-device";
-    vi.stubGlobal("navigator", { onLine: true, serviceWorker: {
+    vi.stubGlobal("navigator", { onLine: true, locks: navigator.locks, serviceWorker: {
       getRegistration: vi.fn(async () => ({ pushManager: { getSubscription: vi.fn(async () => ({ endpoint,
         unsubscribe: vi.fn(async () => { order.push("unsubscribe"); return true; }),
       })) } })), addEventListener: vi.fn(), removeEventListener: vi.fn(),
