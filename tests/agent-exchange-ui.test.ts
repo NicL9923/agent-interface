@@ -77,3 +77,13 @@ it("breaks runs at tools, ordinary replies and attributed human messages", () =>
   expect(exchangeRuns([incoming, outgoing, tool, incoming, reply, outgoing, human, incoming]).map(run => run.map(message => message.id)))
     .toEqual([['in', 'out'], ['tool'], ['in'], ['reply'], ['out'], ['human'], ['in']]);
 });
+
+it("keeps distinct avatar routes when two bots have the same display name", async () => {
+  const messages: Message[] = ['planner-one', 'planner-two'].map(id => ({ id, role: 'user', text: 'Check the gate',
+    origin: { kind: 'agent', visibility: 'activity', name: 'Planner', handle: id } }));
+  await act(async () => root.render(createElement(ExchangeBots.Provider, { value: { currentBotId: 'ranch', bots: [bots[0],
+    { ...bots[1], id: 'planner-one' }, { ...bots[1], id: 'planner-two' }] } },
+  createElement(AgentExchangeGroup, { messages, recipient: 'Ranch hand', children: null }))));
+  const routes = container.querySelectorAll('summary [role="group"]');
+  expect(routes).toHaveLength(2);
+});

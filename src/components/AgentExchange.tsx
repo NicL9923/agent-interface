@@ -88,7 +88,13 @@ export function AgentExchangeGroup({ messages, recipient, children }: { messages
   const { bots, currentBotId } = useContext(ExchangeBots);
   if (messages.length < 2) return children;
   const routes = messages.map(message => exchange(message, recipient, bots, currentBotId));
-  const unique = routes.filter((route, index) => routes.findIndex(other => other.sender.name === route.sender.name && other.receiver.name === route.receiver.name) === index);
+  const seen = new Set<string>();
+  const unique = routes.filter(route => {
+    const key = JSON.stringify([route.sender.bot?.id ?? route.sender.name, route.receiver.bot?.id ?? route.receiver.name]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const failed = messages.filter(message => message.toolCall?.status === 'failed').length;
   const sending = messages.some(message => message.toolCall?.status === 'running');
   return <details className="agent-exchange-group">
