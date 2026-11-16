@@ -138,10 +138,7 @@ struct ConversationTurnView: View, Equatable {
     DisclosureGroup {
       VStack(alignment: .leading, spacing: 12) {
         if advanced && !turn.reasoning.isEmpty { reasoning }
-        ForEach(turn.activityGroups.compactMap { group -> CoordinationGroup? in
-          let messages = group.messages.filter { !AgentHandoff.isExchangeActivity($0) }
-          return messages.isEmpty ? nil : CoordinationGroup(id: group.id, messages: messages)
-        }) { activityGroup($0) }
+        ForEach(turn.intermediateGroups) { activityGroup($0) }
       }
     } label: {
       WorkLabel(summary: WorkSummary(turn), live: live, connected: connected)
@@ -356,6 +353,15 @@ enum TranscriptRow: Identifiable {
   }
 }
 extension ConversationTurn {
+  var intermediateGroups: [CoordinationGroup] {
+    var groups: [CoordinationGroup] = []
+    for message in activityGroups.flatMap(\.messages).compactMap(AgentHandoff.workMessage) {
+      let label = message.isInternalActivity ? message.activityGroup : "Tool calls"
+      if let index = groups.firstIndex(where: { $0.id == label }) { groups[index].messages.append(message) }
+      else { groups.append(CoordinationGroup(id: label, messages: [message])) }
+    }
+    return groups
+  }
   var displayMessages: [Message] {
     AgentHandoff.displayMessages(messages)
   }
@@ -369,7 +375,7 @@ extension ConversationTurn {
         if case .message(_, let message) = row { return message.id }; return nil
       }.first
     }
-    let hasWork = activityGroups.contains { $0.messages.contains { !AgentHandoff.isExchangeActivity($0) } } || advanced && !reasoning.isEmpty
+    let hasWork = !intermediateGroups.isEmpty || advanced && !reasoning.isEmpty
     let shown = displayMessages
     let visible = Dictionary(uniqueKeysWithValues: shown.filter { $0.isConversationVisible || $0.isAgentExchange }.enumerated().map { ($0.element.id, $0.offset) })
     var result: [TranscriptRow] = []
@@ -419,10 +425,7 @@ struct WorkSummary: Equatable {
   var started: Date?
   var ended: Date?
   init(_ turn: ConversationTurn) {
-    counts = turn.activityGroups.compactMap { group in
-      let count = group.messages.filter { !AgentHandoff.isExchangeActivity($0) }.count
-      return count == 0 ? nil : Count(group: group.id, count: count)
-    }
+    counts = turn.intermediateGroups.map { Count(group: $0.id, count: $0.messages.count) }
     reasoning = !turn.reasoning.isEmpty
     let times = turn.messages.flatMap { message in
       [message.createdAt, message.toolCall?.startedAt, message.toolCall?.completedAt].compactMap { $0.flatMap(ServerDate.parse) }

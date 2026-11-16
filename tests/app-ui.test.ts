@@ -1466,6 +1466,35 @@ describe("conversation state", () => {
     expect(container.querySelector('.turn-work')).toBeNull();
   });
 
+  it("keeps a reply to one bot when that reply also sends a message to another bot", async () => {
+    conversation = { ...conversation, messages: [
+      { id: 'from-planner', role: 'user', text: 'Message from Planner: Coordinate dinner.' },
+      { id: 'reply-and-send', role: 'assistant', text: 'I will ask Kitchen to handle dinner.',
+        toolCall: { id: 'call', name: 'message_agent', status: 'completed', arguments: '{"target":"Kitchen","message":"Please handle dinner."}', result: 'Queued' } },
+    ] };
+    await render();
+    expect(container.querySelector('[data-message-id="reply-and-send"] .message-text')?.textContent).toBe('I will ask Kitchen to handle dinner.');
+    expect(container.querySelector('[data-message-id="reply-and-send"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('[data-message-id="agent-call:reply-and-send"] .message-text')?.textContent).toBe('Please handle dinner.');
+    expect(container.querySelector('[data-message-id="agent-call:reply-and-send"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Kitchen');
+  });
+
+  it("shows bot replies while keeping their ordinary tool calls in work", async () => {
+    conversation = { ...conversation, messages: [
+      { id: 'from-planner', role: 'user', text: 'Message from Planner: Check the gate.' },
+      { id: 'checked', role: 'assistant', text: 'The gate is shut.', toolCall: { id: 'read', name: 'read_file', status: 'completed', result: 'Gate log' } },
+      { id: 'file-reply', role: 'assistant', text: '', files: [{ id: 'gate-report', name: 'gate-report.txt', mime: 'text/plain', size: 12 }], toolCall: { id: 'write', name: 'write_file', status: 'completed', result: 'Created' } },
+      { id: 'tool-only', role: 'assistant', text: '', toolCall: { id: 'search', name: 'web_search', status: 'completed', result: 'Weather checked' } },
+    ] };
+    await render();
+    expect(container.querySelector('[data-message-id="checked"] .message-text')?.textContent).toBe('The gate is shut.');
+    expect(container.querySelector('[data-message-id="checked"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('.agent-exchange-group > summary')?.textContent).toContain('2 bot messages');
+    expect(container.querySelector('[data-message-id="file-reply"]')?.textContent).toContain('gate-report.txt');
+    expect(container.querySelector('.turn-work > summary')?.textContent).toContain('3 tool calls');
+    expect(container.querySelector('.tool-calls > summary')?.textContent).toBe('Tool calls3');
+  });
+
   it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {
     const call = { id: "reused", name: "terminal", status, result: "Result" };
     conversation = { ...conversation, activity: { state: status === "running" ? "working" : "done" }, messages: [

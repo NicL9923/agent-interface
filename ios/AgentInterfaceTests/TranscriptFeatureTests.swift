@@ -290,6 +290,28 @@ import XCTest
     XCTAssertTrue(WorkSummary(turn).counts.isEmpty)
   }
 
+  func testBotRepliesKeepTheirTextAndSeparateHandoffsFromOrdinaryTools() throws {
+    let incoming = Message(id: "in", role: "user", text: "Message from Planner: Coordinate dinner")
+    let sent = Message(id: "sent", role: "assistant", text: "I will ask Kitchen.", toolCall: ToolCall(id: "send", name: "message_agent", arguments: #"{"target":"Kitchen","message":"Handle dinner"}"#, status: "completed"))
+    let checked = Message(id: "checked", role: "assistant", text: "The gate is shut", toolCall: ToolCall(id: "read", name: "read_file", status: "completed"))
+    let file = Message(id: "file", role: "assistant", text: "", files: [FileRef(id: "report", name: "report.txt", mime: "text/plain", size: 12)], toolCall: ToolCall(id: "write", name: "write_file", status: "completed"))
+    let empty = Message(id: "tool-only", role: "assistant", text: "", toolCall: ToolCall(id: "search", name: "web_search", status: "completed"))
+    let turn = try XCTUnwrap(conversation([incoming, sent, checked, file, empty], .idle).presentationTurns.first)
+    let replies = turn.displayMessages.filter(\.isAgentExchange)
+    XCTAssertEqual(replies.map(\.id), ["in", "sent", "agent-call:sent", "checked", "file"])
+    let sentReply = try XCTUnwrap(replies.first { $0.id == "sent" })
+    let outgoing = try XCTUnwrap(replies.first { $0.id == "agent-call:sent" })
+    let checkedReply = try XCTUnwrap(replies.first { $0.id == "checked" })
+    XCTAssertEqual(sentReply.text, "I will ask Kitchen.")
+    XCTAssertNil(sentReply.toolCall)
+    XCTAssertEqual(AgentHandoff(message: outgoing).body, "Handle dinner")
+    XCTAssertEqual(checkedReply.text, "The gate is shut")
+    XCTAssertNil(checkedReply.toolCall)
+    XCTAssertEqual(replies.first { $0.id == "file" }?.files?.map(\.name), ["report.txt"])
+    XCTAssertEqual(turn.intermediateGroups.map(\.id), ["Tool calls"])
+    XCTAssertEqual(WorkSummary(turn).detail, "3 tool calls")
+  }
+
   func testWorkFoldsIntoOneRowWithItsDurationAndCounts() throws {
     let messages = [
       Message(id: "p", role: "user", text: "Check it", createdAt: "2026-10-24T15:00:00.000Z"),

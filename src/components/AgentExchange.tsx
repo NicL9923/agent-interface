@@ -14,10 +14,32 @@ export function isAgentExchange(message: Message) {
 }
 /** An assistant can narrate a handoff and make its tool call in the same saved row. Keep both. */
 export function exchangeMessage(message: Message): Message | undefined {
-  if (isAgentExchange(message)) return message;
+  const narration = message.role === 'assistant' && (!!message.text.trim() || !!message.files?.length);
+  if (isAgentExchange(message) && message.toolCall?.name !== 'message_agent') {
+    if (message.toolCall && !narration) return undefined;
+    return message.toolCall ? { ...message, toolCall: undefined } : message;
+  }
+  if (isAgentExchange(message) && !narration) return message;
   if (message.toolCall?.name !== 'message_agent') return undefined;
   return { ...message, id: `agent-call:${message.id}`, role: 'tool', text: '', files: undefined,
     origin: { kind: 'agent', visibility: 'activity' } };
+}
+/** Provenance can also mark an assistant's ordinary tool calls as agent activity. Keep those in work. */
+export function exchangeWork(message: Message): Message | undefined {
+  if (isAgentExchange(message) && message.toolCall && message.toolCall.name !== 'message_agent') {
+    return { ...message, role: 'tool', text: '', origin: undefined, files: undefined };
+  }
+  return exchangeMessage(message) ? undefined : message;
+}
+/** One saved row can contain a reply and a handoff, or a reply and an ordinary tool call. */
+export function exchangeDisplay(message: Message): Message[] {
+  const exchange = exchangeMessage(message);
+  if (exchange && exchange.id !== message.id) return [{ ...message, toolCall: undefined }, exchange];
+  if (isAgentExchange(message) && message.toolCall && message.toolCall.name !== 'message_agent') {
+    const work = { ...exchangeWork(message)!, id: `agent-tool:${message.id}` };
+    return exchange ? [exchange, work] : [work];
+  }
+  return [exchange ?? message];
 }
 /** Opens another assistant's chat from a transcript; App.tsx listens. */
 export const OPEN_CHAT_EVENT = 'wildbots:open-chat';
@@ -53,10 +75,7 @@ function ExchangeRoute({ sender, receiver }: { sender: Participant; receiver: Pa
 /** Contiguous runs only. An intervening tool, human message or reply always breaks a run. */
 export function exchangeRuns(messages: Message[]): Message[][] {
   const runs: Message[][] = [];
-  const shown = messages.flatMap(message => {
-    const call = exchangeMessage(message);
-    return call && call.id !== message.id ? [message, call] : [message];
-  });
+  const shown = messages.flatMap(exchangeDisplay);
   for (const message of shown) {
     const last = runs.at(-1);
     if (last && isAgentExchange(message) && isAgentExchange(last[0])) last.push(message);

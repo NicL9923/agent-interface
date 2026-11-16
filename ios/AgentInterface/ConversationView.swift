@@ -1341,10 +1341,16 @@ enum RoleDiscussion {
 /// A message between assistants. Incoming ones carry an envelope; outgoing ones are a
 /// `message_agent` call whose arguments name the target, as the web's AgentExchange reads them.
 struct AgentHandoff {
-  static func isExchangeActivity(_ message: Message) -> Bool { message.isAgentExchange || message.toolCall?.name == "message_agent" }
   /// The tool call can share a saved row with a normal reply. Its narration stays in chat.
   static func exchangeMessage(_ message: Message) -> Message? {
-    if message.isAgentExchange { return message }
+    let narration = message.role == "assistant" && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files?.isEmpty ?? true))
+    if message.isAgentExchange && message.toolCall?.name != "message_agent" {
+      if message.toolCall != nil && !narration { return nil }
+      var reply = message
+      reply.toolCall = nil
+      return reply
+    }
+    if message.isAgentExchange && !narration { return message }
     guard message.toolCall?.name == "message_agent" else { return nil }
     var exchange = message
     exchange.id = "agent-call:" + message.id
@@ -1356,9 +1362,31 @@ struct AgentHandoff {
   }
   static func displayMessages(_ messages: [Message]) -> [Message] {
     messages.flatMap { message in
-      if let exchange = exchangeMessage(message), exchange.id != message.id { return [message, exchange] }
+      let exchange = exchangeMessage(message)
+      if let exchange, exchange.id != message.id {
+        var narration = message
+        narration.toolCall = nil
+        return [narration, exchange]
+      }
+      if message.isAgentExchange, let call = message.toolCall, call.name != "message_agent", var work = workMessage(message) {
+        work.id = "agent-tool:" + message.id
+        return exchange.map { [$0, work] } ?? [work]
+      }
+      if let exchange { return [exchange] }
       return [message]
     }
+  }
+  /// Tools called while replying to a bot stay in the ordinary work fold.
+  static func workMessage(_ message: Message) -> Message? {
+    if message.isAgentExchange, let call = message.toolCall, call.name != "message_agent" {
+      var work = message
+      work.role = "tool"
+      work.text = ""
+      work.origin = nil
+      work.files = nil
+      return work
+    }
+    return exchangeMessage(message) == nil ? message : nil
   }
   var incoming: (name: String, body: String)?
   var target = "another assistant"
