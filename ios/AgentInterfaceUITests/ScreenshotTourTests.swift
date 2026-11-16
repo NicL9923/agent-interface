@@ -145,7 +145,10 @@ import CryptoKit
       if name == "conversation-loaded" {
         let latest = app.buttons["Jump to latest"]
         if latest.waitForExistence(timeout: 2) { latest.tapWhenReady() }
-        app.buttons["Copy code"].tap()
+        let copyCode = app.buttons["Copy code"]
+        // Jump to latest animates the transcript. Tap its final position.
+        copyCode.waitForStableFrame()
+        copyCode.tapWhenReady()
         XCTAssertTrue(app.staticTexts["Code copied."].waitForExistence(timeout: 5))
         try capture("conversation-code-copied")
         app.textViews["messageComposer"].typeWhenFocused("Make the picnic vegetarian. Keep the walk under two miles.")
@@ -575,7 +578,9 @@ import CryptoKit
         let desiredTop = top + (height - element.frame.height) / 2
         distance = min(height * 0.38, max(12, abs(element.frame.minY - desiredTop)))
       } else { distance = height * 0.38 }
-      let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 40, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
+      // Stay outside the inset cells. At accessibility sizes x=40 hits the
+      // inference menu, whose long press opens it instead of scrolling the form.
+      let start = form.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 4, dy: (upward ? top + height * 0.72 : top + height * 0.28) - form.frame.minY))
       let end = start.withOffset(CGVector(dx: 0, dy: distance * (upward ? -1 : 1)))
       start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
       if !before.isEmpty && before == cells() { print("DESIGN_REVEAL_NO_MOVEMENT target=\(element) attempt=\(attempt)") }
