@@ -538,6 +538,11 @@ import CryptoKit
 
   /// The gutter drag scrolls the form without sending the gesture into its nested TextEditor.
   private func settingsReveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
+    // Profile has both a fixed preview and Save bar, outside the form's frame.
+    if form.identifier == "settings.profile" {
+      revealFormControl(element, in: form, app: XCUIApplication(), up: up)
+      return
+    }
     for _ in 0..<10 {
       if element.hasFrame && element.frame.minY >= form.frame.minY + 12 && element.frame.maxY <= form.frame.maxY - 12 { return }
       let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: up ? 0.8 : 0.3))
@@ -547,7 +552,7 @@ import CryptoKit
     XCTAssertTrue(element.hasFrame && element.frame.intersects(form.frame), "The requested control must be visible in the settings form")
   }
 
-  private func revealModels(_ element: XCUIElement, in form: XCUIElement, app: XCUIApplication, up: Bool = true) {
+  private func revealFormControl(_ element: XCUIElement, in form: XCUIElement, app: XCUIApplication, up: Bool = true) {
     func cells() -> [String] {
       form.cells.allElementsBoundByIndex.filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map {
         "\($0.label.prefix(64)):\(String(describing: $0.frame))"
@@ -560,7 +565,11 @@ import CryptoKit
       let keyboard = app.keyboards.firstMatch
       let navigationBottom = app.navigationBars.allElementsBoundByIndex
         .filter { $0.hasFrame && $0.frame.intersects(form.frame) }.map { $0.frame.maxY }.max() ?? form.frame.minY
-      let top = max(form.frame.minY, navigationBottom) + 12
+      var top = max(form.frame.minY, navigationBottom) + 12
+      if form.identifier == "settings.profile" {
+        let preview = app.descendants(matching: .any)["avatarPreviewBar"].firstMatch
+        if preview.hasFrame { top = max(top, preview.frame.maxY + 8) }
+      }
       // Form frames extend beneath the fixed Save bar. XCTest reports covered
       // rows as hittable, so keep their whole frame above it before tapping.
       let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
@@ -615,9 +624,9 @@ import CryptoKit
         let form = app.descendants(matching: .any)["chatModelForm"].firstMatch
         let search = app.textFields["modelSearch"]
         XCTAssertTrue(form.waitForExistence(timeout: 5)); XCTAssertTrue(search.waitForExistence(timeout: 5))
-        revealModels(search, in: form, app: app); search.typeWhenFocused("field")
+        revealFormControl(search, in: form, app: app); search.typeWhenFocused("field")
         let reason = app.staticTexts["Reconnect in Hermes to use this model"]
-        revealModels(reason, in: form, app: app)
+        revealFormControl(reason, in: form, app: app)
         let unavailable = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "field-planner")).firstMatch
         XCTAssertTrue(unavailable.exists); XCTAssertFalse(unavailable.isEnabled)
         let refresh = app.buttons["Refresh models"]
@@ -628,16 +637,16 @@ import CryptoKit
       app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
       let form = app.collectionViews["settings.behavior"]
       let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
-      revealModels(required, in: form, app: app)
+      revealFormControl(required, in: form, app: app)
       XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
       XCTAssertEqual(required.value as? String, "1")
       let caption = app.staticTexts["Required by Hermes"]
-      revealModels(caption, in: form, app: app)
+      revealFormControl(caption, in: form, app: app)
       XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "Required by Hermes")).count, 1)
       try capture(name + "-skills")
       if name == "models-loaded" {
         let packing = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "packing-list")).firstMatch
-        revealModels(packing, in: form, app: app)
+        revealFormControl(packing, in: form, app: app)
         packing.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertTrue(packing.wait(until: "value == %@", "1"))
         let save = app.buttons["saveChanges"]; save.tapWhenReady()
@@ -648,7 +657,7 @@ import CryptoKit
         XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
         app.buttons["Close"].tapWhenReady()
         app.openAssistantSettings("Ranch hand"); app.selectSettingsTab("Skills")
-        revealModels(packing, in: form, app: app)
+        revealFormControl(packing, in: form, app: app)
         XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
         XCTAssertEqual(required.value as? String, "1")
       }
@@ -726,11 +735,11 @@ import CryptoKit
       func text(_ fragment: String) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch
       }
-      func reveal(_ element: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func reveal(_ element: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
       func press(_ element: XCUIElement, up: Bool = true) { reveal(element, up: up); element.tapWhenReady() }
       func toggle(_ label: String, in container: XCUIElement) {
         let row = app.switches[label], control = row.switches.firstMatch
-        revealModels(row, in: container, app: app)
+        revealFormControl(row, in: container, app: app)
         XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(row.wait(until: "value == %@", "0"))
         XCTAssertTrue(control.waitUntilHittable())
@@ -827,11 +836,11 @@ import CryptoKit
           let sheet = app.collectionViews.allElementsBoundByIndex.last!
           toggle("I've reviewed this conversation and the unconfirmed attempt.", in: sheet)
           if variant == "goal-uncertain-large-text" {
-            revealModels(app.switches["I understand a new attempt may repeat work."], in: sheet, app: app)
+            revealFormControl(app.switches["I understand a new attempt may repeat work."], in: sheet, app: app)
             try capture(variant + "-new-attempt-review-bottom")
           }
           toggle("I understand a new attempt may repeat work.", in: sheet)
-          let start = app.buttons["Start new attempt"]; if stage == "after" { revealModels(start, in: sheet, app: app) }; XCTAssertTrue(start.wait(until: "enabled == true")); start.tapWhenReady()
+          let start = app.buttons["Start new attempt"]; if stage == "after" { revealFormControl(start, in: sheet, app: app) }; XCTAssertTrue(start.wait(until: "enabled == true")); start.tapWhenReady()
           XCTAssertTrue(app.navigationBars["New attempt"].waitForDisappearance(timeout: 5))
           XCTAssertTrue(form.waitUntilHittable(), "A new attempt returns to interactive Work")
           XCTAssertTrue(app.collectionViews["automation.work"].exists)
@@ -925,7 +934,7 @@ import CryptoKit
       let homeIndicatorClearance: CGFloat = 34
       // A phone sheet reaches the home indicator; a floating iPad sheet ends above it.
       func contentBottom(_ form: XCUIElement) -> CGFloat { min(form.frame.intersection(app.frame).maxY, app.frame.maxY - homeIndicatorClearance) }
-      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
       // Center the whole range so touch slop consumes margin instead of leaving a tiny correction.
       func revealRange(_ first: XCUIElement, through last: XCUIElement, _ form: XCUIElement) {
         for attempt in 0...4 {
@@ -1154,7 +1163,7 @@ import CryptoKit
       func events() throws -> [[String: Any]] {
         try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
       }
-      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
       func press(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { reveal(element, form, up: up); XCTAssertTrue(element.wait(until: "enabled == true")); element.tapWhenReady() }
       func contentBottom(_ form: XCUIElement) -> CGFloat { min(form.frame.intersection(app.frame).maxY, app.frame.maxY - 34) }
       // The accepted W2a range algorithm, local to this separate editor tour.
@@ -1358,7 +1367,7 @@ import CryptoKit
         try String(contentsOf: auditURL, encoding: .utf8).split(separator: "\n").map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
       }
       func text(_ fragment: String, in container: XCUIElement) -> XCUIElement { container.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", fragment)).firstMatch }
-      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func reveal(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
       func press(_ element: XCUIElement, _ form: XCUIElement, up: Bool = true) { reveal(element, form, up: up); XCTAssertTrue(element.wait(until: "enabled == true")); element.tapWhenReady() }
       func group(_ name: String) { press(board.buttons[name], board, up: name.hasPrefix("To do")) }
       func open(_ name: String, _ id: String) {
@@ -1553,7 +1562,7 @@ import CryptoKit
       XCTAssertEqual(query.count, 1, "Expected exactly one \(name)")
       return first
     }
-    func reveal(_ element: XCUIElement, _ container: XCUIElement, up: Bool = true) { revealModels(element, in: container, app: app, up: up) }
+    func reveal(_ element: XCUIElement, _ container: XCUIElement, up: Bool = true) { revealFormControl(element, in: container, app: app, up: up) }
     func press(_ query: XCUIElementQuery, _ name: String, in container: XCUIElement, up: Bool = true) {
       reveal(query.firstMatch, container, up: up); let element = unique(query, name)
       XCTAssertTrue(element.wait(until: "enabled == true"), name); XCTAssertTrue(element.waitUntilHittable(), name); element.tapWhenReady()
@@ -2439,7 +2448,7 @@ import CryptoKit
         return app.descendants(matching: .any).matching(NSPredicate(format: "identifier == %@ AND elementType IN %@", identifier,
           [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue, XCUIElement.ElementType.staticText.rawValue])).firstMatch
       }
-      func reveal(_ element: XCUIElement, up: Bool = true) { revealModels(element, in: form, app: app, up: up) }
+      func reveal(_ element: XCUIElement, up: Bool = true) { revealFormControl(element, in: form, app: app, up: up) }
       func save(_ target: String = "memory") -> XCUIElement { app.buttons["memorySave.\(target)"] }
       func error(_ text: String) -> XCUIElement {
         if after { return app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch }
@@ -2641,7 +2650,7 @@ import CryptoKit
       let app = launch(textSize: size, environment: ["AGENT_INTERFACE_UI_DESIGN_FIXTURE": encoded, "AGENT_INTERFACE_UI_THEME": theme])
       XCTAssertTrue(app.chatHeader("Ranch hand").waitForExistence(timeout: 15))
       func reveal(_ element: XCUIElement, in form: XCUIElement, up: Bool = true) {
-        revealModels(element, in: form, app: app, up: up)
+        revealFormControl(element, in: form, app: app, up: up)
       }
       func bannerVisible(_ element: XCUIElement) {
         XCTAssertTrue(element.waitForExistence(timeout: 5))
@@ -2791,7 +2800,7 @@ import CryptoKit
         reveal(emptySkills, in: skillsForm); XCTAssertTrue(emptySkills.waitForExistence(timeout: 5)); try capture(name + "-skills")
       } else {
         let required = app.switches.matching(NSPredicate(format: "label BEGINSWITH %@", "weekly-plan")).firstMatch
-        revealModels(required, in: skillsForm, app: app)
+        revealFormControl(required, in: skillsForm, app: app)
       XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertFalse(required.isEnabled)
         XCTAssertEqual(required.value as? String, "1")
         try capture(name + "-skills")
@@ -2809,7 +2818,7 @@ import CryptoKit
           reveal(save, in: skillsForm); save.tapWhenReady()
           XCTAssertTrue(app.staticTexts["Saved"].firstMatch.waitForExistence(timeout: 5)); try capture(name + "-skills-saved")
           app.buttons["Close"].firstMatch.tapWhenReady(); _ = settings("Skills")
-          revealModels(packing, in: skillsForm, app: app)
+          revealFormControl(packing, in: skillsForm, app: app)
         XCTAssertTrue(packing.waitForExistence(timeout: 5)); XCTAssertEqual(packing.value as? String, "1")
           XCTAssertTrue(required.waitForExistence(timeout: 5)); XCTAssertEqual(required.value as? String, "1")
         }
