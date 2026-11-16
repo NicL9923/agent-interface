@@ -28,5 +28,25 @@ segments are covered; existing cases retain new-turn isolation, saved/streaming 
 and snippet shortening after joining. The server's `hermes-mapping.ts` already treats steered
 rows as guidance in the running turn. No server or Hermes change is required.
 
-Full local check-all, compatible-container WebKit, native checks, and cross-provider review
-are pending. No browser or physical-device interaction was performed for this change.
+## Full Linux validation
+
+At implementation commit `d45a28a9963f1394a593cc6ecceb9f3c7d8f1ed9`,
+`.agents/tools/check-all --skip e2e --keep-going` passed typecheck, lint, ruff,
+4,066 tests in 221 files, and build. Python was skipped because no Python inputs changed.
+The browser check then passed through `.agents/tools/check-all --only e2e` in the
+Playwright 1.65.0 Noble container using the pinned Node 24.22.2 runtime. It covered
+both Chromium and WebKit, with three existing capability skips.
+
+Both commands held the Linux machine lock together. They queued for 5,722.3 s and ran
+for 353.5 s after acquisition. Log: `.private/steer-check-all.log`; browser output:
+`/home/nic/.cache/agent-interface/check-all/logs/20261116T004459-1-work/e2e.log`.
+
+Main was then merged at `1a4113507cf4a90aab058d7cee572cfd7ac895cb`. Its changes since
+the implementation base are iOS accessibility and release evidence. None changes the
+web code, dependencies, server, browser tests or validation tools, so the completed Linux
+checks remain applicable. The pending native run will compile and test the merged state.
+
+Native checks and cross-provider review remain pending. Grok's review launch failed
+with HTTP 402 for exhausted balance; Anthropic is weekly-limited. The implementation
+is OpenAI, so same-provider review cannot clear this obligation. Keep the PR unmerged.
+No manual browser or physical-device interaction was performed for this change.
