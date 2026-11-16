@@ -107,10 +107,11 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
     credentials: "same-origin",
     cache: "no-store",
   });
+  let early: ReturnType<typeof takeStartupRead>;
   try {
     // The page's first bootstrap may already be on its way, started by boot.js before this code loaded.
-    const early = get && !cached ? takeStartupRead(path, controller.signal, request) : undefined;
-    let response = await (early ?? request());
+    early = get && !cached ? takeStartupRead(path, controller.signal, request) : undefined;
+    let response = await (early?.response ?? request());
     if (get && response.status === 304) {
       if (cached?.etag) {
         if (scope === generation) remember(path, { ...cached, started });
@@ -151,6 +152,7 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
       : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
     controller.signal.aborted ? 504 : 503, "CONNECTION_UNAVAILABLE");
   } finally {
+    early?.release();
     clearTimeout(timer);
     init.signal?.removeEventListener("abort", abort);
   }
