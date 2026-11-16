@@ -1396,9 +1396,10 @@ struct AgentHandoff {
   var handle: String?
   var replyHandle: String?
   init(message: Message) {
-    handle = message.presentationOrigin?.handle
+    let envelope = message.agentEnvelope
+    handle = message.presentationOrigin?.handle ?? envelope?.handle
     replyHandle = message.toolCall == nil ? handle : nil
-    if let envelope = message.agentEnvelope { incoming = (envelope.name, envelope.body) }
+    if let envelope { incoming = (envelope.name, envelope.body) }
     else if message.role == "user", let name = message.presentationOrigin?.name { incoming = (name, message.text) }
     if incoming == nil {
       if let name = message.presentationOrigin?.name { target = name }

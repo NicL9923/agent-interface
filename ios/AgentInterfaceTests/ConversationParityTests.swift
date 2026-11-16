@@ -103,7 +103,7 @@ import XCTest
       Bot(id: "ranch", name: "Ranch hand", model: "test", shared: true, activity: .idle),
       Bot(id: "planner", name: "Planner", model: "test", shared: true, activity: .idle),
     ]
-    let incoming = Message(id: "in", role: "user", text: "Message from Old name (@planner): Check the gate")
+    let incoming = Message(id: "in", role: "user", text: "Message from Old name (@planner): Check the gate", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Old name"))
     let received = AgentHandoff(message: incoming).route(bots: bots, currentBotId: "ranch", recipient: "Ranch hand")
     XCTAssertEqual(received.senderBot?.id, "planner")
     XCTAssertEqual(received.receiverBot?.id, "ranch")

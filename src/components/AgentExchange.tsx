@@ -55,7 +55,7 @@ function exchange(message: Message, recipient: string, bots: Bot[], currentBotId
   }
   // A reply inherits the sender's origin, but travels back to that sender. Prefer a stable handle
   // over a display name when Hermes supplies one. Resolve only against this person's roster.
-  const partner = exchangePartner(message, incoming ? origin?.handle || incoming.name : !message.toolCall ? origin?.handle || origin?.name : undefined, bots, currentBotId);
+  const partner = exchangePartner(message, incoming ? origin?.handle || envelope?.handle || incoming.name : !message.toolCall ? origin?.handle || origin?.name : undefined, bots, currentBotId);
   const current = bots.find(bot => bot.id === currentBotId);
   const other = { bot: partner, name: partner?.name ?? incoming?.name ?? target };
   const here = { bot: current, name: recipient };

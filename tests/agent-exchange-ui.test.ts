@@ -61,7 +61,7 @@ it("keeps delivery failures visible while consecutive messages collapse, and pre
 });
 
 it("uses stable handles for known bots and a neutral avatar for unresolved recipients", async () => {
-  await render({ ...incoming, text: 'Message from 🤖 Old name (@planner): Bring water' });
+  await render({ ...incoming, text: 'Message from 🤖 Old name (@planner): Bring water', origin: { kind: 'agent', visibility: 'activity', name: 'Old name' } });
   expect(container.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe('Planner to Ranch hand');
   await render({ ...outgoing, toolCall: { ...outgoing.toolCall!, arguments: '{bad json', status: 'running', error: undefined } });
   expect(container.querySelector('[role="group"]')?.getAttribute('aria-label')).toBe('Ranch hand to another assistant');
