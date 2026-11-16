@@ -232,6 +232,26 @@ class PortTest(TempCase):
             check_all.pick_e2e_port(self.tmp, "w", requested=BASE + 20)
         self.assertIn("locked by another check-all", str(raised.exception))
 
+    def test_adjacent_requested_pairs_cannot_share_a_port_before_either_server_binds(self):
+        port = BASE + 20
+        held, _ = check_all.pick_e2e_port(self.tmp, "first", requested=port)
+        self.addCleanup(held.release)
+        for adjacent in (port - 1, port + 1):
+            with self.subTest(adjacent=adjacent), self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
+                check_all.pick_e2e_port(self.tmp, "second", requested=adjacent)
+        # The lower pair acquired its first port before finding the shared one busy; that partial lease is gone.
+        free = check_all.try_lock(self.tmp / f"e2e-port-{port - 1}.lock")
+        self.assertIsNotNone(free)
+        self.addCleanup(free.release)
+
+    def test_releasing_a_pair_frees_both_ports_for_neighboring_pairs(self):
+        port = BASE + 20
+        held, _ = check_all.pick_e2e_port(self.tmp, "first", requested=port)
+        held.release()
+        # These two new pairs do not overlap each other, but each uses one port the first pair owned.
+        self.assertEqual(self.pick(requested=port - 1), port - 1)
+        self.assertEqual(self.pick(requested=port + 1), port + 1)
+
     def test_binding_is_checked_for_real_on_loopback(self):
         self.assertTrue(check_all.can_bind(BASE + 30))
         self.listen(BASE + 30)
@@ -1204,7 +1224,9 @@ class CommandTest(TempCase):
         port = int(self.calls()[0]["port"])
         locks = self.cache / "locks"
         self.addCleanup(lambda: pidfile.exists() and self.kill_quietly(int(pidfile.read_text())))
-        return process, int(pidfile.read_text()), port, [locks / f"e2e-port-{port}.lock", locks / "heavy-0.lock"]
+        # A failed SIGKILL assertion must not leave its detached fake npm holding descriptors.
+        self.addCleanup(self.kill_quietly, int(self.calls()[0]["pid"]))
+        return process, int(pidfile.read_text()), port, [locks / f"e2e-port-{port}.lock", locks / "heavy-0.lock", locks / f"e2e-port-{port + 1}.lock"]
 
     def wait_for(self, condition, what, seconds=20):
         deadline = time.monotonic() + seconds
@@ -1291,6 +1313,8 @@ class CommandTest(TempCase):
             check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 0.3)
         with self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
             check_all.pick_e2e_port(locks_dir, "w", requested=port)
+        with self.assertRaisesRegex(check_all.Refusal, "locked by another check-all"):
+            check_all.pick_e2e_port(locks_dir, "w", requested=port + 1)
         os.kill(suite, signal.SIGKILL)
         self.wait_for(lambda: not self.alive(suite), "the suite to die")
         held, _ = check_all.acquire_slot(locks_dir, 1, {"check": "second run"}, 2)
@@ -1317,11 +1341,11 @@ class CommandTest(TempCase):
         return json.loads(report.read_text())
 
     def test_the_locks_stay_below_descriptor_16_whatever_the_launcher_left_open_so_only_npm_holds_them(self):
-        # libuv marks descriptors 0 to 15 close-on-exec, so a lock at 3 or 4 stays with npm. With 3 to 20 inherited
+        # libuv marks descriptors 0 to 15 close-on-exec, so locks at 3, 4 and 5 stay with npm. With 3 to 20 inherited
         # open, locks opened after them land at 21 and up, which Node hands to every child: the runner, its workers and
         # Playwright's web server, any of which could hold the slot for good.
         report = self.run_with_leaky_launcher("--only", "e2e")
-        self.assertEqual(report["npm"], [3, 4])  # the heavy slot and the port pair, the lowest numbers there are
+        self.assertEqual(report["npm"], [3, 4, 5])  # the heavy slot and both ports, the lowest numbers there are
         self.assertEqual(report["grandchild"], [], "a child of npm still holds a lock")
 
     def test_a_lock_descriptor_node_would_pass_on_is_refused_before_anything_starts(self):
@@ -1349,6 +1373,7 @@ class CommandTest(TempCase):
         self.assertFalse(self.alive(process.pid))
         # The port pair's lock file names the suite too.
         self.assertEqual(check_all.read_info(locks[0])["pid"], suite)
+        self.assertEqual(check_all.read_info(locks[2])["pid"], suite)
         self.assertEqual(check_all.read_info(locks[1])["check"], "e2e")  # the rest of the holder's description is kept
 
     def test_a_stop_that_the_suite_ignores_kills_it_only_after_the_grace(self):
