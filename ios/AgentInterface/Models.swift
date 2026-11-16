@@ -1141,23 +1141,14 @@ struct SentEcho: Equatable {
     }
     return conversation
   }
-  /// Every echo after a change. A message Hermes accepted stays until its own copy arrives, even
-  /// when another is sent meanwhile, such as guidance after a photo whose row is saved only when
-  /// its run ends.
+  /// Every echo of one chat after a change. A message Hermes accepted stays until its own copy arrives,
+  /// even when another is sent meanwhile, such as guidance after a photo whose row is saved only when
+  /// its run ends. `advance` steps the echoes of every chat, each with its own send.
   static func nextEchoes(_ echoes: [SentEcho], pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
     conversation: Conversation?, sender: Sender?, now: Date) -> [SentEcho]
   {
-    var next = echoes.compactMap { echo in
-      Self.next(echo, pending: pending?.requestId == echo.request.requestId ? pending : nil, receipt: receipt,
-        sending: sending, conversation: conversation, sender: sender, now: now)
-    }
-    // A send gets one echo; once it leaves, the same pending submission never brings it back.
-    if let pending, !echoes.contains(where: { $0.request.requestId == pending.requestId }),
-      let created = Self.next(nil, pending: pending, receipt: receipt, sending: sending, conversation: conversation, sender: sender, now: now)
-    {
-      next.append(created)
-    }
-    return next
+    advance(echoes, [], chat: { _ in ChatSend(pending: pending, receipt: receipt, sending: sending) }, open: pending?.botId,
+      conversation: conversation, sender: sender, now: now).echoes
   }
   /// Whether the composer is showing a draft that is on its way. The echo carries it in the
   /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,
