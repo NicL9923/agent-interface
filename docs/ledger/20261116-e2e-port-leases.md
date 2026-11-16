@@ -40,3 +40,30 @@ real Chromium/WebKit run using the changed launcher remain pending. Independent 
 incomplete because Anthropic is usage-limited and xAI has exhausted its balance. Keep the
 follow-up draft until an eligible outside-OpenAI reviewer completes it. No release is needed
 for this development-tool change.
+
+
+## Final full check and target integration
+
+At `e0b2b47fd7deb67d2e47f208da9bec4e71cf2323`, the full non-browser check passed
+typecheck, lint, Ruff, all 4,078 JavaScript tests in 223 files, build, and Python checks
+across 52 files. The changed launcher then ran the actual Chromium/WebKit suite in the
+Playwright 1.65.0 Noble container with Node 24.22.2: 171 tests passed, with 3 existing skips.
+Output: `.private/port-pair-final-check-all.log`. The machine lock queued for 4,026.584
+seconds and held for 710.121 seconds across both checks. This was a fresh browser run
+through the new two-descriptor port lease, not reused browser output from another fix.
+
+Main advanced to `8bc6ea9474cd658361690da592a2f895bf5b5e99` during the check. It was
+merged in `8909dc4917f89125e6fe26d753f30cd2b3b6b42c`. That merge changes only iOS
+BotSettingsView, three iOS UI test files, and two ledgers. `git diff --name-only e0b2b47f
+HEAD` confirms no changes to the tested launcher, test files, application/server/browser
+source, scripts, assets, dependencies or configuration. A scoped search found no local
+Python or JavaScript test reading the four changed iOS files. The complete helper suite had
+also passed 98 tests after the first main merge. The completed Linux and browser results
+therefore cover the unchanged inputs in the published port-fix diff. No Apple step is
+required for this development-tool-only diff; the integrated iOS work belongs to its PRs.
+
+Independent review is still incomplete. The provider-status checks on November 16 at
+05:44 UTC report Anthropic unavailable until November 17 06:00 UTC and xAI balance
+exhausted with a new estimated retry time of November 16 11:10 UTC. The follow-up PR must
+stay draft and unmerged. Keep #339's review-owed label until this fix is independently
+reviewed and merged. No production release or deployment is needed for the port launcher.
