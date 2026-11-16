@@ -38,6 +38,12 @@ describe("a reply saved as several rows", () => {
   it("keeps the id of its last row, which is how the screen reader tells replies apart", () => {
     expect(announced({ lastId: "q" }, [question(), say("a", "One."), say("b", "Two.")]).reply?.id).toBe("b");
   });
+
+  it("joins segments on both sides of guidance steered into the same turn", () => {
+    const guidance: Message = { ...question("steer"), text: "Check the latch too.", steered: true };
+    const rows = [question(), say("a", "The fence is sound."), guidance, say("b", "The latch is loose.")];
+    expect(announced({ lastId: "q" }, rows).said).toBe("The fence is sound. The latch is loose.");
+  });
 });
 
 describe("a reply that was already heard", () => {
@@ -80,6 +86,16 @@ describe("a reply that grows across reads", () => {
     const done = announced(waiting.watch, [...first, tool("t"), say("b", "The gate latch is loose.")]);
     expect(done.said).toBe("I checked the north fence. The gate latch is loose.");
     expect(done.watch.waiting).toBeUndefined();
+  });
+
+  it("keeps a held segment when steered guidance arrives before the next segment", () => {
+    const waiting = announced({ lastId: "q" }, first, "working");
+    expect(waiting.reply).toBeUndefined();
+    const guidance: Message = { ...question("steer"), text: "Check the latch too.", steered: true };
+    const rows = [...first, guidance, say("b", "The gate latch is loose.")];
+    const done = announced(waiting.watch, rows);
+    expect(done.said).toBe("I checked the north fence. The gate latch is loose.");
+    expect(announced(done.watch, rows).reply).toBeUndefined();
   });
 
   it("joins every segment that arrives while it waits, once each", () => {
