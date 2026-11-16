@@ -38,15 +38,17 @@
       return hintedUser() && hint.bots.indexOf(bot) >= 0 ? bot : null;
     } catch (error) { return null; /* The bundle reads the chat itself. */ }
   }
-  // Another tab's sign-in or sign-out is on its way, so the cookie may already be another account's. A
-  // mark older than account-epoch.ts's CHANGE_STALE_MS belongs to a closed tab.
-  function changing() {
+  // An active account change, or a device-only sign-out whose server session is still live. A stale
+  // change carrying logout still owes cleanup (account-epoch.ts). Only the bundle may do that under its auth lock.
+  function accountPending() {
     var record = read('agent-interface:auth-epoch');
-    return !!record && typeof record === 'object' && record.changing === true && typeof record.at === 'number' && Date.now() - record.at < 65000;
+    return !!record && typeof record === 'object' && (
+      record.logout && (record.signedOut || record.changing) ||
+      record.changing === true && typeof record.at === 'number' && Date.now() - record.at < 65000);
   }
   try {
     // While a change is on its way the app's first draw shows the system's theme too (src/App.tsx).
-    var user = !changing() && hintedUser();
+    var user = !accountPending() && hintedUser();
     var saved = user && read('agent-interface:theme');
     if (saved && saved.v === 1 && saved.user === user && (saved.theme === 'light' || saved.theme === 'dark' || saved.theme === 'system'))
       document.documentElement.setAttribute('data-theme', saved.theme);
@@ -57,7 +59,7 @@
     var epoch = '';
     try { epoch = localStorage.getItem('agent-interface:auth-epoch') || ''; } catch (error) { /* As the app reads it. */ }
     // The cookie this read would carry may be the last account's.
-    if (changing()) return;
+    if (accountPending()) return;
     // The same request the app's api() makes for its first GET: no validator, no CSRF token, the cookie.
     var start = function (path) {
       var controller = typeof AbortController === 'function' ? new AbortController() : null;

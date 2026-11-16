@@ -4,8 +4,10 @@ import { forgetAccountContent } from "./storage";
 
 // A separate lock covers the network request as well as the record writes. Web Locks release it
 // when a tab closes; the record lock remains separate because begin and settle acquire it too.
-function authOperation<T>(work: () => Promise<T>): Promise<T> {
-  if (typeof navigator === "undefined" || !navigator.locks) return work();
+export const canChangeAccounts = () => typeof navigator !== "undefined" && !!navigator.locks;
+export const accountChangeUnavailable = "This browser can't safely change accounts. Use an updated browser and open WildBots over HTTPS.";
+function authOperation<T>(work: () => Promise<T>, localOnly = false): Promise<T> {
+  if (!canChangeAccounts()) return localOnly ? work() : Promise.reject(new Error(accountChangeUnavailable));
   return navigator.locks.request("agent-interface:auth-operation", work);
 }
 
@@ -52,8 +54,8 @@ export function signOutOf(user: string) {
 }
 
 /**
- * Signs `user` out of this browser when the app cannot be reached, as from the saved home after the
- * first bootstrap failed. It goes at once, as a sign-out the server took does, in every tab, and the
+ * Signs `user` out of this device when the app cannot be reached or cookie changes are unsupported.
+ * It also serves the saved home after bootstrap fails. It goes at once in every tab. The
  * record says the server's session may still be live, so nothing reads with it until the sign-in
  * screen ends it there (`finishSignOut`).
  *
@@ -73,7 +75,7 @@ export function signOutHere(user: string) {
     });
     if (!done) await change.undo();
     return done;
-  });
+  }, true);
 }
 
 let finishing: Promise<void> | null = null;
