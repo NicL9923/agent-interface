@@ -129,14 +129,26 @@ import XCTest
     // Accessibility hit tests see through the sticky preview and Save bars, so a tile under
     // either reads as tappable while a real tap lands on the bar.
     func clear(_ button: XCUIElement) -> Bool {
-      guard button.exists, button.canTap else { return false }
+      guard button.hasFrame else { return false }
       let top = app.descendants(matching: .any)["avatarPreviewBar"], bottom = app.descendants(matching: .any)["saveBar"]
       return (!top.exists || button.frame.minY >= top.frame.maxY) && (!bottom.exists || button.frame.maxY <= bottom.frame.minY)
     }
     func scrollTo(_ button: XCUIElement, up: Bool) {
       for _ in 0..<12 {
         if clear(button) { return }
-        if up { form.swipeUp(velocity: .slow) } else { form.swipeDown(velocity: .slow) }
+        let top = app.descendants(matching: .any)["avatarPreviewBar"]
+        let bottom = app.descendants(matching: .any)["saveBar"]
+        let upper = max(form.frame.minY, top.exists ? top.frame.maxY : form.frame.minY) + 8
+        let lower = min(form.frame.maxY, bottom.exists ? bottom.frame.minY : form.frame.maxY) - 8
+        let upward = button.hasFrame ? button.frame.maxY > lower : up
+        // A full swipe can pass the whole tile before it is checked again.
+        // Short gutter drags also avoid the controls inside each form row.
+        let middle = (upper + lower) / 2
+        let distance = min(120, (lower - upper) / 4)
+        let start = form.coordinate(withNormalizedOffset: .zero)
+          .withOffset(CGVector(dx: 4, dy: middle + (upward ? distance / 2 : -distance / 2) - form.frame.minY))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: upward ? -distance : distance)),
+                    withVelocity: .slow, thenHoldForDuration: 0.2)
       }
       XCTAssertTrue(clear(button), "\(button) is clear of the sticky bars")
     }

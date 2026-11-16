@@ -179,7 +179,14 @@ extension XCUIApplication {
       if link.hasFrame && list.hasFrame && link.frame.minY >= navigationBars.firstMatch.frame.maxY && link.frame.maxY <= list.frame.maxY - 12 { break }
       list.swipeUp()
     }
-    link.tapWhenReady(file: file, line: line)
+    link.waitForStableFrame()
+    guard link.hasFrame && list.hasFrame && link.frame.minY >= navigationBars.firstMatch.frame.maxY
+      && link.frame.maxY <= list.frame.maxY - 12 && link.isEnabled else {
+      XCTFail("Settings row for \(title) is not fully visible and enabled", file: file, line: line); return
+    }
+    // XCTest can throw while computing a NavigationLink's activation point even
+    // with its entire row visible. Tap the verified row's center instead.
+    link.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     XCTAssertTrue(link.waitForDisappearance(), "Settings opens \(title)", file: file, line: line)
   }
   /// Goes back through settings pages until the list of sections shows.

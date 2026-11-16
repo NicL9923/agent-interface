@@ -11,7 +11,9 @@ import XCTest
     let compare = app.webViews.buttons["Compare supply"]
     // A web view's first load on CI's simulator can take well over 15 seconds.
     XCTAssertTrue(compare.waitForExistence(timeout: 40), app.debugDescription)
-    compare.tap()
+    // The sandboxed document resizes its host after its controls appear.
+    compare.waitForStableFrame()
+    compare.tapWhenReady()
     XCTAssertTrue(app.webViews.staticTexts["40 days"].waitForExistence(timeout: 5))
     capture(app, name: "Native inline UI expanded")
     app.buttons["Reset view"].tap()

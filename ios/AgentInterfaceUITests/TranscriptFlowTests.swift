@@ -90,7 +90,9 @@ import XCTest
     try capture(app, "approval-scopes")
     app.buttons["approvalMore"].revealAboveComposer()
     app.buttons["approvalMore"].tapWhenReady()
-    app.buttons["Always allow…"].tapWhenReady()
+    let always = app.buttons["Always allow…"]
+    always.waitForStableFrame()
+    always.tapWhenReady()
     let alert = app.alerts.firstMatch
     XCTAssertTrue(alert.waitForExistence(timeout: 5))
     XCTAssertTrue(alert.label.hasPrefix("Always allow this for"))
