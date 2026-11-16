@@ -3441,18 +3441,31 @@ import CryptoKit
 
   private func scrollUntilHittable(_ app: XCUIApplication, _ element: XCUIElement, up: Bool = true, in scroller: XCUIElement? = nil) {
     let area = scroller ?? app
+    func bounds() -> (top: CGFloat, bottom: CGFloat) {
+      let overlay = app.descendants(matching: .any)["composerArea"].firstMatch
+      return (max(area.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 10,
+              min(area.frame.maxY, overlay.exists ? overlay.frame.minY : area.frame.maxY) - 10)
+    }
+    func ready() -> Bool {
+      guard element.canTap else { return false }
+      guard area.identifier == "conversationTranscript" else { return true }
+      let visible = bounds()
+      return element.frame.minY >= visible.top && element.frame.maxY <= visible.bottom
+    }
     for _ in 0..<8 {
-      if element.exists && element.canTap { return }
+      if ready() { return }
       if area.identifier == "conversationTranscript" {
-        let overlay = app.descendants(matching: .any)["composerArea"].firstMatch
-        let top = max(area.frame.minY, app.navigationBars.firstMatch.frame.maxY) + 10
-        let bottom = min(area.frame.maxY, overlay.exists ? overlay.frame.minY : area.frame.maxY) - 10
-        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.frame.midX, dy: up ? bottom : top))
-        let end = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.frame.midX, dy: up ? top : bottom))
+        let visible = bounds()
+        let upward = element.hasFrame ? element.frame.maxY > visible.bottom : up
+        let gap = element.hasFrame ? (upward ? element.frame.maxY - visible.bottom : visible.top - element.frame.minY) : visible.bottom - visible.top
+        let distance = min((visible.bottom - visible.top) * 0.6, max(24, gap + 8))
+        let startY = upward ? visible.bottom : visible.top
+        let start = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: area.frame.midX, dy: startY))
+        let end = start.withOffset(CGVector(dx: 0, dy: upward ? -distance : distance))
         start.press(forDuration: 0.05, thenDragTo: end)
       } else if up { area.swipeUp() } else { area.swipeDown() }
     }
-    XCTAssertTrue(element.canTap, "\(element) never became hittable")
+    XCTAssertTrue(ready(), "\(element) never became hittable clear of the navigation bar and message box")
   }
 
   /// Waits for transitions to settle, then writes the full-screen PNG and attaches it to the result.
