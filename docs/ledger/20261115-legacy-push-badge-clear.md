@@ -37,7 +37,20 @@ legacy payloads, persisted owner state across restart, stale pages, and latest-p
 The existing suites retain named-owner, sign-out and concurrent account-change cases.
 There is no server or iOS contract change; legacy pushes remain supported.
 
-Full check-all and compatible-container browser validation are pending. Independent review
+Full local validation is recorded below. Independent review
 is incomplete because Anthropic is usage-limited and Grok returned HTTP 402 for exhausted
 balance. This OpenAI implementation must remain unmerged until eligible review is available.
-No browser interaction, production deployment, or Apple build ran for this change.
+No production deployment or Apple build ran for this change.
+
+## Full local validation at `074518da`
+
+The coordinated check-all run passed typecheck, lint, ruff, 4,065 Vitest tests and build.
+52 Python test files passed.
+The real Chromium and WebKit suites passed 167 cases with 3 existing capability skips.
+The browsers ran in the Playwright 1.65.0 Noble container with Node 24.22.2 because
+Fedora lacks the host libraries required by WebKit. The outer Linux machine lock covered
+the full job. Output: the coordinating worktree's `.private/review-fix-checks.log`.
+
+This local runtime validation does not replace independent review, which remains incomplete.
+Before publication, main's separately reviewed compaction-test change #433 was merged.
+The production and regression-test files described above are unchanged by that merge.
