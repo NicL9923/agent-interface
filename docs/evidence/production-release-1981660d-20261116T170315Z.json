@@ -1,0 +1,22 @@
+{
+  "webBuild": "ed6e9cc2c51c509f",
+  "hermesRevision": "ed1afb082eb3e46cf2edae9d8f68fb67b09ee4df",
+  "hermesVersionUnchanged": true,
+  "repairPreserved": true,
+  "profileSettingsPreserved": true,
+  "originalGoogleHttpAndFreshWebsocket": true,
+  "gatewayGuardVerified": true,
+  "bothDiscordConnected": true,
+  "actualInstallerMaintenanceRpc": true,
+  "sourceCommit": "1981660d024bf8e173e48c6d4ff8be0b0d0658d6",
+  "archiveSha256": "7a88a630e52142995848fe8c2e03a9c5cce4130dcc043739a92ac33cf9a293a3",
+  "release": "release-1981660d-20261116T170315Z",
+  "qualification": "new",
+  "preflightCheckPassed": true,
+  "publicServiceWorkerBuild": true,
+  "apiRequiresSignIn": true,
+  "releaseIsCurrent": true,
+  "servicesActive": true,
+  "maintenanceCleared": true,
+  "metadataEgressFloor": true
+}
