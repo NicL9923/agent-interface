@@ -133,10 +133,14 @@ struct DiscoveryView: View {
           Button(pinned.contains(bookmark(page)) ? "Saved" : "Save conversation") {
             savePointer(SavedPointer(botId: page.botId, kind: "session", sessionId: page.sessionId, title: knownConversationTitle(page.botId, page.sessionId)))
           }.buttonStyle(.bordered).tint(Palette.messageMetadata).controlSize(.regular).frame(minHeight: 44).disabled(busy || pinned.contains(bookmark(page)))
-          ForEach(page.messages) { message in
-            HistoryMessageRow(message: message, recipient: name(page.botId), userId: store.bootstrap?.user.id ?? "", saved: savedMessage == message.id,
+          ForEach(AgentHandoff.runs(page.messages), id: \.[0].id) { run in
+            AgentExchangeGroupView(messages: run, recipient: name(page.botId), botId: page.botId) {
+            ForEach(run) { message in
+            HistoryMessageRow(message: message, recipient: name(page.botId), botId: page.botId, userId: store.bootstrap?.user.id ?? "", saved: savedMessage == message.id,
               isPinned: pinned.contains(bookmark(page, message.id)),
               save: message.role == "assistant" && !message.isProgressLine && !message.isInternalActivity ? { saveReply(message, page) } : nil, busy: busy).id(message.id)
+            }
+            }.environment(\.foundMessage, savedMessage)
           }
           HStack { Button("Previous page") { Task { await history(page.botId,page.sessionId,max(0,page.offset-100)) } }.disabled(busy || page.offset==0); Spacer(); Button("Next page") { Task { await history(page.botId,page.sessionId,page.offset+100) } }.disabled(busy || !page.hasMore) }
         }
@@ -414,6 +418,7 @@ struct DiscoveryView: View {
 struct HistoryMessageRow: View {
   var message: Message
   var recipient: String
+  var botId: String? = nil
   var userId: String = ""
   var saved: Bool
   var isPinned = false
@@ -445,11 +450,11 @@ struct HistoryMessageRow: View {
     return message.role.capitalized
   }
   @ViewBuilder private var content: some View {
-    if message.isInternalActivity {
+    if message.isAgentExchange {
+      AgentExchangeView(message: message, recipient: recipient, botId: botId)
+    } else if message.isInternalActivity {
       DisclosureGroup(message.presentationOrigin?.title ?? "Activity details") { MarkdownView(text: message.text) }
-    } else if message.isAgentExchange {
-      AgentExchangeView(message: message, recipient: recipient)
-    } else if let call = message.toolCall {
+    } else if let call = message.toolCall, call.name != "message_agent" {
       ActionReceiptView(call: call)
     } else if message.isReply {
       MarkdownView(text: message.text)

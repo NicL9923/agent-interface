@@ -2665,6 +2665,9 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func testUploadFinishingWhileReturningDraftLoadsKeepsTheFile() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts("bot")
+        // A dirty cached draft is ready immediately and schedules a PUT that can consume the held read.
+        // Start clean so the returning GET keeps this test in the loading state.
+        value.draft = Draft()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-loading-\(UUID().uuidString).txt")
         try Data("Keep this file".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         let uploadPath = "/api/bots/bot/uploads", draftPath = "/api/bots/bot/draft"

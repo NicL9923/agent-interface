@@ -98,6 +98,26 @@ import XCTest
     XCTAssertEqual(received.incoming?.body, "Dinner is planned")
   }
 
+  func testBotRoutesUseRosterAvatarsAndReverseForReplies() throws {
+    let bots = [
+      Bot(id: "ranch", name: "Ranch hand", model: "test", shared: true, activity: .idle),
+      Bot(id: "planner", name: "Planner", model: "test", shared: true, activity: .idle),
+    ]
+    let incoming = Message(id: "in", role: "user", text: "Message from Old name (@planner): Check the gate", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Old name"))
+    let received = AgentHandoff(message: incoming).route(bots: bots, currentBotId: "ranch", recipient: "Ranch hand")
+    XCTAssertEqual(received.senderBot?.id, "planner")
+    XCTAssertEqual(received.receiverBot?.id, "ranch")
+    XCTAssertEqual(received.sender, "Planner")
+    let reply = Message(id: "reply", role: "assistant", text: "The gate is shut", origin: MessageOrigin(kind: "agent", visibility: "activity", name: "Planner"))
+    let sent = AgentHandoff(message: reply).route(bots: bots, currentBotId: "ranch", recipient: "Ranch hand")
+    XCTAssertEqual(sent.senderBot?.id, "ranch")
+    XCTAssertEqual(sent.receiverBot?.id, "planner")
+    let unknown = AgentHandoff(message: reply).route(bots: [bots[0]], currentBotId: "ranch", recipient: "Ranch hand")
+    XCTAssertNil(unknown.receiverBot)
+    XCTAssertNil(unknown.partner)
+    XCTAssertEqual(unknown.receiver, "Planner")
+  }
+
   func testAgentExchangesFollowTheMessageOriginLikeTheWeb() {
     let incoming = Message(id: "in", role: "user", text: "Message from Kitchen companion: Dinner is planned")
     XCTAssertTrue(incoming.isAgentExchange)

@@ -258,8 +258,8 @@ describe("a live reply's row when it is saved", () => {
     // Saving loads the reply titler first, which takes real time.
     await waitForUi(() => expect(row("m2")!.querySelector('button[aria-label="Reply saved"]')).not.toBeNull());
     expect(saves).toEqual(["m2"]);
-    // The first reply turns out to be another member's private assistant, and becomes a hidden activity row.
-    await save([{ ...saved("m2", "Message from another member's assistant: This message is private."), origin: { kind: "agent", visibility: "activity" } }, saved("m3", "The trough is full.")]);
+    // A refreshed origin classifies the first reply as internal process activity.
+    await save([{ ...saved("m2", "Internal process activity."), origin: { kind: "process", visibility: "activity" } }, saved("m3", "The trough is full.")]);
     expect(row("m2")).toBeNull();
     expect(row("m3")).toBe(second);
     expect(row("m3")!.querySelector('button[aria-label="Save reply"]')).not.toBeNull();
