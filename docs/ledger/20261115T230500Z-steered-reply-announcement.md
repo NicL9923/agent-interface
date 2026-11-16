@@ -50,3 +50,33 @@ Native checks and cross-provider review remain pending. Grok's review launch fai
 with HTTP 402 for exhausted balance; Anthropic is weekly-limited. The implementation
 is OpenAI, so same-provider review cannot clear this obligation. Keep the PR unmerged.
 No manual browser or physical-device interaction was performed for this change.
+
+
+## Completed native single-predicate validation
+
+Mac validation ran at `4a4e3cc8f03477d44ad21aed602381000fabf0a3` on Xcode 27.2.
+The shared machine lock queued for 3,032 seconds and was held for 145 seconds for the
+combined native task, which also attempted PR #430. The following checks exercised the
+iPhone 17e simulator, not a physical device.
+
+- Restoring only the old `turn(at:)` identity predicate failed the held-segment regression
+  `testAHeldSegmentSurvivesGuidanceSteeredBeforeTheNextSegment`, with 1 failure among
+  22 tests. Mutated source SHA-256:
+  `283b0455f0397355ecb529396bde92035f24423493bc4d9fbf9854f1dad3e099`.
+- Restoring only the old `turnStart` join boundary failed
+  `testSteeredGuidanceKeepsSegmentsOnBothSidesInTheSameAnnouncement`, with 1 failure among
+  22 tests. Mutated source SHA-256:
+  `df441e3c93b381e565af0bc11322f83a1a0cec40396c4ac222218f0e595b4935`.
+- After byte-for-byte source restoration, all 22 ReplyAnnouncementTests passed. The restored
+  source SHA-256 `a760d5669e688def3ac1d7aba4b43990878c792d93fd76e6276ba30f6048f1af`
+  matches the committed file. The checkout was clean at the requested SHA.
+
+Logs are `/Volumes/DevSSD/scratch/ios-validation-task-20261116/pr431-identity.log`,
+`pr431-boundary.log`, and `pr431-restored.log`. Result bundles in the Mac project are
+`.private/ios-test-20261116T043826Z-47924.xcresult`,
+`.private/ios-test-20261116T043921Z-48989.xcresult`, and
+`.private/ios-test-20261116T044004Z-49553.xcresult`, respectively.
+
+This completes the corrected individual mutation coverage. The earlier opposite-test
+selections did not establish that coverage. No source or test changes were needed.
+Independent review outside OpenAI remains incomplete; keep the PR draft until it finishes.
