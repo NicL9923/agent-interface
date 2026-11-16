@@ -57,3 +57,43 @@ the full job. Output: the coordinating worktree's `.private/review-fix-checks.lo
 This local runtime validation does not replace independent review, which remains incomplete.
 Before publication, main's separately reviewed compaction-test change #433 was merged.
 The production and regression-test files described above are unchanged by that merge.
+
+
+## GPT review P1: preserve the signed-out word after cleanup
+
+Nicolas explicitly authorized GPT review and merging for this round. GPT-6.1 Sol high
+reviewed head `8b4c351ca2905d2de0b9a8584db2a9b5e6649286` and reproduced one P1:
+a page starts with pending logout and queues ACCOUNT(null) behind a held registration
+lookup. Cleanup gets bootstrap 401, then signOutFinished rewrites the record. The guard
+drops the old ACCOUNT(null), but no replacement was queued. The worker retains the old
+account and badge and displays that account's next push. The same replay on the merge
+base clears the worker and suppresses the push.
+
+Main `325c54758400e6092b76232ef65dc1878df44b9b`, including the reviewed auth fix, was
+merged normally in `e174bf5dba62ebc834c6d422b9b5de980b8eb60d` before this follow-up.
+No published history was rewritten. The production/test diff from that merge has SHA-256
+`b4ab4cc488f371e828e5c0129988317738777e3e2cede82b4d054d96ad3246b7` over src/app/account-epoch.ts and tests/account-operation.test.ts.
+
+signOutFinished now forces a fresh ACCOUNT(null) bound to its rewritten record. Normal
+per-account deduplication remains, and the queued record check still rejects stale words.
+This is a private tellWorker option; it changes no persisted record or wire format.
+
+The real account-operation/client API regression holds only registration I/O, returns
+bootstrap 401, performs actual cleanup, then releases registration. Before the fix it
+failed because only BADGE(null,0) arrived. After the fix it receives ACCOUNT(null) before
+that badge. Logs: `.private/signed-out-word-red.log` and `.private/signed-out-word-green.log`.
+All 116 account-operation, account-epoch, account-transition UI and app-badge tests passed;
+typecheck, lint and diff checks passed. Removing the replacement call, or restoring the
+old unconditional deduplication, independently fails the new regression. Source bytes were
+restored after each mutation. Log: `.private/signed-out-word-mutations.log`.
+
+The review's real account/client/worker replay was also run against the working source.
+It persisted signed-out worker state, cleared the badge and suppressed the old account's
+push. The probe compares cross-realm posted data as wire values; its initial extra strict
+prototype comparison was corrected without changing the behavioral assertions. Probe and
+result: `.private/signed-out-word-replay.mjs` and `.private/signed-out-word-replay.log`.
+The original review replay/result remain at `/tmp/pr437-review/repro.mjs` and `repro.log`.
+
+A scoped GPT re-check and final-source full validation remain required before merging.
+The original #330 label remains until this fix merges; sibling auth fix #429 has merged.
+A production release is still required after merge; none ran.

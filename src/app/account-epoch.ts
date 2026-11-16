@@ -468,6 +468,8 @@ export function signOutFinished() {
   const mine = stored() === held;
   const now = store(settled({ signedOut: true, user: record.user }));
   if (mine) held = seen = now;
+  // A queued word bound to the old record is now stale, even though the account is still null.
+  tellWorker(null, true);
 }
 
 let told: string | null | undefined;
@@ -490,9 +492,10 @@ function post(message: object, ports: MessagePort[] = [], accountRecord?: string
  * it can read it after the browser stops and restarts it, and drops a push, or refuses a notification's
  * action, for any other account (see scripts/service-worker.js). Each tab tells it in order, once per
  * generation for each account it names, so a bootstrap on every focus does not repeat it.
+ * Cleanup can force a fresh word after replacing the record a queued word belongs to.
  */
-function tellWorker(user: string | null) {
-  if (told === user) return;
+function tellWorker(user: string | null, force = false) {
+  if (!force && told === user) return;
   told = user;
   post({ type: "ACCOUNT", user }, [], stored());
 }
