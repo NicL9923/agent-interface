@@ -7,6 +7,7 @@ import { formRequestId } from "../shared/retry-id";
 import type { SubmissionReceipt } from "../shared/types";
 import { formReplyKey, localRead, localSave } from "../app/storage";
 import { TranscriptTools } from "../app/ReplyActions";
+import { AccountChanged, accountMark, accountStill } from "../app/account-epoch";
 import { useReceiptCheck } from "../app/use-receipt-check";
 import { reactAvatar } from "./avatar-attention";
 import { Button } from "./ui/button";
@@ -127,6 +128,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
   const [problems, setProblems] = useState<Record<string, string>>(() => Object.create(null));
   const [error, setError] = useState("");
   const inFlight = useRef(false);
+  const ownAttempt = useRef<{ id: string; record: (receipt: SubmissionReceipt) => void } | null>(null);
   const formId = useId();
   const save = (next: Saved, change: Change = {}) => {
     const record = nextRecord(readSaved(key), next, change);
@@ -172,6 +174,7 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
     // Another copy may have sent different answers under the same ID. The server's record of the
     // text says whose went; only matching text makes these answers the ones that were sent.
     const theirs = from.elsewhere || receipt.text !== undefined && receipt.text !== formAnswerText(card, from.answers);
+    if (!theirs && receipt.requestId === from.id && ownAttempt.current?.id === from.id) ownAttempt.current.record(receipt);
     const kept = theirs ? { attempt: from.attempt, answers: formStart(card), elsewhere: true } : { attempt: from.attempt, answers: from.answers };
     if (theirs) setElsewhere(true);
     if (receipt.status === "accepted") {
@@ -216,7 +219,11 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
     }
     inFlight.current = true; setStatus("sending"); setError("");
     try {
+      const mark = accountMark();
+      const record = tools?.startFormSend?.(botId, userId, text);
       const from: Pending = { id: await formRequestId(personKey, botId, messageId, card.id, attempt), attempt, answers, elsewhere: false };
+      if (!accountStill(mark)) { setStatus("editing"); return; }
+      if (record) ownAttempt.current = { id: from.id, record };
       // Saved first, so leaving while the request is out checks it on return. If saving fails, the
       // same request ID still keeps a second Send from being admitted.
       save({ attempt, answers, state: "checking", requestId: from.id });
@@ -236,6 +243,9 @@ export function FormReplyCard({ card, botId, messageId, userId, unavailable }: {
           setPending(from); setStatus("checking"); setError(unconfirmed);
         }
       }
+    } catch (cause) {
+      if (!(cause instanceof AccountChanged)) throw cause;
+      setStatus("editing");
     } finally {
       inFlight.current = false;
     }

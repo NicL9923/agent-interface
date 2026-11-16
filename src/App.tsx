@@ -23,6 +23,7 @@ import { withRunsShown } from "./shared/routine-runs";
 import { useAppInstall, useMobile } from "./app/use-browser";
 import { useLatestMessageAt, useReadThrough } from "./app/unread";
 import { useStableCallback } from "./app/use-stable-callback";
+import { accountMark, accountStill } from "./app/account-epoch";
 import { useResource } from "./app/use-resource";
 import { orderRooms, pendingGroup } from "./app/home-rooms";
 import { UpdateNotice } from "./app/UpdateNotice";
@@ -234,7 +235,14 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
     return () => window.removeEventListener("wildbots:computer", opened);
   }, []);
   // A sent message shows in the transcript at once; Send keeps spinning until Hermes answers.
-  const { echoes, sends } = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
+  const { echoes, sends, beginFormSend } = useSentEchoes({ pending, receipt, sending, conversation, sender: boot?.user });
+  const startFormSend = useStableCallback((id: string, senderId: string, text: string) => {
+    const mark = accountMark();
+    const record = beginFormSend(id, senderId, text);
+    return (accepted: import("./shared/types").SubmissionReceipt) => {
+      if (accountStill(mark)) record(accepted);
+    };
+  });
   const ownRows = useMemo(() => ownSentRows(sends, conversation), [sends, conversation]);
   const transcript = useMemo(() => withEchoes(conversation, echoes), [conversation, echoes]);
   // At most one message is on its way; accepted ones read as ordinary messages.
@@ -586,7 +594,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         {/* On a computer the rail is always beside this, so its notice is enough. In a chat it joins the composer's dock. */}
         {mobile && !(view === "conversation" && selected) && <UpdateNotice update={update} />}
         {view === "find" ? <Loading key="find"><DiscoveryPanel key={boot.user.id} bootstrap={boot} search={findQuery} onOpenMessage={openMessage} onRoutine={(id,routineId,resultId)=>setPanel({kind:"routine",botId:id,routineId,resultId})} /></Loading> : view === "group" ? <Loading key="group"><GroupRoomView key={`${boot.user.id}:${roomId}`} bootstrap={boot} roomId={roomId} canSend={catalog?.canSend ?? false} reason={catalog?.reason} onChanged={reloadGroups} /></Loading> : view === "today" ? <TodayPanel key={boot.user.id} bootstrap={boot} onOpen={(id, routineId) => { selectBot(id); if (routineId) setPanel({ kind: "routine", botId: id, routineId }); }} /> : <>
-          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} ownRows={ownRows} echo={outgoing} state={state}
+          <Conversation boot={boot} selected={selected} botId={botId} conversation={transcript} canonical={conversation} ownRows={ownRows} echo={outgoing} state={state} startFormSend={startFormSend}
             showActivity={showActivity} avatarState={avatarState} connectionLost={connectionLost} connectionShown={connectionShown}
             offline={offline} appUnavailable={appUnavailable} checkingConnection={session.checkingConnection}
             reconnect={session.reconnect} error={error} setError={setError}
