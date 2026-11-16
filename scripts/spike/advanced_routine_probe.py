@@ -216,13 +216,25 @@ async def main():
         downstream = await asyncio.to_thread(http, "POST", payload=downstream_payload)
         downstream_id = downstream["id"]
         created.append((PROFILE, downstream_id))
-        # Record the dashboard's [] -> null behavior rather than assuming the
-        # core scheduler's zero-tool semantics survive this HTTP normalizer.
+        # Older dashboards broaden [] to null. Current Hermes preserves it, which must also send zero tool schemas.
         await asyncio.to_thread(http, "PUT", "/" + downstream_id, {"updates": {"enabled_toolsets": []}})
         empty_tools = await asyncio.to_thread(http, "GET", "/" + downstream_id)
-        assert empty_tools["enabled_toolsets"] is None, empty_tools
+        empty_wire_tools = None
+        if empty_tools["enabled_toolsets"] is None:
+            checks["native_dashboard_empty_toolsets_normalizes_to_null"] = True
+        else:
+            assert empty_tools["enabled_toolsets"] == [], empty_tools
+            empty_start = len(requests(log))
+            await asyncio.to_thread(http, "POST", "/" + downstream_id + "/trigger")
+            empty_run = await asyncio.to_thread(http, "GET", "/" + downstream_id)
+            assert empty_run["last_status"] == "ok" and not empty_run.get("last_error"), empty_run
+            empty_wires = [row for row in requests(log)[empty_start:] if prompt_marker in user_text(row)]
+            assert empty_wires, "The empty-toolset routine never reached the fixture provider"
+            for row in empty_wires:
+                empty_wire_tools = assert_wire(row, prompt=prompt_marker, skill=skill_marker,
+                    latest=f"{output_marker}_2", stale=f"{output_marker}_1", script=agent_script_marker, expected_tools=set())
+            checks["native_dashboard_empty_toolsets_executes_without_tools"] = True
         await asyncio.to_thread(http, "PUT", "/" + downstream_id, {"updates": {"enabled_toolsets": ["skills"]}})
-        checks["native_dashboard_empty_toolsets_normalizes_to_null"] = True
         wire_start = len(requests(log))
         await asyncio.to_thread(http, "POST", "/" + downstream_id + "/trigger")
         downstream = await asyncio.to_thread(http, "GET", "/" + downstream_id)
@@ -249,6 +261,7 @@ async def main():
         checks["native_script_sandbox_and_mode_validation"] = True
         checks["native_same_profile_context_validation"] = True
         evidence = dict(revision=revision, checks=checks, selectedModel=MODEL, selectedProvider=PROVIDER,
+            emptyToolsets=empty_tools["enabled_toolsets"], emptyToolsetWireSchemas=empty_wire_tools,
             executionToolSchemas=tools, scriptOnlyProviderRequests=script_provider_calls,
             sourceRuns=int(counter.read_text()), sourceArchiveCount=len(archives), downstreamProviderRequests=len(wires),
             observedModels=sorted({row["model"] for row in wires}), advancedNativeFields=list(FIELDS),

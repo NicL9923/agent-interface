@@ -40,3 +40,14 @@ and native execution admission do not change.
 Full local validation and fresh release qualification are pending. Independent review is
 incomplete: Anthropic has a recorded weekly usage limit and xAI has exhausted its balance.
 No same-provider review is represented as independent.
+
+## Native empty toolsets
+
+The full staged-candidate probe passed projection, gateway durability, steering and executor
+recovery, then found a second native contract change. The current dashboard preserved
+`enabled_toolsets: []`; the old probe expected its historical normalization to `null`.
+The updated probe keeps that legacy check and, when Hermes preserves the empty list,
+triggers a real routine and requires zero tool schemas in its provider request. It then
+restores the skills-only restriction and retains the exact three-schema execution check.
+WildBots's existing rejection of new empty selections is unchanged, preserving safety on
+older supported dashboards. No client capability or routine-setting behavior changes.
