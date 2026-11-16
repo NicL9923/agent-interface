@@ -7,3 +7,5 @@ The regression against baseline production code failed one test with four assert
 With the recovered source, `validate-ios.sh` ran NativeContractTests, OwnSendsTests and ConversationParityTests on the simulator: 188 tests passed. Log: `/Volumes/DevSSD/scratch/own-send-green.log`; result: `.private/ios-test-20261116T001657Z-93808.xcresult`.
 
 `check-all` passed typecheck, lint and ruff, then failed 3 of 4064 tests because this Mac cannot bind `127.0.0.2` (EADDRNOTAVAIL). Build and e2e were skipped. Log: `/Volumes/DevSSD/scratch/own-send-check-all.log`.
+
+After merging `origin/main` at `62ea8cb9`, native suites ran on merge commit `b532b0a9e4cf402d6bd473416cbccea7c6f9263c`: the regression passed, but 2 assertions failed in `testUploadFinishingWhileReturningDraftLoadsKeepsTheFile` (188 tests total). That test passed in the earlier run. Log: `/Volumes/DevSSD/scratch/own-send-merged-green.log`; result: `.private/ios-test-20261116T004638Z-21558.xcresult`. An isolated retry was queued to investigate.
