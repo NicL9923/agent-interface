@@ -67,3 +67,15 @@ The Mac checkout was restored to its original clean state. No independent review
 The earlier upload/draft failure did not recur in this complete selection; its earlier
 cause remains unknown. Full Linux validation remains queued. The eligible independent
 review requirement and production release requirement remain unchanged.
+
+
+## Completed Linux validation at `a4ed8769889e7b87bca4be0b0e39f246de82fbc8`
+
+The full non-browser check-all passed typecheck, lint, Ruff, all 4,064 JavaScript tests in
+221 files, and build. Python was correctly skipped because none of its inputs changed.
+Output: the parent worktree's `.private/own-send-resend-checks.log`. The combined job queued
+for 8,744.184 seconds and held the machine lock for 351.510 seconds, including a subsequent
+browser run for PR #432. This completes the replacement Linux run; the old Mac-host alias
+failures are not the final result. No application or test inputs changed afterward.
+All requested native, Linux and reused-browser validation is now complete. Eligible
+independent review outside OpenAI remains the merge requirement. No release ran.
