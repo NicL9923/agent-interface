@@ -516,7 +516,12 @@ projection; only changed and new pieces are projected again. Every memo in the g
 within one budget of 192 million characters of rows, projections and tool rows (`PROJECTION_BUDGET` in
 `src/hermes/extension.py`); when they pass it, the memo used least recently empties. A new stored session
 starts empty. The longest chat measured, 8,021 rows, keeps 114 million characters, about 110 MB of the
-gateway's memory. Without readable redaction state nothing is kept.
+gateway's memory. Without readable redaction state the memo keeps nothing.
+
+Redaction state covers native vault values, plugin patterns, external secret-source values, the effective
+redaction switch and per-profile policies. Vault values may live in `agent.redact` or its extracted
+`agent.redact_vault_values` module. A change invalidates both the projection memo and settled decorated
+history. Cache metadata records a SHA256 digest of this state.
 
 A restart empties every memo. The first open after one resumes the session through its memo, with image
 URLs as every later open projects them, so the second open reuses what the first projected. A background

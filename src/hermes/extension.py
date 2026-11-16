@@ -568,23 +568,31 @@ class Keeper:
 
 
 def redaction_state():
-    """A digest of native redaction registries, which change history projection in memory only.
+    """A digest of native redaction registries and policy, which can change without a history write.
 
     None when this Hermes keeps them elsewhere, so a renamed registry cannot pass unnoticed.
     """
     try:
         redact = importlib.import_module("agent.redact")
-        vault_lock, vault = redact._VAULT_REDACTION_LOCK, redact._VAULT_REDACTION_VALUES
+        # Hermes moved the vault implementation into its own module while keeping its public functions re-exported.
+        vault_module = redact if hasattr(redact, "_VAULT_REDACTION_LOCK") else importlib.import_module("agent.redact_vault_values")
+        vault_lock, vault = vault_module._VAULT_REDACTION_LOCK, vault_module._VAULT_REDACTION_VALUES
         plugin_lock, plugin = redact._registry_lock, redact._PLUGIN_PREFIX_PATTERNS
+        enabled = redact._redact_enabled() if hasattr(redact, "_redact_enabled") else redact._REDACT_ENABLED
+        policies = [dict(getattr(redact, name, {})) for name in ("_ENV_POLICY_BY_HOME", "_CONFIG_POLICY_BY_HOME")]
+        sources = None
+        # Older qualified Hermes has no external-source redactor. When it does, its registry must be observable too.
+        if hasattr(redact, "redact_secret_source_values"):
+            source_module = importlib.import_module("agent.redact_secret_sources")
+            with source_module._LOCK:
+                sources = json.dumps(source_module._VALUES_BY_HOME, sort_keys=True)
     except (ImportError, AttributeError):
         return None
-    digest = hashlib.sha256()
     with vault_lock:
         vault = sorted((str(home), sorted(values)) for home, values in vault.items())
     with plugin_lock:
         plugin = sorted((str(source), list(patterns)) for source, patterns in plugin.items())
-    digest.update(json.dumps([vault, plugin]).encode())
-    return digest.hexdigest()
+    return hashlib.sha256(json.dumps([vault, plugin, sources, enabled, policies], sort_keys=True).encode()).hexdigest()
 
 
 def history_row_floor(session):
