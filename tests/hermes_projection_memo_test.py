@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -35,6 +36,8 @@ class ProjectingHermes(TranscriptHermes):
     def __init__(self):
         super().__init__()
         self.native_inputs, self.numbered = [], False
+        self.source_values, self.policy_enabled = {}, True
+        self.redact._redact_enabled = lambda: self.policy_enabled
         self.home = tempfile.TemporaryDirectory()
         self.kwargs = {"profile_home": self.home.name}
         server = self.server
@@ -64,6 +67,14 @@ class ProjectingHermes(TranscriptHermes):
         config = Path(profile_home or "/nonexistent") / "config.yaml"
         language = config.read_text().strip() if config.exists() else "en"
         secrets = [value for values in self.redact._VAULT_REDACTION_VALUES.values() for value in values]
+        # The native secret-source registry starts with env maps and classifies them lazily into value tuples.
+        for home, values in list(self.source_values.items()):
+            if isinstance(values, dict):
+                values = self.source_values[home] = tuple(values.values())
+            secrets.extend(values)
+        enabled = getattr(self.redact, "_CONFIG_POLICY_BY_HOME", {}).get(str(profile_home), self.policy_enabled)
+        if not enabled:
+            secrets = []
         calls, messages = {}, []
         for row in history:
             if not isinstance(row, dict):
@@ -237,6 +248,60 @@ class EquivalenceTests(unittest.TestCase):
             hermes.projected()
             hermes.whole()
             self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+
+    def test_a_modular_vault_registry_reuses_history_and_invalidates_when_a_secret_is_registered(self):
+        with ProjectingHermes() as hermes:
+            turns(hermes)
+            # Current Hermes re-exports the public functions but keeps the vault's lock and values in this module.
+            redact = types.SimpleNamespace(_registry_lock=hermes.redact._registry_lock,
+                                           _PLUGIN_PREFIX_PATTERNS=hermes.redact._PLUGIN_PREFIX_PATTERNS,
+                                           _REDACT_ENABLED=True)
+            with patch.dict(sys.modules, {"agent.redact": redact, "agent.redact_vault_values": hermes.redact}):
+                first = hermes.answer()
+                hermes.projected()
+                self.assertEqual(hermes.answer(), first)
+                self.assertEqual(hermes.projected(), set())
+                hermes.redact._VAULT_REDACTION_VALUES[hermes.home.name] = {"hunter2": None}
+                value = hermes.answer()
+                self.assertIn("Read both. The token is [REDACTED].", [m.get("text") for m in value["messages"]])
+
+    def test_external_secret_sources_invalidate_cached_text_and_clearing_them_restores_it(self):
+        with ProjectingHermes() as hermes:
+            first, *_ = turns(hermes)
+            first[0]["content"] = "opaque-source-password"
+            hermes.redact.redact_secret_source_values = lambda text: text
+            sources = types.SimpleNamespace(_LOCK=threading.Lock(), _VALUES_BY_HOME=hermes.source_values)
+            with patch.dict(sys.modules, {"agent.redact_secret_sources": sources}):
+                hermes.answer()
+                hermes.projected()
+                hermes.source_values[hermes.home.name] = {"DATABASE_PASSWORD": "opaque-source-password"}
+                value = hermes.answer()
+                self.assertEqual(value["messages"][0]["text"], "[REDACTED]")
+                # Classification changes the registry once; subsequent opens reuse unchanged projections.
+                hermes.answer()
+                hermes.projected()
+                self.assertEqual(hermes.answer(), value)
+                self.assertEqual(hermes.projected(), set())
+                hermes.source_values.clear()
+                self.assertEqual(hermes.answer()["messages"][0]["text"], "opaque-source-password")
+
+    def test_redaction_policy_changes_invalidate_settled_history_and_restoring_policy_masks_it_again(self):
+        with ProjectingHermes() as hermes:
+            turns(hermes)
+            hermes.session["running"] = False
+            hermes.redact._VAULT_REDACTION_VALUES[hermes.home.name] = {"hunter2": None}
+            masked = "Read both. The token is [REDACTED]."
+            plain = "Read both. The token is hunter2."
+            self.assertEqual(hermes.answer()["messages"][0]["text"], masked)
+            hermes.policy_enabled = False
+            self.assertEqual(hermes.answer()["messages"][0]["text"], plain)
+            hermes.policy_enabled = True
+            self.assertEqual(hermes.answer()["messages"][0]["text"], masked)
+            # A different profile's effective policy can change while the caller's policy stays true.
+            hermes.redact._CONFIG_POLICY_BY_HOME = {hermes.home.name: False}
+            self.assertEqual(hermes.answer()["messages"][0]["text"], plain)
+            hermes.redact._CONFIG_POLICY_BY_HOME.clear()
+            self.assertEqual(hermes.answer()["messages"][0]["text"], masked)
 
     def test_a_row_that_is_not_a_mapping_projects_as_hermes_skips_it(self):
         with ProjectingHermes() as hermes:
