@@ -1,5 +1,6 @@
 """Real native integration handlers in an isolated marked home, without live accounts."""
 import importlib.util
+import inspect
 import json
 import os
 import secrets
@@ -108,8 +109,9 @@ checks["native_literal_mcp_bearer_rotation_repoints_credential_owner"] = True
 # config when Disconnect arrives. Settle even a flow started outside this app,
 # then remove so a late native save cannot resurrect the server.
 from tools.mcp_dashboard_oauth import DashboardOAuthFlow
+flow_profile = {"profile": "default"} if "profile" in inspect.signature(DashboardOAuthFlow).parameters else {}
 assert call("add_mcp", mcp=dict(name="pending", url="https://fixture.example.test/mcp", auth="none")).status_code == 200
-external_flow = DashboardOAuthFlow(flow_id="external-flow-fixture", server_name="pending", profile="default", hermes_home=str(home), redirect_uri="https://fixture.example.test/callback")
+external_flow = DashboardOAuthFlow(flow_id="external-flow-fixture", server_name="pending", hermes_home=str(home), redirect_uri="https://fixture.example.test/callback", **flow_profile)
 with native_mcp._mcp_oauth_flows_lock:
     native_mcp._mcp_oauth_flows[external_flow.flow_id] = external_flow
 worker_errors = []
@@ -138,7 +140,7 @@ from integrations import MCP_LIFECYCLE_LOCK, MCP_DISCONNECTING
 assert call("add_mcp", mcp=dict(name="fenced", url="https://fixture.example.test/mcp", auth="none")).status_code == 200
 captured_config = dict(url="https://fixture.example.test/mcp", auth="oauth")
 for during_removal in (True, False):
-    racing = DashboardOAuthFlow(flow_id="racing-" + str(during_removal), server_name="fenced", profile="default", hermes_home=str(home), redirect_uri="https://fixture.example.test/callback")
+    racing = DashboardOAuthFlow(flow_id="racing-" + str(during_removal), server_name="fenced", hermes_home=str(home), redirect_uri="https://fixture.example.test/callback", **flow_profile)
     if during_removal:
         with MCP_LIFECYCLE_LOCK:
             MCP_DISCONNECTING.add((str(home), "fenced"))

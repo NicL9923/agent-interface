@@ -61,7 +61,7 @@ class FakeGateway:
         gateway.server, gateway.server_requests = server, requests
         # Native redaction registries, which history projection reads in memory.
         self.redact = types.SimpleNamespace(_VAULT_REDACTION_LOCK=threading.Lock(), _VAULT_REDACTION_VALUES={},
-                                            _registry_lock=threading.Lock(), _PLUGIN_PREFIX_PATTERNS={})
+                                            _registry_lock=threading.Lock(), _PLUGIN_PREFIX_PATTERNS={}, _REDACT_ENABLED=True)
         bound = contextvars.ContextVar("transport", default=None)
         self.transport = types.SimpleNamespace(bind_transport=bound.set, current_transport=bound.get)
         self.modules = {"tui_gateway": gateway, "tui_gateway.server": server, "tui_gateway.server_requests": requests,

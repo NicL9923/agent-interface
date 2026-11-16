@@ -523,9 +523,9 @@ assistant's other routines. Script-only execution skips its model call, but
 delivery to Bot Chat starts a separate model turn. Context sources supply their
 latest saved outputs and do not impose execution order. Cycles and cross-profile
 dependencies are refused. Omitted native settings stay saved during edits. Scripts must exist
-inside the profile's scripts directory. Hermes's dashboard cannot save a new empty
-toolset selection safely, so WildBots rejects that change and preserves existing
-zero-tool settings.
+inside the profile's scripts directory. Older supported Hermes dashboards broaden a new empty
+toolset selection to unrestricted profile tools. WildBots rejects that change across supported
+versions and preserves existing zero-tool settings.
 
 ## Integration and release
 
