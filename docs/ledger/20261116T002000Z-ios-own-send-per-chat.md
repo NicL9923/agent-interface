@@ -9,3 +9,27 @@ With the recovered source, `validate-ios.sh` ran NativeContractTests, OwnSendsTe
 `check-all` passed typecheck, lint and ruff, then failed 3 of 4064 tests because this Mac cannot bind `127.0.0.2` (EADDRNOTAVAIL). Build and e2e were skipped. Log: `/Volumes/DevSSD/scratch/own-send-check-all.log`.
 
 After merging `origin/main` at `62ea8cb9`, native suites ran on merge commit `b532b0a9e4cf402d6bd473416cbccea7c6f9263c`: the regression passed, but 2 assertions failed in `testUploadFinishingWhileReturningDraftLoadsKeepsTheFile` (188 tests total). That test passed in the earlier run. Log: `/Volumes/DevSSD/scratch/own-send-merged-green.log`; result: `.private/ios-test-20261116T004638Z-21558.xcresult`. An isolated retry was canceled while queued so the shared checkout could be released for the parent task; it did not run.
+
+
+## Coordinator follow-up: select outgoing status for the open chat
+
+Sol's re-check of the Claude implementation at f2ccbc02 found that the outgoing getter still
+selected the first unsettled echo from any chat. Preserving chat A's echo therefore masked
+chat B's delivery and its send-anchor observer. This follow-up is implemented by GPT-6.1 Sol.
+
+At test-only commit f7f9783d, NativeContractTests/testOutgoingTracksOnlyTheOpenChatWhenTwoSendsAreUnsettled
+failed with four assertions on the Mac's iPhone 17e simulator. The real AppStore selected A's
+request and status while B was open. Log: /Volumes/DevSSD/scratch/own-send-outgoing-red.log.
+The getter now filters by selectedBotId before choosing a delivery. The regression checks
+no outgoing item in the newly opened chat, B's sending and unconfirmed statuses, and A's
+status when returning. Native green validation of the completed fix remains pending.
+
+The earlier two upload/draft assertions did not reproduce when the single test was run on
+both f2ccbc02 and base62ea8cb9. Each isolated run passed. Their cause remains unknown, so
+those passes do not turn the earlier full-suite failure into a pass. The new native run must
+report the complete suite result separately. Logs: own-send-isolated-pr.log and
+own-send-isolated-base.log under /Volumes/DevSSD/scratch.
+
+The original source was Claude-authored and Sol independently reviewed it. This added test
+and outgoing filter are OpenAI-authored and still need eligible non-OpenAI independent review.
+No production deployment ran. A release is required after merge.
