@@ -51,7 +51,7 @@ import { readSavedRoster, rememberRoster, savedHome, savedRooms } from "./app/sa
 import { prefetchLinkedChat } from "./app/linked-chat";
 import { BotDetails, BotSettings, ComputerPanel, DiscoveryPanel, UsagePanel, GroupCreate, GroupRoomView, HermesUpgradePanel, IntegrationsPanel, Loading, PreferencesDialog, RoutineResults, useOnceActive } from "./app/panels";
 import { accountGeneration, accountStart, checkHintExpiry, drawingAccount, hintUntil, uncoverEnded, watchAccount } from "./app/account-epoch";
-import { signOutHere, signOutOf } from "./app/account-change";
+import { canChangeAccounts, signOutHere, signOutOf } from "./app/account-change";
 
 /**
  * The app for one account generation at a time (see account-epoch.ts). A sign-in, sign-out, refused
@@ -289,6 +289,10 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
   const signOut = async () => {
     if (!userId) return;
     try {
+      if (!canChangeAccounts()) {
+        if (!await signOutHere(userId)) setNotice("Couldn't sign out of this device. This browser didn't save the change, so you're still signed in here.");
+        return;
+      }
       await notifications.disable();
       await signOutOf(userId);
     } catch (e) {
@@ -638,7 +642,7 @@ function AccountApp({ start }: { start: "bootstrap" | "signed-out" }) {
         <Loading>
           <PreferencesDialog destination={panel.destination} boot={boot} connectionLost={connectionShown} offline={offline} editPreferences={session.editPreferences}
             notifications={notifications} installEvent={installEvent} notice={notice}
-            onClose={() => sheetClosed("preferences")} closer={panelClose} onSignOut={signOut}
+            onClose={() => sheetClosed("preferences")} closer={panelClose} onSignOut={signOut} signOutOnDeviceOnly={!canChangeAccounts()}
             onComputer={() => open({ kind: "computer" })} onIntegrations={() => open({ kind: "integrations" })}
             onUpgrade={() => open({ kind: "upgrade" })} onShortcuts={showShortcuts} />
         </Loading>

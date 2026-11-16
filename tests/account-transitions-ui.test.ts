@@ -1161,3 +1161,50 @@ describe("what the service worker is told", () => {
     }
   });
 });
+
+
+it.each([true, false])("without Web Locks, device-only sign-out respects storage keeping the mark: %s", async keepsMark => {
+  Reflect.deleteProperty(navigator, "locks");
+  signedInAs("one");
+  const tab = await openTab();
+  await accountMenu(tab);
+  await act(async () => [...tab.container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(item => item.textContent === "Sign out")!.click());
+  await waitForUi(() => expect(document.querySelector('[role="alertdialog"] button.danger')).not.toBeNull());
+  const question = document.querySelector('[role="alertdialog"]')!;
+  expect(question.querySelector("h2")?.textContent).toBe("Sign out of this device?");
+  const bootstrapReads = calls.filter(item => item.call === "GET /bootstrap?roster=lean").length;
+  if (!keepsMark) refusing.write = true;
+  await act(async () => question.querySelector<HTMLButtonElement>("button.danger")!.click());
+  await advance(0);
+  expect(calls.filter(item => item.call === "POST /auth/logout")).toEqual([]);
+  expect(cookie).toBe("one");
+  if (keepsMark) {
+    expect(tab.text()).toContain("Enter local workspace");
+    expect(JSON.parse(data.get(authEpochKey)!)).toMatchObject({ user: "one", signedOut: true, logout: true });
+    expect(data.has(savedRosterKey)).toBe(false);
+    const reopened = await openTab();
+    expect(reopened.text()).toContain("Enter local workspace");
+    expect(calls.filter(item => item.call === "GET /bootstrap?roster=lean")).toHaveLength(bootstrapReads);
+  } else {
+    expect(tab.text()).toContain("still signed in here");
+    expect(JSON.parse(data.get(authEpochKey)!)).toMatchObject({ user: "one" });
+    expect(JSON.parse(data.get(authEpochKey)!).signedOut).toBeUndefined();
+    expect(tab.text()).toContain("Ranch Hand");
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  }
+});
+
+
+it.each([
+  { provider: "local", config: { localDevAuth: true } },
+  { provider: "Google", config: { localDevAuth: false, googleClientId: "test.apps.googleusercontent.com" } },
+])("explains unsupported sign-in before asking for $provider credentials", async ({ provider, config }) => {
+  Reflect.deleteProperty(navigator, "locks");
+  holding = ["GET /auth/config"];
+  const tab = await openTab();
+  await answerHeld("GET /auth/config", { status: 200, body: config });
+  expect(tab.container.querySelector('[role="alert"]')?.textContent).toContain("safely change accounts");
+  if (provider === "local") expect(button(tab, "Enter local workspace").disabled).toBe(true);
+  else expect(document.querySelector('script[src="https://accounts.google.com/gsi/client"]')).toBeNull();
+  expect(calls.filter(item => item.call.startsWith("POST /auth/"))).toEqual([]);
+});

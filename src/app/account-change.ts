@@ -1,24 +1,35 @@
 import { ApiError, request, setCsrf, write } from "../client-api";
-import { beginAccountChange, closeShownNotifications, endPushSubscription, forgetSignIn, pendingSignOut, rememberSignIn, signOutFinished } from "./account-epoch";
+import { accountMark, accountMarkUnchanged, beginAccountChange, closeShownNotifications, endPushSubscription, forgetSignIn, pendingSignOut, rememberSignIn, signOutFinished } from "./account-epoch";
 import { forgetAccountContent } from "./storage";
+
+// A separate lock covers the network request as well as the record writes. Web Locks release it
+// when a tab closes; the record lock remains separate because begin and settle acquire it too.
+export const canChangeAccounts = () => typeof navigator !== "undefined" && !!navigator.locks;
+export const accountChangeUnavailable = "This browser can't safely change accounts. Use an updated browser and open WildBots over HTTPS.";
+function authOperation<T>(work: () => Promise<T>, localOnly = false): Promise<T> {
+  if (!canChangeAccounts()) return localOnly ? work() : Promise.reject(new Error(accountChangeUnavailable));
+  return navigator.locks.request("agent-interface:auth-operation", work);
+}
 
 /**
  * Signs in through `path`. Every tab drops its account before the request can change the cookie,
  * and draws again from bootstrap once it settles. A refused sign-in leaves the cookie as it was, so
  * the record goes back and the tabs that waited read their account again.
  */
-export async function signInWith(path: string, body: unknown) {
-  const change = await beginAccountChange();
-  let answer: { user?: { id?: unknown } } | undefined;
-  try {
-    answer = await write<typeof answer>(path, body);
-  } catch (error) {
-    await change.undo();
-    throw error;
-  }
-  rememberSignIn();
-  // The first bootstrap names the account if the answer does not.
-  await change.settle({ user: typeof answer?.user?.id === "string" ? answer.user.id : undefined });
+export function signInWith(path: string, body: unknown) {
+  return authOperation(async () => {
+    const change = await beginAccountChange();
+    let answer: { user?: { id?: unknown } } | undefined;
+    try {
+      answer = await write<typeof answer>(path, body);
+    } catch (error) {
+      await change.undo();
+      throw error;
+    }
+    rememberSignIn();
+    // The first bootstrap names the account if the answer does not.
+    await change.settle({ user: typeof answer?.user?.id === "string" ? answer.user.id : undefined });
+  });
 }
 
 /**
@@ -26,23 +37,25 @@ export async function signInWith(path: string, body: unknown) {
  * before it can sign out an account it does not show. Once the server ends the session, the records
  * that hold this member's content leave the browser, and every tab shows sign-in.
  */
-export async function signOutOf(user: string) {
-  const change = await beginAccountChange({ ownTree: true });
-  try {
-    await write("/auth/logout", {});
-  } catch (error) {
-    await change.undo();
-    throw error;
-  }
-  forgetAccountContent(user);
-  forgetSignIn();
-  closeShownNotifications();
-  await change.settle({ signedOut: true, user });
+export function signOutOf(user: string) {
+  return authOperation(async () => {
+    const change = await beginAccountChange({ ownTree: true });
+    try {
+      await write("/auth/logout", {});
+    } catch (error) {
+      await change.undo();
+      throw error;
+    }
+    forgetAccountContent(user);
+    forgetSignIn();
+    closeShownNotifications();
+    await change.settle({ signedOut: true, user });
+  });
 }
 
 /**
- * Signs `user` out of this browser when the app cannot be reached, as from the saved home after the
- * first bootstrap failed. It goes at once, as a sign-out the server took does, in every tab, and the
+ * Signs `user` out of this device when the app cannot be reached or cookie changes are unsupported.
+ * It also serves the saved home after bootstrap fails. It goes at once in every tab. The
  * record says the server's session may still be live, so nothing reads with it until the sign-in
  * screen ends it there (`finishSignOut`).
  *
@@ -50,17 +63,19 @@ export async function signOutOf(user: string) {
  * found in storage, before this member's copies go. When storage refuses it or does not keep it, the
  * record goes back, nothing is removed, and this returns false: the person is still signed in here.
  */
-export async function signOutHere(user: string) {
-  const change = await beginAccountChange({ ownTree: true });
-  const done = await change.settleKept({ signedOut: true, user, logout: true }, () => {
-    forgetAccountContent(user);
-    forgetSignIn();
-    closeShownNotifications();
-    // The online sign-out turns notifications off first (see App); offline only the browser's side can end.
-    endPushSubscription();
-  });
-  if (!done) await change.undo();
-  return done;
+export function signOutHere(user: string) {
+  return authOperation(async () => {
+    const change = await beginAccountChange({ ownTree: true });
+    const done = await change.settleKept({ signedOut: true, user, logout: true }, () => {
+      forgetAccountContent(user);
+      forgetSignIn();
+      closeShownNotifications();
+      // The online sign-out turns notifications off first (see App); offline only the browser's side can end.
+      endPushSubscription();
+    });
+    if (!done) await change.undo();
+    return done;
+  }, true);
 }
 
 let finishing: Promise<void> | null = null;
@@ -72,21 +87,21 @@ let finishing: Promise<void> | null = null;
  */
 export function finishSignOut() {
   if (pendingSignOut() === null) return Promise.resolve();
-  finishing ??= (async () => {
+  finishing ??= authOperation(async () => {
+    if (pendingSignOut() === null) return;
+    const mark = accountMark();
     try {
-      try {
-        const answer = await request("GET /bootstrap", { query: { roster: "lean" } });
-        setCsrf(answer.csrfToken ?? "");
-        await write("/auth/logout", {});
-      } catch (error) {
-        if (!(error instanceof ApiError && error.status === 401)) return;
-      } finally {
-        setCsrf("");
-      }
-      signOutFinished();
+      const answer = await request("GET /bootstrap", { query: { roster: "lean" } });
+      if (!accountMarkUnchanged(mark)) return;
+      setCsrf(answer.csrfToken ?? "");
+      await write("/auth/logout", {});
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 401)) return;
     } finally {
-      finishing = null;
+      if (accountMarkUnchanged(mark)) setCsrf("");
     }
-  })();
+    if (accountMarkUnchanged(mark)) signOutFinished();
+  }).catch(() => { /* Keep the pending mark for the next attempt, including when a lock is denied. */ })
+    .finally(() => { finishing = null; });
   return finishing;
 }

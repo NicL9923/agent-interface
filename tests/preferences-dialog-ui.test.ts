@@ -219,6 +219,19 @@ describe("opened at the sign-out question", () => {
     expect(props.onSignOut).not.toHaveBeenCalled();
   });
 
+  it("explains device-only sign-out before confirming it", async () => {
+    props.destination = { kind: "signout" };
+    props.signOutOnDeviceOnly = true;
+    await render();
+    const question = document.querySelector('[role="alertdialog"]')!;
+    expect(question.querySelector("h2")?.textContent).toBe("Sign out of this device?");
+    expect(question.textContent).toContain("HTTPS");
+    expect(props.onSignOut).not.toHaveBeenCalled();
+    await act(async () => question.querySelector<HTMLButtonElement>("button.danger")!.click());
+    expect(props.onSignOut).toHaveBeenCalledWith();
+    expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
   it("returns to the sheet's Sign out row when the question is declined", async () => {
     const stack = trackTopLayer();
     props.destination = { kind: "signout" };

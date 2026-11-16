@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, vi } from "vitest";
 import { recordActWarning, takeActWarnings } from "./act-guard";
+import { browserLocks } from "./helpers/web-locks";
 
 // Only files that run in jsdom have a document; server tests skip all of this.
 if (typeof document !== "undefined") {
@@ -37,7 +38,11 @@ if (typeof document !== "undefined") {
   // A test's own console mock would otherwise swallow React's act warnings; see tests/act-guard.ts.
   const logError = console.error;
   console.error = (...args: unknown[]) => { if (!recordActWarning(args)) logError.apply(console, args); };
-  beforeEach(() => { takeActWarnings(); });
+  beforeEach(() => {
+    takeActWarnings();
+    // Modern secure browsers expose Web Locks. Unsupported-browser cases explicitly remove this I/O boundary.
+    Object.defineProperty(navigator, "locks", { configurable: true, value: browserLocks() });
+  });
   const { unmountAll } = await import("./ui-harness");
   afterEach(async () => {
     await unmountAll();
@@ -50,6 +55,7 @@ if (typeof document !== "undefined") {
     if (vi.isMockFunction(errorLog)) for (const args of errorLog.mock.calls) recordActWarning(args);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(navigator, "locks");
     // Last, so that updates from unmounting count too.
     const found = takeActWarnings();
     if (found.length)

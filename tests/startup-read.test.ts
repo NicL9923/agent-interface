@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearResponseCache, request } from "../src/client-api";
 import { firstPage, firstQuery } from "../src/app/conversation-page";
-import { savedThemeKey, signInHintKey } from "../src/app/storage";
+import { authEpochKey, savedThemeKey, signInHintKey } from "../src/app/storage";
 import { STARTUP_READ_VERSION } from "../src/startup-read";
 
 // public/boot.js runs here as the browser runs it, as a classic script, against the app's real client
@@ -76,6 +76,33 @@ describe("the read boot.js starts", () => {
     await expect(leanBootstrap()).rejects.toMatchObject({ status: 503 });
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
     expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    { state: "device-only sign-out", record: { id: "out", at: NOW, signedOut: true, logout: true, user: "one" } },
+    { state: "an abandoned sign-in carrying pending logout", record: { id: "abandoned", at: NOW - 70_000, changing: true, logout: true } },
+  ])("does not read with the old cookie or restore its theme after $state", ({ record }) => {
+    localStorage.setItem(authEpochKey, JSON.stringify(record));
+    localStorage.setItem(signInHintKey, JSON.stringify({ until: NOW + 60_000, user: "one", bots: ["ranch"] }));
+    localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
+    history.replaceState(null, "", "/?bot=ranch");
+    try {
+      runBoot();
+      expect(calls).toEqual([]);
+      expect(window.__wildbotsStartup).toBeUndefined();
+      expect(document.documentElement.getAttribute("data-theme")).toBe("system");
+    } finally { history.replaceState(null, "", "/"); }
+  });
+
+  it.each([
+    { state: "a completed server sign-out", fields: { signedOut: true, logout: false } },
+    { state: "a logout flag with no signed-out or changing state", fields: { logout: true, signedOut: false, changing: false } },
+  ])("still reads when $state does not owe logout", ({ fields }) => {
+    localStorage.setItem(authEpochKey, JSON.stringify({ id: "settled", at: NOW, ...fields }));
+    answers.push(async () => json(bootstrap));
+    runBoot();
+    expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`]);
+    expect(paths()).toEqual([LEAN]);
   });
 
   it("starts once per page", () => {
