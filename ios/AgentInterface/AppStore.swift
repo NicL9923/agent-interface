@@ -384,17 +384,17 @@ final class AppStore: NSObject, ASWebAuthenticationPresentationContextProviding 
 
   // MARK: Derived presentation state
 
-  /// Follows the open assistant's submissions and keeps each echo until Hermes's copy replaces it.
+  /// Follows each assistant's submissions and keeps each echo until Hermes's copy replaces it.
   /// Every input it reads calls it when it changes.
   func updateEcho(conversationChanged: Bool = false) {
     let now = Date()
     // Only a conversation on screen is kept current, so only it can retire an echo or anchor one.
     let current = followedBotId == nil ? nil : conversation
     let sender = bootstrap.map { Sender(id: $0.user.id, name: $0.user.name) }
-    let next = SentEcho.nextEchoes(
-      echoes, pending: pending, receipt: receipt, sending: sending, conversation: current, sender: sender, now: now)
-    // A send is kept from its echo's last step, so it is worked out before the echoes change.
-    let sends = SentEcho.nextSends(ownSends, before: echoes, after: next, receipt: receipt, sender: sender, conversation: current)
+    // Each echo reads its own chat's send, so leaving a chat before Hermes answers keeps its echo and its record.
+    let (next, sends) = SentEcho.advance(echoes, ownSends, chat: { [pendings, receipts, sendingRequests] id in
+      SentEcho.ChatSend(pending: pendings[id], receipt: receipts[id], sending: sendingRequests[id] != nil)
+    }, open: selectedBotId, conversation: current, sender: sender, now: now)
     if sends != ownSends { ownSends = sends }
     let rows = SentEcho.ownRows(sends, in: conversation)
     if rows != ownRows { ownRows = rows }

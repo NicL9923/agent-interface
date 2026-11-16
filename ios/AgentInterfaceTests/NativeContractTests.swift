@@ -990,6 +990,61 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
         XCTAssertEqual(value.ownSends, []); XCTAssertEqual(value.ownRows, [])
     }
 
+    func testASendWhoseChatIsLeftBeforeHermesAnswersStaysTheirsWhenAcceptedThere() throws {
+        let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
+        let hi = Message(id: "a", role: "assistant", text: "Hi")
+        var chat = try XCTUnwrap(value.conversation)
+        chat.messages = [hi]
+        value.conversation = chat
+        // The send goes out in this shared chat, as `send()` files it.
+        let submission = PendingSubmission(requestId: "req", botId: "bot", text: "Send this", attachments: [], reviewedInterruption: false)
+        value.pendings["bot"] = submission
+        value.sendingRequests["bot"] = submission.requestId
+        XCTAssertEqual(value.echoes.first?.after, "a")
+        // The person opens another shared chat before Hermes answers.
+        value.conversationShown("other", true)
+        value.selectedBotId = "other"
+        value.conversation = Conversation(botId: "other", messages: [], activity: Activity(state: .idle), approvals: [], files: [])
+        XCTAssertEqual(value.echoes.map(\.status), [.sending], "The first chat's send is still out, so its echo stays")
+        XCTAssertEqual(value.echoes.first?.after, "a", "Keeping its anchor")
+        // Hermes accepts it while the other chat is open, as `handleReceipt` and `send()` settle it.
+        value.receipts["bot"] = Receipt(requestId: "req", status: "accepted")
+        value.pendings["bot"] = nil
+        value.sendingRequests["bot"] = nil
+        XCTAssertEqual(value.ownSends.map(\.requestId), ["req"], "Recorded from its own chat's receipt")
+        // Back in the first chat, Hermes saved it without a sender, as it does a queued send.
+        value.selectedBotId = "bot"
+        chat.messages = [hi, Message(id: "queued-row", role: "user", text: "Send this")]
+        value.conversation = chat
+        XCTAssertEqual(value.ownRows, ["queued-row"], "The person's own row, so it carries no household label")
+    }
+
+    func testOutgoingTracksOnlyTheOpenChatWhenTwoSendsAreUnsettled() throws {
+        let server = NativeMockServer(); server.addFamilyBot()
+        let value = try store(server); defer { clean(server, value) }
+        let original = try XCTUnwrap(value.conversation)
+        let first = PendingSubmission(requestId: "first", botId: "bot", text: "First chat", attachments: [], reviewedInterruption: false)
+        value.pendings["bot"] = first
+        value.sendingRequests["bot"] = first.requestId
+        XCTAssertEqual(value.outgoing?.id, "first")
+        value.conversationShown("family", true)
+        value.selectedBotId = "family"
+        value.conversation = Conversation(botId: "family", messages: [], activity: Activity(state: .idle), approvals: [], files: [])
+        XCTAssertNil(value.outgoing, "Another chat's send is not this chat's delivery state")
+        let second = PendingSubmission(requestId: "second", botId: "family", text: "Second chat", attachments: [], reviewedInterruption: false)
+        value.pendings["family"] = second
+        value.sendingRequests["family"] = second.requestId
+        XCTAssertEqual(value.outgoing?.id, "second", "A new ID lets this chat follow its own send")
+        XCTAssertEqual(value.outgoing?.status, .sending)
+        value.sendingRequests["family"] = nil
+        XCTAssertEqual(value.outgoing?.id, "second")
+        XCTAssertEqual(value.outgoing?.status, .unconfirmed)
+        value.selectedBotId = "bot"
+        value.conversation = original
+        XCTAssertEqual(value.outgoing?.id, "first", "Returning to the first chat restores its own delivery state")
+        XCTAssertEqual(value.outgoing?.status, .sending)
+    }
+
     func testASendThatNeverGetsItsOwnCopyEndsItsRecordWhenItsEchoLeaves() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         await value.send()
@@ -2665,6 +2720,9 @@ private final class NativeMockServer: FakeHost, @unchecked Sendable {
     func testUploadFinishingWhileReturningDraftLoadsKeepsTheFile() async throws {
         let server = NativeMockServer(), value = try store(server); defer { clean(server, value) }
         server.versionDrafts("bot")
+        // A dirty cached draft is ready immediately and schedules a PUT that can consume the held read.
+        // Start clean so the returning GET keeps this test in the loading state.
+        value.draft = Draft()
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("native-loading-\(UUID().uuidString).txt")
         try Data("Keep this file".utf8).write(to: file); defer { try? FileManager.default.removeItem(at: file) }
         let uploadPath = "/api/bots/bot/uploads", draftPath = "/api/bots/bot/draft"

@@ -7,7 +7,7 @@ import { preloadBotMenu } from "../src/app/BotMenu";
 import { api, ApiError, uploadFile, write } from "../src/client-api";
 import { takeHeartbeats } from "./helpers/request-mock";
 import { defaultPreferences } from "../src/shared/types";
-import type { Bootstrap, Conversation } from "../src/shared/types";
+import type { Bootstrap, Conversation, Message } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { clearDecline } from "../src/app/decline-handoff";
 import { contentHash } from "../src/app/draft-merge";
@@ -620,7 +620,7 @@ describe("conversation state", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
     const order: string[] = [];
     const endpoint = "https://push.example.invalid/this-device";
-    vi.stubGlobal("navigator", { onLine: true, serviceWorker: {
+    vi.stubGlobal("navigator", { onLine: true, locks: navigator.locks, serviceWorker: {
       getRegistration: vi.fn(async () => ({ pushManager: { getSubscription: vi.fn(async () => ({ endpoint,
         unsubscribe: vi.fn(async () => { order.push("unsubscribe"); return true; }),
       })) } })), addEventListener: vi.fn(), removeEventListener: vi.fn(),
@@ -1420,16 +1420,79 @@ describe("conversation state", () => {
       { id: "handoff", role: "tool", text: "", toolCall: { id: "worker", name: "delegate_task", status: "running" } },
     ], approvals: [{ id: "decision", title: "Open the gate?", detail: "Your decision needed", status: "pending" }] };
     await render();
-    const bubbles = [...container.querySelectorAll(".message[data-message-id]")];
+    const bubbles = [...container.querySelectorAll(".message[data-message-id]:not(.message-agent)")];
     expect(bubbles.map(row => row.getAttribute("data-message-id"))).toEqual(["reminder", "human"]);
     expect(bubbles[0].querySelector(".message-attribution")?.textContent).toBe("Scheduled");
     expect(bubbles[1].textContent).toContain("Hello from Desktop");
     const groups = [...container.querySelectorAll(".tool-calls")];
-    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Bot messages2", "Subagents1Running"]);
+    expect(groups.map(group => group.querySelector("summary")?.textContent)).toEqual(["Scheduled jobs1", "Subagents1Running"]);
     expect(groups.every(group => !group.hasAttribute("open"))).toBe(true);
+    const exchanges = container.querySelector<HTMLDetailsElement>('.conversation-turn > .agent-exchange-group')!;
+    expect(exchanges.open).toBe(false);
+    expect(exchanges.querySelector('summary')?.textContent).toContain('2 bot messages');
+    expect(exchanges.textContent).toContain('Check the gate.');
+    expect(exchanges.textContent).toContain('I will check it.');
     expect(container.querySelector(".approval-card")?.textContent).toContain("Open the gate?");
     await act(async () => { groups[0].setAttribute("open", ""); });
     expect(groups[0].textContent).toContain("Hay and water.");
+  });
+
+  it("keeps exchanges in saved order and starts a new run after an intervening tool or human message", async () => {
+    const incoming = (id: string): Message => ({ id, role: "user", text: "Message from Planner: Check the gate." });
+    conversation = { ...conversation, messages: [
+      { id: 'human', role: 'user', text: 'Check the ranch', sender: { id: 'one', name: 'One' } },
+      incoming('one'), { id: 'two', role: 'assistant', text: 'The gate is shut.' },
+      { id: 'tool', role: 'tool', text: 'Checked', toolCall: { id: 'call', name: 'read_file', status: 'completed' } },
+      incoming('three'), { id: 'four', role: 'assistant', text: 'The barn is shut too.' },
+      { id: 'human2', role: 'user', text: 'Thanks', sender: { id: 'one', name: 'One' } }, incoming('single'),
+    ] };
+    await render();
+    expect([...container.querySelectorAll('.conversation-turn article[data-message-id]')].map(item => item.getAttribute('data-message-id')))
+      .toEqual(['human', 'one', 'two', 'three', 'four', 'human2', 'single']);
+    const groups = [...container.querySelectorAll<HTMLDetailsElement>('.agent-exchange-group')];
+    expect(groups.map(group => [...group.querySelectorAll('article')].map(item => item.getAttribute('data-message-id'))))
+      .toEqual([['one', 'two'], ['three', 'four']]);
+    expect(groups.every(group => !group.open)).toBe(true);
+    expect(container.querySelector('[data-message-id="single"]')?.closest('.agent-exchange-group')).toBeNull();
+  });
+
+  it("shows the outgoing route and body when a handoff shares a row with a normal reply", async () => {
+    conversation = { ...conversation, messages: [{ id: 'narration', role: 'assistant', text: 'I asked Planner to check the gate.',
+      toolCall: { id: 'call', name: 'message_agent', status: 'completed', arguments: '{"target":"Planner","message":"Check the north gate."}', result: 'Queued' } }] };
+    await render();
+    expect(container.querySelector('[data-message-id="narration"]')?.textContent).toContain('I asked Planner to check the gate.');
+    expect(container.querySelector('[data-message-id="agent-call:narration"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('[data-message-id="agent-call:narration"] .message-text')?.textContent).toBe('Check the north gate.');
+    expect(container.querySelector('.turn-work')).toBeNull();
+  });
+
+  it("keeps a reply to one bot when that reply also sends a message to another bot", async () => {
+    conversation = { ...conversation, messages: [
+      { id: 'from-planner', role: 'user', text: 'Message from Planner: Coordinate dinner.' },
+      { id: 'reply-and-send', role: 'assistant', text: 'I will ask Kitchen to handle dinner.',
+        toolCall: { id: 'call', name: 'message_agent', status: 'completed', arguments: '{"target":"Kitchen","message":"Please handle dinner."}', result: 'Queued' } },
+    ] };
+    await render();
+    expect(container.querySelector('[data-message-id="reply-and-send"] .message-text')?.textContent).toBe('I will ask Kitchen to handle dinner.');
+    expect(container.querySelector('[data-message-id="reply-and-send"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('[data-message-id="agent-call:reply-and-send"] .message-text')?.textContent).toBe('Please handle dinner.');
+    expect(container.querySelector('[data-message-id="agent-call:reply-and-send"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Kitchen');
+  });
+
+  it("shows bot replies while keeping their ordinary tool calls in work", async () => {
+    conversation = { ...conversation, messages: [
+      { id: 'from-planner', role: 'user', text: 'Message from Planner: Check the gate.' },
+      { id: 'checked', role: 'assistant', text: 'The gate is shut.', toolCall: { id: 'read', name: 'read_file', status: 'completed', result: 'Gate log' } },
+      { id: 'file-reply', role: 'assistant', text: '', files: [{ id: 'gate-report', name: 'gate-report.txt', mime: 'text/plain', size: 12 }], toolCall: { id: 'write', name: 'write_file', status: 'completed', result: 'Created' } },
+      { id: 'tool-only', role: 'assistant', text: '', toolCall: { id: 'search', name: 'web_search', status: 'completed', result: 'Weather checked' } },
+    ] };
+    await render();
+    expect(container.querySelector('[data-message-id="checked"] .message-text')?.textContent).toBe('The gate is shut.');
+    expect(container.querySelector('[data-message-id="checked"] [role="group"]')?.getAttribute('aria-label')).toBe('Shared to Planner');
+    expect(container.querySelector('.agent-exchange-group > summary')?.textContent).toContain('2 bot messages');
+    expect(container.querySelector('[data-message-id="file-reply"]')?.textContent).toContain('gate-report.txt');
+    expect(container.querySelector('.turn-work > summary')?.textContent).toContain('3 tool calls');
+    expect(container.querySelector('.tool-calls > summary')?.textContent).toBe('Tool calls3');
   });
 
   it.each(["completed", "running"] as const)("orders saved tool activity before the final reply after calls are %s", async status => {

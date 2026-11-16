@@ -9,6 +9,7 @@ import { LIMITS, MAX_SAVED_CHARS } from "../src/app/saved-roster";
 import type { GroupCatalog } from "../src/shared/collaboration";
 import { defaultPreferences, type Bootstrap, type Conversation } from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
+import { browserLocks } from "./helpers/web-locks";
 import { advance, button, mountRoot, stubMatchMedia } from "./ui-harness";
 
 // The whole app, through the real client API, against a fake server at fetch; browser storage is
@@ -737,8 +738,11 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     await advance(0);
     expect(JSON.parse(localStorage.getItem(authEpochKey)!)).toMatchObject({ changing: true, fromSignedOut: true, user: "one" });
     expect(reads("POST /auth/local")).toHaveLength(1);
-    // The tab closes. Its mark goes stale 65 seconds after it was written.
+    // Unmount alone keeps this jsdom document alive. A real tab close releases its Web Locks.
+    // Model that browser boundary before creating the later page, without settling the hung fetch.
     await act(async () => root.unmount());
+    Object.defineProperty(navigator, "locks", { configurable: true, value: browserLocks() });
+    // Its account mark goes stale 65 seconds after it was written.
     await advance(66_000);
     vi.resetModules();
     const { App: FreshApp } = await import("../src/App");

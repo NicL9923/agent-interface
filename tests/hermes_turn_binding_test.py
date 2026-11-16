@@ -93,11 +93,14 @@ class TurnHermes(FakeHermes):
         self.busy, self.races, self.submit_races, self.turns, self.rows, self.calls, self.start_as = busy, [], [], [], [], [], {}
         self.snapshots, self.changed = [], threading.Condition()
         self.voice, self.reply_as, self.hold_admission, self.attach_pause, self.mid_request = False, None, None, None, False
+        self.after_enqueue = None
         server = self.server
         server.handle_request = self.handle
         server._run_prompt_submit = self.run_prompt_submit
         server._invoke_agent = self.invoke_agent
         server._run_post_turn_followups = self.post_turn_followups
+        server._enqueue_prompt = self.native_enqueue
+        server._handle_busy_submit = self.busy_submit
 
     def start(self, path):
         # source_state reads the Hermes checkout with git; answer as a clean qualified checkout would.
@@ -202,12 +205,7 @@ class TurnHermes(FakeHermes):
             return self.server._ok(rid, {"voice_stopped": True})
         with session["history_lock"]:
             if session["running"]:
-                images, session["attached_images"] = session["attached_images"], []
-                if self.busy == "redirected" and text.strip() and not images:
-                    session.setdefault("redirects" if self.mid_request else "corrections", []).append(text)
-                    return self.server._ok(rid, {"status": "redirected"})
-                self.enqueue(text, images, accepted=True)
-                return self.server._ok(rid, {"status": "queued"})
+                return self.server._handle_busy_submit(rid, "sid", session, text, None)
             session["running"] = True
             staged = {"content": text, "_row_id": self.write_row(text)["row_id"]} if text.strip() else None
             if staged:
@@ -222,6 +220,20 @@ class TurnHermes(FakeHermes):
         threading.Thread(target=admit, daemon=True).start()
         reply, self.reply_as = self.reply_as, None
         return self.server._ok(rid, reply if reply is not None else {"status": "streaming", **({"user_row_id": staged["_row_id"]} if staged else {})})
+
+    def busy_submit(self, rid, sid, session, text, transport):
+        images, session["attached_images"] = session["attached_images"], []
+        if self.busy == "redirected" and text.strip() and not images:
+            session.setdefault("redirects" if self.mid_request else "corrections", []).append(text)
+            return self.server._ok(rid, {"status": "redirected"})
+        self.server._enqueue_prompt(session, text, transport, image_paths=images)
+        if self.after_enqueue:
+            after, self.after_enqueue = self.after_enqueue, None
+            after()
+        return self.server._ok(rid, {"status": "queued"})
+
+    def native_enqueue(self, session, text, transport, image_paths=None):
+        return self.enqueue(text, image_paths or [], accepted=True)
 
     def pause_attach(self, fail=None):
         """The next image.attach waits after it appends until the test sets ``resume``: (appended, resume) Events."""
@@ -249,10 +261,10 @@ class TurnHermes(FakeHermes):
         session = self.session
         head, rest = session.get("queued_prompt"), session.setdefault("queued_prompts", [])
         if not images and head and not head.get("image_paths") and not rest:
-            head["text"] = head["text"] + "\n\n" + text
+            head["text"] = f"{head['text']}\n\n{text}" if head["text"] and text else (head["text"] or text)
             if head.get("row"):
                 head["row"]["text"] = head["text"]
-            return
+            return head
         # As _enqueue_prompt keeps them, under "image_paths" and only when there are some (session_auto_continue.py:163).
         envelope = {"text": text, **({"image_paths": images} if images else {})}
         if accepted and text.strip():
@@ -261,6 +273,7 @@ class TurnHermes(FakeHermes):
             rest.append(envelope)
         else:
             session["queued_prompt"] = envelope
+        return envelope
 
     def drain(self, rid):
         session = self.session

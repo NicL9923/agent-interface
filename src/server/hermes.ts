@@ -456,7 +456,7 @@ export function createHermesRuntime(options: HermesOptions & {files: FileSigner}
       if (input.retryOf !== undefined && error instanceof TransportError && error.rpcCode === 4091)
         return {requestId: input.requestId, status: 'rejected', message: 'Another reply started before this retry, so it was not sent.'};
       if (error instanceof TransportError && error.rpcCode !== undefined && BEFORE_ADMISSION.has(error.rpcCode)
-        && !(input.retryOf !== undefined && TEMPORARY_REFUSAL.has(error.rpcCode)))
+        && !((input.retryOf !== undefined || input.reviewedUncertain) && TEMPORARY_REFUSAL.has(error.rpcCode)))
         return {requestId: input.requestId, status: 'rejected', message: beforeAdmissionMessage(error.rpcCode, error.rpcMessage)};
       return {requestId: input.requestId, status: 'uncertain', message: error instanceof Error ? error.message : 'Hermes response lost. Review before retrying.'};
     }

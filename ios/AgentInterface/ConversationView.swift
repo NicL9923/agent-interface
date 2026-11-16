@@ -909,24 +909,24 @@ private struct SendingMessage: ViewModifier {
 struct AgentExchangeView: View {
   var message: Message
   var recipient: String
+  var botId: String? = nil
   @Environment(AppStore.self) private var store
   var body: some View {
     let handoff = AgentHandoff(message: message)
     // A handoff to or from one of this person's assistants opens its chat; anyone else's is never named.
-    let partner = MainAssistant.exchangePartner(target: handoff.incoming == nil ? handoff.target : nil, incomingName: handoff.incoming?.name,
-      bots: store.bootstrap?.bots ?? [], currentBotId: store.selectedBotId ?? "")
+    let route = handoff.route(bots: store.bootstrap?.bots ?? [], currentBotId: botId ?? store.selectedBotId ?? "", recipient: recipient)
+    let partner = route.partner
     VStack(alignment: .leading, spacing: 8) {
-      HStack(spacing: 8) {
-        Text("↔").accessibilityHidden(true)
-        Text(handoff.incoming.map { "\($0.name) → \(recipient)" } ?? "\(recipient) → \(partner?.name ?? handoff.target)").bold()
-        Text("Agent message").foregroundStyle(.secondary)
-      }.font(.caption)
+      AgentExchangeRouteView(route: route)
+      Text("Bot message").font(.caption).foregroundStyle(Palette.muted)
       if let incoming = handoff.incoming {
         Text(incoming.body).textSelection(.enabled)
+      } else if message.toolCall == nil {
+        Text(message.text).textSelection(.enabled)
       } else {
+        if !handoff.body.isEmpty { Text(handoff.body).textSelection(.enabled) }
         DisclosureGroup(handoff.summary) {
           VStack(alignment: .leading, spacing: 8) {
-            if !handoff.body.isEmpty { Text(handoff.body).textSelection(.enabled) }
             Text(handoff.response).font(.caption.monospaced()).textSelection(.enabled)
           }.frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
         }.font(.subheadline)
@@ -936,9 +936,74 @@ struct AgentExchangeView: View {
           .font(.subheadline.weight(.semibold)).buttonStyle(.bordered).tint(Palette.accent)
           .accessibilityIdentifier("openExchangeChat.\(partner.id)")
       }
+      if let time = message.createdAt { Text(When.format(time)).font(.caption).foregroundStyle(Palette.muted) }
     }.padding(.horizontal, 16).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
-      .background(Palette.accentSoft, in: UnevenRoundedRectangle(bottomTrailingRadius: 12, topTrailingRadius: 12))
-      .overlay(alignment: .leading) { Rectangle().fill(Palette.accent).frame(width: 3) }
+      .overlay(alignment: .leading) { Rectangle().fill(Palette.line).frame(width: 2) }
+  }
+}
+struct AgentExchangeRoute {
+  var sender: String
+  var receiver: String
+  var senderBot: Bot?
+  var receiverBot: Bot?
+  var partner: Bot?
+  var id: String { "\(senderBot?.id ?? sender)\n\(receiverBot?.id ?? receiver)" }
+}
+struct AgentExchangeRouteView: View {
+  var route: AgentExchangeRoute
+  var body: some View {
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 6) {
+        participant(route.sender, route.senderBot)
+        Image(systemName: "arrow.right").foregroundStyle(Palette.muted).accessibilityHidden(true)
+        participant(route.receiver, route.receiverBot)
+      }
+      VStack(alignment: .leading, spacing: 6) {
+        participant(route.sender, route.senderBot)
+        HStack(spacing: 6) { Image(systemName: "arrow.right").foregroundStyle(Palette.muted).accessibilityHidden(true); participant(route.receiver, route.receiverBot) }
+      }
+    }.font(.caption).accessibilityElement(children: .ignore).accessibilityLabel("\(route.sender) to \(route.receiver)")
+  }
+  private func participant(_ name: String, _ bot: Bot?) -> some View {
+    HStack(spacing: 6) {
+      if let bot { AvatarView(avatar: bot.avatar ?? AvatarConfig(), size: 28, name: name, botId: bot.id, forceReducedMotion: true).accessibilityHidden(true) }
+      else { Image(systemName: "person.crop.circle.badge.questionmark").frame(width: 28, height: 28).foregroundStyle(Palette.muted).accessibilityHidden(true) }
+      Text(name).bold().fixedSize(horizontal: false, vertical: true)
+    }
+  }
+}
+/// A consecutive run stays closed until requested, including while live messages append.
+struct AgentExchangeGroupView<Content: View>: View {
+  var messages: [Message]
+  var recipient: String
+  var botId: String? = nil
+  @ViewBuilder var content: () -> Content
+  @State private var expanded = false
+  @Environment(AppStore.self) private var store
+  @Environment(\.foundMessage) private var foundMessage
+  var body: some View {
+    if messages.count < 2 { content() }
+    else {
+      DisclosureGroup(isExpanded: $expanded) { content() } label: {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(routes, id: \.id) { AgentExchangeRouteView(route: $0) }
+          HStack {
+            Text("\(messages.count) bot messages").foregroundStyle(Palette.muted)
+            if failed > 0 { Text("\(failed) failed").foregroundStyle(.red) }
+            if messages.contains(where: { $0.toolCall?.status == "running" }) { Text("Sending…").foregroundStyle(Palette.muted) }
+          }.font(.caption)
+        }
+      }.disclosureIdentifier("botMessages")
+        .onChange(of: foundMessage, initial: true) { _, value in
+          if messages.contains(where: { $0.id == value }) { expanded = true }
+        }
+    }
+  }
+  private var failed: Int { messages.filter { $0.toolCall?.status == "failed" }.count }
+  private var routes: [AgentExchangeRoute] {
+    var seen = Set<String>()
+    return messages.map { AgentHandoff(message: $0).route(bots: store.bootstrap?.bots ?? [], currentBotId: botId ?? store.selectedBotId ?? "", recipient: recipient) }
+      .filter { seen.insert($0.id).inserted }
   }
 }
 /// A tool call's detail, as the web's ToolCallDetail: identifiers and times, then the call's
@@ -1276,13 +1341,65 @@ enum RoleDiscussion {
 /// A message between assistants. Incoming ones carry an envelope; outgoing ones are a
 /// `message_agent` call whose arguments name the target, as the web's AgentExchange reads them.
 struct AgentHandoff {
+  /// The tool call can share a saved row with a normal reply. Its narration stays in chat.
+  static func exchangeMessage(_ message: Message) -> Message? {
+    let narration = message.role == "assistant" && (!message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(message.files?.isEmpty ?? true))
+    if message.isAgentExchange && message.toolCall?.name != "message_agent" {
+      if message.toolCall != nil && !narration { return nil }
+      var reply = message
+      reply.toolCall = nil
+      return reply
+    }
+    if message.isAgentExchange && !narration { return message }
+    guard message.toolCall?.name == "message_agent" else { return nil }
+    var exchange = message
+    exchange.id = "agent-call:" + message.id
+    exchange.role = "tool"
+    exchange.text = ""
+    exchange.files = nil
+    exchange.origin = MessageOrigin(kind: "agent", visibility: "activity")
+    return exchange
+  }
+  static func displayMessages(_ messages: [Message]) -> [Message] {
+    messages.flatMap { message in
+      let exchange = exchangeMessage(message)
+      if let exchange, exchange.id != message.id {
+        var narration = message
+        narration.toolCall = nil
+        return [narration, exchange]
+      }
+      if message.isAgentExchange, let call = message.toolCall, call.name != "message_agent", var work = workMessage(message) {
+        work.id = "agent-tool:" + message.id
+        return exchange.map { [$0, work] } ?? [work]
+      }
+      if let exchange { return [exchange] }
+      return [message]
+    }
+  }
+  /// Tools called while replying to a bot stay in the ordinary work fold.
+  static func workMessage(_ message: Message) -> Message? {
+    if message.isAgentExchange, let call = message.toolCall, call.name != "message_agent" {
+      var work = message
+      work.role = "tool"
+      work.text = ""
+      work.origin = nil
+      work.files = nil
+      return work
+    }
+    return exchangeMessage(message) == nil ? message : nil
+  }
   var incoming: (name: String, body: String)?
   var target = "another assistant"
   var body = ""
   var summary: String
   var response: String
+  var handle: String?
+  var replyHandle: String?
   init(message: Message) {
-    if let envelope = message.agentEnvelope { incoming = envelope }
+    let envelope = message.agentEnvelope
+    handle = message.presentationOrigin?.handle ?? envelope?.handle
+    replyHandle = message.toolCall == nil ? handle : nil
+    if let envelope { incoming = (envelope.name, envelope.body) }
     else if message.role == "user", let name = message.presentationOrigin?.name { incoming = (name, message.text) }
     if incoming == nil {
       if let name = message.presentationOrigin?.name { target = name }
@@ -1296,6 +1413,21 @@ struct AgentHandoff {
     summary = message.toolCall?.status == "running" ? "Sending message…" : message.toolCall?.status == "failed" ? "Delivery failed" : "View handoff and response"
     response = [message.toolCall?.error, message.toolCall?.result, message.text].compactMap { $0 }.first { !$0.isEmpty }
       ?? "Waiting for Hermes to report delivery."
+  }
+  func route(bots: [Bot], currentBotId: String, recipient: String) -> AgentExchangeRoute {
+    let partner = MainAssistant.exchangePartner(target: incoming == nil ? replyHandle ?? target : nil, incomingName: incoming.map { handle ?? $0.name }, bots: bots, currentBotId: currentBotId)
+    let current = bots.first { $0.id == currentBotId }
+    let otherName = partner?.name ?? incoming?.name ?? target
+    return AgentExchangeRoute(sender: incoming == nil ? recipient : otherName, receiver: incoming == nil ? otherName : recipient,
+      senderBot: incoming == nil ? current : partner, receiverBot: incoming == nil ? partner : current, partner: partner)
+  }
+  static func runs(_ messages: [Message]) -> [[Message]] {
+    var result: [[Message]] = []
+    for message in displayMessages(messages) {
+      if message.isAgentExchange, result.last?.first?.isAgentExchange == true { result[result.count - 1].append(message) }
+      else { result.append([message]) }
+    }
+    return result
   }
 }
 
@@ -1440,8 +1572,8 @@ struct ReplyWatch: Equatable {
   }
   static func next(_ watch: ReplyWatch, _ conversation: Conversation, baseline: Bool) -> (ReplyWatch, Message?) {
     let messages = conversation.messages
-    // A turn is named by the prompt that opened it, so the same words in a later turn are new.
-    func turn(at index: Int) -> String? { index < 0 ? nil : messages[...index].last { $0.role == "user" }?.id }
+    // Steered guidance belongs to the running turn; only a new prompt changes its identity.
+    func turn(at index: Int) -> String? { index < 0 ? nil : messages[...index].last { $0.role == "user" && $0.steered != true }?.id }
     let unsaved = messages.last.flatMap { !saved($0) && speakable($0) ? $0 : nil }
     let unsavedHeard = unsaved.map { Heard(text: $0.text, turn: turn(at: messages.count - 1)) }
     let lastId = messages.last(where: saved)?.id
@@ -1457,7 +1589,7 @@ struct ReplyWatch: Equatable {
     // saved row can grow in place while that lasts, so a held one is read again from the conversation. The
     // newest turn is the one the unsaved tail belongs to, or else the one of the newest saved row.
     let newest = unsaved != nil ? messages.count - 1 : arrivedAt ?? -1
-    let turnStart = messages.indices.last { $0 <= newest && messages[$0].role == "user" } ?? -1
+    let turnStart = messages.indices.last { $0 <= newest && messages[$0].role == "user" && messages[$0].steered != true } ?? -1
     let heldRow = watch.waiting.map { waiting in messages.first { $0.id == waiting.id } ?? waiting }
     var held: [String] = []
     if watch.waiting != nil, watch.waitingTurn == turn(at: newest) {
@@ -1574,8 +1706,13 @@ enum FindMatches {
   }
   static func merge(loaded messages: [Message], query: String, hits: [SearchHit], botId: String, sessionId: String?) -> [Match] {
     guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-    let local = messages.filter(\.isConversationVisible).filter {
-      $0.text.localizedStandardContains(query) || ($0.files ?? []).contains { $0.name.localizedStandardContains(query) }
+    let local = AgentHandoff.displayMessages(messages).filter { $0.isConversationVisible || $0.isAgentExchange }.filter {
+      let text: String
+      if $0.isAgentExchange {
+        let handoff = AgentHandoff(message: $0)
+        text = handoff.incoming?.body ?? ($0.toolCall == nil ? $0.text : handoff.body)
+      } else { text = $0.text }
+      return text.localizedStandardContains(query) || ($0.files ?? []).contains { $0.name.localizedStandardContains(query) }
     }.map { Match(id: $0.id, loaded: true) }
     // Only the canonical session's hits open the live chat; other sessions keep their history views.
     guard let sessionId else { return local }

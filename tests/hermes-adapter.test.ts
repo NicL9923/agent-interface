@@ -5,7 +5,7 @@ import { Store } from "../src/server/store.js";
 import { hermesMaintenanceSendMessage, IncompleteCreationError, nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { compareVersions } from '../src/shared/inflight.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -371,6 +371,20 @@ describe('Hermes adapter trust and recovery boundary',()=>{
         .toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message: Not this request. Your draft is saved.'});
     }
   });
+  it('keeps reviewed sends and steers uncertain only for temporary fences', async () => {
+    canonicalSubmission=true;
+    for (const code of [409, 5035, -32602, 4093, 4091]) {
+      rpcErrors.set('agent-interface.submit', {code, message: 'Refused'});
+      for (const send of [runtime.submit, runtime.steer]) {
+        const result=await send({...input(), text:'Hello', reviewedUncertain:true});
+        expect(result.status, String(code)).toBe(code===-32602 || code===4093 ? 'rejected' : 'uncertain');
+        expect(result.message).toContain(code===-32602 || code===4093 ? 'Hermes did not accept this message' : `code ${code}`);
+      }
+    }
+    rpcErrors.set('agent-interface.submit', {code:4091, message:'Another turn started'});
+    expect(await runtime.submit({...input(), text:'Again', retryOf:'m1', reviewedUncertain:true}))
+      .toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
+  });
   it('sends a retry again once an upgrade that refused it ends', async () => {
     canonicalSubmission=true;
     snapshot.messages=[{row_id: 1, role: 'user', text: 'Order more feed', app_run_id: 'run-1'}];
@@ -398,6 +412,62 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       expect(resent.json()).toMatchObject({requestId,status:'accepted'});
       expect(submits()).toHaveLength(2);
       expect(submits()[1].params).toMatchObject({request_id:requestId,require_idle:true});
+    } finally { await app.close(); }
+  });
+  it('keeps a reviewed send uncertain when retirement fences it after a missing lookup', async () => {
+    canonicalSubmission=true;
+    const requestId=randomUUID();
+    let sends=0, admitted=false;
+    const unexpected: string[]=[];
+    vi.stubGlobal('fetch',vi.fn(async(url: URL, init?: RequestInit)=>{
+      if (String(url)==='http://127.0.0.1:19119/api/agent-interface/service/agent-interface/voice/status' && init?.method==='POST')
+        return Response.json({profiles:[]});
+      unexpected.push(`${init?.method} ${String(url)}`);
+      throw new Error(`Unexpected fetch ${url}`);
+    }));
+    let original: Record<string,any> | undefined;
+    beforeSend=(request,socket)=>{
+      if (!['client.capabilities','agent-interface.capabilities','profiles.list','image.generate','agent-interface.submit','agent-interface.receipt'].includes(request.method)) {
+        unexpected.push(request.method);
+        throw new Error(`Unexpected RPC ${request.method}`);
+      }
+      if (request.method==='agent-interface.submit') {
+        deferredMethods.add(request.method);
+        sends++;
+        if (sends===1) {
+          original=request.params;
+          // The connection loses its answer while the remote send remains queued.
+          setTimeout(()=>socket.close(),0);
+        } else {
+          expect(admitted).toBe(true);
+          expect(request.params).toEqual(original);
+          queueMicrotask(()=>socket.receive({id:request.id,error:{code:5035,message:'backend is retiring; reconnect to continue'}}));
+        }
+      }
+      if (request.method==='agent-interface.receipt') {
+        deferredMethods.add(request.method);
+        expect(request.params).toEqual({request_id:requestId});
+        const result=admitted ? {receipt:{requestId,status:'accepted',runId:'task-one'}} : {receipt:null};
+        // The original leaves the send lane and is admitted after this read, but its answer is lost.
+        admitted=true;
+        queueMicrotask(()=>socket.receive({id:request.id,result}));
+      }
+    };
+    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    try {
+      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
+      const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
+      const payload={requestId,text:'Order feed',attachments:[]};
+      const send=(reviewedUncertain=false)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers,payload:{...payload,reviewedUncertain}});
+      expect((await send()).json()).toMatchObject({requestId,status:'uncertain'});
+      await runtime.reconnect!();
+      const reviewed=await send(true);
+      expect(reviewed.json()).toMatchObject({requestId,status:'uncertain',message:'Hermes refused the request (code 5035). Review before retrying.'});
+      const found=await app.inject({method:'GET',url:`/api/submissions/${requestId}`,headers});
+      expect(found.json()).toMatchObject({requestId,status:'accepted',runId:'task-one'});
+      expect((await send()).json()).toMatchObject({requestId,status:'accepted',runId:'task-one'});
+      expect(sends).toBe(2);
+      expect(unexpected).toEqual([]);
     } finally { await app.close(); }
   });
   it('keeps a send whose error may have followed admission uncertain, whatever Hermes says', async () => {

@@ -98,4 +98,38 @@ extension SentEcho {
     }
     return next
   }
+
+  /// One chat's send as the app holds it: its unconfirmed submission, its latest receipt, and whether its request is out.
+  struct ChatSend {
+    var pending: PendingSubmission?
+    var receipt: Receipt?
+    var sending = false
+  }
+  /// Every echo and send after a change. Each echo steps with its own chat's send and receipt, not the open
+  /// chat's, so a send whose chat was left before Hermes answered keeps its echo and its anchor, and its
+  /// acceptance records it as the person's. Only the open chat's send starts an echo, since only it shows
+  /// what was last when it was sent. `chat` gives a chat's send by its assistant's ID.
+  static func advance(_ echoes: [SentEcho], _ sends: [OwnSend], chat: (String) -> ChatSend, open: String?,
+    conversation: Conversation?, sender: Sender?, now: Date) -> (echoes: [SentEcho], sends: [OwnSend])
+  {
+    var next = echoes.compactMap { echo in
+      let own = chat(echo.request.botId)
+      return Self.next(echo, pending: own.pending?.requestId == echo.request.requestId ? own.pending : nil, receipt: own.receipt,
+        sending: own.sending, conversation: conversation, sender: sender, now: now)
+    }
+    // A send gets one echo; once it leaves, the same pending submission never brings it back.
+    if let open, case let state = chat(open), let pending = state.pending, !echoes.contains(where: { $0.request.requestId == pending.requestId }),
+      let created = Self.next(nil, pending: pending, receipt: state.receipt, sending: state.sending, conversation: conversation,
+        sender: sender, now: now)
+    {
+      next.append(created)
+    }
+    // A send is kept from its echo's last step, so each chat's receipt is read against the echoes before the change.
+    var chats: [String] = []
+    for echo in echoes where !chats.contains(echo.request.botId) { chats.append(echo.request.botId) }
+    let kept = chats.reduce(nextSends(sends, before: echoes, after: next, receipt: nil, sender: sender, conversation: conversation)) {
+      nextSends($0, before: echoes, after: next, receipt: chat($1).receipt, sender: sender, conversation: conversation)
+    }
+    return (next, kept)
+  }
 }

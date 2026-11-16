@@ -217,10 +217,16 @@ tab's sign-in that began signed out is under way, is kept for the next sign-in. 
 the server refuses puts the record back, so other tabs read the
 same account again and keep their address, open chat and fragment. A record left marked as under way by a tab that closed
 mid-request stops counting after 65 seconds, and a tab that waited on it starts as soon as it
-is shown or focused. Where the browser has the Web Locks API, each sign-in and sign-out step
-reads and writes the record under one lock, so another tab's step cannot land between. Storage
-that refuses writes leaves each tab on its own: it still takes its own changes, but cannot
-tell other tabs. See `src/app/account-epoch.ts`.
+is shown or focused. Cookie-changing sign-in, server sign-out and pending-logout requests require
+the [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API). They hold a
+separate lock through the request and record settlement, while record updates use their own lock.
+Without that API, no cookie-changing request is sent: the page asks for an updated browser and
+WildBots over HTTPS. Web Locks require a secure context. Device-only sign-out remains available
+from Settings and the offline home. It first keeps the signed-out record, then removes saved data;
+the server logout stays pending until this browser can acquire the lock. A record the browser
+cannot keep leaves the person signed in here and explains why. Storage that refuses writes leaves
+each tab on its own: it still takes its own changes, but cannot tell other tabs. See
+`src/app/account-epoch.ts` and `src/app/account-change.ts`.
 
 A page in the back-forward cache hears nothing while it is frozen, and a browser can show it
 again before its script runs. So as a page leaves, the account's screens are hidden in place,
@@ -742,9 +748,12 @@ are discussing, and settings and routine posts stay hidden.
 Hermes owns the persistent coordinator.
 If that coordinator is unavailable, rooms remain readable and sending is disabled.
 After an uncertain send or creation, retry the saved request to check its status
-without creating a duplicate. Conversation activity keeps bot messages, scheduled-job handoffs, subagents,
-background processes, and diagnostics in separate collapsed sections in both
-presentations. Expand them to inspect the original input and results. Scheduled
+without creating a duplicate. Bot messages appear in chat with the sender's and recipient's
+avatars and names. Consecutive exchanges collapse into a counted group, with sending and
+failed delivery status visible in its summary. Single exchanges stay readable. Search opens
+the matching group, and known assistants offer a link to their chat. History uses the same display.
+Conversation activity keeps scheduled-job handoffs, subagents, background processes, and diagnostics
+in separate collapsed sections in both presentations. Expand them to inspect the original input and results. Scheduled
 answers stay in the conversation with a Scheduled label. Decisions and requests
 for input stay visible. Unknown messages from other clients remain in chat;
 only recognized automation sources move into activity.

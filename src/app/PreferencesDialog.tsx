@@ -26,7 +26,7 @@ type Commit = (edit: (value: Preferences) => Preferences) => void;
 const assistants = (count: number) => count === 1 ? "1 assistant" : `${count} assistants`;
 
 /** Account and app settings as grouped rows, opened from the home screen's account button. */
-export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, destination, onClose, onSignOut, onComputer, onIntegrations, onUpgrade, onShortcuts, closer }: {
+export function PreferencesDialog({ boot, connectionLost, offline, editPreferences, notifications, installEvent, notice, destination, onClose, onSignOut, signOutOnDeviceOnly = false, onComputer, onIntegrations, onUpgrade, onShortcuts, closer }: {
   boot: Bootstrap;
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
@@ -37,6 +37,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   notice: string;
   onClose(): void;
   onSignOut(): Promise<void>;
+  signOutOnDeviceOnly?: boolean;
   onComputer(): void;
   onIntegrations(): void;
   onUpgrade(): void;
@@ -53,6 +54,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
     commit(value => ({ ...value, notifications: { timezone, batchMinutes: 0, ...value.notifications, ...update } }));
   const [quietError, setQuietError] = useState("");
   // Sign out from the profile menu or the palette opens straight to its confirmation.
+  const signOutLabel = signOutOnDeviceOnly ? "Sign out of this device" : "Sign out";
   const [confirmSignOut, setConfirmSignOut] = useState(destination?.kind === "signout");
   const changeQuietTime = (field: "quietStart" | "quietEnd", value: string) => {
     const other = field === "quietStart" ? prefs.notifications?.quietEnd : prefs.notifications?.quietStart;
@@ -185,7 +187,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
           {installEvent && <Button type="button" className="settings-row" onClick={() => void installEvent.prompt()}>
             <Icon name="download" size={18} /><span className="row-label">Install app</span></Button>}
           <Button id="settings-signout" type="button" className="settings-row danger" disabled={notifications.busy} onClick={() => setConfirmSignOut(true)}>
-            <span className="row-label">Sign out</span></Button>
+            <span className="row-label">{signOutLabel}</span></Button>
         </div>
         {notice && <p className="settings-footnote" role="status">{notice}</p>}
         <footer className="settings-footer">
@@ -195,8 +197,8 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
         </footer>
         </>}
       </div>
-      {confirmSignOut && <SettingsConfirmation title="Sign out?" detail="You will need to sign in again to use this workspace." confirmLabel="Sign out" cancelLabel="Stay signed in" danger busy={notifications.busy}
-        fallbackFocus="#settings-signout" onCancel={() => setConfirmSignOut(false)} onConfirm={() => void onSignOut()} />}
+      {confirmSignOut && <SettingsConfirmation title={`${signOutLabel}?`} detail={signOutOnDeviceOnly ? "This removes your saved data and signs you out here. To finish signing out, update this browser and open WildBots over HTTPS." : "You will need to sign in again to use this workspace."} confirmLabel={signOutLabel} cancelLabel="Stay signed in" danger busy={notifications.busy}
+        fallbackFocus="#settings-signout" onCancel={() => setConfirmSignOut(false)} onConfirm={() => { if (signOutOnDeviceOnly) setConfirmSignOut(false); void onSignOut(); }} />}
     </Dialog>
   );
 }

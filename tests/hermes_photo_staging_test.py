@@ -14,6 +14,7 @@ import unittest
 
 from hermes_extension_journal_test import FakeGateway, receipt as insert_receipt
 from hermes_turn_binding_test import PHOTO, TurnHermes
+from hermes_upstream_queue import _enqueue_prompt
 
 SECOND = {**PHOTO, "path": "/uploads/shared/second.png", "name": "second.png"}
 
@@ -24,6 +25,13 @@ def lookup(hermes, request_id):
 
 def calls(hermes, *methods):
     return [(method, params.get("text")) for method, _, params in hermes.calls if method in methods]
+
+
+class UpstreamQueueHermes(TurnHermes):
+    """Use Hermes's pinned queue functions at the native enqueue edge."""
+    def __init__(self, busy="queued"):
+        super().__init__(busy)
+        self.server._enqueue_prompt = _enqueue_prompt
 
 
 class PhotoTakenBeforeThePromptTests(unittest.TestCase):
@@ -238,6 +246,35 @@ class PromptAnsweredWhileATurnRunsTests(unittest.TestCase):
             self.assertNotIn("imagesMissing", answer)
             admission.set()
             hermes.finish("Look")
+
+    def test_photo_only_queue_entry_drained_before_another_entry_arrives(self):
+        with UpstreamQueueHermes(busy="queued") as hermes:
+            hermes.races.append(lambda: (hermes.other_client("Book the dentist"), hermes.snapshotted("Book the dentist")))
+            def after_queue():
+                hermes.session["queued_prompt"] = {"text": "Check this too"}
+            hermes.after_enqueue = after_queue
+            answer = hermes.send("alice-1", "", attachments=[PHOTO])
+            self.assertEqual(answer["turn"], "queued")
+            self.assertNotIn("imagesMissing", answer)
+            hermes.finish("Book the dentist")
+
+    def test_photo_only_prompt_merges_after_another_turn_takes_photo(self):
+        with UpstreamQueueHermes(busy="queued") as hermes:
+            def race():
+                hermes.other_client("Book the dentist")
+                hermes.snapshotted("Book the dentist")
+                hermes.other_client("Check this too")
+            hermes.submit_races.append(race)
+            answer = hermes.send("alice-1", "", attachments=[PHOTO])
+            self.assertEqual((answer["turn"], answer["imagesMissing"]), ("queued", 1))
+            hermes.finish("Book the dentist")
+
+    def test_photo_only_prompt_queued_without_its_photo_says_so(self):
+        with UpstreamQueueHermes(busy="queued") as hermes:
+            self.take_the_photo_during_submit(hermes)
+            answer = hermes.send("alice-1", "", attachments=[PHOTO])
+            self.assertEqual((answer["turn"], answer["imagesMissing"]), ("queued", 1))
+            hermes.finish("Book the dentist")
 
     def test_a_prompt_hermes_put_into_the_running_turn_leaves_its_photo_behind_and_takes_it_back(self):
         with TurnHermes(busy="redirected") as hermes:

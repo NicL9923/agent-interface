@@ -22,6 +22,9 @@ import XCTest
       // Decorative initials in a fixed 40-point badge, hidden from VoiceOver; the button reads "Account menu".
       // Scaling them would only overflow the circle, but the audit inspects hidden text too.
       case ("home", .dynamicType, "LT", _): return true
+      // The system subheadline grows from normal to the largest accessibility size;
+      // testSharedAssistantSummaryScalesWithDynamicType exercises the rendered label.
+      case ("home", .dynamicType, "Shared assistant", _): return true
       // #412: the system toolbar Close. Its accent label on dark glass measures 5.2:1 from the pixels of
       // ios/evidence/issue-412-before-settings-default.png; the audit misreads the translucent material.
       case ("settings", .contrast, "Close", _), ("settings", .dynamicType, "Close", _): return true
@@ -39,6 +42,28 @@ import XCTest
     }
   }
 
+  func testSharedAssistantSummaryScalesWithDynamicType() throws {
+    continueAfterFailure = false
+    func summaryHeight(_ size: String) throws -> CGFloat {
+      let app = XCUIApplication()
+      app.launchArguments += ["-UIPreferredContentSizeCategoryName", size]
+      app.launchEnvironment["AGENT_INTERFACE_UI_FIXTURE"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_RESET"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_HOME"] = "1"
+      app.launchEnvironment["AGENT_INTERFACE_UI_SCOPE"] = UUID().uuidString.lowercased()
+      app.launch()
+      defer { app.terminate() }
+      XCTAssertTrue(app.buttons["bot.ranch"].waitForExistence(timeout: 15))
+      let summary = app.staticTexts["Shared assistant"].firstMatch
+      XCTAssertTrue(summary.waitForExistence(timeout: 5))
+      return summary.frame.height
+    }
+    let normal = try summaryHeight("UICTContentSizeCategoryL")
+    let largest = try summaryHeight("UICTContentSizeCategoryAccessibilityXXXL")
+    XCTAssertGreaterThan(normal, 0)
+    XCTAssertGreaterThan(largest, normal, "The shared assistant summary must grow with Dynamic Type")
+  }
+
   func testLargeTextAccessibility() throws {
     continueAfterFailure = false
     let app = XCUIApplication()
@@ -52,6 +77,10 @@ import XCTest
     try audit(app, screen: "home")
     app.openSettingsFromProfileMenu()
     XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10))
+    let account = app.descendants(matching: .any).matching(identifier: "signedInAccount").firstMatch
+    XCTAssertTrue(account.waitForExistence(timeout: 5))
+    XCTAssertTrue(account.label.contains("Local test member"), "The account description includes the member name")
+    XCTAssertTrue(account.label.contains("test@localhost.invalid"), "The account description includes the email")
     try audit(app, screen: "settings")
     app.buttons["Close"].tap()
     app.buttons["openToday"].tap()

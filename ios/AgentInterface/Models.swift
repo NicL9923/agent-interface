@@ -280,7 +280,7 @@ struct Message: Codable, Identifiable, Equatable {
   var presentationOrigin: MessageOrigin? {
     if role == "user", sender != nil { return nil }
     if let origin { return origin }
-    if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name) }
+    if let envelope = agentEnvelope { return MessageOrigin(kind: "agent", visibility: "activity", name: envelope.name, handle: envelope.handle) }
     if role == "user" {
       if let kind = Self.originPatterns.first(where: { Self.matches($0.pattern, text) }) {
         return MessageOrigin(kind: kind.kind, visibility: kind.visibility)
@@ -307,14 +307,15 @@ struct Message: Codable, Identifiable, Equatable {
   var isConversationVisible: Bool {
     !isInternalActivity && role != "tool" && (role != "assistant" || isAgentExchange || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(files?.isEmpty ?? true))
   }
-  var agentEnvelope: (name: String, body: String)? {
+  var agentEnvelope: (name: String, body: String, handle: String?)? {
     guard role == "user", sender == nil else { return nil }
     guard text.hasPrefix("Message from ") || text.hasPrefix("[Message from agent "),
       let match = Self.envelopePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
       let bodyRange = Range(match.range(at: 4), in: text),
       let nameRange = Range(match.range(at: 1).location == NSNotFound ? match.range(at: 3) : match.range(at: 1), in: text)
     else { return nil }
-    return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]))
+    let handle = Range(match.range(at: 2), in: text).map { String(text[$0]) }
+    return (String(text[nameRange]).trimmingCharacters(in: .whitespaces), String(text[bodyRange]), handle)
   }
   /// As the web's `isAgentExchange`: any message whose origin is another assistant, including an
   /// incoming "Message from" envelope and an outgoing `message_agent` call.
@@ -701,7 +702,7 @@ struct Conversation: Codable, Equatable {
     var turns: [ConversationTurn] = []
     var sawActivity = false
     for message in messages {
-      if turns.isEmpty || message.role == "user" {
+      if turns.isEmpty || message.role == "user" && !message.isAgentExchange {
         turns.append(ConversationTurn(id: message.id, messages: []))
         sawActivity = false
       }
@@ -1140,23 +1141,14 @@ struct SentEcho: Equatable {
     }
     return conversation
   }
-  /// Every echo after a change. A message Hermes accepted stays until its own copy arrives, even
-  /// when another is sent meanwhile, such as guidance after a photo whose row is saved only when
-  /// its run ends.
+  /// Every echo of one chat after a change. A message Hermes accepted stays until its own copy arrives,
+  /// even when another is sent meanwhile, such as guidance after a photo whose row is saved only when
+  /// its run ends. `advance` steps the echoes of every chat, each with its own send.
   static func nextEchoes(_ echoes: [SentEcho], pending: PendingSubmission?, receipt: Receipt?, sending: Bool,
     conversation: Conversation?, sender: Sender?, now: Date) -> [SentEcho]
   {
-    var next = echoes.compactMap { echo in
-      Self.next(echo, pending: pending?.requestId == echo.request.requestId ? pending : nil, receipt: receipt,
-        sending: sending, conversation: conversation, sender: sender, now: now)
-    }
-    // A send gets one echo; once it leaves, the same pending submission never brings it back.
-    if let pending, !echoes.contains(where: { $0.request.requestId == pending.requestId }),
-      let created = Self.next(nil, pending: pending, receipt: receipt, sending: sending, conversation: conversation, sender: sender, now: now)
-    {
-      next.append(created)
-    }
-    return next
+    advance(echoes, [], chat: { _ in ChatSend(pending: pending, receipt: receipt, sending: sending) }, open: pending?.botId,
+      conversation: conversation, sender: sender, now: now).echoes
   }
   /// Whether the composer is showing a draft that is on its way. The echo carries it in the
   /// transcript, so the composer reads empty, and read-only: the draft must stay the sent copy,

@@ -111,6 +111,13 @@ final class ReplyAnnouncementTests: XCTestCase {
     XCTAssertEqual(announced(result.watch, rows).reply?.id, nil, "Read once")
   }
 
+  func testSteeredGuidanceKeepsSegmentsOnBothSidesInTheSameAnnouncement() {
+    var guidance = user("steer", "Check the latch too.")
+    guidance.steered = true
+    let rows = [question(), reply("a", fence), guidance, reply("b", latch)]
+    XCTAssertEqual(announced(ReplyWatch(lastId: "q"), rows).said, "\(fence) \(latch)")
+  }
+
   func testTheJoinedReplyIsCutToTwoHundredCharactersAfterItIsJoined() throws {
     let first = String(repeating: "alpha ", count: 20).trimmingCharacters(in: .whitespaces)
     let second = String(repeating: "bravo ", count: 20).trimmingCharacters(in: .whitespaces)
@@ -161,6 +168,18 @@ final class ReplyAnnouncementTests: XCTestCase {
     XCTAssertNil(done.watch.waiting); XCTAssertEqual(done.watch.waitingBefore, [])
     // One segment is joined with the next when only the second arrives after it finishes.
     XCTAssertEqual(announced(one.watch, second).said, "\(fence) \(latch)")
+  }
+
+  func testAHeldSegmentSurvivesGuidanceSteeredBeforeTheNextSegment() {
+    let first = [question(), reply("a", fence)]
+    let waiting = announced(ReplyWatch(lastId: "q"), first, .working)
+    XCTAssertNil(waiting.reply)
+    var guidance = user("steer", "Check the latch too.")
+    guidance.steered = true
+    let rows = first + [guidance, reply("b", latch)]
+    let done = announced(waiting.watch, rows)
+    XCTAssertEqual(done.said, "\(fence) \(latch)")
+    XCTAssertNil(announced(done.watch, rows).reply, "Read once")
   }
 
   func testAHeldRowIsReadAsItEndedUpWhenItGrewInPlaceWhileTheAssistantWorked() {

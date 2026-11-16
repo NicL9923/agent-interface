@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { signInWith } from "../app/account-change";
+import { accountChangeUnavailable, canChangeAccounts, signInWith } from "../app/account-change";
 import { useAction } from "../app/use-action";
 import { useResource } from "../app/use-resource";
 import { Avatar } from "./Avatar";
@@ -35,10 +35,12 @@ export function SignIn() {
   const signing = useAction();
   const { busy } = signing;
   const signIn = (path: string, body: unknown) => signing.run(() => signInWith(path, body));
-  const button = useGoogleButton(google, config?.googleClientId, attempt, credential => void signIn("/auth/google", { credential }));
+  const authBlocked = !canChangeAccounts();
+  const button = useGoogleButton(google, authBlocked ? undefined : config?.googleClientId, attempt, credential => void signIn("/auth/google", { credential }));
   const googleLoading = button.loading;
-  const error = signing.error || button.error;
   const needsSetup = config && !config.googleClientId && !config.localDevAuth;
+  const needsBrowser = authBlocked && !!config && !needsSetup;
+  const error = needsBrowser ? accountChangeUnavailable : signing.error || button.error;
   return <main className={`welcome sign-in${needsSetup ? " needs-setup" : ""}`}>
     <header className="sign-in-brand"><span className="brand-mark" aria-hidden="true">w.</span>WildBots</header>
     {/* One centered column on every screen: who is waiting, then one way in. */}
@@ -73,12 +75,12 @@ export function SignIn() {
               <option value="two">Household member two</option>
             </NativeSelect>
           </label>
-          <Button type="submit" className="primary" disabled={busy}>Enter local workspace</Button>
+          <Button type="submit" className="primary" disabled={busy || authBlocked}>Enter local workspace</Button>
           <p className="sign-in-note">Local test accounts are turned on for this computer.</p>
         </form>}
         {(error || configError) && <div className="sign-in-error">
           <p role="alert">{error || configError}</p>
-          <Button onClick={() => { signing.setError(""); setAttempt(value => value + 1); }}>Try again</Button>
+          {!needsBrowser && <Button onClick={() => { signing.setError(""); setAttempt(value => value + 1); }}>Try again</Button>}
         </div>}
       </div>
     </div>

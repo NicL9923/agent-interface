@@ -471,6 +471,8 @@ export interface Bootstrap {
 }
 export interface Submission {
   reviewedInterruption?: boolean;
+  /** Server-only attempt context, never part of the recorded submission or native payload. */
+  reviewedUncertain?: boolean;
   requestId: string;
   botId: string;
   text: string;

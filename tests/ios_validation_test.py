@@ -109,6 +109,62 @@ sys.exit('unexpected xcrun call: '+repr(args))
         return subprocess.run([sys.executable, str(self.tools / 'ios-validation-state.py'), 'full-run'],
                               check=False, cwd=self.root, env=self.env, capture_output=True, text=True)
 
+    def test_default_design_fixtures_publish_evidence_and_changed_data_invalidates(self):
+        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('{"questions":["original"]}')
+        first = self.run_validation()
+        self.assertEqual(first.returncode, 0, first.stderr)
+        evidence = self.full_run()
+        self.assertEqual(evidence.returncode, 0, evidence.stderr)
+        self.assertEqual(json.loads(evidence.stdout)['tests']['passed'], 1)
+        before = self.actions()
+        reused = self.run_validation(TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH=str(fixture))
+        self.assertEqual(reused.returncode, 0, reused.stderr)
+        self.assertIn('Reused successful', reused.stdout)
+        self.assertEqual(self.actions(), before)
+
+        fixture.write_text('{"questions":["changed"]}')
+        stale = self.full_run()
+        self.assertEqual(stale.returncode, 1)
+        self.assertIn('No passing iOS validation exists', stale.stderr)
+        rerun = self.run_validation()
+        self.assertEqual(rerun.returncode, 0, rerun.stderr)
+        self.assertNotIn('Reused successful', rerun.stdout)
+        self.assertGreater(len(self.actions()), len(before))
+        self.assertEqual(self.full_run().returncode, 0)
+
+    def test_custom_design_fixture_inputs_do_not_certify_a_full_run(self):
+        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('{"questions":["default"]}')
+        external = self.root / 'custom.json'
+        external.write_text('{"questions":["custom"]}')
+        key = 'TEST_RUNNER_AGENT_INTERFACE_DESIGN_QUESTIONS_PATH'
+        for override in [{key: str(external)}, {key: str(self.root / 'missing.json')}, {key: ''},
+                         {key: '.agents/fixtures/questions-design.json'},
+                         {'TEST_RUNNER_AGENT_INTERFACE_DESIGN_VARIANT': 'questions-loaded'}]:
+            with self.subTest(override=override):
+                result = self.run_validation(**override)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.receipts(), [])
+                evidence = self.full_run()
+                self.assertEqual(evidence.returncode, 1)
+                self.assertIn('No passing iOS validation exists', evidence.stderr)
+
+    def test_ignored_default_fixture_changes_invalidate_evidence(self):
+        fixture = self.repo / '.agents/fixtures/questions-design.json'
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text('{"questions":["original"]}')
+        (self.repo / '.git/info/exclude').write_text('/.agents/fixtures/questions-design.json\n')
+        result = self.run_validation()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.full_run().returncode, 0)
+        fixture.write_text('{"questions":["changed"]}')
+        stale = self.full_run()
+        self.assertEqual(stale.returncode, 1, 'A fixture exported by the runner is an input even when Git ignores it')
+        self.assertIn('No passing iOS validation exists', stale.stderr)
+
     def test_summary_source_change_never_certifies_new_source(self):
         p = self.run_validation(TEST_SUMMARY_CHANGE='1')
         self.assertEqual(p.returncode, 75, p.stderr)

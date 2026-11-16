@@ -21,14 +21,21 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def design_fixtures():
+    return [path for path in sorted((ROOT / '.agents/fixtures').glob('*.json'))
+            if not path.name.startswith('.') and path.is_file()]
+
+
 def source_state():
     paths = subprocess.check_output(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], cwd=ROOT).split(b'\0')
+    # The runner exports every default JSON fixture, including locally ignored files.
+    paths.extend(os.fsencode(path.relative_to(ROOT)) for path in design_fixtures())
     entries = []
     for name in sorted(set(paths)):
         if not name:
             continue
         relative = os.fsdecode(name)
-        if not (relative.startswith('ios/') or relative in {
+        if not (relative.startswith(('ios/', '.agents/fixtures/')) or relative in {
             '.agents/tools/validate-ios.sh', '.agents/tools/ios-validation-state.py',
             '.agents/tools/source-state.py', '.agents/tools/patch-xctestrun.py',
         }):
@@ -51,11 +58,23 @@ def source_state():
 def cacheable(operation, options):
     if operation != 'test':
         return False
-    # Capture/design inputs and live children may depend on external files or a
-    # server. Their side effects must happen on every explicit invocation.
-    if any(value and (key.startswith(('AGENT_INTERFACE_', 'TEST_RUNNER_', 'SIMCTL_CHILD_', 'DYLD_', 'SWIFT_', 'XCODE_')) or key in {'CFLAGS', 'CXXFLAGS', 'LDFLAGS'})
-           for key, value in os.environ.items()):
-        return False
+    # The runner exports the repository's default design fixtures on every run.
+    # Their contents are fingerprinted above. Custom files, capture switches and
+    # variant selections must still run fresh and cannot certify the default suite.
+    fixtures = {}
+    for path in design_fixtures():
+        name = path.stem.removesuffix('-design').upper().replace('-', '_')
+        fixtures.setdefault('TEST_RUNNER_AGENT_INTERFACE_DESIGN_' + name + '_PATH', path)
+    for key, value in os.environ.items():
+        if key in fixtures:
+            try:
+                if (not Path(value).is_absolute()
+                        or Path(value).resolve(strict=True) != fixtures[key].resolve(strict=True)):
+                    return False
+            except OSError:
+                return False
+        elif value and (key.startswith(('AGENT_INTERFACE_', 'TEST_RUNNER_', 'SIMCTL_CHILD_', 'DYLD_', 'SWIFT_', 'XCODE_')) or key in {'CFLAGS', 'CXXFLAGS', 'LDFLAGS'}):
+            return False
     scalar_options = {
         '-only-testing', '-skip-testing', '-parallel-testing-enabled',
         '-parallel-testing-worker-count', '-maximum-parallel-testing-workers',

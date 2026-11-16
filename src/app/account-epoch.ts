@@ -189,6 +189,9 @@ export function accountRecordIs(text: string) {
   checkAccount();
   return stored() === text && (!guarding || held === text);
 }
+/** A cleanup also belongs to the era that started it, even before an app draws. */
+export const accountMarkUnchanged = (mark: AccountMark) => mark.era === era && accountStill(mark);
+
 /** Whether an answer to a request marked `mark` may still be used. */
 export function accountStill(mark: AccountMark) {
   if (!guarding) return mark.generation === generation;
