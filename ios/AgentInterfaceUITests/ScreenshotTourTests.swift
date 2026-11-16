@@ -564,7 +564,9 @@ import CryptoKit
       // Form frames extend beneath the fixed Save bar. XCTest reports covered
       // rows as hittable, so keep their whole frame above it before tapping.
       let saveBar = app.descendants(matching: .any)["saveBar"].firstMatch
-      let formBottom = saveBar.hasFrame && element.identifier != "saveChanges"
+      // Virtualized rows have no readable attributes until scrolling reveals them.
+      let isSaveButton = element.exists && element.identifier == "saveChanges"
+      let formBottom = saveBar.hasFrame && !isSaveButton
         ? min(form.frame.maxY - 12, saveBar.frame.minY - 8) : form.frame.maxY - 12
       let bottom = min(formBottom, keyboard.exists ? keyboard.frame.minY - 8 : formBottom)
       print("DESIGN_MODELS_REVEAL target=\(element) attempt=\(attempt) exists=\(element.exists) frame=\(element.hasFrame ? String(describing: element.frame) : "none") band=\(top)...\(bottom) upHint=\(up)")
