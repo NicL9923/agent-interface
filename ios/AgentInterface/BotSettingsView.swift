@@ -850,7 +850,10 @@ struct BotSettingsView: View {
         if catalogLoading.contains(kind) {
           ProgressView("Loading \(kind.rawValue)…")
         } else if !catalogReady.contains(kind) && store.supports(kind.capability) {
-          Button("Retry loading \(kind.rawValue)") { Task { await loadCatalog(kind) } }
+          Button("Retry loading \(kind.rawValue)") {
+            error = nil
+            Task { await loadCatalog(kind) }
+          }
         }
         if rows.isEmpty && catalogReady.contains(kind) {
           Text("No \(kind.rawValue) were reported by Hermes.").foregroundStyle(Palette.muted)
