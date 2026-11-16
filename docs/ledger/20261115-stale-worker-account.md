@@ -37,10 +37,23 @@ With the fix it receives only two and storage still names two.
 Logs: `.private/stale-worker-red.log`, `.private/stale-worker-green.log`,
 `.private/stale-worker-badge.log`, and `.private/stale-worker-mutations.log`.
 
-Full check-all and compatible-container browser validation are pending. Independent review is
+Full local validation is recorded below. Independent review is
 incomplete: Anthropic is weekly-limited and Grok returned HTTP 402 for exhausted balance.
 This OpenAI implementation remains unmerged until eligible review is available.
 
 The separate concurrent-auth-request cookie race in #330 is being fixed separately. This change
 does not serialize authentication requests or fix #333's late logout CSRF cleanup.
-No production, browser, or Apple-platform operation ran for this fix.
+No production or Apple-platform operation ran for this fix.
+
+## Full local validation at `2b959334`
+
+The coordinated check-all run passed typecheck, lint, ruff, 4,065 Vitest tests and build.
+Python was automatically skipped because the changed files do not affect those tests.
+The real Chromium and WebKit suites passed 167 cases with 3 existing capability skips.
+The browsers ran in the Playwright 1.65.0 Noble container with Node 24.22.2 because
+Fedora lacks the host libraries required by WebKit. The outer Linux machine lock covered
+the full job. Output: the coordinating worktree's `.private/review-fix-checks.log`.
+
+This local runtime validation does not replace independent review, which remains incomplete.
+Before publication, main's separately reviewed compaction-test change #433 was merged.
+The production and regression-test files described above are unchanged by that merge.
