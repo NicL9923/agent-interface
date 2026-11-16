@@ -13,3 +13,17 @@ The review flag is sent only to the runtime adapter, not the stored request or t
 The first `~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going --skip e2e --py always --lock-timeout 7200` attempt timed out in the machine queue after 7,200 seconds, exit 75. It did not start a check. Output: `/tmp/reviewed-resend-check-all.log`. A retry with a 14,400-second machine queue timeout was started at the same source fingerprint.
 
 The retry passed on commit `e00d2d6e6078bf9f4507c3a96f3de2038f9fb961`, the same source fingerprint. It waited 4,660 seconds for the machine lock and ran for 6 minutes 17 seconds. Typecheck, lint, Ruff, the JavaScript suite (4,066 tests in 221 files), build (896 modules), and Python checks (52 files) passed. Command: `LINUX_HEAVY_LOCK_TIMEOUT=14400 ~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going --skip e2e --py always --lock-timeout 14400`. Output: `/tmp/reviewed-resend-check-all-retry.log`. Browser checks were skipped for the compatible-container validation assigned to the parent.
+
+
+## Completed browser validation at `c407254ba5fc19bdcb880c895730ff24b2802741`
+
+The compatible Playwright 1.65.0 Noble container with Node 24.22.2 ran
+`.agents/tools/check-all --only e2e` through the actual server and browser suites.
+All 167 Chromium/WebKit cases passed, with 3 existing skips, in 5 minutes 30 seconds.
+Output: the parent worktree's `.private/own-send-resend-checks.log`. The combined job queued
+for 8,744.184 seconds and held the machine lock for 351.510 seconds, including the preceding
+Linux checks for PR #430. This completes final browser validation for the reviewed-resend
+fix; no application or test inputs changed afterward. The earlier full non-browser results
+still cover the same source. No live Hermes or physical-device run was performed.
+Independent review outside OpenAI remains incomplete. Keep the PR draft until an eligible
+reviewer is available. A release is required after merge; no deployment ran.
