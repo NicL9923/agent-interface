@@ -43,7 +43,20 @@ Its full fake-host test runs the real tool and cleanup. The refusal does not res
 or alter the gateway, so its pending handler can continue. Missing or unreadable state still
 refuses through the existing cleanup instead of proceeding to stop.
 
-Full check-all and compatible-container browser validation are queued. Independent review is
+Full local validation is recorded below. Independent review is
 incomplete: Anthropic has a weekly usage limit and Grok returned HTTP 402 for exhausted balance.
 This OpenAI implementation must remain unmerged until an eligible reviewer is available.
-No production command, deployment, browser interaction, or Apple build was run for this fix.
+No production command, deployment, or Apple build was run for this fix.
+
+## Full local validation at `db058560`
+
+The coordinated check-all run passed typecheck, lint, ruff, 4,064 Vitest tests and build.
+52 Python test files passed.
+The real Chromium and WebKit suites passed 167 cases with 3 existing capability skips.
+The browsers ran in the Playwright 1.65.0 Noble container with Node 24.22.2 because
+Fedora lacks the host libraries required by WebKit. The outer Linux machine lock covered
+the full job. Output: the coordinating worktree's `.private/review-fix-checks.log`.
+
+This local runtime validation does not replace independent review, which remains incomplete.
+Before publication, main's separately reviewed compaction-test change #433 was merged.
+The production and regression-test files described above are unchanged by that merge.
