@@ -24,7 +24,7 @@ const FOUND_MS = 2400;
  * order, so a binary search measures a handful of them instead of every one on each scroll.
  */
 export function firstMessageBelow(container: HTMLElement, y: number, selector = "[data-message-id]") {
-  const items = container.querySelectorAll<HTMLElement>(selector);
+  const items = container.querySelectorAll<HTMLElement>(`:is(${selector}):not(details:not([open]) *)`);
   let low = 0, high = items.length;
   while (low < high) {
     const middle = (low + high) >> 1;
@@ -727,7 +727,7 @@ export function useConversation(botId: string, userId?: string, onMissing?: (bot
     if (positionTimer.current) clearTimeout(positionTimer.current);
     const positionBot = botId;
     const visibleMessage = latest ? undefined : firstMessageBelow(element, element.getBoundingClientRect().top + 8);
-    const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.messageId;
+    const messageId = latest ? conversation.messages.at(-1)?.id : visibleMessage?.dataset.sourceMessageId ?? visibleMessage?.dataset.messageId;
     // Saving the scroll position is best effort; a failure leaves the previous position in place.
     positionTimer.current = setTimeout(
       () =>

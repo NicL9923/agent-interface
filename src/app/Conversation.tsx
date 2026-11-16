@@ -504,7 +504,12 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
   // classification or duplicating a tool-call row that is already conversation-visible.
   const byId = new Map([...block.messages, ...allWork].map(message => [message.id, message]));
   const shownIds = new Set(block.messages.map(message => message.id));
-  const ordered = block.order.flatMap<Message | { id: string }>(id => byId.has(id) ? exchangeDisplay(byId.get(id)!) : [{ id }]);
+  const sources = new Map<string, string>();
+  const ordered = block.order.flatMap<Message | { id: string }>(id => {
+    const shown = byId.has(id) ? exchangeDisplay(byId.get(id)!) : [{ id }];
+    for (const message of shown) sources.set(message.id, id);
+    return shown;
+  });
   const messages = ordered.filter((message): message is Message => 'role' in message
     && (isAgentExchange(message) || message.role !== 'tool' && shownIds.has(message.id)));
   // A turn's intermediate work folds into one row: before the reply that follows the work, before the
@@ -532,7 +537,7 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
       if (position > 0 && isAgentExchange(messages[position - 1]) && consecutive(messages[position - 1], message) && message.id !== foldAt) return [];
       const run = [message];
       for (let at = position + 1; at < messages.length && isAgentExchange(messages[at]) && consecutive(messages[at - 1], messages[at]) && messages[at].id !== foldAt; at++) run.push(messages[at]);
-      const article = <ExchangeMessages key={rowKey(message)} messages={run} recipient={name} />;
+      const article = <ExchangeMessages key={rowKey(message)} messages={run} recipient={name} sources={sources} />;
       return message.id === foldAt ? [...afterFold, article] : [article];
     }
     // The conversation is with one assistant, so its replies need no name. Consecutive reply parts
@@ -587,9 +592,9 @@ const TurnView = memo(function TurnView({ block, advanced, unavailable, disconne
   if (foldAt === undefined) rows.push(...afterFold);
   return <div className="conversation-turn">{rows}</div>;
 }, sameTurnProps);
-function ExchangeMessages({ messages, recipient }: { messages: Message[]; recipient: string }) {
+function ExchangeMessages({ messages, recipient, sources }: { messages: Message[]; recipient: string; sources: Map<string, string> }) {
   return <AgentExchangeGroup messages={messages} recipient={recipient}>
-    {messages.map(message => <article className="message message-agent" key={message.id} data-message-id={message.id}>
+    {messages.map(message => <article className="message message-agent" key={message.id} data-message-id={message.id} data-source-message-id={sources.get(message.id)}>
       <AgentExchange message={message} recipient={recipient} />
       {message.files?.map(file => <FileLink key={file.id} file={file} />)}
     </article>)}

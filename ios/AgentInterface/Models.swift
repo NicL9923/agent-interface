@@ -702,7 +702,7 @@ struct Conversation: Codable, Equatable {
     var turns: [ConversationTurn] = []
     var sawActivity = false
     for message in messages {
-      if turns.isEmpty || message.role == "user" {
+      if turns.isEmpty || message.role == "user" && !message.isAgentExchange {
         turns.append(ConversationTurn(id: message.id, messages: []))
         sawActivity = false
       }
