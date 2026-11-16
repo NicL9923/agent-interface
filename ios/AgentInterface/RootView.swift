@@ -712,7 +712,7 @@ struct BotListView: View {
           if activity != .idle && activity != .done { ActivityLabel(state: activity) }
           else {
             Text(bot.lastMessage?.text.isEmpty == false ? bot.lastMessage!.text : "Your main assistant")
-              .font(.subheadline).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
+              .font(.subheadline).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
           }
         }.frame(maxWidth: .infinity, alignment: .leading)
       }.padding(12).contentShape(RoundedRectangle(cornerRadius: 18))
