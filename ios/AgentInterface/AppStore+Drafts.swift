@@ -166,7 +166,7 @@ extension AppStore {
   /// A typing pause this long saves the open draft to the server.
   static let draftSaveDelay: Duration = .milliseconds(600)
   /// The open chat's message on its way, if any. Accepted ones read as ordinary messages.
-  var outgoing: SentEcho.Delivery? { echoes.lazy.filter { $0.request.botId == selectedBotId }.compactMap(\.delivery).first }
+  var outgoing: SentEcho.Delivery? { echoes.lazy.filter { $0.request.botId == self.selectedBotId }.compactMap(\.delivery).first }
   /// Whether the open draft is the message on its way. The transcript shows it, so the composer
   /// reads empty, and read-only: until Hermes answers, a draft and its send are told apart only by
   /// their content, so the draft must stay the sent copy.

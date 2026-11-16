@@ -33,3 +33,18 @@ own-send-isolated-base.log under /Volumes/DevSSD/scratch.
 The original source was Claude-authored and Sol independently reviewed it. This added test
 and outgoing filter are OpenAI-authored and still need eligible non-OpenAI independent review.
 No production deployment ran. A release is required after merge.
+
+
+## Compiler correction after the Mac validation attempt
+
+At `bddec87639efd7c3f4b7b84f639f7998996159d2`, both requested native invocations
+failed during compilation, before any tests ran. Xcode 27.2 requires the instance reference
+inside the lazy filter closure to be explicit. The getter now uses `self.selectedBotId`.
+This compiler correction changes no selection condition or test assertion.
+
+Failed logs: `/Volumes/DevSSD/scratch/ios-validation-task-20261116/pr430-single.log`
+and `pr430-full.log` in that directory. No fresh baseline build ran; the base did not
+contain this closure. The previous baseline and isolated results do not validate this head.
+A fresh exact-commit focused and complete three-suite run is required on the Mac.
+The queued Linux job prints the checked-out commit before execution; its scope cannot
+compile Swift and does not replace this required native check.
