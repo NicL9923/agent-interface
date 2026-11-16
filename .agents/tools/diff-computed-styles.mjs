@@ -53,7 +53,12 @@ const screens = [
     await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Settings/ }).click();
     await page.locator(".settings-sheet[open]").waitFor();
   }],
-  ["command palette", async page => { await page.keyboard.press("Control+k"); await page.locator(".command-palette[open]").waitFor(); }],
+  ["command palette", async page => {
+    // The app takes Command on Apple platforms and Control elsewhere, by the browser's platform as shortcuts.ts reads it.
+    const apple = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent));
+    await page.keyboard.press(apple ? "Meta+k" : "Control+k");
+    await page.locator(".command-palette[open]").waitFor();
+  }],
   ["chat", async page => {
     await page.getByRole("region", { name: "Your assistants" }).getByRole("button", { name: /Ranch Hand/ }).click();
     await page.getByText("Morning. The north fence is fixed.").waitFor();
