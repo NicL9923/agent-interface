@@ -147,7 +147,11 @@ beforeAll(async () => {
   screen = document.getElementById("screen")!;
   // Assigned rather than stubbed: teardown unstubs globals after each test, but the page's sockets
   // must stay fakes for the whole file. afterAll restores the shared worker.
-  Object.assign(globalThis, { WebSocket: FakeSocket });
+  Object.defineProperty(globalThis, "WebSocket", {
+    configurable: true,
+    writable: true,
+    value: FakeSocket,
+  });
   (window as unknown as { webkit: unknown }).webkit = {
     messageHandlers: { terminal: { postMessage: (value: unknown) => mocks.reports.push(value) } },
   };

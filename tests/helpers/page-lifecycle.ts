@@ -6,7 +6,6 @@ export function trackPageLifetime(bridgeKeys: string[]): () => void {
   const listeners: Parameters<Window["addEventListener"]>[] = [];
   const bridges = bridgeKeys.map((name) => Object.getOwnPropertyDescriptor(window, name));
   const socket = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
-  const windowSocket = Object.getOwnPropertyDescriptor(window, "WebSocket");
   Object.defineProperty(window, "addEventListener", {
     configurable: true,
     writable: true,
@@ -26,7 +25,5 @@ export function trackPageLifetime(bridgeKeys: string[]): () => void {
     });
     if (socket) Object.defineProperty(globalThis, "WebSocket", socket);
     else Reflect.deleteProperty(globalThis, "WebSocket");
-    if (windowSocket) Object.defineProperty(window, "WebSocket", windowSocket);
-    else Reflect.deleteProperty(window, "WebSocket");
   };
 }
