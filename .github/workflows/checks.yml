@@ -118,13 +118,30 @@ jobs:
         with:
           node-version-file: .node-version
       - run: pip install -r .github/requirements-ci.txt
-      - name: Check Python syntax
-        run: python -m compileall -q src/hermes scripts .agents/tools
-      - name: Check for undefined names and likely bugs
-        run: ruff check --output-format=github .
       - name: Install tmux for the terminal and computer tests
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y tmux
-      - name: Run Python tests
-        run: python scripts/run-python-tests.py
+      - name: Check Python syntax, lint and tests in parallel
+        shell: bash
+        run: |
+          # Syntax compilation has its own cache so imports in tests cannot share writes.
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/python-syntax-cache" python -m compileall -q src/hermes scripts .agents/tools &
+          syntax_pid=$!
+          ruff check --output-format=github . &
+          lint_pid=$!
+          python scripts/run-python-tests.py &
+          test_pid=$!
+          failed=0
+          for check_spec in "syntax:$syntax_pid" "lint:$lint_pid" "tests:$test_pid"; do
+            check_name=${check_spec%%:*}
+            check_pid=${check_spec#*:}
+            if wait "$check_pid"; then
+              printf '%s: passed\n' "$check_name"
+            else
+              check_status=$?
+              printf '%s: failed (%s)\n' "$check_name" "$check_status" >&2
+              failed=1
+            fi
+          done
+          exit "$failed"
