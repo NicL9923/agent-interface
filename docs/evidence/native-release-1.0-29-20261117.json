@@ -1,0 +1,79 @@
+{
+  "version": "1.0",
+  "build": 29,
+  "sourceCommit": "d98765da2a6cb0c4d0c1e256bbcfb999c9443731",
+  "ipaSha256": "cbb939a672b30f12561d11d6a1d4d3d2734d582f3d043ee030ea7acd986b4d6c",
+  "archiveTreeSha256": "7c4267184de42b174bce3ae130c9f0742d54e8f77e7bfa776350380f537d9196",
+  "validation": {
+    "testedCommit": "f67f41ca65b8989266bb079532865551ce963589",
+    "sourceFingerprint": "ac13b979aa30c75244e3dc41942f12b52c9c444870a2daefe19752c7388c23df",
+    "gateInputFingerprint": "1cba01866598eb66024a468566111bcdaba028f28623050efeb3e0ee8ffe6f8e",
+    "tests": {
+      "expectedFailures": 1,
+      "failed": 0,
+      "passed": 966,
+      "skipped": 10
+    },
+    "total": 977,
+    "validationExitCode": 0,
+    "cleanupExitCode": 0,
+    "physicalDeviceVerified": false
+  },
+  "distribution": {
+    "channel": "internal TestFlight",
+    "group": "Household",
+    "testerCount": 2,
+    "appleBuildId": "28605d43-e79a-4331-bebd-101703a41290",
+    "installableConfirmedAt": "2026-11-17T04:07:43.572Z",
+    "expiresAt": "2027-02-14T20:06:28-08:00",
+    "uploadedAt": "2026-11-17T04:05:34.706Z"
+  },
+  "announcement": {
+    "previousBuild": 28,
+    "latestBuild": 29,
+    "updateUrl": "https://testflight.apple.com/v1/app/6823644380",
+    "checkedAt": "2026-11-17T04:10:24.738Z",
+    "authenticatedBootstrap": true,
+    "nativeConnected": true,
+    "temporarySessionRemoved": true,
+    "webBuild": "ed6e9cc2c51c509f",
+    "otherEnvironmentFieldsUnchanged": true
+  },
+  "hermes": {
+    "revision": "e2fb450adcf74421fe9514f048319dfcbb5af6c1",
+    "trackedPatchSha256": "d555e25f8b6d8dc94129bcb99c5d69bc9750aac862fa3e0d8e86214b5c708433",
+    "integrationDigest": "2c141dfc564e9079b8b340615f812c1f8ace80646057725eef0c7267ad307020",
+    "qualifiedAt": "2026-11-16T19:38:16.652088+00:00",
+    "modelAndTerminalSmoke": {
+      "default": {
+        "passed": true,
+        "model": null,
+        "modelIdReportedByGateway": false,
+        "processExitCode": 0,
+        "terminalExecuted": true,
+        "terminalExitCode": 0,
+        "terminalOutputMatched": true,
+        "finalExitCode": 0
+      },
+      "kimberly": {
+        "passed": true,
+        "model": null,
+        "modelIdReportedByGateway": false,
+        "processExitCode": 0,
+        "terminalExecuted": true,
+        "terminalExitCode": 0,
+        "terminalOutputMatched": true,
+        "finalExitCode": 0
+      }
+    }
+  },
+  "macOS": {
+    "distributed": false,
+    "coreTestsPassed": 104,
+    "blocker": "Missing Developer ID Application identity and wildbots-notary profile"
+  },
+  "independentReview": {
+    "complete": false,
+    "reason": "Eligible Anthropic and xAI providers unavailable under recorded usage limits"
+  }
+}
