@@ -71,7 +71,7 @@ import XCTest
     let destination = element(app, "form.trip.city").textFields.firstMatch
     destination.tap()
     XCTAssertEqual(problems.count, 2)
-    destination.typeText("Marfa")
+    destination.typeWhenFocused("Marfa")
     element(app, "form.trip.lodging.1").tap()
     // Tapping one spelling of "Café" selects that option alone.
     let composed = element(app, "form.trip.cafe.0"), decomposed = element(app, "form.trip.cafe.1")

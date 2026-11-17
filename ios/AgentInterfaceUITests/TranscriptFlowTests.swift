@@ -90,7 +90,11 @@ import XCTest
     try capture(app, "approval-scopes")
     app.buttons["approvalMore"].revealAboveComposer()
     app.buttons["approvalMore"].tapWhenReady()
-    app.buttons["Always allow…"].tapWhenReady()
+    let always = app.buttons["Always allow…"]
+    guard always.waitForFrame() else { XCTFail("The approval menu must offer Always allow"); return }
+    always.waitForStableFrame()
+    // Target the settled menu row directly, without its computed activation point.
+    always.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     let alert = app.alerts.firstMatch
     XCTAssertTrue(alert.waitForExistence(timeout: 5))
     XCTAssertTrue(alert.label.hasPrefix("Always allow this for"))
