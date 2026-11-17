@@ -18,7 +18,10 @@
     "test:py": "python3 scripts/run-python-tests.py",
     "lint:py": "ruff check .",
     "setup": "tsx scripts/setup.ts",
-    "doctor": "tsx scripts/setup.ts --check"
+    "doctor": "tsx scripts/setup.ts --check",
+    "prepare": "node scripts/install-hooks.mjs",
+    "verify:ci": "node scripts/check-parallel.mjs",
+    "format": "oxfmt --write src scripts tests e2e"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
@@ -57,13 +60,30 @@
     "@types/web-push": "3.6.4",
     "@types/ws": "8.18.2",
     "@vitejs/plugin-react": "6.3.0",
+    "husky": "9.1.7",
     "jsdom": "31.0.0",
+    "lint-staged": "17.6.0",
+    "oxfmt": "0.77.0",
     "oxlint": "1.93.0",
+    "prettier": "3.9.10",
     "tailwindcss": "4.3.5",
     "tsrs": "0.20.1-ts7.1.0-beta",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vite": "8.3.8",
     "vitest": "5.1.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs}": [
+      "oxlint --deny-warnings",
+      "oxfmt --write"
+    ],
+    "*.{css,json,md,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.py": [
+      "ruff check",
+      "ruff format"
+    ]
   }
 }

@@ -8,22 +8,38 @@ if (typeof document !== "undefined") {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   // jsdom has no canvas. Its getContext already returns null, but logs "Not implemented" each
   // time; this returns the same null quietly. Tests that need a context still stub their own.
-  HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = (() =>
+    null) as typeof HTMLCanvasElement.prototype.getContext;
   // crypto.subtle.digest runs on Node's thread pool and settles in real time, outside the pinned clock and outside what act() and advance()
   // flush, so under load a digest lands after the test's next step: a form's Send was still disabled for its receipt lookup, and a
   // retry's request had not been sent. The same SHA-2 digest from node:crypto settles at once, in a microtask act() already flushes.
   // Anything else goes to the real implementation.
-  const digestNames: Record<string, string> = { "SHA-1": "sha1", "SHA-256": "sha256", "SHA-384": "sha384", "SHA-512": "sha512" };
-  const realDigest = crypto.subtle.digest.bind(crypto.subtle);
-  Object.defineProperty(crypto.subtle, "digest", { configurable: true, writable: true, value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
-    const name = digestNames[(typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase()];
-    // Web Crypto rejects data that is neither a view nor an ArrayBuffer; the real call keeps that refusal.
-    const buffer = Object.prototype.toString.call(data) === "[object ArrayBuffer]";
-    if (!name || !(ArrayBuffer.isView(data) || buffer)) return realDigest(algorithm, data);
-    const bytes = ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : new Uint8Array(data as ArrayBuffer);
-    const digest = createHash(name).update(bytes).digest();
-    return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength);
-  } });
+  const digestNames: Record<string, string> = {
+    "SHA-1": "sha1",
+    "SHA-256": "sha256",
+    "SHA-384": "sha384",
+    "SHA-512": "sha512",
+  };
+  const digestKey = Symbol.for("agent-interface.test.originalDigest");
+  const realDigest = (Reflect.get(crypto.subtle, digestKey) ||
+    crypto.subtle.digest.bind(crypto.subtle)) as SubtleCrypto["digest"];
+  Reflect.set(crypto.subtle, digestKey, realDigest);
+  Object.defineProperty(crypto.subtle, "digest", {
+    configurable: true,
+    writable: true,
+    value: async (algorithm: AlgorithmIdentifier, data: BufferSource) => {
+      const name =
+        digestNames[(typeof algorithm === "string" ? algorithm : algorithm.name).toUpperCase()];
+      // Web Crypto rejects data that is neither a view nor an ArrayBuffer; the real call keeps that refusal.
+      const buffer = Object.prototype.toString.call(data) === "[object ArrayBuffer]";
+      if (!name || !(ArrayBuffer.isView(data) || buffer)) return realDigest(algorithm, data);
+      const bytes = ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data as ArrayBuffer);
+      const digest = createHash(name).update(bytes).digest();
+      return digest.buffer.slice(digest.byteOffset, digest.byteOffset + digest.byteLength);
+    },
+  });
   // jsdom has no SVG path geometry or media queries, which the real Avatar reads on every render. These stand in for the browser, so no
   // test replaces the Avatar itself: a path is 100 units long and a point at a distance lies at x = distance. Nothing asserts a pose's
   // geometry here; tests/avatar-motion.test.ts covers the rig. Only reduced motion matches: an animating Avatar draws a frame every 16 ms
@@ -33,11 +49,20 @@ if (typeof document !== "undefined") {
     getPointAtLength: (distance: number) => ({ x: distance, y: 0 }),
   });
   if (!window.matchMedia) {
-    window.matchMedia = ((query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)", media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
   }
   // A test's own console mock would otherwise swallow React's act warnings; see tests/act-guard.ts.
-  const logError = console.error;
-  console.error = (...args: unknown[]) => { if (!recordActWarning(args)) logError.apply(console, args); };
+  const errorKey = Symbol.for("agent-interface.test.originalConsoleError");
+  const logError = (Reflect.get(console, errorKey) || console.error) as typeof console.error;
+  Reflect.set(console, errorKey, logError);
+  console.error = (...args: unknown[]) => {
+    if (!recordActWarning(args)) logError.apply(console, args);
+  };
   beforeEach(() => {
     takeActWarnings();
     // Modern secure browsers expose Web Locks. Unsupported-browser cases explicitly remove this I/O boundary.
@@ -59,6 +84,8 @@ if (typeof document !== "undefined") {
     // Last, so that updates from unmounting count too.
     const found = takeActWarnings();
     if (found.length)
-      throw new Error(`React reported ${found.length} act() problem(s). Await every act(), wrap async work in it, and never nest acts:\n${found.join("\n")}`);
+      throw new Error(
+        `React reported ${found.length} act() problem(s). Await every act(), wrap async work in it, and never nest acts:\n${found.join("\n")}`,
+      );
   });
 }
