@@ -85,3 +85,5 @@ These integration fixtures combine per-file I/O mocks with cached lazy UI module
 The narrower exception set exposed two additional shared-worker timeouts in seed 731: `service-worker.test.ts` and `direct-routes.test.ts`. Both are now isolated; their clock-driven worker and listener contracts remain intact.
 
 The same narrower seed-731 run also timed out six serialized policy-change cases in `main-assistant-api.test.ts`; it now retains isolation. The run collected each of the 225 files exactly once.
+
+With the narrower set, seed 1907 failed only `send-timing.test.ts`: eight stream/timing cases received the initial retry frame but not the expected inflight event. That real-socket suite now retains isolation.

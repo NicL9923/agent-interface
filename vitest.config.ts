@@ -5,6 +5,7 @@ import { defineConfig } from "vitest/config";
 // exact failures and commands are recorded in docs/ledger/2026-11-17-isolation.md.
 // New files start on the shared default, including new jsdom tests.
 const isolated = [
+  "tests/send-timing.test.ts",
   "tests/main-assistant-api.test.ts",
   "tests/service-worker.test.ts",
   "tests/direct-routes.test.ts",
