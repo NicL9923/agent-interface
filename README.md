@@ -42,6 +42,7 @@ Hermes dashboard is household-wide, so anyone with dashboard access can still re
 its memory and logins.
 
 <!-- Main assistant: begin -->
+
 Each member can make one of their own personal assistants their **main assistant**, on
 web and iOS. It leads home with a **Main** mark, is first in the command palette, whose
 Ask entry sends typed words to its draft, and hands specialist work to the member's
@@ -69,6 +70,7 @@ removes its delivered ones from your iPhone and iPad. A browser tab counts while
 it is focused and has had input in the last five minutes.
 
 <!-- BEGIN device activity -->
+
 Notifications go to the device you are using. While a browser window is focused
 and touched in the last five minutes, or the iOS app is open and touched in the
 last five minutes, only those devices get the alert; your other iPhones and iPads
@@ -260,24 +262,24 @@ earlier account never overwrites a later one's.
 
 What the browser keeps, in localStorage unless noted:
 
-| Record | Holds | Removed |
-| --- | --- | --- |
-| `agent-interface:auth-epoch` | Which account the tabs act for, and whether a change is under way | Never; each change replaces it |
-| `wildbots-account` (the service worker's Cache Storage) | The hash of the account notifications may show for, or that none may, and of the account whose push or page set the app badge | Never; each change replaces it |
-| `agent-interface:sign-in-hint` | Lapse time, account ID, chat IDs | Sign-out, refused session, another account, lapse |
-| `agent-interface:theme` | The theme last shown, and its account, for `boot.js` | With the hint, and at any sign-in |
-| `agent-interface:roster` | The home last shown: assistants, order, group chats and their members, the member's name and picture | With the hint, and at any sign-in |
-| `agent-interface:draft:<account>:<assistant>` | An unsent draft | Sign-out |
-| `agent-interface:submission:<account>:<assistant>` | A message whose delivery is unconfirmed | Sign-out, or once confirmed |
-| `agent-interface:group-send:<account>:<room>` and its `:draft` | A group message on its way, a group draft | Sign-out, or once sent |
-| `agent-interface:group-create:<account>` | A group being made: name, assistants | Sign-out, or once made |
-| `agent-interface:form-reply:<account>:…` | A form's answers | Sign-out |
-| `agent-interface:routine-trial:<account>:<routine>`, `automation-goal-resume:<account>:<assistant>` | A request ID, so a retry is checked rather than repeated | Kept |
-| `agent-interface:notifications-prompt:v2:<account>` | Whether the notification prompt was shown | Kept |
-| `agent-interface:approval:<account>:…` (sessionStorage) | An approval decision on its way | With the tab |
-| `integration-flow:<account>:<profile>` (sessionStorage) | An integration sign-in flow ID | With the tab |
-| `wildbots.device-id` | This profile's device ID | Kept; it names the device, not a member |
-| `computer.trackpad` | A trackpad preference | Kept |
+| Record                                                                                              | Holds                                                                                                                         | Removed                                           |
+| --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `agent-interface:auth-epoch`                                                                        | Which account the tabs act for, and whether a change is under way                                                             | Never; each change replaces it                    |
+| `wildbots-account` (the service worker's Cache Storage)                                             | The hash of the account notifications may show for, or that none may, and of the account whose push or page set the app badge | Never; each change replaces it                    |
+| `agent-interface:sign-in-hint`                                                                      | Lapse time, account ID, chat IDs                                                                                              | Sign-out, refused session, another account, lapse |
+| `agent-interface:theme`                                                                             | The theme last shown, and its account, for `boot.js`                                                                          | With the hint, and at any sign-in                 |
+| `agent-interface:roster`                                                                            | The home last shown: assistants, order, group chats and their members, the member's name and picture                          | With the hint, and at any sign-in                 |
+| `agent-interface:draft:<account>:<assistant>`                                                       | An unsent draft                                                                                                               | Sign-out                                          |
+| `agent-interface:submission:<account>:<assistant>`                                                  | A message whose delivery is unconfirmed                                                                                       | Sign-out, or once confirmed                       |
+| `agent-interface:group-send:<account>:<room>` and its `:draft`                                      | A group message on its way, a group draft                                                                                     | Sign-out, or once sent                            |
+| `agent-interface:group-create:<account>`                                                            | A group being made: name, assistants                                                                                          | Sign-out, or once made                            |
+| `agent-interface:form-reply:<account>:…`                                                            | A form's answers                                                                                                              | Sign-out                                          |
+| `agent-interface:routine-trial:<account>:<routine>`, `automation-goal-resume:<account>:<assistant>` | A request ID, so a retry is checked rather than repeated                                                                      | Kept                                              |
+| `agent-interface:notifications-prompt:v2:<account>`                                                 | Whether the notification prompt was shown                                                                                     | Kept                                              |
+| `agent-interface:approval:<account>:…` (sessionStorage)                                             | An approval decision on its way                                                                                               | With the tab                                      |
+| `integration-flow:<account>:<profile>` (sessionStorage)                                             | An integration sign-in flow ID                                                                                                | With the tab                                      |
+| `wildbots.device-id`                                                                                | This profile's device ID                                                                                                      | Kept; it names the device, not a member           |
+| `computer.trackpad`                                                                                 | A trackpad preference                                                                                                         | Kept                                              |
 
 Every record that belongs to an account has the account's ID in its name, and the app reads
 only the signed-in account's, so no member's records are read under another account. A
@@ -683,6 +685,7 @@ thread, the chat shows a card with **Open in T3 Code**. These work on web and
 iOS. See [email drafts and forms](docs/HouseholdExperience.md#email-drafts-and-forms)
 and [T3 Code threads](docs/HouseholdExperience.md#t3-code-threads).
 <!-- BEGIN draft revisions -->
+
 When an assistant revises an email draft from earlier in the chat, the new draft
 marks the words it added and removed, with **Hide changes** to read it clean.
 <!-- END draft revisions -->
@@ -922,6 +925,7 @@ outputs and shared attachments. Search filenames, filter by type, and preview
 images, text, or supported media. PDFs and other files can be opened or downloaded.
 External file sources open only when you choose their link.
 <!-- BEGIN reply files -->
+
 A reply whose turn produced files it does not already show as attachments lists
 them as chips under it, up to four and then **+N more**. A chip opens Artifacts on
 that file; **+N more** opens the whole list. Files you shared yourself are not chips.
@@ -989,7 +993,7 @@ console errors or CSP violation reports. It runs in full Chromium (`channel: "ch
 `npx playwright install chromium` installs beside the headless shell): the shell crashes the
 page when a service worker calls the badge API, which the worker does for every page it controls,
 and it has no back-forward cache. Playwright WebKit skips the worker badge instrumentation and the two back-forward cache tests. It uses a fake push service. It does not cover real Hermes behavior, push
-delivery, Google sign-in, the iOS app, or other browsers. CI runs it in the `browser` job
+delivery, Google sign-in, the iOS app, or other browsers. Main pushes and manual CI runs execute it in the `browser` job, while PR CI excludes it
 and uploads the report and traces when it fails.
 
 The [validation ledger](docs/ledger/README.md) distinguishes application tests,
@@ -998,7 +1002,7 @@ acceptance that needs a physical phone or configured external service. Tests wit
 a runtime double do not prove Hermes integration. Simulated push checks do not
 prove delivery to an installed phone app while it is closed.
 
-`.agents/tools/check-all` runs every local check in CI's order, chooses a free browser-suite port and queues the heavy suites across worktrees; see the [tools index](.agents/tools/README.md).
+`npm run verify:ci` runs lint, typecheck, build and unit tests in parallel. `.agents/tools/check-all` runs every local check, chooses a free browser-suite port and queues the heavy suites across worktrees; see the [tools index](.agents/tools/README.md).
 
 Pull requests run the application tests, lint, production build and Python syntax checks
 on both supported Node versions. Native builds and simulator tests run on the
