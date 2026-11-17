@@ -558,8 +558,9 @@ import CryptoKit
         "\($0.label.prefix(64)):\(String(describing: $0.frame))"
       }
     }
-    // The two Memory documents at AX3 need more travel than the shorter Models forms.
-    let attempts = form.identifier == "memoryForm" ? 24 : 12
+    // Memory documents and Profile's avatar/voice sections need more travel
+    // than the shorter Models forms, especially between Profile's fixed bars.
+    let attempts = ["memoryForm", "settings.profile"].contains(form.identifier) ? 24 : 12
     // Check the position reached by the final permitted drag before reporting failure.
     for attempt in 0...attempts {
       let keyboard = app.keyboards.firstMatch
