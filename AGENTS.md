@@ -27,7 +27,7 @@
 
 - `npm ci` installs the pre-commit hook in Git checkouts. It runs Oxlint and Oxfmt on staged JavaScript/TypeScript, Prettier on staged data and prose, and the pinned Ruff on staged Python. Release archives skip hook installation.
 - `npm run verify:ci` runs lint, typecheck, build and Vitest concurrently and waits for every result. Browser tests run on main pushes and manual runs, never PR CI.
-- Vitest defaults to `isolate: false` for Node units. The browser integration project and named socket/clock contracts retain file isolation after shuffled runs demonstrated retained lazy-module mocks and dependency timers across files. `vitest.config.ts` lists the exceptions. The first setup file clears app module caches for reused workers. Replay file order with `npm test -- --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
+- Vitest defaults to `isolate: false` for Node units. Only the 78 named files with reproduced shuffled-run failures retain file isolation. New files start shared. The migration record in `docs/ledger/2026-11-17-isolation.md` gives the evidence. `vitest.config.ts` lists the exceptions. The first setup file clears app module caches for reused workers. Replay file order with `npm test -- --sequence.shuffle.files --sequence.seed=731 --maxWorkers=1`.
 
 # Tests
 

@@ -82,8 +82,7 @@
       "prettier --write"
     ],
     "*.py": [
-      "ruff check",
-      "ruff format"
+      "python3 .agents/tools/staged-python.py"
     ]
   }
 }
