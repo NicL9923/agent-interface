@@ -165,7 +165,9 @@ async function accept() {
     check(profiles.every((profile) => bootstrap.bots.some((bot) => bot.id === profile)));
     step = "deployed_build";
     const workerSource = await request(base + "/sw.js", {}, 1024 * 1024, 20_000);
-    const webBuild = workerSource.match(/const CACHE = 'agent-interface-([0-9a-f]{16})'/)?.[1];
+    const webBuild = workerSource.match(
+      /const CACHE = ['"]agent-interface-([0-9a-f]{16})['"]/,
+    )?.[1];
     check(webBuild);
     check(readFileSync(join(appRoot, "dist/client/sw.js"), "utf8") === workerSource);
     step = "today_snapshot";

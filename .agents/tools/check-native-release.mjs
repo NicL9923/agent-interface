@@ -84,7 +84,7 @@ try {
     worker === readFileSync(join(root, "dist/client/sw.js"), "utf8"),
     "Server differs from the selected release",
   );
-  const webBuild = worker.match(/const CACHE = 'agent-interface-([0-9a-f]{16})'/)?.[1];
+  const webBuild = worker.match(/const CACHE = ['"]agent-interface-([0-9a-f]{16})['"]/)?.[1];
   check(webBuild, "Service worker build is missing");
   receipt = {
     checkedAt: new Date().toISOString(),

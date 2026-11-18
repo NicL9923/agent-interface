@@ -383,6 +383,13 @@ const { app, store } = await createApp(
     },
   },
 );
+// A replacement that matches nothing would leave the served worker unchanged and the test meaningless.
+function replaceOnce(source: string, pattern: string | RegExp, replacement: string) {
+  const next = source.replace(pattern, replacement);
+  if (next === source) throw new Error(`sw.js has nothing matching ${pattern}`);
+  return next;
+}
+
 // After POST /next-release on the control port, the server answers as the next build would: sw.js
 // names another cache, and the shell carries a release mark, so the two releases' shells differ.
 // Everything the worker installs is this build's files, so the release it stands for is complete.
@@ -398,16 +405,18 @@ app.addHook("onRequest", async (req, reply) => {
   if (path === "/sw.js") {
     let source = readFileSync("dist/client/sw.js", "utf8");
     if (nextRelease !== "none")
-      source = source.replace(
-        "const CACHE = 'agent-interface-",
-        "const CACHE = 'agent-interface-next-",
+      source = replaceOnce(
+        source,
+        /const CACHE = (['"])agent-interface-/,
+        "const CACHE = $1agent-interface-next-",
       );
     source += `\nself.addEventListener("message", event => {
       if (event.data?.type === "TEST_OPEN_CHAT") event.waitUntil(openChat({ data: { url: event.data.url } }).then(() => event.ports[0].postMessage(true)));
     });`;
     // A file the release lists but the server lacks: the server answers it with the shell, which install refuses.
     if (nextRelease === "broken")
-      source = source.replace(
+      source = replaceOnce(
+        source,
         "const INSTALL_FILES = [",
         'const INSTALL_FILES = ["/assets/missing-AAAAAAAA.js",',
       );
