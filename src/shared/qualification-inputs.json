@@ -137,7 +137,6 @@
   "src/shared/message-origin.ts",
   "src/shared/model-name.ts",
   "src/shared/plain-text.ts",
-  "src/shared/primitive-text.ts",
   "src/shared/progress-line-instructions.json",
   "src/shared/qualification-inputs.json",
   "src/shared/recommended.ts",
