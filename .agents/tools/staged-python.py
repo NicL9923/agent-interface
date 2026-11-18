@@ -13,7 +13,14 @@ try:
         ruff = find_ruff(root, cache_dir())
         for mode in ("format", "check"):
             subprocess.run(
-                [ruff, mode, "--config", str(root / "ruff.toml"), *sys.argv[1:]],
+                [
+                    ruff,
+                    mode,
+                    "--config",
+                    str(root / "ruff.toml"),
+                    "--force-exclude",
+                    *sys.argv[1:],
+                ],
                 check=True,
             )
 except (Refusal, OSError, subprocess.CalledProcessError) as error:

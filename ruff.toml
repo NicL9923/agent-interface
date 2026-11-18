@@ -2,6 +2,15 @@
 # the Python job with a pinned ruff version; run `npm run lint:py` locally.
 target-version = "py314"
 
+[format]
+# Files whose exact bytes a host or receipt pins. Reformatting them breaks a deployed check.
+exclude = [
+  # The recovery configuration pins this file's SHA256 as deployFunctionsSha256.
+  ".agents/tools/deploy_common.py",
+  # Installed qualification receipts record this helper's SHA256 as helperSha256 and refuse a changed copy.
+  "scripts/hermes-qualified-python.py",
+]
+
 [lint]
 # F: pyflakes (undefined names, unused imports and variables).
 # E9: syntax and I/O errors. B: bugbear, for bug-prone patterns.

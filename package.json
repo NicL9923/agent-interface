@@ -21,8 +21,8 @@
     "doctor": "tsx scripts/setup.ts --check",
     "prepare": "node scripts/install-hooks.mjs",
     "verify:ci": "node scripts/check-parallel.mjs",
-    "format": "oxfmt --write --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --write --log-level warn \"**/*.{css,json,md,yml,yaml}\"",
-    "format:check": "oxfmt --check --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --check \"**/*.{css,json,md,yml,yaml}\""
+    "format": "python3 .agents/tools/format-python.py --write && oxfmt --write --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --write --log-level warn \"**/*.{css,json,md,yml,yaml}\"",
+    "format:check": "python3 .agents/tools/format-python.py --check && oxfmt --check --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --check \"**/*.{css,json,md,yml,yaml}\""
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
