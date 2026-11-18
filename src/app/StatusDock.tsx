@@ -24,7 +24,7 @@ export function StatusDock({ items }: { items: readonly DockItem[] }) {
 }
 
 /** Waiting approvals, questions and secure requests in the open chat. */
-export function DecisionsNotice({ count, onReview, disconnected = false }: { count: number; onReview(): void; disconnected?: boolean }) {
+export function DecisionsNotice({ count, onReview, disconnected = false }: { count: number; onReview: () => void; disconnected?: boolean }) {
   return <div className="dock-row dock-decisions-row">
     <Icon name="bell" size={17} />
     <span><strong>{count === 1 ? "1 decision waiting" : `${count} decisions waiting`}</strong></span>

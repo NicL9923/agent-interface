@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyMock } from "./helpers/mock-of";
 import { ApiError } from "../src/client-api";
 import { talkLive } from "../src/app/talk-live";
 import { useTalk, type Talk } from "../src/app/use-talk";
@@ -39,7 +40,7 @@ class FakePeer {
   setLocalDescription = vi.fn(async () => {}); setRemoteDescription = vi.fn(async () => {});
   constructor() { peers.push(this); }
 }
-let stopTrack: ReturnType<typeof vi.fn>, getUserMedia: ReturnType<typeof vi.fn>, openai: ReturnType<typeof vi.fn>;
+let stopTrack: ReturnType<typeof vi.fn>, getUserMedia: AnyMock, openai: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   write.mockReset(); players.length = 0; peers.length = 0;
   stopTrack = vi.fn();

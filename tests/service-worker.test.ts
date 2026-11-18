@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import type { AnyMock } from "./helpers/mock-of";
 import { isHashedAsset } from '../src/server/static-cache';
+import { byText } from "./helpers/sort";
 
 const INSTALL = ['/index.html', '/assets/app-a1234567.js', '/icon-192.png', '/assets/vendor.js'];
 const WARM = ['/assets/panel-b1234567.js', '/assets/panel-c1234567.css'];
@@ -26,7 +28,7 @@ class FakeMessageChannel {
 type Port = FakeMessageChannel['port2'];
 // An open window of the app. `controlled` says whether this worker controls it; `answers` whether its page
 // says it opened what it was asked to at once. A page that does not can still answer later on `ports`.
-type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> };
+type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: AnyMock; navigate: ReturnType<typeof vi.fn> };
 let windowIds = 0;
 const openWindowOf = ({ url = 'https://app.example/?bot=home', controlled = true, answers = true, focused = false } = {}): Window => {
   const client: Window = {
@@ -54,7 +56,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   // `holdShows`, each stays on its way until the test calls releaseShows, or releaseShow for one of
   // them, which can also refuse it as Chromium does when it cannot store the notification.
   const shown: Shown[] = [];
-  const onTheirWay: { title: string; resolve(): void; reject(error: Error): void }[] = [];
+  const onTheirWay: { title: string; resolve: () => void; reject: (error: Error) => void }[] = [];
   const releaseShows = () => { for (const { resolve } of onTheirWay.splice(0)) resolve(); };
   const releaseShow = (title: string, { refuse = false } = {}) => {
     const index = onTheirWay.findIndex(each => each.title === title);
@@ -140,7 +142,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
       return globalThis.crypto.subtle.digest(algorithm, bytes);
     } } },
     // Read at call time, so a test's fake timers apply inside the worker too.
-    setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
+    setTimeout: (callback: () => void, delay?: number) => setTimeout(callback, delay),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   };
   vm.runInNewContext(script(), context);
@@ -167,13 +169,13 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   };
   // A page's word on which account is signed in, or null after a sign-out. Resolves once the worker kept it.
   const signedIn = (user: string | null) => {
-    let waited: Promise<unknown> | undefined;
+    let waited: Promise<unknown> = Promise.resolve();
     handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
   // A page's app badge, with the port it listens on for the worker's answer. Resolves once the worker ended the step.
   const pageBadge = (user: unknown, count: unknown, answer?: Port) => {
-    let waited: Promise<unknown> | undefined;
+    let waited: Promise<unknown> = Promise.resolve();
     handlers.message({ data: { type: 'BADGE', user, count }, ports: answer ? [answer] : [], waitUntil: (value: Promise<unknown>) => { waited = value; } });
     return waited;
   };
@@ -199,7 +201,7 @@ describe('service worker privacy and return path', () => {
   it('installs only the app shell and the entry code, leaving lazy and admin-only code to later', async () => {
     const { install, fetch, stores } = worker();
     await install();
-    expect(fetch.mock.calls.map(([path]) => path).sort()).toEqual([...INSTALL].sort());
+    expect(fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...INSTALL].sort());
     const kept = [...stores.get('agent-interface-test')!.keys()];
     expect(kept.sort()).toEqual([...INSTALL].sort());
   });
@@ -399,7 +401,7 @@ describe('service worker badge and approval actions', () => {
 describe('service worker release updates', () => {
   const older = (entries: Record<string, Response>) => ({ older: { 'agent-interface-previous': entries } });
   const current = (sw: ReturnType<typeof worker>) => sw.stores.get('agent-interface-test')!;
-  const fetched = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.map(([path]) => path).sort();
+  const fetched = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.map(([path]) => path).sort(byText);
 
   it('copies a hashed file the last release already holds instead of fetching it', async () => {
     const sw = worker(older({ '/assets/app-a1234567.js': js('old body'), '/assets/panel-b1234567.js': js() }));
@@ -449,7 +451,7 @@ describe('service worker release updates', () => {
     let installed: Promise<unknown> | undefined;
     handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });
     await installed;
-    expect(fetch.mock.calls.map(([path]) => path).sort()).toEqual([...INSTALL].sort());
+    expect(fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...INSTALL].sort());
   });
 
   it('does not warm on activation, so activation never waits on downloads or leaves them unprotected', async () => {
@@ -468,7 +470,7 @@ describe('service worker release updates', () => {
     // The browser is told to keep the worker alive for the whole download.
     expect(typeof waited?.then).toBe('function');
     await vi.waitFor(() => expect(sw.fetch).toHaveBeenCalledTimes(WARM.length));
-    expect(sw.fetch.mock.calls.map(([path]) => path).sort()).toEqual([...WARM].sort());
+    expect(sw.fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...WARM].sort());
     let settled = false;
     void waited!.then(() => { settled = true; });
     await new Promise((resolve) => setTimeout(resolve, 5));

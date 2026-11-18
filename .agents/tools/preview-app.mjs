@@ -373,7 +373,7 @@ const computerTickets = new Map();
 // PREVIEW_SIGNED_OUT=1 starts at the sign-in page; local sign-in then opens the fixture household.
 let signedIn = process.env.PREVIEW_SIGNED_OUT !== '1';
 const json = (response, data, status = 200) => { response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Content-Security-Policy': apiPolicy }); response.end(JSON.stringify(data)); };
-const server = createServer(async (request, response) => {
+const handle = async (request, response) => {
   response.setHeader('Cache-Control', 'no-store');
   const url = new URL(request.url, `http://127.0.0.1:${port}`);
   // A browser that closes mid-request must not take the fixture down.
@@ -667,7 +667,8 @@ const server = createServer(async (request, response) => {
   if (url.pathname === '/inline-ui') { response.writeHead(200, { 'Content-Type': 'text/html', 'Content-Security-Policy': inlineUiShellPolicy, 'X-Frame-Options': 'SAMEORIGIN' }); return response.end(inlineUiShell); }
   try { const file = resolve(root, '.' + url.pathname); if (!file.startsWith(root + '/') && file !== root) throw Error(); const content = url.pathname === '/' ? await fixtureHtml() : await readFile(file); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': ({ '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.html': 'text/html', '.webmanifest': 'application/manifest+json', '.m4a': 'audio/mp4' })[extname(file)] || 'text/html' }); response.end(content); }
   catch { try { const fallback = await fixtureHtml(); response.writeHead(200, { ...documentHeaders(request), 'Content-Type': 'text/html' }); response.end(fallback); } catch { response.writeHead(404); response.end('Run npm run build first.'); } }
-}).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
+};
+const server = createServer((request, response) => { void handle(request, response); }).listen(port, host, () => process.stdout.write(`Fixture-only preview: http://${host}:${port}\n`));
 
 const computerSockets = new WebSocketServer({ noServer: true });
 server.on('upgrade', (request, socket, head) => {
@@ -682,7 +683,7 @@ server.on('upgrade', (request, socket, head) => {
     output('\x1b[32mWildBots terminal preview\x1b[0m\r\nExplicit fixture. Commands are echoed, never executed.\r\n\r\npreview@fixture:~$ ');
     let line = '';
     client.on('message', bytes => {
-      let message; try { message = JSON.parse(String(bytes)); } catch { return; }
+      let message; try { message = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString() : ''); } catch { return; }
       if (message.type !== 'input' || typeof message.data !== 'string') return;
       for (const character of message.data) {
         if (character === '\x03') { line = ''; output('^C\r\npreview@fixture:~$ '); }

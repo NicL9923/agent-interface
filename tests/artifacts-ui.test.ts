@@ -2,6 +2,7 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyMock } from "./helpers/mock-of";
 import { ArtifactsButton } from "../src/components/Artifacts";
 import type { Bot, Conversation, FileRef } from "../src/shared/types";
 import { mountRoot, typeInto } from "./ui-harness";
@@ -12,7 +13,7 @@ const file = (id: string, name: string, mime = "text/plain", url?: string): File
 let container: HTMLDivElement;
 let root: Root;
 let conversation: Conversation;
-let fetchFile: ReturnType<typeof vi.fn>;
+let fetchFile: AnyMock;
 
 beforeEach(() => {
   fetchFile = vi.fn().mockImplementation(async () => new Response("Plain preview", { headers: { "Content-Type": "text/plain" } }));

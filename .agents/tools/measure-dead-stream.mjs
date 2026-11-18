@@ -21,7 +21,7 @@ const SCREENSHOT = flag("--screenshot", undefined);
 const PROXY = 4180, APP = 4173;
 
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true });
-const stop = () => { try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
+const stop = () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
 process.on("exit", stop);
 for (let tries = 0; ; tries++) {
   try { if ((await fetch(`http://127.0.0.1:${APP}/api/auth/config`)).ok) break; } catch { /* Not up yet. */ }

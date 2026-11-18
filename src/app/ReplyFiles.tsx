@@ -7,7 +7,7 @@ const icons: Record<FileKind, IconName> = { image: "image", text: "file-text", d
  * The files a reply's turn produced, as chips under it. Each opens the Artifacts panel on that file;
  * past four, the last chip opens the whole list.
  */
-export function ReplyFiles({ artifacts, onOpen }: { artifacts: Artifact[]; onOpen(fileId?: string): void }) {
+export function ReplyFiles({ artifacts, onOpen }: { artifacts: Artifact[]; onOpen: (fileId?: string) => void }) {
   const shown = artifacts.slice(0, REPLY_CHIP_LIMIT), more = artifacts.length - shown.length;
   return <div className="reply-files" role="group" aria-label="Files from this reply">
     {shown.map(({ file }) => {

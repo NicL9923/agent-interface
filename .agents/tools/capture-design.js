@@ -119,7 +119,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
       const body=req.postDataJSON() || {};
       if (!body || Array.isArray(body) || typeof body !== "object") throw Error(`Invalid Work body ${suffix}`);
       const keys=(required,optional=[])=>{
-        const actual=Object.keys(body); if(required.some(k=>!actual.includes(k)) || actual.some(k=>!required.includes(k)&&!optional.includes(k))) throw Error(`Unexpected Work keys ${method} ${suffix}: ${actual.sort()}`);
+        const actual=Object.keys(body); if(required.some(k=>!actual.includes(k)) || actual.some(k=>!required.includes(k)&&!optional.includes(k))) throw Error(`Unexpected Work keys ${method} ${suffix}: ${actual.sort().join(',')}`);
       };
       const uuid=id=>typeof id==="string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
       workSubmissions.push({mode:workMode,method,path:suffix,body:structuredClone(body)});
@@ -840,7 +840,7 @@ async (page, { outputDir = ".private/design-review", prefix = "current", screen 
         const expected={title:original.title,body:original.body,priority:original.priority,assignee:null};
         if(writes.length!==1||writes[0].method!=='PATCH'||writes[0].path!==`/tasks/${original.id}`||JSON.stringify(writes[0].body)!==JSON.stringify(expected)||!(await row.locator(':scope > summary').textContent()).includes('Unassigned'))throw Error('Editor PATCH/null assignment mismatch');
         await landingShot('edit-saved',row.locator('.automation-task-feedback'));
-        if(paths.length!==16||browserErrors.length)throw Error(`W2b expected16 clean frames, got${paths.length}: ${browserErrors}`);
+        if(paths.length!==16||browserErrors.length)throw Error(`W2b expected16 clean frames, got${paths.length}: ${browserErrors.join(',')}`);
         return {title:'Work W2b task editors AFTER',paths,geometry,workSubmissions,workChecks,browserErrors,workCase,taskGate};
       }
       if(workCase==="tasks") {

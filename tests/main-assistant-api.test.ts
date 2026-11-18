@@ -261,7 +261,7 @@ describe("check-ins", () => {
     expect(prefs().mainBotId).toBe("mom-main");
     expect(calls).not.toContain("saveBot:mom-main");
     expect((await share(true)).statusCode).toBe(200);
-    expect(calls.indexOf(`delete:${created.store.db.prepare("SELECT job_id FROM check_in_jobs").get()!.job_id}`)).toBeLessThan(calls.indexOf("saveBot:mom-main"));
+    expect(calls.indexOf(`delete:${(created.store.db.prepare("SELECT job_id FROM check_in_jobs").get() as { job_id: string }).job_id}`)).toBeLessThan(calls.indexOf("saveBot:mom-main"));
     expect(prefs().mainBotId).toBeUndefined();
     expect(prefs().checkIns?.enabled).toBe(false);
     expect(jobs).toEqual([]);
@@ -301,6 +301,16 @@ describe("check-ins", () => {
     await created.mains.reconcile();
     expect(prefs().mainBotId).toBeUndefined();
     expect(jobs).toEqual([]);
+  });
+  it("keeps a running check-in whose Hermes job lists its delivery", async () => {
+    await checkIns();
+    const [kept] = momJobs();
+    // Hermes accepts and lists `deliver` as a list of targets as well as comma-separated text.
+    jobs = jobs.map(job => job.id === kept.id ? { ...job, running: true, delivery: { deliver: ["bot-chat:mom-main"] } } : job);
+    calls = [];
+    await created.mains.reconcile();
+    expect(momJobs().map(job => job.id)).toEqual([kept.id]);
+    expect(calls.filter(call => /^(stop|delete|create|update)/.test(call))).toEqual([]);
   });
   it("finds lost and duplicate check-ins at startup and keeps only the one it made", async () => {
     await checkIns();
@@ -648,7 +658,7 @@ describe("review round three", () => {
       calls.length = 0;
       await created.mains.reconcile();
       expect(momJobs().map(row => row.id)).toEqual([job.id]);
-      expect(calls.filter(call => /^(stop|delete|create)/.test(call))).toEqual([]);
+      expect(calls.filter(call => /^(stop|delete|create|update)/.test(call))).toEqual([]);
     }
   });
 });

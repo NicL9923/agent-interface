@@ -12,7 +12,7 @@ import "./experience.css";
 
 /** Hermes counts Unicode scalars and includes its entry delimiter. Infer only known overhead. */
 export function memoryDraftSize(document: MemoryDocument, entries: MemoryEntry[]): number | undefined {
-  const lengths = (texts: string[]) => texts.reduce((sum, text) => sum + [...text].length, 0);
+  const lengths = (texts: string[]) => texts.reduce((sum, text) => sum + Array.from(text).length, 0);
   const texts = entries.map(entry => entry.text.trim());
   const textSize = lengths(texts);
   if (texts.length <= 1) return textSize;

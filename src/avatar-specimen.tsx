@@ -225,7 +225,7 @@ function Specimen() {
                 r.onload = () =>
                   setAvatar({
                     mode: "portrait",
-                    src: String(r.result),
+                    src: typeof r.result === "string" ? r.result : "",
                     origin: "uploaded",
                   });
                 r.readAsDataURL(f);

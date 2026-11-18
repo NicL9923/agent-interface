@@ -20,7 +20,7 @@ import './collaboration.css';
  * A name or choice not yet sent is unsaved work: Escape, the close button and the app's own close (the
  * browser's Back) ask before discarding it, as an edited sheet does. Cancel says so itself and does not ask.
  */
-export function GroupCreate({ bootstrap, canSend, closer, onClose, onCreated }: { bootstrap: Bootstrap; canSend: boolean; closer?: RefObject<SheetClose | null>; onClose(): void; onCreated(room: GroupRoom): void }) {
+export function GroupCreate({ bootstrap, canSend, closer, onClose, onCreated }: { bootstrap: Bootstrap; canSend: boolean; closer?: RefObject<SheetClose | null>; onClose: () => void; onCreated: (room: GroupRoom) => void }) {
   const createKey = groupCreateKey(bootstrap.user.id);
   const action = useAction();
   const { busy, error } = action;

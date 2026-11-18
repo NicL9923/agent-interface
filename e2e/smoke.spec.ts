@@ -210,6 +210,7 @@ test.describe("a returning member's home", () => {
         await signIn(page);
         await expect.poll(() => page.evaluate(() => localStorage.getItem("agent-interface:roster"))).not.toBeNull();
         await page.evaluate(source => {
+          // oxlint-disable-next-line typescript/no-implied-eval -- the test runs a function it serialised from the page build, which is the point
           const edit = new Function("saved", `return (${source})(saved)`) as (saved: unknown) => unknown;
           localStorage.setItem("agent-interface:roster", JSON.stringify(edit(JSON.parse(localStorage.getItem("agent-interface:roster")!))));
         }, change.toString());

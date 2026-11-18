@@ -36,8 +36,8 @@ async function saveDraft(options: {
   draft: Draft;
   setDraft: SetDraft;
   /** False once the identity changed, so nothing is written for the wrong person. */
-  live(): boolean;
-  shown(): boolean;
+  live: () => boolean;
+  shown: () => boolean;
   /** Lets the open draft's persistence effect check the rule again. */
   settle?(): void;
   keepalive?: boolean;
@@ -96,7 +96,7 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   botId: string;
   userId?: string;
   identityEpoch: Epoch;
-  setError(update: string | ((previous: string) => string)): void;
+  setError: (update: string | ((previous: string) => string)) => void;
 }) {
   const [draft, setDraftState] = useState<Draft>({ text: "", attachments: [] });
   // A change that leaves the copy unsaved with new content is a local edit and gets a new sequence.

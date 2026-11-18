@@ -209,7 +209,9 @@ async function nativeSetup(method, params) {
     socket.close();
   }
 }
-let botId, routineId;
+let botId;
+/** @type {string | undefined} */
+let routineId;
 try {
   await check("authAndCapabilities", async () => {
     await login("one");

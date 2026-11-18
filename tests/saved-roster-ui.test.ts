@@ -11,6 +11,7 @@ import { defaultPreferences, type Bootstrap, type Conversation } from "../src/sh
 import { FakeEventSource } from "./fake-event-source";
 import { browserLocks } from "./helpers/web-locks";
 import { advance, button, mountRoot, stubMatchMedia } from "./ui-harness";
+import { mockOf } from "./helpers/mock-of";
 
 // The whole app, through the real client API, against a fake server at fetch; browser storage is
 // jsdom's. Bootstrap and the group catalog stay open until a test answers them, so a test sees what
@@ -254,7 +255,7 @@ describe("the home this device saved", () => {
 
   it("is not saved, and nothing breaks, when storage is full", async () => {
     store(signInHintKey, hintFor("one"));
-    const setItem = Storage.prototype.setItem;
+    const setItem = Reflect.get(Storage.prototype, "setItem") as Storage["setItem"];
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
       if (key === savedRosterKey) throw new DOMException("Full", "QuotaExceededError");
       setItem.call(this, key, value);
@@ -670,7 +671,7 @@ describe("signing out from the saved home when the app cannot be reached", () =>
       signedInAsOne();
       await open();
       await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
-      const setItem = Storage.prototype.setItem;
+      const setItem = Reflect.get(Storage.prototype, "setItem") as Storage["setItem"];
       vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
         if (key === authEpochKey && value.includes('"logout":true')) throw new DOMException("Full", "QuotaExceededError");
         setItem.call(this, key, value);
@@ -769,7 +770,7 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     await open();
     await answer("GET /bootstrap?roster=lean", 503, { error: "Hermes is restarting" });
     const before = localStorage.getItem(authEpochKey);
-    const setItem = Storage.prototype.setItem;
+    const setItem = Reflect.get(Storage.prototype, "setItem") as Storage["setItem"];
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
       if (key === authEpochKey && value.includes('"logout":true')) return write();
       setItem.call(this, key, value);
@@ -785,7 +786,7 @@ describe("signing out from the saved home when the app cannot be reached", () =>
     // The record is member one's again, so no tab waits on a change that will never settle.
     expect(localStorage.getItem(authEpochKey)).toBe(before);
     // Once storage keeps it, the same button signs out.
-    vi.mocked(Storage.prototype.setItem).mockRestore();
+    mockOf(Storage.prototype, "setItem").mockRestore();
     await act(async () => button("Sign out of this device").click());
     await advance(0);
     expect(button("Enter local workspace")).toBeDefined();

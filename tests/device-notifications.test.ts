@@ -7,6 +7,7 @@ import { useDeviceNotifications } from "../src/components/use-device-notificatio
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { deviceIdPattern } from "../src/shared/device-activity";
+import { mockOf, type AnyMock } from "./helpers/mock-of";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(
   { write: vi.fn(), ApiError: (await original<typeof import("../src/client-api")>()).ApiError }));
@@ -15,8 +16,8 @@ let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
 let registered: boolean;
 let permission: NotificationPermission;
-let requestPermission: ReturnType<typeof vi.fn>;
-let unsubscribe: ReturnType<typeof vi.fn>;
+let requestPermission: AnyMock;
+let unsubscribe: AnyMock;
 let subscribe: ReturnType<typeof vi.fn>;
 let worker: ServiceWorkerRegistration;
 const endpoint = "https://push.example.invalid/device";
@@ -237,7 +238,7 @@ it("offers another account its own invitation when browser permission was alread
 it("leaves checking after Enable supersedes a refresh and then fails", async () => {
   await render();
   let finishRead!: (subscription: PushSubscription | null) => void;
-  vi.mocked(worker.pushManager.getSubscription).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  mockOf(worker.pushManager, "getSubscription").mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
   let refresh!: Promise<void>;
   await act(async () => { refresh = notifications.refresh(); });
   expect(notifications.checking).toBe(true);

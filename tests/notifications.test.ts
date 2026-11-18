@@ -7,6 +7,7 @@ import { loadConfig } from "../src/server/config.js";
 import * as apns from "../src/server/apns.js";
 import type { RuntimeEvent } from "../src/shared/types.js";
 import { fakeRuntime } from "./helpers/server.js";
+import { byText, byTuple } from "./helpers/sort";
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => { resolve = done; });
@@ -551,7 +552,7 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
     // One batched send per endpoint; only the dead endpoint is pruned, and only on 404/410.
     expect(sender).toHaveBeenCalledTimes(2);
     expect(sender.mock.calls.map(call => call[0].endpoint).sort()).toEqual([endpoint, healthy].sort());
-    expect(store.subscriptions("one").map(item => item.endpoint).sort()).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
+    expect(store.subscriptions("one").map(item => item.endpoint).sort(byText)).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
     for (const id of ["first-push", "second-push"]) {
       expect(store.delivered(id, healthy)).toBe(true);
       // A dead endpoint is recorded apart, so it never reads as having shown the notification.
@@ -577,7 +578,7 @@ it("sends nothing of one member to an endpoint another member has taken over, an
   const sender = vi.fn(async (subscription: { endpoint: string }, payload: string) => { sent.push([subscription.endpoint, JSON.parse(payload).tag]); });
   try {
     await new BackgroundWorker(store, offline, household(), sender).tick();
-    expect(sent.sort()).toEqual([[elsewhere, "for-one"], [shared, "for-two"]]);
+    expect(sent.sort(byTuple)).toEqual([[elsewhere, "for-one"], [shared, "for-two"]]);
     expect(outboxRow(store, "for-one")?.state).toBe("delivered");
     expect(outboxRow(store, "for-two")?.state).toBe("delivered");
   } finally { store.close(); }

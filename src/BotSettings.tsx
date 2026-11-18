@@ -764,7 +764,7 @@ function BehaviorFields({ form, setForm, busy, profile, bootstrap, onModelChange
 }
 
 function DeleteBot({ bot, busy, supported, remove }: {
-  bot: Bot; busy: boolean; supported: boolean; remove(): void;
+  bot: Bot; busy: boolean; supported: boolean; remove: () => void;
 }) {
   const [confirm, setConfirm] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);

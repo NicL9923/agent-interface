@@ -143,8 +143,8 @@ export async function distribute(api, buildNumber, version, expectedTesters) {
   if (!group) group = (await api('POST', '/betaGroups', { data: { type: 'betaGroups', attributes: { name: 'Household', isInternalGroup: true, hasAccessToAllBuilds: false }, relationships: { app: { data: { type: 'apps', id: selectedApp.id } } } } })).data;
   if (group.attributes.hasAccessToAllBuilds !== false) throw new Error('Household must use explicit build distribution, without automatic access to all uploads');
   const testers = await all(api, `/betaTesters?filter[betaGroups]=${group.id}&limit=200`);
-  const actual = testers.map(tester => tester.attributes.email.toLowerCase()).sort();
-  if (JSON.stringify(actual) !== JSON.stringify(expectedTesters.map(email => email.toLowerCase()).sort())) throw new Error('The internal group must contain exactly the two configured household testers before distribution');
+  const actual = testers.map(tester => tester.attributes.email.toLowerCase()).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (JSON.stringify(actual) !== JSON.stringify(expectedTesters.map(email => email.toLowerCase()).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))) throw new Error('The internal group must contain exactly the two configured household testers before distribution');
   const before = (await api('GET', `/builds/${selected.id}/buildBetaDetail`)).data.attributes;
   if (['PROCESSING', 'IN_EXPORT_COMPLIANCE_REVIEW'].includes(before.internalBuildState)) throw new AppleNotReady(`Build ${buildNumber} is not ready for internal testing yet: ${before.internalBuildState}.`);
   if (!['READY_FOR_BETA_TESTING', 'IN_BETA_TESTING'].includes(before.internalBuildState)) throw new Error(`Build is not ready for internal distribution: ${before.internalBuildState}`);

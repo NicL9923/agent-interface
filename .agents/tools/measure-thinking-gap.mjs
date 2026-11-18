@@ -23,7 +23,7 @@ const base = `http://127.0.0.1:${port}`, control = `http://127.0.0.1:${port + 1}
 // A server already there would be another worktree's build, measured by mistake.
 if (await fetch(`${base}/api/auth/config`).then(() => true, () => false)) throw new Error(`Port ${port} is taken; set E2E_PORT.`);
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
-const stop = () => { try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
+const stop = () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
 process.on("exit", stop);
 for (let tries = 0; ; tries++) {
   try { if ((await fetch(`${base}/api/auth/config`)).ok) break; } catch { /* Not up yet. */ }

@@ -36,14 +36,14 @@ export function BotDetails({ boot, bot, avatarState, conversation, connectionLos
   connectionLost: boolean;
   /** Opens with the new section field ready, as from the home menu. */
   startNewSection?: boolean;
-  editPreferences(edit: PreferenceEdit): Promise<void>;
+  editPreferences: (edit: PreferenceEdit) => Promise<void>;
   /** Makes this assistant the main one, or clears it with null; rejects with the reason it couldn't. */
-  onMain?(botId: string | null): Promise<Preferences>;
-  onCheckIns?(change: Partial<CheckInSettings>): Promise<Preferences>;
-  onSettings(bot: Bot): void;
+  onMain?: (botId: string | null) => Promise<Preferences>;
+  onCheckIns?: (change: Partial<CheckInSettings>) => Promise<Preferences>;
+  onSettings: (bot: Bot) => void;
   /** Opens this assistant's chat with Find in chat ready. */
-  onFind(botId: string): void;
-  onClose(): void;
+  onFind: (botId: string) => void;
+  onClose: () => void;
 }) {
   const titleId = useId();
   const [prefs, commit] = usePreferenceEdits(boot.preferences, editPreferences);

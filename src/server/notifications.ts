@@ -125,9 +125,9 @@ export class BackgroundWorker {
   }
   start() {
     if (this.timer || this.stopped) return;
-    this.timer = setInterval(() => { this.schedule(); }, 5000);
+    this.timer = setInterval(() => { void this.schedule(); }, 5000);
     this.timer.unref();
-    this.schedule();
+    void this.schedule();
   }
   stop(): Promise<void> {
     this.stopped = true;

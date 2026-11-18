@@ -17,7 +17,7 @@ async function collect(directory) {
   }
 }
 await collect(output);
-files.sort();
+files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 const hash = createHash('sha256');
 for (const file of files) {
   hash.update(relative(output, file));

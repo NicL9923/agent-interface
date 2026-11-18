@@ -293,7 +293,7 @@ function shown(value: FormValue | undefined) {
 }
 
 function FieldInput({ id, field, value, problem, disabled, onChange }: {
-  id: string; field: FormField; value: FormValue | undefined; problem?: string; disabled: boolean; onChange(value: FormValue): void;
+  id: string; field: FormField; value: FormValue | undefined; problem?: string; disabled: boolean; onChange: (value: FormValue) => void;
 }) {
   const help = field.help ? `${id}-help` : undefined, error = problem ? `${id}-error` : undefined;
   const described = [help, error].filter(Boolean).join(" ") || undefined;

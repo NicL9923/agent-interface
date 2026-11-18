@@ -7,6 +7,7 @@ import { useReplySpeech } from "../src/app/use-reply-speech";
 import { MAX_SPOKEN_TEXT, STOP_SPEECH } from "../src/shared/voice";
 import type { Message } from "../src/shared/types";
 import { mountRoot } from "./ui-harness";
+import { mockOf } from "./helpers/mock-of";
 
 const requestApi = vi.hoisted(() => vi.fn());
 vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest({ api: requestApi }));
@@ -56,7 +57,7 @@ it("speaks the chosen reply, reports speaking only during playback and stops it"
   expect(button("a", "Stop speaking")).toBeTruthy();
   await press("a", "Stop speaking");
   expect(players[0]!.pause).toHaveBeenCalled();
-  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:spoken");
+  expect(mockOf(URL, "revokeObjectURL")).toHaveBeenCalledWith("blob:spoken");
   expect(button("a", "Listen to reply")).toBeTruthy();
 });
 it("plays one reply at a time across the transcript, in any reply", async () => {

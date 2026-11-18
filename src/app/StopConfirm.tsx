@@ -4,7 +4,7 @@ import { Dialog } from "../components/ui/dialog";
 import "./shell.css";
 
 /** Asks before Cmd+. stops an assistant's work, as the native app does. */
-export function StopConfirm({ name, renewed = false, onStop, onClose }: { name: string; renewed?: boolean; onStop(): void; onClose(): void }) {
+export function StopConfirm({ name, renewed = false, onStop, onClose }: { name: string; renewed?: boolean; onStop: () => void; onClose: () => void }) {
   const titleId = useId(), detailId = useId();
   return <Dialog className="confirm-dialog" role="alertdialog" aria-labelledby={titleId} aria-describedby={detailId}
     initialFocus="[data-confirm-default]" onCancel={onClose} onClose={onClose}>

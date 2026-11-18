@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { authEpochKey } from "../src/app/storage";
 import { browserLocks } from "./helpers/web-locks";
+import { bodyText } from "./helpers/wire-text";
 
 type Tab = { change: typeof import("../src/app/account-change"); epoch: typeof import("../src/app/account-epoch"); api: typeof import("../src/client-api") };
 async function tab(): Promise<Tab> {
@@ -59,7 +60,7 @@ it("serializes the cookie-changing sign-ins through settlement across tabs", asy
   const calls: string[] = [];
   vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
     if (!init.body) return json({ user: { id: cookie } });
-    const user = JSON.parse(String(init.body)).user as string;
+    const user = JSON.parse(bodyText(init.body)).user as string;
     calls.push(user);
     if (user === "a") await gate.promise;
     cookie = user;

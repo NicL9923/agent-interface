@@ -35,7 +35,7 @@ export function useToast(owner: string | undefined) {
   return { toast: shown as ToastValue | null, show, dismiss, undo };
 }
 
-export function Toast({ toast, onDismiss, onUndo }: { toast: ToastValue | null; onDismiss(): void; onUndo(): void }) {
+export function Toast({ toast, onDismiss, onUndo }: { toast: ToastValue | null; onDismiss: () => void; onUndo: () => void }) {
   const [paused, setPaused] = useState(false);
   const hovered = useRef(false), focused = useRef(false);
   const settle = () => setPaused(hovered.current || focused.current);

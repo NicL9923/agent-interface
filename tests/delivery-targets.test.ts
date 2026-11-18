@@ -82,7 +82,7 @@ describe("Python's str.strip(), which Hermes trims targets with", () => {
     //   python3 -c "import sys; print(''.join('\\u%04x' % ord(c) for c in map(chr, range(sys.maxunicode + 1)) if c.isspace()))"
     // which prints these 29 characters.
     const python = '\u0009\u000a\u000b\u000c\u000d\u001c\u001d\u001e\u001f \u0085                 　';
-    expect([...PYTHON_WHITESPACE].sort()).toEqual([...python].sort());
+    expect(Array.from(PYTHON_WHITESPACE).sort()).toEqual(Array.from(python).sort());
     for (const space of python) expect(strip(`${space}x${space}`)).toBe('x');
     // JavaScript's trim() strips U+FEFF, which Python keeps.
     expect(strip('﻿x')).toBe('﻿x');

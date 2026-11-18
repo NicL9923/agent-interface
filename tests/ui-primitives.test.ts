@@ -9,6 +9,7 @@ import { Input } from "../src/components/ui/input";
 import { cn } from "../src/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../src/components/ui/popover";
 import { mountRoot } from "./ui-harness";
+import { mockOf } from "./helpers/mock-of";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -81,7 +82,7 @@ it("does not report a stale native close event after StrictMode reopens", async 
 
 // The top layer stacks dialogs in the order they open, and React runs a child's effect before its parent's.
 it("opens a dialog nested in another after it when both mount together, and focuses the inner one last", async () => {
-  const opened = () => vi.mocked(HTMLDialogElement.prototype.showModal).mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"));
+  const opened = () => mockOf(HTMLDialogElement.prototype, "showModal").mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"));
   await act(async () => root.render(h(Dialog, { "aria-label": "outer", initialFocus: "#outer-field" },
     h(Input, { id: "outer-field" }),
     h(Dialog, { "aria-label": "inner", initialFocus: "#inner-field" }, h(Input, { id: "inner-field" })))));
@@ -92,18 +93,18 @@ it("opens a dialog nested in another after it when both mount together, and focu
 it("opens a dialog nested in an outer one that is already open at once", async () => {
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" })));
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
-  expect(vi.mocked(HTMLDialogElement.prototype.showModal).mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"))).toEqual(["outer", "inner"]);
+  expect(mockOf(HTMLDialogElement.prototype, "showModal").mock.contexts.map(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label"))).toEqual(["outer", "inner"]);
 });
 
 it("keeps a nested dialog closed while its outer one is closed", async () => {
   // Only the outer dialog refuses to open, as a sheet whose showModal fails would.
-  vi.mocked(HTMLDialogElement.prototype.showModal).mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
+  mockOf(HTMLDialogElement.prototype, "showModal").mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
   expect(container.querySelector<HTMLDialogElement>('dialog[aria-label="inner"]')!.open).toBe(false);
 });
 
 it("never opens a nested dialog that unmounted while it waited for its outer one", async () => {
-  const showModal = vi.mocked(HTMLDialogElement.prototype.showModal);
+  const showModal = mockOf(HTMLDialogElement.prototype, "showModal");
   showModal.mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" })));
@@ -114,7 +115,7 @@ it("never opens a nested dialog that unmounted while it waited for its outer one
 
 /** Both dialogs mounted, the outer one left closed by a `showModal` that does nothing, so a test opens it by hand. */
 async function mountNestedUnderClosedOuter() {
-  const showModal = vi.mocked(HTMLDialogElement.prototype.showModal);
+  const showModal = mockOf(HTMLDialogElement.prototype, "showModal");
   showModal.mockImplementation(function (this: HTMLDialogElement) { if (this.getAttribute("aria-label") === "inner") this.open = true; });
   await act(async () => root.render(h(Dialog, { "aria-label": "outer" }, h(Dialog, { "aria-label": "inner" }))));
   const inner = () => showModal.mock.contexts.filter(dialog => (dialog as HTMLDialogElement).getAttribute("aria-label") === "inner").length;

@@ -324,7 +324,7 @@ export function routeUrl<K extends ApiRoute>(route: K, params: ApiParams<K>, que
     return encodeURIComponent(value);
   });
   const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(query ?? {})) if (value !== undefined) search.set(key, String(value));
+  for (const [key, value] of Object.entries((query ?? {}) as Record<string, string | number | undefined>)) if (value !== undefined) search.set(key, String(value));
   const text = search.toString();
   return text ? `${path}?${text}` : path;
 }

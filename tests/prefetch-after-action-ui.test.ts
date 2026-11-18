@@ -11,6 +11,7 @@ import { TalkPanel } from "../src/components/TalkPanel";
 import type { AutomationOverview } from "../src/shared/automation";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, button, mountRoot, type Mount } from "./ui-harness";
+import { bodyText } from "./helpers/wire-text";
 
 // Actions that submit work to a chat from outside its composer. The chat opens from the read its
 // link started as the page loaded, the person acts, leaves and comes back inside five seconds. The
@@ -105,7 +106,7 @@ const actions: [string, () => Promise<void>][] = [
     const asked = JSON.stringify({ type: "response.function_call_arguments.done", name: "ask_assistant", call_id: "c1", arguments: JSON.stringify({ request: "Shut the gate" }) });
     await act(async () => peers[0]!.channel.onmessage!({ data: asked }));
     await advance(0);
-    expect(vi.mocked(fetch).mock.calls.some(([url, init]) => url === "/api/bots/ranch/talk/ask" && JSON.parse(String(init?.body)).request === "Shut the gate")).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([url, init]) => url === "/api/bots/ranch/talk/ask" && JSON.parse(bodyText(init?.body)).request === "Shut the gate")).toBe(true);
     await act(async () => talk.end());
   }],
   ["a goal resumed from the automation controls", async () => {
@@ -113,7 +114,7 @@ const actions: [string, () => Promise<void>][] = [
     routes["GET /api/routines"] = () => [];
     let resumed: unknown;
     routes["POST /api/bots/ranch/automation/goal/resume"] = init => {
-      resumed = JSON.parse(String(init.body));
+      resumed = JSON.parse(bodyText(init.body));
       return { ...overview(), goals: { ...overview().goals, goal: { ...overview().goals.goal!, status: "active" } } };
     };
     const panel = mountRoot();

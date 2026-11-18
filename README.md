@@ -945,7 +945,7 @@ python3 .agents/tools/source-state.py
 
 `npm test` runs the application tests with Vitest. It refuses to start on a Node
 outside the `engines` range in `package.json`, and `.npmrc` makes `npm ci` refuse too:
-older Node 24 releases hang the event-stream tests. `npm run lint` runs oxlint over the
+older Node 24 releases hang the event-stream tests. `npm run lint` runs type-aware oxlint (engine: tsrs-lint) over the
 TypeScript and JavaScript, with warnings failing the run. `npm run test:py` runs every
 Python test file it discovers in `tests/*_test.py`, `scripts/*-test.py` and
 `scripts/spike/*_test.py`, one subprocess each, and fails if a test-looking file

@@ -18,7 +18,7 @@ const width = Number(process.env.WIDTH) || 900;
 const schemes = (process.env.SCHEMES || "light,dark").split(",");
 const motion = process.env.MOTION || "reduce";
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
-process.on("exit", () => { try { process.kill(-server.pid, "SIGTERM"); } catch {} });
+process.on("exit", () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch {} });
 for (let i = 0; ; i++) { try { if ((await fetch(`${api}/api/auth/config`)).ok) break; } catch {} if (i > 120) throw new Error("no server"); await sleep(250); }
 const { createServer } = await import("vite");
 // The server refuses a write whose Origin is not its own, so the proxy presents the app server's origin.
@@ -44,6 +44,7 @@ const snapshot = () => {
 };
 
 /** Each screen: how to reach it from a signed-in home, and how to leave it. */
+/** @type {[string, (page: import("playwright").Page) => Promise<void>][]} */
 const screens = [
   ["home", async () => {}],
   ["bot menu", async page => { await page.getByRole("region", { name: "Your assistants" }).getByRole("button", { name: /Trail Cook/ }).click({ button: "right" }); await page.locator(".bot-menu").waitFor(); }],

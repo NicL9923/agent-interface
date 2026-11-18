@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MAX_PORTRAIT_INPUT_BYTES, PORTRAIT_INPUT_ERROR, preparePortrait } from "../src/portrait-upload";
+import { mockOf } from "./helpers/mock-of";
 
 const drawImage = vi.fn();
 let blob: Blob | null;
@@ -32,22 +33,22 @@ it("accepts 15 MB and resizes before uploading a PNG under the storage limit", a
   expect(drawImage).toHaveBeenCalled();
   expect(file.type).toBe("image/png");
   expect(file.size).toBe(blob!.size);
-  expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:portrait");
+  expect(mockOf(URL, "revokeObjectURL")).toHaveBeenCalledWith("blob:portrait");
 });
 it.each([
   new File([new Uint8Array(MAX_PORTRAIT_INPUT_BYTES + 1)], "large.png", { type: "image/png" }),
   new File(["text"], "file.txt", { type: "text/plain" }),
 ])("rejects invalid input before decoding", async file => {
   await expect(preparePortrait(file)).rejects.toThrow(PORTRAIT_INPUT_ERROR);
-  expect(URL.createObjectURL).not.toHaveBeenCalled();
+  expect(mockOf(URL, "createObjectURL")).not.toHaveBeenCalled();
 });
 it("reports decode errors and releases the object URL", async () => {
   decodeFails = true;
   await expect(preparePortrait(new File(["bad"], "bad.png", { type: "image/png" }))).rejects.toThrow("couldn't be read");
-  expect(URL.revokeObjectURL).toHaveBeenCalled();
+  expect(mockOf(URL, "revokeObjectURL")).toHaveBeenCalled();
 });
 it.each([null, new Blob([new Uint8Array(2_000_001)])])("does not upload failed or oversized canvas output", async result => {
   blob = result;
   await expect(preparePortrait(new File(["image"], "image.png", { type: "image/png" }))).rejects.toThrow("couldn't be compressed");
-  expect(URL.revokeObjectURL).toHaveBeenCalled();
+  expect(mockOf(URL, "revokeObjectURL")).toHaveBeenCalled();
 });

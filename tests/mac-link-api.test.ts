@@ -8,6 +8,7 @@ import { loadConfig } from "../src/server/config.js";
 import { GRACE_MS, MacBroker, MAX_IN_FLIGHT, STALE_MS, type MacState } from "../src/server/mac-link.js";
 import { Store } from "../src/server/store.js";
 import { fakeRuntime } from "./helpers/server.js";
+import { rawDataText } from "../src/server/raw-data-text.js";
 
 const origin = "http://127.0.0.1:3000";
 const key = randomBytes(32).toString("base64url");
@@ -48,7 +49,7 @@ async function setup(env: Record<string, string> = { MAC_LINK_KEY: key }) {
     const socket = new WebSocket(`${address.replace("http", "ws")}/api/mac/link`, { headers: { authorization: `Device ${mac.deviceId}.${mac.credential}` } });
     const closing = new Promise<number>(resolve => socket.once("close", code => resolve(code)));
     const inbox: Record<string, unknown>[] = [];
-    socket.on("message", data => inbox.push(JSON.parse(data.toString())));
+    socket.on("message", data => inbox.push(JSON.parse(rawDataText(data))));
     await new Promise((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject); });
     const next = (type: string) => vi.waitFor(() => {
       const index = inbox.findIndex(message => message.type === type);

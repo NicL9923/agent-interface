@@ -13,7 +13,7 @@ import { httpError } from "./http-error.js";
 import { quietLog, type Log } from "./logging.js";
 import { serialDelivery } from "./routine-delivery.js";
 import { ownChatOnly } from "./collaboration.js";
-import { routineTargets } from "./delivery-targets.js";
+import { normalizeDeliver, routineTargets } from "./delivery-targets.js";
 import { id, timezone } from "./schemas.js";
 import type { Store } from "./store.js";
 export { scheduleMinutes };
@@ -48,7 +48,8 @@ export function signedCheckInMember(store: Store, job: Pick<Routine, "botId" | "
  * chat, a group room or a script, would take what the check-in reads to someone else.
  */
 export function managedConfig(job: Routine) {
-  const tokens = String(job.delivery?.deliver ?? "").split(",").map(part => part.trim().toLowerCase()).filter(Boolean);
+  // Hermes keeps `deliver` as text or a list; anything it would not deliver from leaves no tokens.
+  const tokens = (normalizeDeliver(job.delivery?.deliver) ?? "").split(",").map(part => part.trim().toLowerCase()).filter(Boolean);
   const failure = job.delivery?.failure_deliver;
   const empty = (value: unknown) => value === undefined || value === null || value === "" || Array.isArray(value) && value.length === 0;
   const context = job.contextFrom ?? [];
@@ -464,7 +465,7 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   runtime: Runtime;
   store: Store;
   mains: MainAssistants;
-  preferences(userId: string): Preferences;
+  preferences: (userId: string) => Preferences;
   requireCapability: RequireCapability;
 }) {
   const { runtime, store, mains, preferences, requireCapability } = collaborators;

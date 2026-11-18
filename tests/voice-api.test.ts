@@ -91,7 +91,7 @@ it("reads only stored assistant replies and delivers speech once to its requesti
   expect((await s.app.inject({ url, headers: s.first })).statusCode).toBe(404);
   const concurrentUrl = (await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).json().url;
   const concurrent = await Promise.all([s.app.inject({ url: concurrentUrl, headers: s.first }), s.app.inject({ url: concurrentUrl, headers: s.first })]);
-  expect(concurrent.map(response => response.statusCode).sort()).toEqual([200, 404]);
+  expect(concurrent.map(response => response.statusCode).sort((a, b) => a - b)).toEqual([200, 404]);
 });
 it("expires prepared audio, replaces old audio and rejects invalid provider output", async () => {
   const s = await setup(), speak = () => s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } });

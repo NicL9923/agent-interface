@@ -11,6 +11,7 @@ import { SystemTerminal } from "./terminal.js";
 import { safeError } from "./logging.js";
 import { visibleTo } from "./bot-access.js";
 import { httpError } from "./http-error.js";
+import { rawDataText } from "./raw-data-text.js";
 
 type Session = { kind: "web" | "native"; hash: string; userId: string };
 type Attachment = { session: Session; expires: number; type: "desktop" | "terminal"; native?: ComputerAttachment };
@@ -259,7 +260,7 @@ export async function installComputerRoutes(app: FastifyInstance, config: Config
         const message = z.discriminatedUnion("type", [
           z.object({type: z.literal("input"), data: z.string().max(16384).refine(value => Buffer.byteLength(value) <= 16384)}).strict(),
           z.object({type: z.literal("resize"), columns: z.number().int().min(2).max(500), rows: z.number().int().min(2).max(300)}).strict(),
-        ]).parse(JSON.parse(data.toString()));
+        ]).parse(JSON.parse(rawDataText(data)));
         if (child.stdin.writableLength > 128 * 1024) {socket.close(1013, "Terminal input is too fast"); return;}
         if (!child.stdin.write(JSON.stringify(message) + "\n") && !inputPaused) {
           inputPaused = true;

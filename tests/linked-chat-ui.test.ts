@@ -11,6 +11,7 @@ import { defaultPreferences, type Bootstrap, type Conversation } from "../src/sh
 import { quietConsoleErrors } from "./act-guard";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, button, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
+import { bodyText } from "./helpers/wire-text";
 
 // The app runs whole, through the real client API, against a fake server at fetch. A request the
 // test did not configure is recorded and refused, and the test fails on it after it ends.
@@ -101,7 +102,7 @@ beforeEach(() => {
     if (call in empty) return respond({ status: 200, body: empty[call] });
     // A send Hermes takes, and the draft saves around it.
     if (/^POST \/bots\/[^/]+\/messages$/.test(call))
-      return respond({ status: 200, body: { requestId: JSON.parse(String(init.body)).requestId, status: "accepted" } });
+      return respond({ status: 200, body: { requestId: JSON.parse(bodyText(init.body)).requestId, status: "accepted" } });
     if (/^POST \/bots\/[^/]+\/requests\/[^/]+$/.test(call)) return respond({ status: 200, body: { ok: true } });
     if (/^PUT \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: { revision: 1 } });
     if (/^GET \/bots\/[^/]+\/draft$/.test(call)) return respond({ status: 200, body: null });

@@ -18,11 +18,11 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   userId?: string;
   identityEpoch: RefObject<number>;
   draft: Draft;
-  setDraft(update: (current: Draft) => Draft): void;
+  setDraft: (update: (current: Draft) => Draft) => void;
   draftReady: boolean;
   reviewed: boolean;
   connectionLost: boolean;
-  setError(message: string): void;
+  setError: (message: string) => void;
 }) {
   const [pending, setPending] = useState<Pending | null>(null);
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);

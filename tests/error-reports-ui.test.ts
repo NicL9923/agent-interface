@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRoot } from "./ui-harness";
 import { quietConsoleErrors } from "./act-guard";
+import { bodyText } from "./helpers/wire-text";
 
 // Each test loads its own copy, so the page's dedupe and cap start empty, as on a fresh load.
 async function load(signedIn = true) {
@@ -14,7 +15,7 @@ async function load(signedIn = true) {
   return { api, reports, RootBoundary };
 }
 let fetch: ReturnType<typeof vi.fn>;
-const sent = () => fetch.mock.calls.map(([url, init]) => ({ url, headers: Object.fromEntries(new Headers((init as RequestInit).headers)), body: JSON.parse(String((init as RequestInit).body)) }));
+const sent = () => fetch.mock.calls.map(([url, init]) => ({ url, headers: Object.fromEntries(new Headers((init as RequestInit).headers)), body: JSON.parse(bodyText((init as RequestInit).body)) }));
 const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 beforeEach(() => {
   fetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));

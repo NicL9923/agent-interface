@@ -17,7 +17,7 @@ const composerKeys = (enterSends: boolean): [string, string][] => [
   ["Esc", "Leave recall and restore your draft"],
 ];
 
-export function ShortcutsDialog({ onClose }: { onClose(): void }) {
+export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   const titleId = useId();
   const enterSends = useEnterSends();
   const row = ([keys, label]: [string, string]) => <div className="shortcut-row" key={label}><dt>{label}</dt><dd><kbd>{keys}</kbd></dd></div>;

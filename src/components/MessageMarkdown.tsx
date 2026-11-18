@@ -26,7 +26,7 @@ function MessagePre({ children, node }: { children?: ReactNode; node?: { positio
   const context = useContext(ReplyContext);
   const child = Children.toArray(children)[0];
   if (!isValidElement<{ children?: ReactNode; className?: string }>(child)) return <pre>{children}</pre>;
-  const code = String(child.props.children ?? "");
+  const code = Children.toArray(child.props.children).map(part => typeof part === "string" || typeof part === "number" ? String(part) : "").join("");
   const language = child.props.className?.match(/(?:^|\s)language-(\S+)/)?.[1];
   // A streaming fence can contain valid JSON before its closing fence arrives.
   const raw = context?.text.slice(node?.position?.start.offset, node?.position?.end.offset) || "";

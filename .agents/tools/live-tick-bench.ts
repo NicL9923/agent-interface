@@ -102,7 +102,7 @@ async function serve() {
   process.send!({ base });
   // "start" grows the replies, "measure" reports the next window's cost, "stop" ends the replies.
   let growing: ReturnType<typeof grow> | undefined;
-  process.on("message", async (message: { start?: { streaming: number; from: number }; measure?: number; stop?: true }) => {
+  const onMessage = async (message: { start?: { streaming: number; from: number }; measure?: number; stop?: true }) => {
     if (message.start) {
       const { streaming, from } = message.start;
       for (let index = 0; index < streaming; index++) replies.set(`bot${index}`, filler.repeat(Math.ceil(from / filler.length) + 1).slice(0, from));
@@ -122,7 +122,8 @@ async function serve() {
       process.send!({ report });
     }
     if (message.stop) { stopGrowing(growing); replies.clear(); process.send!({ stopped: true }); }
-  });
+  };
+  process.on("message", message => { void onMessage(message); });
 }
 
 async function drive() {

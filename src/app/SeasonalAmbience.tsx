@@ -26,7 +26,7 @@ export function SeasonalAmbience({ season }: { season: Season }) {
       ["--y" as string]: `${(index * 23 + 7) % 92}%`,
       ["--size" as string]: `${10 + (index * 5) % 9}px`,
       ["--duration" as string]: `${16 + (index * 7) % 11}s`,
-      ["--delay" as string]: `${-((index * 4.3) % 16).toFixed(1)}s`,
+      ["--delay" as string]: `${-Number(((index * 4.3) % 16).toFixed(1))}s`,
       ["--sway" as string]: `${index % 2 ? 14 : -14}px`,
     } as CSSProperties}>
       <svg viewBox="0 0 24 24" fill={motif.stroke ? "none" : "currentColor"} stroke={motif.stroke ? "currentColor" : "none"} strokeWidth={1.8} strokeLinecap="round"><path d={motif.d} /></svg>

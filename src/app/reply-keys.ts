@@ -36,7 +36,7 @@ export const isLiveRow = (message: Message) => message.id.endsWith("-inflight");
  * 4. In every other case each row is keyed by its own identity and built again, as before rows were
  *    kept.
  */
-export function replyKeys(record: ReplyKeyRecord, rows: Message[]): { key(message: Message): string; record: ReplyKeyRecord } {
+export function replyKeys(record: ReplyKeyRecord, rows: Message[]): { key: (message: Message) => string; record: ReplyKeyRecord } {
   const ids = new Set(rows.map(message => message.id)), shown = new Set(record.shown);
   const handed = new Map([...record.handed].filter(([id]) => ids.has(id)));
   const added = rows.filter(message => !shown.has(message.id));

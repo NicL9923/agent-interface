@@ -15,9 +15,9 @@ import "./shell.css";
  */
 export function MainAssistantPicker({ boot, onChoose, onMakePersonal, onClose }: {
   boot: Bootstrap;
-  onChoose(botId: string): Promise<Preferences>;
-  onMakePersonal(bot: Bot): void;
-  onClose(): void;
+  onChoose: (botId: string) => Promise<Preferences>;
+  onMakePersonal: (bot: Bot) => void;
+  onClose: () => void;
 }) {
   const titleId = useId();
   const [busy, setBusy] = useState<string | null>(null);

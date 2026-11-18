@@ -559,131 +559,131 @@ export interface TurnWatcher {
 
 /** One agent harness behind the app. A refusal the person can act on is a `RuntimeRefusal` (`shared/errors.ts`). */
 export interface Runtime {
-  setRoutineEnabled?(botId: string, routineId: string, enabled: boolean): Promise<void>;
+  setRoutineEnabled?: (botId: string, routineId: string, enabled: boolean) => Promise<void>;
   /** Stops the routine's run in flight, leaving its schedule alone. Whether a run was stopped. */
-  stopRoutineRun?(botId: string, routineId: string): Promise<boolean>;
-  routineResults?(botId: string, routineId: string): Promise<RoutineResult[]>;
-  routineOutput?(botId: string, routineId: string, resultId: string): Promise<RoutineOutput>;
-  groupRequest?(input: GroupRequest): Promise<GroupResponse>;
-  transcribeVoice?(botId: string, input: { mime: string; data: Buffer }): Promise<{ text: string; provider?: string }>;
-  synthesizeVoice?(botId: string, text: string): Promise<{ data: Buffer; mime: string; provider?: string }>;
+  stopRoutineRun?: (botId: string, routineId: string) => Promise<boolean>;
+  routineResults?: (botId: string, routineId: string) => Promise<RoutineResult[]>;
+  routineOutput?: (botId: string, routineId: string, resultId: string) => Promise<RoutineOutput>;
+  groupRequest?: (input: GroupRequest) => Promise<GroupResponse>;
+  transcribeVoice?: (botId: string, input: { mime: string; data: Buffer }) => Promise<{ text: string; provider?: string }>;
+  synthesizeVoice?: (botId: string, text: string) => Promise<{ data: Buffer; mime: string; provider?: string }>;
   automationRequest?: AutomationRequester;
   experienceRequest?: ExperienceRequester;
-  vaultRequest?(input: VaultRequest): Promise<VaultResponse>;
-  computerRequest?(input: ComputerRequest): Promise<ComputerStatus | ComputerAttachment>;
-  connectComputerDisplay?(attachment: ComputerAttachment): import("ws").WebSocket;
-  inferenceSettings?(botId: string, update?: Partial<InferenceSettings>): Promise<InferenceSettings>;
-  modelOptions?(profile?: string): Promise<ModelCatalog>;
-  integrationRequest?(input: IntegrationRequest): Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
+  vaultRequest?: (input: VaultRequest) => Promise<VaultResponse>;
+  computerRequest?: (input: ComputerRequest) => Promise<ComputerStatus | ComputerAttachment>;
+  connectComputerDisplay?: (attachment: ComputerAttachment) => import("ws").WebSocket;
+  inferenceSettings?: (botId: string, update?: Partial<InferenceSettings>) => Promise<InferenceSettings>;
+  modelOptions?: (profile?: string) => Promise<ModelCatalog>;
+  integrationRequest?: (input: IntegrationRequest) => Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
   /** Continue or Not now on an assistant's connection request. Hermes checks it belongs to that profile's conversation. */
-  connectionRequest?(input: ConnectionRequestSettle): Promise<ConnectionRequestResult>;
-  status(): Promise<RuntimeStatus>;
-  reconnect?(): Promise<RuntimeStatus>;
+  connectionRequest?: (input: ConnectionRequestSettle) => Promise<ConnectionRequestResult>;
+  status: () => Promise<RuntimeStatus>;
+  reconnect?: () => Promise<RuntimeStatus>;
   /**
    * What the runtime serving this assistant supports. Without an assistant, the default runtime's: the one set clients
    * get for the whole roster, and the one a new assistant is created on.
    */
-  capabilities(botId?: string): Promise<Capabilities>;
-  canonicalSubmit?(botId?: string): Promise<boolean>;
-  listBots(): Promise<Bot[]>;
-  botDetail?(botId: string): Promise<Bot>;
-  watchRoster?(changed: () => void): () => void;
-  saveBot(input: BotInput, id?: string): Promise<Bot>;
-  deleteBot(id: string): Promise<void>;
+  capabilities: (botId?: string) => Promise<Capabilities>;
+  canonicalSubmit?: (botId?: string) => Promise<boolean>;
+  listBots: () => Promise<Bot[]>;
+  botDetail?: (botId: string) => Promise<Bot>;
+  watchRoster?: (changed: () => void) => () => void;
+  saveBot: (input: BotInput, id?: string) => Promise<Bot>;
+  deleteBot: (id: string) => Promise<void>;
   /**
    * Interrupts the assistant's session, which Hermes does for every run and every member's queued message in it. Refuses with
    * a 409 and sends nothing when no run is open, or, with `runId`, when the open run is another one.
    */
-  stop(botId: string, runId?: string): Promise<void>;
-  generatePortrait(botId: string, prompt: string): Promise<FileRef>;
-  setAvatar?(botId: string, avatar: Avatar): Promise<void>;
+  stop: (botId: string, runId?: string) => Promise<void>;
+  generatePortrait: (botId: string, prompt: string) => Promise<FileRef>;
+  setAvatar?: (botId: string, avatar: Avatar) => Promise<void>;
   /** Saves the Talk voice with the profile, beside its avatar. */
-  setVoice?(botId: string, voice: TalkVoice): Promise<void>;
+  setVoice?: (botId: string, voice: TalkVoice) => Promise<void>;
   /** A Realtime client secret on Hermes's ChatGPT sign-in, for a session the add-on completes. */
-  realtimeSession?(input: RealtimeSessionInput): Promise<TalkSession>;
-  conversation(botId: string, options?: ConversationOptions): Promise<Conversation>;
+  realtimeSession?: (input: RealtimeSessionInput) => Promise<TalkSession>;
+  conversation: (botId: string, options?: ConversationOptions) => Promise<Conversation>;
   /**
    * An inflight notice patches live state; an omitted kind means refetch. Unsubscribe with the returned function.
    * A refetch notice for a change that a turn event carries whole, such as a tool finishing, names the structural
    * version the turn read after it reaches in `turnVersion`. A stream that sends turn events may hold its notice
    * until that event goes, and send it only if none does; any other caller ignores the version.
    */
-  watch?(botId: string, changed: (kind?: "inflight", turnVersion?: string) => void): () => void;
+  watch?: (botId: string, changed: (kind?: "inflight", turnVersion?: string) => void) => () => void;
   /** The live reply, built only on what a client's conversation read stored, for `?inflight=1` and `?inflight=2`. */
-  inflight?(botId: string): Inflight | undefined;
+  inflight?: (botId: string) => Inflight | undefined;
   /**
    * The live reply with the running turn's saved messages, for `?inflight=3`, built on the latest client read
    * or turn read (see `followTurns`).
    */
-  turn?(botId: string): LiveTurn | undefined;
+  turn?: (botId: string) => LiveTurn | undefined;
   /**
    * Keeps the running turn readable for `turn` while the returned function is not called: after a change to
    * the turn's structure, the runtime reads the turn itself, at most once at a time per assistant, and calls
    * `restored` once a live reply can be built again. Watchers and `inflight` never see these reads.
    */
-  followTurns?(botId: string, restored: () => void): () => void;
+  followTurns?: (botId: string, restored: () => void) => () => void;
   /** Reports the turn events a send is timed by, in frame order. Unsubscribe with the returned function. */
-  watchTurns?(watcher: TurnWatcher): () => void;
-  submit(input: Submission): Promise<SubmissionReceipt>;
+  watchTurns?: (watcher: TurnWatcher) => () => void;
+  submit: (input: Submission) => Promise<SubmissionReceipt>;
   /** `botId` names the assistant the request was sent to, when the caller knows it. Without it, every runtime is asked. */
-  lookupSubmission(requestId: string, botId?: string): Promise<SubmissionReceipt | null>;
-  steer(input: Submission): Promise<SubmissionReceipt>;
-  answerRequest(
+  lookupSubmission: (requestId: string, botId?: string) => Promise<SubmissionReceipt | null>;
+  steer: (input: Submission) => Promise<SubmissionReceipt>;
+  answerRequest: (
     botId: string,
     id: string,
     answers: Record<string, string>,
-  ): Promise<void>;
-  approve(
+  ) => Promise<void>;
+  approve: (
     botId: string,
     approvalId: string,
     decision: "approved" | "denied",
     senderId: string,
     /** How far an approval reaches. Absent means this one command. */
     scope?: ApprovalScope,
-  ): Promise<void>;
-  upload(
+  ) => Promise<void>;
+  upload: (
     botId: string,
     input: { name: string; mime: string; data: Buffer },
-  ): Promise<FileRef>;
+  ) => Promise<FileRef>;
   /**
    * The body never yields more than maxBytes; a larger file is refused with file_too_large. `botId` is the assistant
    * the ID's signature names (see `fileBotId`), when the caller already checked it.
    */
-  download(id: string, maxBytes: number, botId?: string): Promise<DownloadedFile>;
+  download: (id: string, maxBytes: number, botId?: string) => Promise<DownloadedFile>;
   /** The assistant a file ID belongs to, only when its signature is genuine. */
-  fileBotId?(id: string): string | undefined;
-  tools(botId: string): Promise<Tool[]>;
-  setTools(botId: string, ids: string[]): Promise<void>;
-  skills(botId: string): Promise<Skill[]>;
-  setSkills(botId: string, ids: string[]): Promise<void>;
+  fileBotId?: (id: string) => string | undefined;
+  tools: (botId: string) => Promise<Tool[]>;
+  setTools: (botId: string, ids: string[]) => Promise<void>;
+  skills: (botId: string) => Promise<Skill[]>;
+  setSkills: (botId: string, ids: string[]) => Promise<void>;
   /**
    * With `botId`, only that assistant's runtime is asked. The list may still hold other assistants' routines, so a
    * caller that wants one assistant's filters by `botId`. Without it, the list is complete or the call fails: callers
    * reconcile and prune by what it leaves out.
    */
-  routines(botId?: string): Promise<Routine[]>;
-  saveRoutine(input: Omit<Routine, "id">, id?: string): Promise<Routine>;
+  routines: (botId?: string) => Promise<Routine[]>;
+  saveRoutine: (input: Omit<Routine, "id">, id?: string) => Promise<Routine>;
   /** `botId` names the assistant whose job this is: Hermes lets several hold one ID. */
-  deleteRoutine(id: string, botId: string): Promise<void>;
+  deleteRoutine: (id: string, botId: string) => Promise<void>;
   /** Events after `cursor` from one event source (see `eventSources`), the default runtime without one. */
-  discoverEvents(cursor: string, source?: string): Promise<RuntimeDiscovery>;
+  discoverEvents: (cursor: string, source?: string) => Promise<RuntimeDiscovery>;
   /**
    * Each runtime whose events `discoverEvents` reads, with a cursor of its own. Absent: only the default runtime.
    * A runtime that has this refuses, in `discoverEvents`, a source without durable events.
    */
-  eventSources?(): string[];
+  eventSources?: () => string[];
   /**
    * Who each assistant may see and reach, replacing every earlier policy. Resolves once Hermes holds
    * it, with the roster protocol Hermes enforces: 0 when this add-on has no gate, so nothing is
    * enforced. Absent when the runtime can't send rosters at all.
    */
-  delegationPolicy?(policies: DelegationPolicies): Promise<number>;
+  delegationPolicy?: (policies: DelegationPolicies) => Promise<number>;
   /**
    * Routine results Hermes still holds for delivery from this assistant's profile, each keeping the
    * destination its run had. Throws when they can't be read. Absent when the add-on can't say.
    */
-  routineDeliveries?(botId: string): Promise<{ id: string; name: string }[]>;
-  close(): Promise<void>;
+  routineDeliveries?: (botId: string) => Promise<{ id: string; name: string }[]>;
+  close: () => Promise<void>;
 }
 export type DownloadedFile = {
   name: string;

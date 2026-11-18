@@ -8,6 +8,7 @@ import { defaultPreferences, type Bootstrap, type Conversation, type Inflight, t
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, waitForUi } from "./ui-harness";
 import type { Mount } from "./ui-harness";
+import { bodyText } from "./helpers/wire-text";
 
 // The app runs whole, through the real client API, against a fake server at fetch and a fake
 // event stream. A request the test did not configure is refused, and the test fails on it.
@@ -44,7 +45,7 @@ beforeEach(() => {
   Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
   // jsdom has no layout. The Quote button measures a selection in a reply.
-  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+  if (!Reflect.has(Range.prototype, "getBoundingClientRect")) Range.prototype.getBoundingClientRect = () => new DOMRect();
   unexpected = [];
   saves = [];
   retries = [];
@@ -68,9 +69,9 @@ beforeEach(() => {
       "GET /bots/home/routine-runs": { runs: [], unavailable: [] },
     };
     if (call in empty) return respond(empty[call]);
-    if (call === "POST /saved") { saves.push((JSON.parse(String(init.body)) as { messageId: string }).messageId); return respond({}); }
+    if (call === "POST /saved") { saves.push((JSON.parse(bodyText(init.body)) as { messageId: string }).messageId); return respond({}); }
     if (call === "POST /bots/home/messages") {
-      const body = JSON.parse(String(init.body)) as { requestId: string; retryOf?: string };
+      const body = JSON.parse(bodyText(init.body)) as { requestId: string; retryOf?: string };
       if (body.retryOf) retries.push(body.retryOf);
       return respond({ requestId: body.requestId, status: "accepted", runId: "run-2" });
     }

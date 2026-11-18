@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyMock } from "./helpers/mock-of";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type { Routine, Runtime } from "../src/shared/types.js";
@@ -11,7 +12,7 @@ const base = { botId: "shared", name: "Morning", prompt: "Check the ranch", sche
 const room = (room_id: string, profiles: string[]) => ({ room_id, name: room_id, members: profiles.map(profile => ({ member_id: profile, profile, handle: profile })) });
 let created: Awaited<ReturnType<typeof createApp>>;
 let rows: Routine[];
-let save: ReturnType<typeof vi.fn>;
+let save: AnyMock;
 let catalog: GroupCatalog;
 let groupRequest: ReturnType<typeof vi.fn>;
 let saveBot: ReturnType<typeof vi.fn>;
@@ -351,7 +352,7 @@ describe("routes that name only a routine ID, when two assistants hold jobs with
     });
     const [first, second] = await Promise.all([1, 2].map(async () =>
       created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })));
-    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 404]);
+    expect([first.statusCode, second.statusCode].sort((a, b) => a - b)).toEqual([200, 404]);
     expect(deleteRoutine).toHaveBeenCalledTimes(1);
     expect(rows.map(row => row.botId)).toEqual(["diary"]);
     deleteRoutine.mockImplementation(async () => {});

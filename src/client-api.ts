@@ -469,7 +469,7 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   return { open, suspend, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
-export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?(sent: number): void; signal?: AbortSignal } = {}) {
+export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?: (sent: number) => void; signal?: AbortSignal } = {}) {
   return new Promise<T>((resolve, reject) => {
     const mark = accountMark();
     const request = new XMLHttpRequest();
