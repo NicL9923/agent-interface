@@ -28,7 +28,7 @@ const port = Number(process.env.E2E_PORT) || 4199, api = `http://127.0.0.1:${por
 const dev = process.env.MODE === "dev";
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
 let vite;
-process.on("exit", () => { try { process.kill(-server.pid, "SIGTERM"); } catch {} });
+process.on("exit", () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch {} });
 for (let i = 0; ; i++) { try { if ((await fetch(`${api}/api/auth/config`)).ok) break; } catch {} if (i > 120) throw new Error("no server"); await sleep(250); }
 let base = api;
 if (dev) {

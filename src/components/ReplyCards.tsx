@@ -82,7 +82,7 @@ function SavedCard({ card, botId, messageId, userId, unavailable }: CardProps<Ch
       {card.type === "checklist" && <span className="muted">{saved.checkedIds.length} / {card.items.length}</span>}</div>
     <h3>{card.title}</h3>
     {card.type === "checklist" && <ul className="reply-checklist">{card.items.map(item => <li key={item.id}><label>
-      <Input type="checkbox" checked={draft.checkedIds.includes(item.id)} disabled={busy || !!error} onChange={e => void save({ ...draft,
+      <Input type="checkbox" checked={draft.checkedIds.includes(item.id)} disabled={busy || !!error} onChange={e => save({ ...draft,
         checkedIds: e.target.checked ? [...draft.checkedIds, item.id] : draft.checkedIds.filter(id => id !== item.id) })} />
       <span>{item.text}</span></label></li>)}</ul>}
     {card.type === "itinerary" && <ol className="reply-itinerary">{card.items.map(item => <li key={item.id}>
@@ -91,12 +91,12 @@ function SavedCard({ card, botId, messageId, userId, unavailable }: CardProps<Ch
       {item.url && <a href={item.url} target="_blank" rel="noopener noreferrer">Open details</a>}
       {editing === item.id ? <div className="itinerary-edit"><label>Your itinerary note<Textarea maxLength={2000} rows={3}
         value={draft.notes[item.id] || ""} onChange={e => setDraft({ ...draft, notes: { ...draft.notes, [item.id]: e.target.value } })} /></label>
-        <div className="actions"><Button type="button" disabled={busy} onClick={() => void save(draft)}>Save note</Button><Button type="button" disabled={busy}
+        <div className="actions"><Button type="button" disabled={busy} onClick={() => save(draft)}>Save note</Button><Button type="button" disabled={busy}
           onClick={() => { setDraft(saved); setEditing(null); }}>Cancel</Button></div></div>
         : <Button type="button" className="itinerary-note-button" disabled={busy || !!error} onClick={() => setEditing(item.id)}>{draft.notes[item.id] ? "Edit note" : "Add note"}</Button>}
     </li>)}</ol>}
     <small className="muted">Checks and notes are saved for your account. The assistant's proposal stays in the conversation.</small>
-    {error && <div role="alert" className="form-error"><p>{error}</p>{failedSave ? <Button type="button" disabled={unavailable} onClick={() => void save(draft)}>Retry saving</Button>
+    {error && <div role="alert" className="form-error"><p>{error}</p>{failedSave ? <Button type="button" disabled={unavailable} onClick={() => save(draft)}>Retry saving</Button>
       : <Button type="button" disabled={unavailable} onClick={reload}>Reload saved state</Button>}</div>}
     {saving.busy && <span role="status">Saving...</span>}
   </section>;

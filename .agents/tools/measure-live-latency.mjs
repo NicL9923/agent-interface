@@ -31,7 +31,7 @@ const timelineFile = join(dir, "timeline.json");
 const steady = CPS >= 75 ? { STREAM_CHARS: String(Math.round(CPS * 0.04)), STREAM_MS: "40" } : { STREAM_CHARS: "2", STREAM_MS: String(Math.round(2000 / CPS)) };
 const server = spawn("npx", ["tsx", ".agents/tools/streaming-preview.ts", String(PORT)], { stdio: ["ignore", "inherit", "inherit"], detached: true,
   env: { ...process.env, SEED_TURNS: SEED, TOKENS: String(WORDS), TIMELINE_FILE: timelineFile, SAVE_DELAY_MS: "1500", ...BURSTY ? { BURSTY: "1" } : steady } });
-const stop = () => { try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } rmSync(dir, { recursive: true, force: true }); };
+const stop = () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } rmSync(dir, { recursive: true, force: true }); };
 process.on("exit", stop);
 for (let tries = 0; ; tries++) {
   try { if ((await fetch(`http://127.0.0.1:${PORT}/api/auth/config`)).ok) break; } catch { /* Not up yet. */ }

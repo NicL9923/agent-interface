@@ -223,6 +223,7 @@ const builds = (option('--compare') ?? '').split(',').filter(Boolean).map(entry 
 const rounds = Number(option('--rounds', builds.length ? 3 : 1));
 const client = 'dist/client', kept = `${client}.measure-kept`;
 if (builds.length) await rename(client, kept);
+/** @type {[string, string, { serviceWorker: boolean, httpCache: boolean }][]} */
 const scenarios = [
   ['cold', 'no worker, cold HTTP cache', { serviceWorker: false, httpCache: false }],
   ['warm', 'no worker, warm HTTP cache', { serviceWorker: false, httpCache: true }],

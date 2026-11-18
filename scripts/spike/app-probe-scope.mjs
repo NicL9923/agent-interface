@@ -13,5 +13,5 @@ export function probeScope(root = ".") {
   const trees = TREES.flatMap(tree => readdirSync(join(root, tree), { recursive: true })
     .map(name => `${tree}/${String(name).replaceAll("\\", "/")}`)
     .filter(path => !/(^|\/)\./.test(path) && statSync(join(root, path)).isFile()));
-  return [...new Set([...manifest, ...trees, ...PROBE_ONLY])].sort();
+  return [...new Set([...manifest, ...trees, ...PROBE_ONLY])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }

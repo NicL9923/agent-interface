@@ -9,6 +9,7 @@ import type { Store } from "./store.js";
 import type { MacDevice } from "./store-macs.js";
 import type { LinkedMacs } from "../shared/mac.js";
 import { MAX_MACS } from "./store-macs.js";
+import { rawDataText } from "./raw-data-text.js";
 
 /**
  * WildBots for Mac: linked Macs that personal assistants can ask to act, unattended when the
@@ -152,7 +153,7 @@ export class MacBroker {
     let raw: unknown;
     try {
       if (binary) throw new Error("binary");
-      raw = JSON.parse(data.toString());
+      raw = JSON.parse(rawDataText(data));
       message = incoming.parse(raw);
     } catch {
       // A result this server cannot read is acknowledged and fails its call. Closing instead would

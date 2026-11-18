@@ -17,7 +17,7 @@ for (const [name, payload] of Object.entries({ loaded: fixture.memory, ...fixtur
     for (const entry of document.entries) {
       assert.equal(entry.id, digest(memory.profile, document.target, entry.text));
     }
-    assert.equal(document.charCount, [...texts.join(fixture.memoryFixture.delimiter)].length);
+    assert.equal(document.charCount, Array.from(texts.join(fixture.memoryFixture.delimiter)).length);
     assert.ok(document.charCount <= document.charLimit);
   }
   assert.equal(memory.refresh?.revision, "");

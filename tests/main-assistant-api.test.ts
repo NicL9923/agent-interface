@@ -261,7 +261,7 @@ describe("check-ins", () => {
     expect(prefs().mainBotId).toBe("mom-main");
     expect(calls).not.toContain("saveBot:mom-main");
     expect((await share(true)).statusCode).toBe(200);
-    expect(calls.indexOf(`delete:${created.store.db.prepare("SELECT job_id FROM check_in_jobs").get()!.job_id}`)).toBeLessThan(calls.indexOf("saveBot:mom-main"));
+    expect(calls.indexOf(`delete:${(created.store.db.prepare("SELECT job_id FROM check_in_jobs").get() as { job_id: string }).job_id}`)).toBeLessThan(calls.indexOf("saveBot:mom-main"));
     expect(prefs().mainBotId).toBeUndefined();
     expect(prefs().checkIns?.enabled).toBe(false);
     expect(jobs).toEqual([]);

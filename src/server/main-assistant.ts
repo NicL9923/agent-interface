@@ -16,6 +16,7 @@ import { ownChatOnly } from "./collaboration.js";
 import { routineTargets } from "./delivery-targets.js";
 import { id, timezone } from "./schemas.js";
 import type { Store } from "./store.js";
+import { primitiveText } from "../shared/primitive-text.js";
 export { scheduleMinutes };
 
 // A member's main assistant and its check-ins. The member's preferences say what they want; this
@@ -48,7 +49,7 @@ export function signedCheckInMember(store: Store, job: Pick<Routine, "botId" | "
  * chat, a group room or a script, would take what the check-in reads to someone else.
  */
 export function managedConfig(job: Routine) {
-  const tokens = String(job.delivery?.deliver ?? "").split(",").map(part => part.trim().toLowerCase()).filter(Boolean);
+  const tokens = primitiveText(job.delivery?.deliver).split(",").map(part => part.trim().toLowerCase()).filter(Boolean);
   const failure = job.delivery?.failure_deliver;
   const empty = (value: unknown) => value === undefined || value === null || value === "" || Array.isArray(value) && value.length === 0;
   const context = job.contextFrom ?? [];

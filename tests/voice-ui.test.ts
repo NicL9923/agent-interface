@@ -8,7 +8,7 @@ import { STOP_SPEECH } from "../src/shared/voice.js";
 import type { VoiceState } from "../src/shared/voice.js";
 import { mountRoot } from "./ui-harness";
 const requestApi = vi.hoisted(() => vi.fn());
-vi.mock("../src/client-api.js", async () => (await import("./helpers/request-mock")).withRequest(await (() => ({ api: requestApi }))()));
+vi.mock("../src/client-api.js", async () => (await import("./helpers/request-mock")).withRequest({ api: requestApi }));
 let container: HTMLDivElement, root: Root;
 let transcript: ReturnType<typeof vi.fn<(text: string) => void>>, state: ReturnType<typeof vi.fn<(state: VoiceState) => void>>;
 let stopped: ReturnType<typeof vi.fn>, getUserMedia: AnyMock;

@@ -20,6 +20,7 @@ import { retryRequestId } from '../src/shared/retry-id.js';
 import { createHermesTransport } from '../src/server/hermes-transport.js';
 import { SendTimings } from '../src/server/send-timing.js';
 import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
+import { bodyText, urlText } from "./helpers/wire-text";
 
 const realFetch=globalThis.fetch;
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
@@ -134,7 +135,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     await runtime.deleteRoutine('job','shared');
     // Hermes allows one job ID in several profiles, so a deletion names the profile.
     const deleted = vi.mocked(fetch).mock.calls.at(-1)!;
-    expect([String(deleted[0]).replace(/^.*\/cron\//, ''), (deleted[1] as RequestInit).method]).toEqual(['jobs/job?profile=shared', 'DELETE']);
+    expect([urlText(deleted[0]).replace(/^.*\/cron\//, ''), (deleted[1] as RequestInit).method]).toEqual(['jobs/job?profile=shared', 'DELETE']);
     expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(0);
     const tick=runtime.discoverEvents('7');
     await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
@@ -1072,7 +1073,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
     const requests: {url:string; method:string; body:Record<string,any>}[] = [];
     let job = {id:'job-one',enabled:false,state:'paused'};
     vi.stubGlobal('fetch', vi.fn(async (url:URL, init:RequestInit) => {
-      requests.push({url:String(url),method:init.method!,body:JSON.parse(String(init.body || '{}'))});
+      requests.push({url:String(url),method:init.method!,body:JSON.parse(bodyText(init.body || '{}'))});
       if (String(url).includes('/resume?')) job = {...job,enabled:true,state:'scheduled'};
       if (String(url).includes('/pause?')) job = {...job,enabled:false,state:'paused'};
       return Response.json(job);
@@ -1096,7 +1097,7 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       monitor_url:'https://example.invalid/check',reasoning_effort:'high',deliver:'bot-chat:shared'};
     const requests: {method:string;body:Record<string,any>}[]=[];
     vi.stubGlobal('fetch',vi.fn(async (_url:URL, init:RequestInit = {}) => {
-      requests.push({method:init.method ?? 'GET',body:JSON.parse(String(init.body || '{}'))});
+      requests.push({method:init.method ?? 'GET',body:JSON.parse(bodyText(init.body || '{}'))});
       return Response.json(init.method ? native : [native]);
     }));
     const [routine] = await runtime.routines();
@@ -1470,7 +1471,7 @@ describe('Hermes transport liveness and diagnostics', () => {
     expect(fetch).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({
       headers: {'X-Hermes-Session-Token': token}, redirect: 'error',
     }));
-    expect(String(vi.mocked(fetch).mock.calls[0]![0])).toBe('http://127.0.0.1:19119/api/profiles');
+    expect(urlText(vi.mocked(fetch).mock.calls[0]![0])).toBe('http://127.0.0.1:19119/api/profiles');
     expect(calls).toEqual([]);
   });
 
@@ -1874,7 +1875,7 @@ it('posts routine results in chosen group chats and rewrites only the room targe
   let listed: boolean | 'unreadable'=true;
   vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit={})=>{
     const method=init.method ?? 'GET';
-    requests.push({url:String(url),method,body:JSON.parse(String(init.body || '{}'))});
+    requests.push({url:String(url),method,body:JSON.parse(bodyText(init.body || '{}'))});
     // The service route admits only the profile's job list for reads, never a single job.
     if(method==='GET')expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
     return Response.json(method==='GET'?(listed==='unreadable'?{error:'busy'}:listed?[native]:[]):native);
@@ -2723,7 +2724,7 @@ describe('approval scopes, question shapes and the steering decision on the wire
     capabilities({approval_settings: true});
     runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
     expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
-    expect(JSON.parse(String((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
+    expect(JSON.parse(bodyText((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
   });
 });
 
@@ -2861,7 +2862,7 @@ describe('Hermes refusals over HTTP', () => {
         const response=await app.inject({url:`/api/files/${encodeURIComponent(id)}`,headers});
         expect([response.statusCode,response.json().error,response.json().code],id).toEqual([404,'That file is no longer available.','file_not_found']);
       }
-      expect(vi.mocked(fetch).mock.calls.some(([url])=>String(url).includes('/api/files/download'))).toBe(false);
+      expect(vi.mocked(fetch).mock.calls.some(([url])=>urlText(url).includes('/api/files/download'))).toBe(false);
     } finally { await app.close(); }
   });
   it('answers an approval Hermes no longer has open with 409 and the reason', async () => {

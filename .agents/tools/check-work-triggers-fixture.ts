@@ -57,7 +57,7 @@ assert.equal(fixture.workStates["no-routines"].goals.goal, null);
 assert.deepEqual(fixture.workStates["no-routines"].triggers.items, []);
 const secret = fixture.workFixture.syntheticSecret;
 assert.match(secret, /^[A-Za-z0-9_-]{43}$/); assert.ok(secret.includes("SYNTHETIC"));
-assert.ok([...raw].every(character => character.charCodeAt(0) < 128), "fixture must remain ASCII for digest parity");
+assert.ok(Array.from(raw).every(character => character.charCodeAt(0) < 128), "fixture must remain ASCII for digest parity");
 for (const token of raw.matchAll(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g)) assert.equal(token[0], secret);
 for (const [operation, response] of [["trigger_create", { subscription: items[0], secret }], ["trigger_update", { subscription: items[0] }], ["trigger_toggle", { subscription: items[0] }]] as const) {
   assert.deepEqual(decodeAutomation(operation, response), response);

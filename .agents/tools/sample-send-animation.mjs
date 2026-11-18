@@ -11,7 +11,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 const port = Number(process.env.E2E_PORT) || 4197, base = `http://127.0.0.1:${port}`;
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
-process.on("exit", () => { try { process.kill(-server.pid, "SIGTERM"); } catch {} });
+process.on("exit", () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch {} });
 for (let i = 0; ; i++) { try { if ((await fetch(`${base}/api/auth/config`)).ok) break; } catch {} if (i > 120) throw new Error("no server"); await sleep(250); }
 const browser = await chromium.launch();
 const out = {};

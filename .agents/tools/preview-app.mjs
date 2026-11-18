@@ -683,7 +683,7 @@ server.on('upgrade', (request, socket, head) => {
     output('\x1b[32mWildBots terminal preview\x1b[0m\r\nExplicit fixture. Commands are echoed, never executed.\r\n\r\npreview@fixture:~$ ');
     let line = '';
     client.on('message', bytes => {
-      let message; try { message = JSON.parse(String(bytes)); } catch { return; }
+      let message; try { message = JSON.parse(Buffer.isBuffer(bytes) ? bytes.toString() : ''); } catch { return; }
       if (message.type !== 'input' || typeof message.data !== 'string') return;
       for (const character of message.data) {
         if (character === '\x03') { line = ''; output('^C\r\npreview@fixture:~$ '); }

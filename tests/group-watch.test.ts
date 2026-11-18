@@ -190,7 +190,7 @@ describe("watching a group chat on the app event stream", () => {
         expect(response.status, `stream ${index + 1}`).toBe(200);
       }
     } finally {
-      await Promise.all(open.map(response => response.body?.cancel()));
+      await Promise.all(open.flatMap(response => response.body ? [response.body.cancel()] : []));
       await s.app.close();
     }
   });
@@ -283,7 +283,7 @@ describe("watching a group chat on the app event stream", () => {
       expect(roster.status).toBe(200);
       open.push(roster);
     } finally {
-      await Promise.all(open.map(response => response.body?.cancel()));
+      await Promise.all(open.flatMap(response => response.body ? [response.body.cancel()] : []));
       await s.app.close();
     }
   });

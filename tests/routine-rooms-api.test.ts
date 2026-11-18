@@ -352,7 +352,7 @@ describe("routes that name only a routine ID, when two assistants hold jobs with
     });
     const [first, second] = await Promise.all([1, 2].map(async () =>
       created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })));
-    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 404]);
+    expect([first.statusCode, second.statusCode].sort((a, b) => a - b)).toEqual([200, 404]);
     expect(deleteRoutine).toHaveBeenCalledTimes(1);
     expect(rows.map(row => row.botId)).toEqual(["diary"]);
     deleteRoutine.mockImplementation(async () => {});

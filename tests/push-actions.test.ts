@@ -6,6 +6,7 @@ import { BackgroundWorker } from "../src/server/notifications.js";
 import { pushActionTtl, Store } from "../src/server/store.js";
 import { approvalFixture, botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
 import { fakeRuntime } from "./helpers/server.js";
+import { byTuple } from "./helpers/sort";
 
 const origin = "http://127.0.0.1:3000";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
@@ -103,7 +104,7 @@ describe("web push Decline", () => {
       store.queueNotification("one-event", "one", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "one-event", kind: "completed", botId: "shared" });
       store.queueNotification("two-event", "two", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "two-event", kind: "completed", botId: "shared" });
       await worker.tick();
-      expect(web.map(({ endpoint, payload }) => [endpoint, payload.account]).sort()).toEqual([
+      expect(web.map(({ endpoint, payload }) => [endpoint, payload.account as string]).sort(byTuple)).toEqual([
         ["https://push.test/one", accountMarker("one")], ["https://push.test/two", accountMarker("two")]]);
     } finally { await worker.stop(); store.close(); }
   });

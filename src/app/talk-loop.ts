@@ -1,5 +1,6 @@
 import { withoutDraftClause } from "../shared/errors";
 import { finalTalkStates, MAX_HEARD_LINES, TALK_TOOL, type TalkAnswer } from "../shared/voice";
+import { primitiveText } from "../shared/primitive-text";
 
 /** What the person sees: who is talking, or what the assistant is doing. */
 export type TalkPhase = "listening" | "thinking" | "working" | "speaking";
@@ -74,14 +75,14 @@ export class TalkLoop {
       case "input_audio_buffer.speech_started":
         this.host.activity(); this.host.phase(this.following ? "working" : "listening"); break;
       case "conversation.item.input_audio_transcription.completed":
-        this.you = String(event.transcript ?? "").trim(); this.assistant = ""; this.show(); break;
+        this.you = primitiveText(event.transcript).trim(); this.assistant = ""; this.show(); break;
       case "response.created":
         this.active = true; this.host.phase("thinking"); break;
       case "response.output_audio_transcript.delta":
         if (!this.assistant || this.assistantDone) { this.assistant = ""; this.assistantDone = false; }
-        this.assistant += String(event.delta ?? ""); this.host.phase("speaking"); this.show(); break;
+        this.assistant += primitiveText(event.delta); this.host.phase("speaking"); this.show(); break;
       case "response.output_audio_transcript.done":
-        this.assistant = String(event.transcript ?? this.assistant); this.assistantDone = true; this.host.activity(); this.show(); break;
+        this.assistant = primitiveText(event.transcript, this.assistant); this.assistantDone = true; this.host.activity(); this.show(); break;
       case "response.done":
         this.active = false;
         this.host.phase(this.following ? "working" : "listening");
@@ -89,8 +90,8 @@ export class TalkLoop {
         else this.flushHeld();
         break;
       case "response.function_call_arguments.done":
-        if (event.name === TALK_TOOL) void this.call(String(event.call_id ?? ""), String(event.arguments ?? ""));
-        else this.output(String(event.call_id ?? ""), "That tool is not available. Answer without it.");
+        if (event.name === TALK_TOOL) void this.call(primitiveText(event.call_id), primitiveText(event.arguments));
+        else this.output(primitiveText(event.call_id), "That tool is not available. Answer without it.");
         break;
       case "error": {
         const error = (event.error ?? {}) as { code?: unknown; message?: unknown };
@@ -147,7 +148,7 @@ export class TalkLoop {
 
   private async call(callId: string, raw: string) {
     let request = "";
-    try { request = String((JSON.parse(raw) as { request?: unknown }).request ?? "").trim(); } catch { /* Answered below. */ }
+    try { request = primitiveText((JSON.parse(raw) as { request?: unknown }).request).trim(); } catch { /* Answered below. */ }
     if (!request) { this.output(callId, "No request was given. Ask the person what they need."); return; }
     const requestId = this.host.newId();
     this.following++;

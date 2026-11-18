@@ -77,7 +77,7 @@ for (const [width, height, frames] of views) for (const frame of frames) for (co
   await context.close();
 }
 await browser.close();
-for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${row.width}x${row.height} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}${row.note ? `, explanation at ${row.note.top}-${row.note.bottom}${row.note.uncovered ? '' : ' covered'}, panel needs ${row.note.least}` : ''}`);
+for (const row of rows) console.log(`${row.ok ? 'ok  ' : 'FAIL'} ${Number(row.width)}x${Number(row.height)} frame=${row.frame ?? 'none'} ${row.chat} ${row.draft}${row.attach ? '+files' : ''}${row.thread ? '+thread' : ''}${row.failed ? '+failed send' : ''}: ${String(row.button)} at ${row.top}-${row.bottom}${row.note ? `, explanation at ${row.note.top}-${row.note.bottom}${row.note.uncovered ? '' : ' covered'}, panel needs ${row.note.least}` : ''}`);
 const failed = rows.filter(row => !row.ok).length;
 console.log(`${rows.length - failed} of ${rows.length} cases keep the button whole and tappable.`);
 if (report) writeFileSync(report, JSON.stringify(rows, null, 1));

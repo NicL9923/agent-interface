@@ -16,7 +16,7 @@ const ONLY = new Set(flag("--only", "cold,wake,idle,turn").split(","));
 const base = "http://127.0.0.1:4173";
 
 const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true });
-const stop = () => { try { process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
+const stop = () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
 process.on("exit", stop);
 for (let tries = 0; ; tries++) {
   try { if ((await fetch(`${base}/api/auth/config`)).ok) break; } catch { /* Not up yet. */ }

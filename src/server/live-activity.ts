@@ -22,7 +22,7 @@ const seconds = (ms: number) => Math.floor(ms / 1000);
 const fit = (value: string | undefined, limit: number) => {
   const text = value?.replace(/\s+/g, " ").trim();
   if (!text) return undefined;
-  const characters = [...text];
+  const characters = Array.from(text);
   return characters.length <= limit ? text : characters.slice(0, limit - 1).join("") + "…";
 };
 
