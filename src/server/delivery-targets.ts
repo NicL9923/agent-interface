@@ -47,7 +47,7 @@ export function roomOfAddress(address: string): string | undefined {
  * _normalize_deliver_value: one comma-separated string, "local" when empty. Undefined for a value whose
  * Python text the app cannot reproduce (anything but text, a number or a list of them).
  */
-function normalize(value: unknown): string | undefined {
+export function normalizeDeliver(value: unknown): string | undefined {
   if (value === null || value === undefined || value === "") return "local";
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
@@ -98,7 +98,7 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
     if (room) rooms.add(room);
   };
   for (const lane of lanes(job)) {
-    const value = normalize(lane);
+    const value = normalizeDeliver(lane);
     if (value === undefined) { unknown = true; continue; }
     if (value === "local") continue;
     for (const raw of value.split(",")) {
@@ -126,7 +126,7 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
  * outside the app and stay as they are; `deliveryRooms` still checks them.
  */
 export function deliverRooms(deliver: unknown): string[] {
-  const value = normalize(deliver);
+  const value = normalizeDeliver(deliver);
   if (value === undefined || value === "local") return [];
   return [...new Set(value.split(",").flatMap(part => {
     const address = parseRoomToken(part);
@@ -139,7 +139,7 @@ export function deliverRooms(deliver: unknown): string[] {
  * as written. Undefined when the current value cannot be read, so nothing is rewritten from a guess.
  */
 export function withDeliverRooms(deliver: unknown, roomIds: string[]): string | undefined {
-  const value = normalize(deliver);
+  const value = normalizeDeliver(deliver);
   if (value === undefined) return undefined;
   const parts = value === "local" ? [] : value.split(",").map(part => strip(part)).filter(Boolean);
   const others = parts.filter(part => { const address = parseRoomToken(part); return !(address && !address.includes("@")) && part !== "local"; });
