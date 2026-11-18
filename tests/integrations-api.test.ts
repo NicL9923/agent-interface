@@ -345,7 +345,8 @@ describe("assistant connection requests", () => {
       "utf8",
     );
     expect(source).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
-    expect(source).toContain(
+    // The Python formatter wraps the long pattern onto its own line.
+    expect(source.replace(/re\.compile\(\s+/g, "re.compile(").replace(/"\s+\)/g, '")')).toContain(
       `REQUESTABLE = re.compile(r"${requestableConnectionId.source.slice(1, -1)}")`,
     );
     expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(
