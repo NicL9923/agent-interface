@@ -1,0 +1,17 @@
+# Shared by Prettier and Oxfmt (Oxfmt reads this file too). Keep entries to files whose exact bytes matter.
+
+# npm owns the lockfile format, and src/shared/qualification-inputs.json lists it for the receipt.
+package-lock.json
+
+# Archived qualification and release evidence: recorded output, content-addressed by the archive tools.
+docs/evidence/
+
+# Recorded fixtures captured from other releases and tools. Tests compare their exact content.
+tests/fixtures/
+
+# Generated files that tests compare byte for byte against their generators' output. Regenerate them, never format them.
+ios/AgentInterfaceTests/Avatar/avatar-art.json
+ios/AgentInterfaceTests/Motion/avatar-motion.json
+
+# Holds a block written by .agents/tools/season-tint.mjs, which also parses the season colors from one-line rules.
+src/motion.css
