@@ -5,10 +5,17 @@
 //   cron/scheduler_delivery_room.py: parse_room_deliver_token, _ROOM_TOKEN_RE, deliver_to_room
 
 /** A routine's delivery fields as Hermes stores them. Server only, never sent to clients. */
-export interface RoutineDelivery { deliver?: unknown; failure_deliver?: unknown; origin?: unknown }
+export interface RoutineDelivery {
+  deliver?: unknown;
+  failure_deliver?: unknown;
+  origin?: unknown;
+}
 
 /** The rooms a routine posts in, by room identity, or `unknown` when Hermes's reading cannot be mirrored. */
-export type DeliveryRooms = ({ rooms: string[]; unknown: false } | { rooms: string[]; unknown: true }) & {
+export type DeliveryRooms = (
+  | { rooms: string[]; unknown: false }
+  | { rooms: string[]; unknown: true }
+) & {
   /** Other assistants' Bot Chats it delivers into, by profile, from `bot-chat:<profile>` tokens. */
   chats?: string[];
   /** It also posts somewhere outside WildBots: a platform chat, home channels, or an origin that is not a room. */
@@ -20,9 +27,12 @@ export type DeliveryRooms = ({ rooms: string[]; unknown: false } | { rooms: stri
  * exactly (Python adds U+001C to U+001F and U+0085; JavaScript adds U+FEFF). tests/delivery-targets.test.ts
  * lists how the set was generated.
  */
-export const PYTHON_WHITESPACE = "\t\n\v\f\r\u001c\u001d\u001e\u001f \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000";
+export const PYTHON_WHITESPACE =
+  "\t\n\v\f\r\u001c\u001d\u001e\u001f \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000";
 const edges = new RegExp(`^[${PYTHON_WHITESPACE}]+|[${PYTHON_WHITESPACE}]+$`, "gu");
-export function strip(text: string): string { return text.replace(edges, ""); }
+export function strip(text: string): string {
+  return text.replace(edges, "");
+}
 
 // _ROOM_TOKEN_RE: a room ID, then an optional @<profile> naming the gateway that hosts it.
 const ROOM_ADDRESS = /^(?<room>[A-Za-z0-9][A-Za-z0-9._:-]*)(?:@(?<profile>[A-Za-z0-9_-]+))?$/;
@@ -52,8 +62,9 @@ export function normalizeDeliver(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   if (Array.isArray(value)) {
-    if (!value.every(item => typeof item === "string" || typeof item === "number")) return undefined;
-    const parts = value.map(item => strip(String(item))).filter(Boolean);
+    if (!value.every((item) => typeof item === "string" || typeof item === "number"))
+      return undefined;
+    const parts = value.map((item) => strip(String(item))).filter(Boolean);
     return parts.length ? parts.join(",") : "local";
   }
   return undefined;
@@ -66,17 +77,22 @@ export function normalizeDeliver(value: unknown): string | undefined {
 function lanes(job: RoutineDelivery): unknown[] {
   const success = "deliver" in job ? job.deliver : "local";
   const failure = job.failure_deliver;
-  const failureSet = failure !== null && failure !== undefined && (typeof failure !== "string" || strip(failure) !== "");
+  const failureSet =
+    failure !== null &&
+    failure !== undefined &&
+    (typeof failure !== "string" || strip(failure) !== "");
   return failureSet ? [success, failure] : [success];
 }
 
 /** _resolve_origin: the job's origin when it names a platform and chat. Undefined when unusable. */
 function origin(job: RoutineDelivery): { platform: string; chat: string } | undefined | "unknown" {
   const value = job.origin;
-  if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (value === null || value === undefined || typeof value !== "object" || Array.isArray(value))
+    return undefined;
   const { platform, chat_id: chat } = value as { platform?: unknown; chat_id?: unknown };
   if (!platform || !chat) return undefined;
-  if (typeof platform !== "string" || (typeof chat !== "string" && typeof chat !== "number")) return "unknown";
+  if (typeof platform !== "string" || (typeof chat !== "string" && typeof chat !== "number"))
+    return "unknown";
   return { platform, chat: String(chat) };
 }
 
@@ -87,19 +103,30 @@ function origin(job: RoutineDelivery): { platform: string; chat: string } | unde
  * origin chat. Routing tokens such as `all` expand to home channels, which are never rooms.
  */
 export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
-  const rooms = new Set<string>(), chats = new Set<string>();
-  let unknown = false, outward = false;
+  const rooms = new Set<string>(),
+    chats = new Set<string>();
+  let unknown = false,
+    outward = false;
   const from = origin(job);
   const originRoom = () => {
-    if (from === "unknown") { unknown = true; return; }
+    if (from === "unknown") {
+      unknown = true;
+      return;
+    }
     // Without a recorded origin Hermes falls back to a configured platform's home channel.
-    if (from?.platform !== "room") { outward = true; return; }
+    if (from?.platform !== "room") {
+      outward = true;
+      return;
+    }
     const room = roomOfAddress(from.chat);
     if (room) rooms.add(room);
   };
   for (const lane of lanes(job)) {
     const value = normalizeDeliver(lane);
-    if (value === undefined) { unknown = true; continue; }
+    if (value === undefined) {
+      unknown = true;
+      continue;
+    }
     if (value === "local") continue;
     for (const raw of value.split(",")) {
       const part = strip(raw);
@@ -110,10 +137,16 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
         if (room) rooms.add(room);
         continue;
       }
-      if (part === "origin" || part === "room") { originRoom(); continue; }
+      if (part === "origin" || part === "room") {
+        originRoom();
+        continue;
+      }
       const [kind, ...rest] = part.split(":");
       const target = strip(rest.join(":"));
-      if (strip(kind).toLowerCase() === "bot-chat") { if (target) chats.add(target); continue; }
+      if (strip(kind).toLowerCase() === "bot-chat") {
+        if (target) chats.add(target);
+        continue;
+      }
       outward = true;
     }
   }
@@ -128,10 +161,14 @@ export function deliveryRooms(job: RoutineDelivery): DeliveryRooms {
 export function deliverRooms(deliver: unknown): string[] {
   const value = normalizeDeliver(deliver);
   if (value === undefined || value === "local") return [];
-  return [...new Set(value.split(",").flatMap(part => {
-    const address = parseRoomToken(part);
-    return address && !address.includes("@") ? [address] : [];
-  }))];
+  return [
+    ...new Set(
+      value.split(",").flatMap((part) => {
+        const address = parseRoomToken(part);
+        return address && !address.includes("@") ? [address] : [];
+      }),
+    ),
+  ];
 }
 
 /**
@@ -141,9 +178,18 @@ export function deliverRooms(deliver: unknown): string[] {
 export function withDeliverRooms(deliver: unknown, roomIds: string[]): string | undefined {
   const value = normalizeDeliver(deliver);
   if (value === undefined) return undefined;
-  const parts = value === "local" ? [] : value.split(",").map(part => strip(part)).filter(Boolean);
-  const others = parts.filter(part => { const address = parseRoomToken(part); return !(address && !address.includes("@")) && part !== "local"; });
-  const targets = [...others, ...[...new Set(roomIds)].map(id => `room:${id}`)];
+  const parts =
+    value === "local"
+      ? []
+      : value
+          .split(",")
+          .map((part) => strip(part))
+          .filter(Boolean);
+  const others = parts.filter((part) => {
+    const address = parseRoomToken(part);
+    return !(address && !address.includes("@")) && part !== "local";
+  });
+  const targets = [...others, ...[...new Set(roomIds)].map((id) => `room:${id}`)];
   return targets.length ? targets.join(",") : "local";
 }
 
@@ -151,18 +197,32 @@ export function withDeliverRooms(deliver: unknown, roomIds: string[]): string | 
  * Every room a routine posts in now. A runtime that reports no delivery fields, such as a test double,
  * has only the rooms it lists.
  */
-export function routineTargets(routine: { roomIds?: string[]; delivery?: RoutineDelivery }): DeliveryRooms {
-  return routine.delivery ? deliveryRooms(routine.delivery) : { rooms: [...new Set(routine.roomIds ?? [])], unknown: false };
+export function routineTargets(routine: {
+  roomIds?: string[];
+  delivery?: RoutineDelivery;
+}): DeliveryRooms {
+  return routine.delivery
+    ? deliveryRooms(routine.delivery)
+    : { rooms: [...new Set(routine.roomIds ?? [])], unknown: false };
 }
 
 /**
  * Every room a routine will post in after a save that sets the app's rooms to `roomIds` (undefined leaves
  * them). Computed from the delivery Hermes will then hold, never by subtracting what the client sees.
  */
-export function routineTargetsAfter(current: { roomIds?: string[]; delivery?: RoutineDelivery } | undefined, botId: string, roomIds: string[] | undefined): DeliveryRooms {
-  if (!current) return routineTargets({ delivery: { deliver: withDeliverRooms(`bot-chat:${botId}`, roomIds ?? []) } });
+export function routineTargetsAfter(
+  current: { roomIds?: string[]; delivery?: RoutineDelivery } | undefined,
+  botId: string,
+  roomIds: string[] | undefined,
+): DeliveryRooms {
+  if (!current)
+    return routineTargets({
+      delivery: { deliver: withDeliverRooms(`bot-chat:${botId}`, roomIds ?? []) },
+    });
   if (roomIds === undefined) return routineTargets(current);
   if (!current.delivery) return routineTargets({ roomIds });
   const deliver = withDeliverRooms(current.delivery.deliver, roomIds);
-  return deliver === undefined ? { rooms: [], unknown: true } : deliveryRooms({ ...current.delivery, deliver });
+  return deliver === undefined
+    ? { rooms: [], unknown: true }
+    : deliveryRooms({ ...current.delivery, deliver });
 }

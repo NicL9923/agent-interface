@@ -12,4 +12,6 @@ export interface LinkedMac {
   state: { paused: boolean; screenLocked: boolean } | null;
 }
 /** The signed-in person's Macs. Unavailable when the server has no Mac link key. */
-export type LinkedMacs = { available: true; devices: LinkedMac[] } | { available: false; reason: string; devices: [] };
+export type LinkedMacs =
+  | { available: true; devices: LinkedMac[] }
+  | { available: false; reason: string; devices: [] };

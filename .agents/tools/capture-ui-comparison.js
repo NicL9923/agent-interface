@@ -3,11 +3,15 @@ async (page, { outputDir = ".private/ui-comparison", prefix = "current" } = {}) 
   const origin = new URL(page.url());
   if (!["127.0.0.1", "localhost"].includes(origin.hostname)) throw Error("Use a loopback fixture.");
   const fixture = await (await page.request.get(`${origin.origin}/api/bootstrap`)).json();
-  if (fixture.user?.email !== "preview@localhost.invalid") throw Error("Use the synthetic household preview.");
-  const context = await page.context().browser().newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 1000 } });
+  if (fixture.user?.email !== "preview@localhost.invalid")
+    throw Error("Use the synthetic household preview.");
+  const context = await page
+    .context()
+    .browser()
+    .newContext({ serviceWorkers: "block", viewport: { width: 1440, height: 1000 } });
   const tab = await context.newPage();
   const paths = [];
-  const capture = async state => {
+  const capture = async (state) => {
     const path = `${outputDir}/${prefix}-${state}.png`;
     await tab.screenshot({ path, animations: "disabled" });
     paths.push(path);
@@ -22,15 +26,22 @@ async (page, { outputDir = ".private/ui-comparison", prefix = "current" } = {}) 
     await tab.getByRole("combobox", { name: "Appearance" }).selectOption("light");
     await tab.getByRole("switch", { name: "Advanced details" }).check();
     await tab.getByRole("button", { name: "Close settings" }).click();
-    await tab.getByRole("button", { name: "Model: openrouter / configured-model", exact: true }).waitFor();
+    await tab
+      .getByRole("button", { name: "Model: openrouter / configured-model", exact: true })
+      .waitFor();
     await tab.getByText("Add a shared reminder for both of you?", { exact: true }).waitFor();
-    await tab.addStyleTag({ content: "*,*::before,*::after { animation: none !important; transition: none !important; caret-color: transparent !important; }" });
+    await tab.addStyleTag({
+      content:
+        "*,*::before,*::after { animation: none !important; transition: none !important; caret-color: transparent !important; }",
+    });
     await capture("desktop-chat");
     await tab.locator('.pinned-bot[aria-current="page"]').click({ button: "right" });
     await tab.getByRole("menu", { name: "Ranch hand", exact: true }).waitFor();
     await capture("desktop-menu");
     await tab.keyboard.press("Escape");
-    await tab.getByRole("button", { name: "Model: openrouter / configured-model", exact: true }).click();
+    await tab
+      .getByRole("button", { name: "Model: openrouter / configured-model", exact: true })
+      .click();
     await tab.getByText("OpenAI subscription", { exact: true }).waitFor();
     await capture("desktop-model");
     await tab.keyboard.press("Escape");
@@ -50,4 +61,4 @@ async (page, { outputDir = ".private/ui-comparison", prefix = "current" } = {}) 
   } finally {
     await context.close();
   }
-}
+};

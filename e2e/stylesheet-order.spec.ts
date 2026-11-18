@@ -10,43 +10,86 @@ import { assistants, expect, signIn, test } from "./fixtures.js";
 // `.agents/tools/diff-computed-styles.mjs` compares the build with the real dev server on the same screens.
 const SCREENS: [string, (page: Page) => Promise<void>][] = [
   ["home", async () => {}],
-  ["the assistant menu", async page => {
-    await assistants(page).getByRole("button", { name: /Trail Cook/ }).click({ button: "right" });
-    await page.locator(".bot-menu").waitFor();
-  }],
-  ["the account menu", async page => {
-    await page.getByRole("button", { name: "Account" }).click();
-    await page.getByRole("menu", { name: "Account" }).waitFor();
-  }],
-  ["Settings", async page => {
-    await page.getByRole("button", { name: "Account" }).click();
-    await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Settings/ }).click();
-    await page.locator(".settings-sheet[open]").waitFor();
-  }],
+  [
+    "the assistant menu",
+    async (page) => {
+      await assistants(page)
+        .getByRole("button", { name: /Trail Cook/ })
+        .click({ button: "right" });
+      await page.locator(".bot-menu").waitFor();
+    },
+  ],
+  [
+    "the account menu",
+    async (page) => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page.getByRole("menu", { name: "Account" }).waitFor();
+    },
+  ],
+  [
+    "Settings",
+    async (page) => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page
+        .getByRole("menu", { name: "Account" })
+        .getByRole("menuitem", { name: /Settings/ })
+        .click();
+      await page.locator(".settings-sheet[open]").waitFor();
+    },
+  ],
   // The e2e server has no push key, so the card never reaches its blocked state here; its class is what the card's
   // warning color hangs on, and Settings' own rules for the same toggle have to leave that color alone.
-  ["Settings with notifications blocked", async page => {
-    await page.getByRole("button", { name: "Account" }).click();
-    await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Settings/ }).click();
-    await page.locator(".settings-sheet[open]").waitFor();
-    await page.evaluate(() => document.querySelector(".settings-notifications .notification-settings")?.classList.add("is-blocked"));
-    await expect(page.locator(".settings-notifications .notification-settings.is-blocked .notification-toggle")).toBeVisible();
-  }],
-  ["the command palette", async page => {
-    const apple = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test((navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform || navigator.platform || navigator.userAgent));
-    await page.keyboard.press(apple ? "Meta+k" : "Control+k");
-    await page.locator(".command-palette[open]").waitFor();
-  }],
-  ["a chat", async page => {
-    await assistants(page).getByRole("button", { name: /Ranch Hand/ }).click();
-    await page.getByText("Morning. The north fence is fixed.").waitFor();
-    // The jump button shows only after scrolling up; a bare one carries the cascade's answer for its class.
-    await page.evaluate(() => {
-      const button = document.createElement("button");
-      button.className = "jump-latest";
-      document.querySelector(".conversation-panel")?.appendChild(button);
-    });
-  }],
+  [
+    "Settings with notifications blocked",
+    async (page) => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page
+        .getByRole("menu", { name: "Account" })
+        .getByRole("menuitem", { name: /Settings/ })
+        .click();
+      await page.locator(".settings-sheet[open]").waitFor();
+      await page.evaluate(() =>
+        document
+          .querySelector(".settings-notifications .notification-settings")
+          ?.classList.add("is-blocked"),
+      );
+      await expect(
+        page.locator(
+          ".settings-notifications .notification-settings.is-blocked .notification-toggle",
+        ),
+      ).toBeVisible();
+    },
+  ],
+  [
+    "the command palette",
+    async (page) => {
+      const apple = await page.evaluate(() =>
+        /Mac|iPhone|iPad|iPod/i.test(
+          (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData
+            ?.platform ||
+            navigator.platform ||
+            navigator.userAgent,
+        ),
+      );
+      await page.keyboard.press(apple ? "Meta+k" : "Control+k");
+      await page.locator(".command-palette[open]").waitFor();
+    },
+  ],
+  [
+    "a chat",
+    async (page) => {
+      await assistants(page)
+        .getByRole("button", { name: /Ranch Hand/ })
+        .click();
+      await page.getByText("Morning. The north fence is fixed.").waitFor();
+      // The jump button shows only after scrolling up; a bare one carries the cascade's answer for its class.
+      await page.evaluate(() => {
+        const button = document.createElement("button");
+        button.className = "jump-latest";
+        document.querySelector(".conversation-panel")?.appendChild(button);
+      });
+    },
+  ],
 ];
 
 type Order = "built" | "reversed";
@@ -59,41 +102,62 @@ type Order = "built" | "reversed";
  * "built" has in one order, and for any property the dev server's order moves it picks the same winner, since index.css
  * is the last sheet in both. So one read in that order stands in for the dev server's, and costs one read less.
  */
-const readInOrder = (page: Page, order: Order) => page.evaluate(order => {
-  const links = [...document.querySelectorAll<HTMLLinkElement>("link[rel=stylesheet]")];
-  // A disabled link has no sheet to read, so each one's rules are kept the first time.
-  const sheets = ((window as unknown as { sheetRules?: Record<string, string> }).sheetRules ??= {});
-  links.forEach((link, index) => { link.dataset.order ??= String(index); sheets[link.dataset.order] ??= Array.from(link.sheet!.cssRules, rule => rule.cssText).join("\n"); });
-  const isIndex = (link: HTMLLinkElement) => /\/index-[\w-]+\.css$/.test(link.href);
-  const components = links.filter(link => !isIndex(link));
-  const ordered = order === "built" ? links : [...components.reverse(), ...links.filter(isIndex)];
-  document.querySelectorAll("style[data-order]").forEach(style => style.remove());
-  for (const link of ordered) {
-    const style = document.head.appendChild(document.createElement("style"));
-    style.dataset.order = link.dataset.order;
-    style.textContent = sheets[link.dataset.order!];
-  }
-  // A hovered control is still easing toward its hover color, and where it is differs by when it was read.
-  const still = document.head.appendChild(document.createElement("style"));
-  still.dataset.order = "transitions";
-  still.textContent = "*, *::before, *::after { transition: none !important; }";
-  links.forEach(link => { link.disabled = true; });
-  const found: Record<string, string> = {};
-  const walk = (element: Element, path: string) => {
-    const style = getComputedStyle(element);
-    // A custom property is read through what it feeds. An ID a component generates differs between renders.
-    for (const property of style) if (!property.startsWith("--")) found[`${path} ${property}`] = style.getPropertyValue(property).replace(/url\("#[^"]*"\)/g, "url(#id)");
-    [...element.children].filter(child => !["SCRIPT", "STYLE", "LINK"].includes(child.tagName)).forEach((child, index) =>
-      walk(child, `${path} > ${child.tagName.toLowerCase()}${[...child.classList].map(name => `.${name}`).join("")}:${index}`));
-  };
-  walk(document.body, "body");
-  return found;
-}, order);
+const readInOrder = (page: Page, order: Order) =>
+  page.evaluate((order) => {
+    const links = [...document.querySelectorAll<HTMLLinkElement>("link[rel=stylesheet]")];
+    // A disabled link has no sheet to read, so each one's rules are kept the first time.
+    const sheets = ((window as unknown as { sheetRules?: Record<string, string> }).sheetRules ??=
+      {});
+    links.forEach((link, index) => {
+      link.dataset.order ??= String(index);
+      sheets[link.dataset.order] ??= Array.from(link.sheet!.cssRules, (rule) => rule.cssText).join(
+        "\n",
+      );
+    });
+    const isIndex = (link: HTMLLinkElement) => /\/index-[\w-]+\.css$/.test(link.href);
+    const components = links.filter((link) => !isIndex(link));
+    const ordered = order === "built" ? links : [...components.reverse(), ...links.filter(isIndex)];
+    document.querySelectorAll("style[data-order]").forEach((style) => style.remove());
+    for (const link of ordered) {
+      const style = document.head.appendChild(document.createElement("style"));
+      style.dataset.order = link.dataset.order;
+      style.textContent = sheets[link.dataset.order!];
+    }
+    // A hovered control is still easing toward its hover color, and where it is differs by when it was read.
+    const still = document.head.appendChild(document.createElement("style"));
+    still.dataset.order = "transitions";
+    still.textContent = "*, *::before, *::after { transition: none !important; }";
+    links.forEach((link) => {
+      link.disabled = true;
+    });
+    const found: Record<string, string> = {};
+    const walk = (element: Element, path: string) => {
+      const style = getComputedStyle(element);
+      // A custom property is read through what it feeds. An ID a component generates differs between renders.
+      for (const property of style)
+        if (!property.startsWith("--"))
+          found[`${path} ${property}`] = style
+            .getPropertyValue(property)
+            .replace(/url\("#[^"]*"\)/g, "url(#id)");
+      [...element.children]
+        .filter((child) => !["SCRIPT", "STYLE", "LINK"].includes(child.tagName))
+        .forEach((child, index) =>
+          walk(
+            child,
+            `${path} > ${child.tagName.toLowerCase()}${[...child.classList].map((name) => `.${name}`).join("")}:${index}`,
+          ),
+        );
+    };
+    walk(document.body, "body");
+    return found;
+  }, order);
 
 // One test per screen and scheme, each far inside the default timeout, so a slow runner has room.
 for (const colorScheme of ["light", "dark"] as const) {
   for (const [name, reach] of SCREENS) {
-    test(`${name} reads the same in the build's stylesheet order and the dev server's, ${colorScheme}`, async ({ page }) => {
+    test(`${name} reads the same in the build's stylesheet order and the dev server's, ${colorScheme}`, async ({
+      page,
+    }) => {
       await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
       await signIn(page);
       await reach(page);

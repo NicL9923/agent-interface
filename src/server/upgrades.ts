@@ -1,10 +1,27 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import type { Runtime, User } from "../shared/types.js";
-import type { UpgradeControlAction, UpgradeControlRequest, UpgradeInstallRequest, UpgradeStatus } from "../shared/upgrades.js";
+import type {
+  UpgradeControlAction,
+  UpgradeControlRequest,
+  UpgradeInstallRequest,
+  UpgradeStatus,
+} from "../shared/upgrades.js";
 import type { Config } from "./config.js";
 import { httpError } from "./http-error.js";
 
@@ -18,60 +35,159 @@ const LAUNCH_LOGS_KEPT = 10;
  * the app's child can never pass the browser probe. Under systemd the worker runs as its own
  * transient user unit instead, outside the app's namespace and cgroup.
  */
-export function transientRunner(env: NodeJS.ProcessEnv = process.env, runner = "/usr/bin/systemd-run"): string | false {
+export function transientRunner(
+  env: NodeJS.ProcessEnv = process.env,
+  runner = "/usr/bin/systemd-run",
+): string | false {
   return env.INVOCATION_ID && env.XDG_RUNTIME_DIR && existsSync(runner) ? runner : false;
 }
-export function launchWorker(settings: WorkerSettings, args: { action: string; operationId: string },
-  script = resolve("scripts/hermes-upgrade-worker.py"), runner: string | false = transientRunner()) {
+export function launchWorker(
+  settings: WorkerSettings,
+  args: { action: string; operationId: string },
+  script = resolve("scripts/hermes-upgrade-worker.py"),
+  runner: string | false = transientRunner(),
+) {
   const directory = settings.stateDirectory;
-  const logs = readdirSync(directory).filter(name => /^worker-launch-.+\.log$/.test(name))
-    .map(name => ({ name, at: lstatSync(join(directory, name)).mtimeMs })).sort((a, b) => b.at - a.at);
-  for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1)) rmSync(join(directory, name), { force: true });
+  const logs = readdirSync(directory)
+    .filter((name) => /^worker-launch-.+\.log$/.test(name))
+    .map((name) => ({ name, at: lstatSync(join(directory, name)).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  for (const { name } of logs.slice(LAUNCH_LOGS_KEPT - 1))
+    rmSync(join(directory, name), { force: true });
   // Exclusive creation never follows or reuses an existing path.
-  const logPath = join(directory, `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`);
+  const logPath = join(
+    directory,
+    `worker-launch-${new Date().toISOString().replace(/[:.]/g, "")}-${randomUUID()}.log`,
+  );
   const log = openSync(logPath, "wx", 0o600);
-  const argv = [script, "--config", settings.workerConfig, "--state-dir", settings.stateDirectory,
-    "--action", args.action, "--operation-id", args.operationId];
+  const argv = [
+    script,
+    "--config",
+    settings.workerConfig,
+    "--state-dir",
+    settings.stateDirectory,
+    "--action",
+    args.action,
+    "--operation-id",
+    args.operationId,
+  ];
   const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", LANG: "C.UTF-8" };
   try {
-    if (!runner) return spawn(settings.python, argv, { detached: true, stdio: ["ignore", log, log], env });
+    if (!runner)
+      return spawn(settings.python, argv, { detached: true, stdio: ["ignore", log, log], env });
     // exec: systemd-run fails if Python itself cannot start. ExitType=cgroup: hooks the worker
     // left behind keep running to their end instead of being killed when it exits, as they
     // did as orphans before. Paths reach Python as written, with no `$` expansion.
-    const child = spawn(runner, ["--user", "--collect", "--quiet", "--service-type=exec", "--expand-environment=no",
-      `--unit=agent-interface-upgrade-${randomUUID()}`, `--working-directory=${process.cwd()}`,
-      "--property=ExitType=cgroup", "--property=UMask=0077",
-      `--property=StandardOutput=append:${logPath}`, `--property=StandardError=append:${logPath}`,
-      ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`), "--", settings.python, ...argv],
-    { stdio: ["ignore", log, log], env: { ...env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "" } });
+    const child = spawn(
+      runner,
+      [
+        "--user",
+        "--collect",
+        "--quiet",
+        "--service-type=exec",
+        "--expand-environment=no",
+        `--unit=agent-interface-upgrade-${randomUUID()}`,
+        `--working-directory=${process.cwd()}`,
+        "--property=ExitType=cgroup",
+        "--property=UMask=0077",
+        `--property=StandardOutput=append:${logPath}`,
+        `--property=StandardError=append:${logPath}`,
+        ...Object.entries(env).map(([key, value]) => `--setenv=${key}=${value}`),
+        "--",
+        settings.python,
+        ...argv,
+      ],
+      {
+        stdio: ["ignore", log, log],
+        env: { ...env, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "" },
+      },
+    );
     // systemd-run returns once the unit starts; a refusal means the worker never ran.
-    child.on("exit", code => { if (code) child.emit("error", new Error(`systemd-run exited with ${code}`)); });
+    child.on("exit", (code) => {
+      if (code) child.emit("error", new Error(`systemd-run exited with ${code}`));
+    });
     return child;
   } finally {
     closeSync(log);
   }
 }
-const phases = ["idle", "checking", "qualifying", "ready", "installing", "verifying", "succeeded", "blocked", "failed", "rolled_back", "recovering", "cancelled"] as const;
+const phases = [
+  "idle",
+  "checking",
+  "qualifying",
+  "ready",
+  "installing",
+  "verifying",
+  "succeeded",
+  "blocked",
+  "failed",
+  "rolled_back",
+  "recovering",
+  "cancelled",
+] as const;
 // A bad date only loses its label; it must never invalidate the record and close the maintenance gate.
-const committedAt = z.string().refine(value => !Number.isNaN(Date.parse(value))).optional().catch(undefined);
-const revision = z.object({ revision: z.string().regex(/^[a-f0-9]{40}$/), version: z.string().optional(), notesUrl: z.string().url().optional(), committedAt });
-const stateSchema = z.object({
-  phase: z.enum(phases), message: z.string(), current: revision.optional(), candidate: revision.optional(),
-  checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["pending", "running", "passed", "failed"]), detail: z.string().optional() })),
-  operationId: z.string().optional(), error: z.string().nullable().transform(value => value ?? undefined).optional(), checkedAt: z.string().optional(), updatedAt: z.string().optional(),
-  workerPid: z.number().int().positive().optional(), maintenance: z.boolean().optional(), requestId: z.string().optional(),
-}).passthrough();
+const committedAt = z
+  .string()
+  .refine((value) => !Number.isNaN(Date.parse(value)))
+  .optional()
+  .catch(undefined);
+const revision = z.object({
+  revision: z.string().regex(/^[a-f0-9]{40}$/),
+  version: z.string().optional(),
+  notesUrl: z.string().url().optional(),
+  committedAt,
+});
+const stateSchema = z
+  .object({
+    phase: z.enum(phases),
+    message: z.string(),
+    current: revision.optional(),
+    candidate: revision.optional(),
+    checks: z.array(
+      z.object({
+        id: z.string(),
+        label: z.string(),
+        status: z.enum(["pending", "running", "passed", "failed"]),
+        detail: z.string().optional(),
+      }),
+    ),
+    operationId: z.string().optional(),
+    error: z
+      .string()
+      .nullable()
+      .transform((value) => value ?? undefined)
+      .optional(),
+    checkedAt: z.string().optional(),
+    updatedAt: z.string().optional(),
+    workerPid: z.number().int().positive().optional(),
+    maintenance: z.boolean().optional(),
+    requestId: z.string().optional(),
+  })
+  .passthrough();
 type WorkerState = z.infer<typeof stateSchema>;
-interface InstallReceipt { candidateRevision: string; operationId: string; status: "pending" | "complete"; result?: WorkerState }
+interface InstallReceipt {
+  candidateRevision: string;
+  operationId: string;
+  status: "pending" | "complete";
+  result?: WorkerState;
+}
 const active = new Set(["checking", "qualifying", "installing", "verifying", "recovering"]);
 const writePrivate = (file: string, value: unknown) => {
   const temporary = `${file}.${randomUUID()}.tmp`;
   const descriptor = openSync(temporary, "wx", 0o600);
-  try { writeFileSync(descriptor, JSON.stringify(value) + "\n"); fsyncSync(descriptor); }
-  finally { closeSync(descriptor); }
+  try {
+    writeFileSync(descriptor, JSON.stringify(value) + "\n");
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
   renameSync(temporary, file);
   const directory = openSync(dirname(file), "r");
-  try { fsyncSync(directory); } finally { closeSync(directory); }
+  try {
+    fsyncSync(directory);
+  } finally {
+    closeSync(directory);
+  }
 };
 
 /** Installer-owned local worker. Browser requests can name only an already qualified SHA. */
@@ -82,22 +198,41 @@ export class HermesUpgrades {
   private serial: Promise<unknown> = Promise.resolve();
   /** Whether this person may see the assistant; the app installs its visibility rule. */
   visibleTo: (botId: string, userId: string) => boolean = () => true;
-  constructor(private config: Config, private runtime: Runtime,
-    private launch: (args: { action: "check" | "install" | UpgradeControlAction; operationId: string }) => void = args => {
+  constructor(
+    private config: Config,
+    private runtime: Runtime,
+    private launch: (args: {
+      action: "check" | "install" | UpgradeControlAction;
+      operationId: string;
+    }) => void = (args) => {
       const child = launchWorker(this.config.hermesUpgrade!, args);
       child.on("error", () => {
         const state = this.read();
-        if (state.operationId === args.operationId) this.save({ ...state, phase: "failed", message: "The upgrade worker could not start. Ask the installer to check its configuration.", error: "worker_start_failed" });
+        if (state.operationId === args.operationId)
+          this.save({
+            ...state,
+            phase: "failed",
+            message:
+              "The upgrade worker could not start. Ask the installer to check its configuration.",
+            error: "worker_start_failed",
+          });
       });
       child.unref();
-    }) {
+    },
+  ) {
     const settings = config.hermesUpgrade;
     if (!settings) return;
     const privatePath = (path: string, directory = false) => {
       if (directory) mkdirSync(path, { recursive: true, mode: 0o700 });
       const info = lstatSync(path);
-      if ((info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid()) || (directory ? !info.isDirectory() : !info.isFile()))
-        throw new Error("Hermes upgrade configuration and state must be owned by the app user and inaccessible to other users");
+      if (
+        (info.mode & 0o077) !== 0 ||
+        (process.getuid && info.uid !== process.getuid()) ||
+        (directory ? !info.isDirectory() : !info.isFile())
+      )
+        throw new Error(
+          "Hermes upgrade configuration and state must be owned by the app user and inaccessible to other users",
+        );
     };
     privatePath(settings.workerConfig);
     privatePath(settings.stateDirectory, true);
@@ -106,134 +241,329 @@ export class HermesUpgrades {
     this.controlsDirectory = join(settings.stateDirectory, "controls");
     privatePath(this.controlsDirectory, true);
     this.stateFile = join(settings.stateDirectory, "status.json");
-    if (!existsSync(this.stateFile)) this.save({ phase: "idle", checks: [], message: "Check for a Hermes update when you're ready." });
+    if (!existsSync(this.stateFile))
+      this.save({
+        phase: "idle",
+        checks: [],
+        message: "Check for a Hermes update when you're ready.",
+      });
     // Recover a crash between durable admission and the status write. No worker
     // can have started until the admitted status was saved.
     const state = this.read();
-    for (const file of readdirSync(this.requestsDirectory).filter(file => file.endsWith(".json"))) {
+    for (const file of readdirSync(this.requestsDirectory).filter((file) =>
+      file.endsWith(".json"),
+    )) {
       try {
         const receipt = JSON.parse(readFileSync(join(this.requestsDirectory, file), "utf8"));
-        if (receipt.status === "pending" && receipt.predecessorOperationId === state.operationId && state.phase === "ready" && receipt.admittedState?.operationId === receipt.operationId)
+        if (
+          receipt.status === "pending" &&
+          receipt.predecessorOperationId === state.operationId &&
+          state.phase === "ready" &&
+          receipt.admittedState?.operationId === receipt.operationId
+        )
           this.save(stateSchema.parse(receipt.admittedState));
-      } catch { /* Damaged admissions keep the maintenance gate closed. */ }
+      } catch {
+        /* Damaged admissions keep the maintenance gate closed. */
+      }
     }
   }
   /** When a recorded Hermes revision was committed, for showing a date instead of a hash. */
   revisionDate(revision?: string) {
     if (!revision || !this.stateFile) return undefined;
     const state = this.read();
-    return [state.current, state.candidate].find(item => item?.revision === revision)?.committedAt;
+    return [state.current, state.candidate].find((item) => item?.revision === revision)
+      ?.committedAt;
   }
-  private save(state: WorkerState) { if (this.stateFile) writePrivate(this.stateFile, { ...state, updatedAt: new Date().toISOString() }); }
+  private save(state: WorkerState) {
+    if (this.stateFile)
+      writePrivate(this.stateFile, { ...state, updatedAt: new Date().toISOString() });
+  }
   private read(): WorkerState {
-    if (!this.stateFile) return { phase: "blocked", checks: [], message: "Hermes upgrades have not been enabled by this installation's administrator." };
-    try { return stateSchema.parse(JSON.parse(readFileSync(this.stateFile, "utf8"))); }
-    catch { return { phase: "blocked", checks: [], maintenance: true, message: "The upgrade record needs installer review before Hermes can accept changes.", error: "invalid_upgrade_record" }; }
+    if (!this.stateFile)
+      return {
+        phase: "blocked",
+        checks: [],
+        message: "Hermes upgrades have not been enabled by this installation's administrator.",
+      };
+    try {
+      return stateSchema.parse(JSON.parse(readFileSync(this.stateFile, "utf8")));
+    } catch {
+      return {
+        phase: "blocked",
+        checks: [],
+        maintenance: true,
+        message: "The upgrade record needs installer review before Hermes can accept changes.",
+        error: "invalid_upgrade_record",
+      };
+    }
   }
   private async workerHeld() {
     if (!this.config.hermesUpgrade) return false;
     const settings = this.config.hermesUpgrade;
-    return new Promise<boolean>(resolveHeld => {
-      const probe = spawn(settings.python, ["-c", "import fcntl,os,sys\nf=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600)\ntry: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(1)", join(settings.stateDirectory, "worker.lock")], { stdio: "ignore", timeout: 2000 });
+    return new Promise<boolean>((resolveHeld) => {
+      const probe = spawn(
+        settings.python,
+        [
+          "-c",
+          "import fcntl,os,sys\nf=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600)\ntry: fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(1)",
+          join(settings.stateDirectory, "worker.lock"),
+        ],
+        { stdio: "ignore", timeout: 2000 },
+      );
       probe.on("error", () => resolveHeld(true));
-      probe.on("exit", code => resolveHeld(code !== 0));
+      probe.on("exit", (code) => resolveHeld(code !== 0));
     });
   }
-  private recoveryEligibility(state: WorkerState): { restore: boolean; restart: boolean; reason?: string } {
+  private recoveryEligibility(state: WorkerState): {
+    restore: boolean;
+    restart: boolean;
+    reason?: string;
+  } {
     const none = { restore: false, restart: false };
     try {
       const settings = JSON.parse(readFileSync(this.config.hermesUpgrade!.workerConfig, "utf8"));
       const finish = settings.hooks?.finish;
-      const hooks = Boolean(settings.hooks?.recover && settings.hooks?.restart_service || Array.isArray(finish) && finish.at(-1) === "finish" && finish.some((arg: string) => arg.endsWith("/hermes-upgrade-linux.py")));
-      const qualification = state.qualification as { stage?: string; currentRevision?: string; currentPatchSha256?: string; candidateRevision?: string; candidatePatchSha256?: string; integrationDigest?: string } | undefined;
-      if (!hooks || !qualification?.stage || resolve(dirname(qualification.stage)) !== resolve(settings.stageRoot)) return none;
+      const hooks = Boolean(
+        (settings.hooks?.recover && settings.hooks?.restart_service) ||
+        (Array.isArray(finish) &&
+          finish.at(-1) === "finish" &&
+          finish.some((arg: string) => arg.endsWith("/hermes-upgrade-linux.py"))),
+      );
+      const qualification = state.qualification as
+        | {
+            stage?: string;
+            currentRevision?: string;
+            currentPatchSha256?: string;
+            candidateRevision?: string;
+            candidatePatchSha256?: string;
+            integrationDigest?: string;
+          }
+        | undefined;
+      if (
+        !hooks ||
+        !qualification?.stage ||
+        resolve(dirname(qualification.stage)) !== resolve(settings.stageRoot)
+      )
+        return none;
       const stage = qualification.stage;
-      const journalPath = join(stage, "recovery.json"), platformPath = join(stage, "platform.json");
-      const journal = existsSync(journalPath) ? JSON.parse(readFileSync(journalPath, "utf8")) : undefined;
+      const journalPath = join(stage, "recovery.json"),
+        platformPath = join(stage, "platform.json");
+      const journal = existsSync(journalPath)
+        ? JSON.parse(readFileSync(journalPath, "utf8"))
+        : undefined;
       if (journal && journal.operationId !== state.operationId) return none;
-      if (journal?.releaseStarted) return { ...none, reason: "Admission release may have started. The installer must review Hermes before any restart or rollback." };
+      if (journal?.releaseStarted)
+        return {
+          ...none,
+          reason:
+            "Admission release may have started. The installer must review Hermes before any restart or rollback.",
+        };
       if (journal && !journal.hostHookStarted) return { restore: true, restart: false };
       // An admitted worker which has not started a hook can be cancelled safely.
-      if (!journal && !existsSync(platformPath) && (state.phase === "installing" || state.phase === "failed" && state.error === "worker_start_failed") && !state.checks.some(check => ["quiescence", "backup", "install"].includes(check.id))) return { restore: true, restart: false };
+      if (
+        !journal &&
+        !existsSync(platformPath) &&
+        (state.phase === "installing" ||
+          (state.phase === "failed" && state.error === "worker_start_failed")) &&
+        !state.checks.some((check) => ["quiescence", "backup", "install"].includes(check.id))
+      )
+        return { restore: true, restart: false };
       if (!existsSync(platformPath)) return none;
       const platform = JSON.parse(readFileSync(platformPath, "utf8"));
       if (Array.isArray(finish) && finish.includes("--config")) {
-        const platformConfig = JSON.parse(readFileSync(finish[finish.indexOf("--config") + 1], "utf8"));
+        const platformConfig = JSON.parse(
+          readFileSync(finish[finish.indexOf("--config") + 1], "utf8"),
+        );
         const gate = JSON.parse(readFileSync(platformConfig.maintenanceFile, "utf8"));
-        if (gate.operationId !== state.operationId) return { ...none, reason: "The saved maintenance gate has lost ownership. The installer must review recovery." };
+        if (gate.operationId !== state.operationId)
+          return {
+            ...none,
+            reason:
+              "The saved maintenance gate has lost ownership. The installer must review recovery.",
+          };
       }
-      if (platform.operationId !== state.operationId || ["releasing", "finished", "rejected"].includes(platform.phase)) return { ...none, reason: "Native admission ownership or release needs installer review before recovery." };
-      const previous = journal?.previousReceipt ? JSON.parse(Buffer.from(journal.previousReceipt, "base64").toString("utf8")) : undefined;
-      const deployed = existsSync(settings.qualificationReceipt) ? JSON.parse(readFileSync(settings.qualificationReceipt, "utf8")) : undefined;
-      const attested = (receipt: typeof deployed) => receipt?.schemaVersion === 1 && receipt?.checks?.realIntegration === true && receipt?.checks?.hostRegressions === true && typeof receipt?.qualifiedAt === "string" && receipt?.integrationDigest === qualification.integrationDigest;
-      const attestsBaseline = (receipt: typeof deployed) => attested(receipt) && receipt?.revision === qualification.currentRevision && receipt?.trackedPatchSha256 === qualification.currentPatchSha256 && receipt?.integrationDigest === qualification.integrationDigest;
-      return { restore: attestsBaseline(previous) || attestsBaseline(deployed), restart: attested(deployed) && (attestsBaseline(deployed) || deployed.revision === qualification.candidateRevision && deployed.trackedPatchSha256 === qualification.candidatePatchSha256),
-        reason: !attestsBaseline(previous) && !attestsBaseline(deployed) ? "The original qualification receipt is unavailable. Restore cannot be offered; service recovery must verify the recorded installed source." : undefined };
-    } catch { return none; }
+      if (
+        platform.operationId !== state.operationId ||
+        ["releasing", "finished", "rejected"].includes(platform.phase)
+      )
+        return {
+          ...none,
+          reason: "Native admission ownership or release needs installer review before recovery.",
+        };
+      const previous = journal?.previousReceipt
+        ? JSON.parse(Buffer.from(journal.previousReceipt, "base64").toString("utf8"))
+        : undefined;
+      const deployed = existsSync(settings.qualificationReceipt)
+        ? JSON.parse(readFileSync(settings.qualificationReceipt, "utf8"))
+        : undefined;
+      const attested = (receipt: typeof deployed) =>
+        receipt?.schemaVersion === 1 &&
+        receipt?.checks?.realIntegration === true &&
+        receipt?.checks?.hostRegressions === true &&
+        typeof receipt?.qualifiedAt === "string" &&
+        receipt?.integrationDigest === qualification.integrationDigest;
+      const attestsBaseline = (receipt: typeof deployed) =>
+        attested(receipt) &&
+        receipt?.revision === qualification.currentRevision &&
+        receipt?.trackedPatchSha256 === qualification.currentPatchSha256 &&
+        receipt?.integrationDigest === qualification.integrationDigest;
+      return {
+        restore: attestsBaseline(previous) || attestsBaseline(deployed),
+        restart:
+          attested(deployed) &&
+          (attestsBaseline(deployed) ||
+            (deployed.revision === qualification.candidateRevision &&
+              deployed.trackedPatchSha256 === qualification.candidatePatchSha256)),
+        reason:
+          !attestsBaseline(previous) && !attestsBaseline(deployed)
+            ? "The original qualification receipt is unavailable. Restore cannot be offered; service recovery must verify the recorded installed source."
+            : undefined,
+      };
+    } catch {
+      return none;
+    }
   }
-  private controlIntent(operationId?: string): { action: UpgradeControlAction; requestId: string; status: string; startedAt?: string } | undefined {
+  private controlIntent(
+    operationId?: string,
+  ):
+    | { action: UpgradeControlAction; requestId: string; status: string; startedAt?: string }
+    | undefined {
     if (!this.controlsDirectory || !operationId) return;
     try {
       const file = join(this.controlsDirectory, `${operationId}.json`);
       return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : undefined;
-    } catch { return { action: "cancel", requestId: "invalid", status: "pending" }; }
+    } catch {
+      return { action: "cancel", requestId: "invalid", status: "pending" };
+    }
   }
   private pendingInstall() {
     if (!this.requestsDirectory) return false;
     try {
       const state = this.read();
-      return readdirSync(this.requestsDirectory).filter(file => file.endsWith(".json")).some(file => {
-        const receipt = JSON.parse(readFileSync(join(this.requestsDirectory!, file), "utf8"));
-        if (receipt.status === "complete") return false;
-        // The worker writes its verified outcome before completing this receipt.
-        // A crash between those writes must not leave a completed update paused.
-        if (receipt.operationId === state.operationId && file === `${state.requestId}.json` && state.maintenance === false && ["succeeded", "rolled_back", "blocked", "cancelled"].includes(state.phase)) {
-          writePrivate(join(this.requestsDirectory!, file), { ...receipt, status: "complete", result: state });
-          return false;
-        }
-        return true;
-      });
+      return readdirSync(this.requestsDirectory)
+        .filter((file) => file.endsWith(".json"))
+        .some((file) => {
+          const receipt = JSON.parse(readFileSync(join(this.requestsDirectory!, file), "utf8"));
+          if (receipt.status === "complete") return false;
+          // The worker writes its verified outcome before completing this receipt.
+          // A crash between those writes must not leave a completed update paused.
+          if (
+            receipt.operationId === state.operationId &&
+            file === `${state.requestId}.json` &&
+            state.maintenance === false &&
+            ["succeeded", "rolled_back", "blocked", "cancelled"].includes(state.phase)
+          ) {
+            writePrivate(join(this.requestsDirectory!, file), {
+              ...receipt,
+              status: "complete",
+              result: state,
+            });
+            return false;
+          }
+          return true;
+        });
+    } catch {
+      return true;
     }
-    catch { return true; }
   }
-  maintenance() { return Boolean(this.config.hermesUpgrade && (this.read().maintenance || this.pendingInstall())); }
-  private administrator(user: User) { return Boolean(this.config.hermesUpgrade?.adminEmails.includes(user.email.toLowerCase())); }
+  maintenance() {
+    return Boolean(this.config.hermesUpgrade && (this.read().maintenance || this.pendingInstall()));
+  }
+  private administrator(user: User) {
+    return Boolean(this.config.hermesUpgrade?.adminEmails.includes(user.email.toLowerCase()));
+  }
   private async busyBots(user: User) {
     try {
       const status = await this.runtime.status();
       if (!status.connected) return ["Hermes connection unavailable"];
       // Another member's private assistant still blocks the update, as one unnamed entry however
       // many are busy. That entry shows some assistant is working, a documented privacy limit.
-      const busy = (await this.runtime.listBots()).filter(bot => ["thinking", "working", "waiting", "blocked"].includes(bot.activity));
-      const shown = busy.filter(bot => this.visibleTo(bot.id, user.id)).map(bot => bot.name);
+      const busy = (await this.runtime.listBots()).filter((bot) =>
+        ["thinking", "working", "waiting", "blocked"].includes(bot.activity),
+      );
+      const shown = busy.filter((bot) => this.visibleTo(bot.id, user.id)).map((bot) => bot.name);
       return shown.length < busy.length ? [...shown, "An assistant"] : shown;
-    } catch { return ["Hermes activity unavailable"]; }
+    } catch {
+      return ["Hermes activity unavailable"];
+    }
   }
   async status(user: User): Promise<UpgradeStatus> {
     const state = this.read();
-    const available = Boolean(this.config.hermesUpgrade), administrator = this.administrator(user);
+    const available = Boolean(this.config.hermesUpgrade),
+      administrator = this.administrator(user);
     const busyBots = available && !this.maintenance() ? await this.busyBots(user) : [];
     const starting = Boolean(state.updatedAt && Date.now() - Date.parse(state.updatedAt) < 15000);
-    const held = available && await this.workerHeld();
+    const held = available && (await this.workerHeld());
     const abandoned = active.has(state.phase) && !held && !starting;
     const intent = this.controlIntent(state.operationId);
-    const controlling = intent?.status === "pending" && (held || Boolean(intent.startedAt && Date.now() - Date.parse(intent.startedAt) < 15000));
+    const controlling =
+      intent?.status === "pending" &&
+      (held || Boolean(intent.startedAt && Date.now() - Date.parse(intent.startedAt) < 15000));
     const recovery = this.recoveryEligibility(state);
     const controllable = available && administrator && !!state.operationId && !controlling;
     const maintenance = this.maintenance();
-    return { available, phase: abandoned ? "blocked" : state.phase, current: state.current, candidate: state.candidate,
-      message: controlling && state.phase !== "recovering" ? "Your recovery request is saved. Waiting for the current command to reach a safe boundary." : maintenance && recovery.reason ? recovery.reason : abandoned ? "The update stopped before it finished. Choose a recovery action to continue safely."
-        : available && !administrator ? "This installation's administrator manages Hermes updates." : state.message,
-      checks: state.checks, operationId: state.operationId,
+    return {
+      available,
+      phase: abandoned ? "blocked" : state.phase,
+      current: state.current,
+      candidate: state.candidate,
+      message:
+        controlling && state.phase !== "recovering"
+          ? "Your recovery request is saved. Waiting for the current command to reach a safe boundary."
+          : maintenance && recovery.reason
+            ? recovery.reason
+            : abandoned
+              ? "The update stopped before it finished. Choose a recovery action to continue safely."
+              : available && !administrator
+                ? "This installation's administrator manages Hermes updates."
+                : state.message,
+      checks: state.checks,
+      operationId: state.operationId,
       // Only an install admission records a request ID; checks and retries never do.
-      operation: state.operationId ? ["installing", "verifying", "recovering", "rolled_back"].includes(state.phase) || state.requestId ? "install" : "check" : undefined,
-      controlRequestId: controlling ? intent.requestId : undefined, controlAction: controlling ? intent.action : undefined, error: abandoned ? "worker_interrupted" : state.error,
-      checkedAt: state.checkedAt, updatedAt: state.updatedAt, busyBots,
-      canCheck: available && administrator && !maintenance && !held && !controlling && (!active.has(state.phase) || abandoned),
-      canRetry: controllable && !starting && !held && (!active.has(state.phase) || abandoned) && ["blocked", "failed", "rolled_back", "cancelled"].includes(abandoned ? "blocked" : state.phase) && (!maintenance || recovery.restore),
-      canCancel: controllable && (!starting || held) && (active.has(state.phase) || maintenance || state.phase === "ready") && (!maintenance || recovery.restore),
+      operation: state.operationId
+        ? ["installing", "verifying", "recovering", "rolled_back"].includes(state.phase) ||
+          state.requestId
+          ? "install"
+          : "check"
+        : undefined,
+      controlRequestId: controlling ? intent.requestId : undefined,
+      controlAction: controlling ? intent.action : undefined,
+      error: abandoned ? "worker_interrupted" : state.error,
+      checkedAt: state.checkedAt,
+      updatedAt: state.updatedAt,
+      busyBots,
+      canCheck:
+        available &&
+        administrator &&
+        !maintenance &&
+        !held &&
+        !controlling &&
+        (!active.has(state.phase) || abandoned),
+      canRetry:
+        controllable &&
+        !starting &&
+        !held &&
+        (!active.has(state.phase) || abandoned) &&
+        ["blocked", "failed", "rolled_back", "cancelled"].includes(
+          abandoned ? "blocked" : state.phase,
+        ) &&
+        (!maintenance || recovery.restore),
+      canCancel:
+        controllable &&
+        (!starting || held) &&
+        (active.has(state.phase) || maintenance || state.phase === "ready") &&
+        (!maintenance || recovery.restore),
       canRestartService: controllable && !starting && maintenance && recovery.restart && !held,
-      canInstall: available && administrator && !maintenance && !busyBots.length && state.phase === "ready" && !!state.candidate && !held && !controlling };
+      canInstall:
+        available &&
+        administrator &&
+        !maintenance &&
+        !busyBots.length &&
+        state.phase === "ready" &&
+        !!state.candidate &&
+        !held &&
+        !controlling,
+    };
   }
   private exclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.serial.then(work, work);
@@ -241,68 +571,155 @@ export class HermesUpgrades {
     return result;
   }
   private authorized(user: User) {
-    if (!this.config.hermesUpgrade) throw httpError(409, "Hermes upgrades are not enabled on this installation");
-    if (!this.administrator(user)) throw httpError(403, "Only the installation's designated administrator can manage Hermes upgrades");
+    if (!this.config.hermesUpgrade)
+      throw httpError(409, "Hermes upgrades are not enabled on this installation");
+    if (!this.administrator(user))
+      throw httpError(
+        403,
+        "Only the installation's designated administrator can manage Hermes upgrades",
+      );
   }
-  control(user: User, input: UpgradeControlRequest) { return this.exclusive(async () => {
-    this.authorized(user);
-    input = z.object({ action: z.enum(["retry", "cancel", "restart_service"]), operationId: z.string().uuid(), requestId: z.string().uuid() }).strict().parse(input);
-    const receiptFile = join(this.controlsDirectory!, `request-${input.requestId}.json`);
-    if (existsSync(receiptFile)) {
-      const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
-      if (receipt.action !== input.action || receipt.operationId !== input.operationId) throw httpError(409, "This recovery request ID already belongs to another action");
-      const intent = this.controlIntent(input.operationId);
-      const lostLaunch = !intent || intent.requestId === input.requestId && intent.status === "pending" && (!intent.startedAt || Date.now() - Date.parse(intent.startedAt) >= 15000);
-      if (receipt.status === "pending" && lostLaunch && this.read().operationId === input.operationId && !await this.workerHeld()) {
-        writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), { ...receipt, startedAt: new Date().toISOString() });
-        this.launch({ action: input.action, operationId: input.operationId });
+  control(user: User, input: UpgradeControlRequest) {
+    return this.exclusive(async () => {
+      this.authorized(user);
+      input = z
+        .object({
+          action: z.enum(["retry", "cancel", "restart_service"]),
+          operationId: z.string().uuid(),
+          requestId: z.string().uuid(),
+        })
+        .strict()
+        .parse(input);
+      const receiptFile = join(this.controlsDirectory!, `request-${input.requestId}.json`);
+      if (existsSync(receiptFile)) {
+        const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+        if (receipt.action !== input.action || receipt.operationId !== input.operationId)
+          throw httpError(409, "This recovery request ID already belongs to another action");
+        const intent = this.controlIntent(input.operationId);
+        const lostLaunch =
+          !intent ||
+          (intent.requestId === input.requestId &&
+            intent.status === "pending" &&
+            (!intent.startedAt || Date.now() - Date.parse(intent.startedAt) >= 15000));
+        if (
+          receipt.status === "pending" &&
+          lostLaunch &&
+          this.read().operationId === input.operationId &&
+          !(await this.workerHeld())
+        ) {
+          writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), {
+            ...receipt,
+            startedAt: new Date().toISOString(),
+          });
+          this.launch({ action: input.action, operationId: input.operationId });
+        }
+        return this.status(user);
       }
+      const status = await this.status(user);
+      if (status.operationId !== input.operationId)
+        throw httpError(409, "This update changed. Refresh before choosing a recovery action");
+      const allowed =
+        input.action === "cancel"
+          ? status.canCancel
+          : input.action === "retry"
+            ? status.canRetry
+            : status.canRestartService;
+      if (!allowed)
+        throw httpError(
+          409,
+          "This recovery action is unavailable while another operation runs or the update requires installer review",
+        );
+      const intent = { ...input, status: "pending", startedAt: new Date().toISOString() };
+      writePrivate(receiptFile, intent);
+      writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
+      // A running worker consumes cancellation at its next safe command boundary.
+      if (!(await this.workerHeld()))
+        this.launch({ action: input.action, operationId: input.operationId });
       return this.status(user);
-    }
-    const status = await this.status(user);
-    if (status.operationId !== input.operationId) throw httpError(409, "This update changed. Refresh before choosing a recovery action");
-    const allowed = input.action === "cancel" ? status.canCancel : input.action === "retry" ? status.canRetry : status.canRestartService;
-    if (!allowed) throw httpError(409, "This recovery action is unavailable while another operation runs or the update requires installer review");
-    const intent = { ...input, status: "pending", startedAt: new Date().toISOString() };
-    writePrivate(receiptFile, intent);
-    writePrivate(join(this.controlsDirectory!, `${input.operationId}.json`), intent);
-    // A running worker consumes cancellation at its next safe command boundary.
-    if (!await this.workerHeld()) this.launch({ action: input.action, operationId: input.operationId });
-    return this.status(user);
-  }); }
-  check(user: User) { return this.exclusive(async () => {
-    this.authorized(user);
-    if (!(await this.status(user)).canCheck) throw httpError(409, "An upgrade is already running or requires installer review");
-    const operationId = randomUUID();
-    this.save({ phase: "checking", checks: [], operationId, message: "Looking for a Hermes update." });
-    this.launch({ action: "check", operationId });
-    return this.status(user);
-  }); }
-  install(user: User, input: UpgradeInstallRequest) { return this.exclusive(async () => {
-    input = z.object({ candidateRevision: z.string().regex(/^[a-f0-9]{40}$/), requestId: z.string().uuid() }).strict().parse(input);
-    this.authorized(user);
-    const requestFile = join(this.requestsDirectory!, `${input.requestId}.json`);
-    if (existsSync(requestFile)) {
-      const receipt = JSON.parse(readFileSync(requestFile, "utf8")) as InstallReceipt;
-      if (receipt.candidateRevision !== input.candidateRevision) throw httpError(409, "This upgrade request ID was already used for a different revision");
-      const current = await this.status(user);
-      if (current.operationId === receipt.operationId || !receipt.result) return current;
-      const result = receipt.result;
-      return { ...current, phase: result.phase, current: result.current, candidate: result.candidate,
-        message: result.message, checks: result.checks, operationId: result.operationId,
-        error: result.error, checkedAt: result.checkedAt, updatedAt: result.updatedAt, canCheck: false, canInstall: false, canRetry: false, canCancel: false, canRestartService: false };
-    }
-    const status = await this.status(user);
-    if (!status.canInstall || status.candidate?.revision !== input.candidateRevision)
-      throw httpError(409, status.busyBots.length ? "Wait for active Hermes work to finish before upgrading" : "Check and qualify this exact Hermes update before installing it");
-    const operationId = randomUUID();
-    // The pending receipt is also the durable maintenance gate. Persist it before launching.
-    const predecessor = this.read();
-    const admittedState = { ...predecessor, phase: "installing" as const, requestId: input.requestId, maintenance: true,
-      operationId, workerPid: undefined, message: "Installing the qualified Hermes update. Your conversations are saved." };
-    writePrivate(requestFile, { candidateRevision: input.candidateRevision, operationId, predecessorOperationId: predecessor.operationId, admittedState, status: "pending" });
-    this.save(admittedState);
-    this.launch({ action: "install", operationId });
-    return this.status(user);
-  }); }
+    });
+  }
+  check(user: User) {
+    return this.exclusive(async () => {
+      this.authorized(user);
+      if (!(await this.status(user)).canCheck)
+        throw httpError(409, "An upgrade is already running or requires installer review");
+      const operationId = randomUUID();
+      this.save({
+        phase: "checking",
+        checks: [],
+        operationId,
+        message: "Looking for a Hermes update.",
+      });
+      this.launch({ action: "check", operationId });
+      return this.status(user);
+    });
+  }
+  install(user: User, input: UpgradeInstallRequest) {
+    return this.exclusive(async () => {
+      input = z
+        .object({
+          candidateRevision: z.string().regex(/^[a-f0-9]{40}$/),
+          requestId: z.string().uuid(),
+        })
+        .strict()
+        .parse(input);
+      this.authorized(user);
+      const requestFile = join(this.requestsDirectory!, `${input.requestId}.json`);
+      if (existsSync(requestFile)) {
+        const receipt = JSON.parse(readFileSync(requestFile, "utf8")) as InstallReceipt;
+        if (receipt.candidateRevision !== input.candidateRevision)
+          throw httpError(409, "This upgrade request ID was already used for a different revision");
+        const current = await this.status(user);
+        if (current.operationId === receipt.operationId || !receipt.result) return current;
+        const result = receipt.result;
+        return {
+          ...current,
+          phase: result.phase,
+          current: result.current,
+          candidate: result.candidate,
+          message: result.message,
+          checks: result.checks,
+          operationId: result.operationId,
+          error: result.error,
+          checkedAt: result.checkedAt,
+          updatedAt: result.updatedAt,
+          canCheck: false,
+          canInstall: false,
+          canRetry: false,
+          canCancel: false,
+          canRestartService: false,
+        };
+      }
+      const status = await this.status(user);
+      if (!status.canInstall || status.candidate?.revision !== input.candidateRevision)
+        throw httpError(
+          409,
+          status.busyBots.length
+            ? "Wait for active Hermes work to finish before upgrading"
+            : "Check and qualify this exact Hermes update before installing it",
+        );
+      const operationId = randomUUID();
+      // The pending receipt is also the durable maintenance gate. Persist it before launching.
+      const predecessor = this.read();
+      const admittedState = {
+        ...predecessor,
+        phase: "installing" as const,
+        requestId: input.requestId,
+        maintenance: true,
+        operationId,
+        workerPid: undefined,
+        message: "Installing the qualified Hermes update. Your conversations are saved.",
+      };
+      writePrivate(requestFile, {
+        candidateRevision: input.candidateRevision,
+        operationId,
+        predecessorOperationId: predecessor.operationId,
+        admittedState,
+        status: "pending",
+      });
+      this.save(admittedState);
+      this.launch({ action: "install", operationId });
+      return this.status(user);
+    });
+  }
 }

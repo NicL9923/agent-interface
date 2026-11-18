@@ -11,7 +11,15 @@ const identity = (choice: ModelChoice) => JSON.stringify([choice.provider, choic
 const matchesProvider = (provider: ModelProvider, id: string) =>
   provider.id === id || provider.aliases?.includes(id);
 
-export function ModelSelector({ value, profile, favorites: initialFavorites, disabled, inline, onChange, onFavoritesSaved }: {
+export function ModelSelector({
+  value,
+  profile,
+  favorites: initialFavorites,
+  disabled,
+  inline,
+  onChange,
+  onFavoritesSaved,
+}: {
   value: ModelChoice;
   /** Renders only the searchable list, for the composer's model popover. */
   inline?: boolean;
@@ -34,99 +42,225 @@ export function ModelSelector({ value, profile, favorites: initialFavorites, dis
     const controller = new AbortController();
     setLoading(true);
     setError("");
-    void request("GET /models", { query: { botId: profile || undefined }, signal: controller.signal })
+    void request("GET /models", {
+      query: { botId: profile || undefined },
+      signal: controller.signal,
+    })
       .then((result) => {
         if (controller.signal.aborted) return;
-        if (!Array.isArray(result.providers)) throw new Error("Hermes returned an unreadable model catalog.");
+        if (!Array.isArray(result.providers))
+          throw new Error("Hermes returned an unreadable model catalog.");
         setCatalog(result);
       })
-      .catch((e: Error) => { if (!controller.signal.aborted) setError(e.message); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      .catch((e: Error) => {
+        if (!controller.signal.aborted) setError(e.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
     return () => controller.abort();
   }, [profile, retry]);
 
   const favoriteKeys = new Set(favorites.map(identity));
-  const sameProvider = (left: string, right: string) => left === right || !!catalog?.providers.some(provider =>
-    matchesProvider(provider, left) && matchesProvider(provider, right));
+  const sameProvider = (left: string, right: string) =>
+    left === right ||
+    !!catalog?.providers.some(
+      (provider) => matchesProvider(provider, left) && matchesProvider(provider, right),
+    );
   const query = search.trim().toLowerCase();
-  const selectedProvider = catalog?.providers.find((provider) => matchesProvider(provider, value.provider));
+  const selectedProvider = catalog?.providers.find((provider) =>
+    matchesProvider(provider, value.provider),
+  );
   const selectedName = selectedProvider?.name || value.provider;
-  const providers = (catalog?.providers || []).map((provider) => ({
-    ...provider,
-    models: provider.models.filter((model) => `${provider.name} ${model.name}`.toLowerCase().includes(query)),
-  })).filter((provider) => provider.models.length > 0 || !query);
+  const providers = (catalog?.providers || [])
+    .map((provider) => ({
+      ...provider,
+      models: provider.models.filter((model) =>
+        `${provider.name} ${model.name}`.toLowerCase().includes(query),
+      ),
+    }))
+    .filter((provider) => provider.models.length > 0 || !query);
   const favoriteChoices = favorites.flatMap((choice) => {
-    const provider = catalog?.providers.find((provider) => matchesProvider(provider, choice.provider));
+    const provider = catalog?.providers.find((provider) =>
+      matchesProvider(provider, choice.provider),
+    );
     const model = provider?.models.find((model) => model.id === choice.model);
     return provider && model && `${provider.name} ${model.name}`.toLowerCase().includes(query)
-      ? [{ choice, provider, model }] : [];
+      ? [{ choice, provider, model }]
+      : [];
   });
   const resultCount = providers.reduce((count, provider) => count + provider.models.length, 0);
-  const emptyMessage = !loading && !error && providers.length === 0
-    ? query ? "No models match your search." : "No connected models were reported. Connect a provider in Hermes, then retry." : "";
-  const statusMessage = loading ? "Loading models from Hermes…" : error ? "" : emptyMessage
-    || `${resultCount} ${resultCount === 1 ? "model" : "models"} ${query ? "match your search" : "available"}.`;
+  const emptyMessage =
+    !loading && !error && providers.length === 0
+      ? query
+        ? "No models match your search."
+        : "No connected models were reported. Connect a provider in Hermes, then retry."
+      : "";
+  const statusMessage = loading
+    ? "Loading models from Hermes…"
+    : error
+      ? ""
+      : emptyMessage ||
+        `${resultCount} ${resultCount === 1 ? "model" : "models"} ${query ? "match your search" : "available"}.`;
   const toggleFavorite = async (choice: ModelChoice) => {
     if (savingFavorite) return;
     const key = identity(choice);
-    const next = favoriteKeys.has(key) ? favorites.filter((item) => identity(item) !== key) : [...favorites, choice];
+    const next = favoriteKeys.has(key)
+      ? favorites.filter((item) => identity(item) !== key)
+      : [...favorites, choice];
     setSavingFavorite(true);
     setFavoriteError("");
     try {
       const result = await request("PUT /preferences/models", { body: { modelFavorites: next } });
       setFavorites(result.modelFavorites);
       onFavoritesSaved();
-    } catch (e) { setFavoriteError((e as Error).message); }
-    finally { setSavingFavorite(false); }
+    } catch (e) {
+      setFavoriteError((e as Error).message);
+    } finally {
+      setSavingFavorite(false);
+    }
   };
   const row = (choice: ModelChoice, name: string, available: boolean, providerName?: string) => {
     const selected = value.model === choice.model && sameProvider(value.provider, choice.provider);
-    const savedFavorite = favorites.find(item => item.model === choice.model && sameProvider(item.provider, choice.provider));
+    const savedFavorite = favorites.find(
+      (item) => item.model === choice.model && sameProvider(item.provider, choice.provider),
+    );
     const favorite = !!savedFavorite;
     // Keep an existing provider alias until the user explicitly chooses another model.
     const favoriteChoice = savedFavorite || choice;
-    return <div className="model-option" key={identity(choice)}>
-      <Button className="model-choice" aria-pressed={selected} data-unavailable={!available || undefined} disabled={disabled || !available}
-        onClick={() => onChange(choice)}>
-        <span><span className="model-name">{name}</span>{providerName && <small>{providerName}</small>}
-          {!available && <small>Reconnect in Hermes to use this model</small>}</span>
-        {selected && <Icon name="check" size={18} />}
-      </Button>
-      <Button className="model-favorite" data-favorite={favorite || undefined} aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`}
-        disabled={savingFavorite || favorites.length >= 100 && !favorite}
-        onClick={() => void toggleFavorite(favoriteChoice)}>
-        <Icon name="star" size={18} filled={favorite} />
-      </Button>
-    </div>;
+    return (
+      <div className="model-option" key={identity(choice)}>
+        <Button
+          className="model-choice"
+          aria-pressed={selected}
+          data-unavailable={!available || undefined}
+          disabled={disabled || !available}
+          onClick={() => onChange(choice)}
+        >
+          <span>
+            <span className="model-name">{name}</span>
+            {providerName && <small>{providerName}</small>}
+            {!available && <small>Reconnect in Hermes to use this model</small>}
+          </span>
+          {selected && <Icon name="check" size={18} />}
+        </Button>
+        <Button
+          className="model-favorite"
+          data-favorite={favorite || undefined}
+          aria-label={`${favorite ? "Remove" : "Add"} ${name} ${favorite ? "from" : "to"} favorites`}
+          disabled={savingFavorite || (favorites.length >= 100 && !favorite)}
+          onClick={() => void toggleFavorite(favoriteChoice)}
+        >
+          <Icon name="star" size={18} filled={favorite} />
+        </Button>
+      </div>
+    );
   };
-  const content = <div className="model-picker-content">
-        <div className="model-search-row"><label className="model-search"><span className="sr-only">Search models</span><Input type="search" value={search} placeholder="Search models"
-          onChange={(event) => setSearch(event.target.value)} /></label>
-        {!error && !!catalog?.providers.length && <Button className="model-refresh" aria-label="Refresh models" title="Refresh models" disabled={loading}
-          onClick={() => setRetry((n) => n + 1)}><Icon name="refresh" size={18} className={loading ? "spin" : undefined} /></Button>}
+  const content = (
+    <div className="model-picker-content">
+      <div className="model-search-row">
+        <label className="model-search">
+          <span className="sr-only">Search models</span>
+          <Input
+            type="search"
+            value={search}
+            placeholder="Search models"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        {!error && !!catalog?.providers.length && (
+          <Button
+            className="model-refresh"
+            aria-label="Refresh models"
+            title="Refresh models"
+            disabled={loading}
+            onClick={() => setRetry((n) => n + 1)}
+          >
+            <Icon name="refresh" size={18} className={loading ? "spin" : undefined} />
+          </Button>
+        )}
+      </div>
+      <p
+        className={loading || emptyMessage ? "muted model-status" : "sr-only"}
+        role="status"
+        aria-atomic="true"
+      >
+        {statusMessage}
+      </p>
+      {error && (
+        <div className="model-load-error">
+          <p role="alert">{error}</p>
+          <Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button>
         </div>
-        <p className={loading || emptyMessage ? "muted model-status" : "sr-only"} role="status" aria-atomic="true">{statusMessage}</p>
-        {error && <div className="model-load-error"><p role="alert">{error}</p><Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button></div>}
-        {favoriteError && <FormMessage tone="error">{favoriteError}</FormMessage>}
-        {favoriteChoices.length > 0 && <div className="model-favorites"><h3>Favorites</h3>
-          {favoriteChoices.map(({ choice, provider, model }) => row(choice, model.name, model.available, provider.name))}</div>}
-        {providers.map((provider) => <details className="model-provider" key={`${provider.id}:${!!query}`} open={query || matchesProvider(provider, value.provider) ? true : undefined}>
-          <summary><Icon name="chevron" size={16} /><span>{provider.name}</span><small>{provider.models.length}</small></summary>
+      )}
+      {favoriteError && <FormMessage tone="error">{favoriteError}</FormMessage>}
+      {favoriteChoices.length > 0 && (
+        <div className="model-favorites">
+          <h3>Favorites</h3>
+          {favoriteChoices.map(({ choice, provider, model }) =>
+            row(choice, model.name, model.available, provider.name),
+          )}
+        </div>
+      )}
+      {providers.map((provider) => (
+        <details
+          className="model-provider"
+          key={`${provider.id}:${!!query}`}
+          open={query || matchesProvider(provider, value.provider) ? true : undefined}
+        >
+          <summary>
+            <Icon name="chevron" size={16} />
+            <span>{provider.name}</span>
+            <small>{provider.models.length}</small>
+          </summary>
           {provider.warning && <p className="muted model-warning">{provider.warning}</p>}
-          {provider.models.map((model) => row({ provider: provider.id, model: model.id }, model.name, model.available))}
-          {provider.models.length === 0 && <p className="muted model-warning">No models reported. Check this connection in Hermes.</p>}
-        </details>)}
-        {!loading && !error && (catalog?.providers.length || 0) === 0 && <Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button>}
-      </div>;
-  if (inline) return <section className="model-selector inline" aria-label="Choose a model">{content}</section>;
-  return <section className="model-selector" aria-labelledby={labelId}>
-    <span className="model-label" id={labelId}>Model</span>
-    <details className="model-picker">
-      <summary><span><strong>{value.model || "Choose a model"}</strong><small>{selectedName || "Connected providers"}</small></span><Icon name="chevron" size={18} /></summary>
-      {content}
-    </details>
-    {value.model && !loading && !error && !selectedProvider?.models.some((model) => model.id === value.model) &&
-      <p className="muted model-saved-note">Your saved model is kept. Hermes did not include it in the current catalog.</p>}
-    <p className="muted model-saved-note">Model choices come from your connected Hermes providers. Star models to keep them handy.</p>
-  </section>;
+          {provider.models.map((model) =>
+            row({ provider: provider.id, model: model.id }, model.name, model.available),
+          )}
+          {provider.models.length === 0 && (
+            <p className="muted model-warning">
+              No models reported. Check this connection in Hermes.
+            </p>
+          )}
+        </details>
+      ))}
+      {!loading && !error && (catalog?.providers.length || 0) === 0 && (
+        <Button onClick={() => setRetry((n) => n + 1)}>Retry loading models</Button>
+      )}
+    </div>
+  );
+  if (inline)
+    return (
+      <section className="model-selector inline" aria-label="Choose a model">
+        {content}
+      </section>
+    );
+  return (
+    <section className="model-selector" aria-labelledby={labelId}>
+      <span className="model-label" id={labelId}>
+        Model
+      </span>
+      <details className="model-picker">
+        <summary>
+          <span>
+            <strong>{value.model || "Choose a model"}</strong>
+            <small>{selectedName || "Connected providers"}</small>
+          </span>
+          <Icon name="chevron" size={18} />
+        </summary>
+        {content}
+      </details>
+      {value.model &&
+        !loading &&
+        !error &&
+        !selectedProvider?.models.some((model) => model.id === value.model) && (
+          <p className="muted model-saved-note">
+            Your saved model is kept. Hermes did not include it in the current catalog.
+          </p>
+        )}
+      <p className="muted model-saved-note">
+        Model choices come from your connected Hermes providers. Star models to keep them handy.
+      </p>
+    </section>
+  );
 }

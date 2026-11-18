@@ -3,7 +3,14 @@ import { act, createElement, useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRoot, stubMatchMedia, type Mount } from "./ui-harness";
 import { Avatar } from "../src/components/Avatar";
-import { cheerFrames, glanceAtAvatar, nodFrames, POINTER_REST_MS, reactAvatar, useAvatarAttention } from "../src/components/avatar-attention";
+import {
+  cheerFrames,
+  glanceAtAvatar,
+  nodFrames,
+  POINTER_REST_MS,
+  reactAvatar,
+  useAvatarAttention,
+} from "../src/components/avatar-attention";
 import { morphNavigate } from "../src/app/navigation-morph";
 import { WorkTape } from "../src/app/WorkTape";
 import type { ToolCall } from "../src/shared/types";
@@ -18,21 +25,44 @@ const runFrames = async (count = 30) => {
     now += 1000 / 60;
     const queued = [...frames.values()];
     frames = new Map();
-    await act(async () => queued.forEach(callback => callback(now)));
+    await act(async () => queued.forEach((callback) => callback(now)));
   }
 };
-const box = (x: number, y: number, size = 60) => ({ left: x - size / 2, top: y - size / 2, right: x + size / 2, bottom: y + size / 2, width: size, height: size, x, y, toJSON() {} }) as DOMRect;
+const box = (x: number, y: number, size = 60) =>
+  ({
+    left: x - size / 2,
+    top: y - size / 2,
+    right: x + size / 2,
+    bottom: y + size / 2,
+    width: size,
+    height: size,
+    x,
+    y,
+    toJSON() {},
+  }) as DOMRect;
 
 beforeEach(() => {
   now = 0;
   frames = new Map();
   reduceMotion = false;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++nextFrame, callback); return nextFrame; });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  });
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => frames.delete(handle));
-  stubMatchMedia(query => query.includes("reduced-motion") && reduceMotion);
-  vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
-  Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
+  stubMatchMedia((query) => query.includes("reduced-motion") && reduceMotion);
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  Object.assign(SVGElement.prototype, {
+    getTotalLength: () => 100,
+    getPointAtLength: (length: number) => ({ x: length, y: 0 }),
+  });
   mount = mountRoot();
 });
 afterEach(() => {
@@ -49,7 +79,9 @@ describe("avatar reactions", () => {
     await act(async () => reactAvatar("ranch", "cheer"));
     expect(animate).toHaveBeenCalledWith(cheerFrames, expect.objectContaining({ duration: 760 }));
     expect(mount.container.querySelectorAll(".avatar-burst > i")).toHaveLength(8);
-    expect(mount.container.querySelector(".avatar-burst")?.getAttribute("aria-hidden")).toBe("true");
+    expect(mount.container.querySelector(".avatar-burst")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
     await act(async () => reactAvatar("ranch", "nod"));
     expect(animate).toHaveBeenLastCalledWith(nodFrames, expect.objectContaining({ duration: 520 }));
   });
@@ -68,15 +100,24 @@ describe("avatar attention", () => {
   function Probe({ enabled = true }: { enabled?: boolean }) {
     const wrapper = useRef<HTMLSpanElement>(null);
     const gaze = useAvatarAttention(wrapper, "ranch", enabled);
-    return createElement("span", { ref: wrapper, "data-gaze": `${gaze.x.toFixed(2)},${gaze.y.toFixed(2)}` });
+    return createElement("span", {
+      ref: wrapper,
+      "data-gaze": `${gaze.x.toFixed(2)},${gaze.y.toFixed(2)}`,
+    });
   }
-  const gaze = () => mount.container.querySelector("[data-gaze]")!.getAttribute("data-gaze")!.split(",").map(Number);
-  const point = (x: number, y: number) => act(async () => window.dispatchEvent(new MouseEvent("pointermove", { clientX: x, clientY: y })));
+  const gaze = () =>
+    mount.container.querySelector("[data-gaze]")!.getAttribute("data-gaze")!.split(",").map(Number);
+  const point = (x: number, y: number) =>
+    act(async () =>
+      window.dispatchEvent(new MouseEvent("pointermove", { clientX: x, clientY: y })),
+    );
 
   it("follows a mouse pointer, looks at a sibling that finished, and returns to the front when the pointer rests", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+        this: HTMLElement,
+      ) {
         return this.dataset.glanceTarget === "garden" ? box(100, 700) : box(100, 100);
       });
       const sibling = document.createElement("span");
@@ -95,11 +136,15 @@ describe("avatar attention", () => {
       await act(async () => glanceAtAvatar("ranch"));
       // Frame time and timers move together, as they do in a browser.
       now += POINTER_REST_MS + 100;
-      await act(async () => { vi.advanceTimersByTime(POINTER_REST_MS + 100); });
+      await act(async () => {
+        vi.advanceTimersByTime(POINTER_REST_MS + 100);
+      });
       await runFrames(60);
       expect(gaze()).toEqual([0, 0]);
       sibling.remove();
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("ignores the pointer when not enabled", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(100, 100));
@@ -114,7 +159,10 @@ describe("phone navigation morph", () => {
   const source = () => document.querySelector<HTMLElement>("#source");
   const target = () => document.querySelector<HTMLElement>("#target");
   beforeEach(() => {
-    document.body.insertAdjacentHTML("beforeend", '<span id="source"></span><span id="target"></span>');
+    document.body.insertAdjacentHTML(
+      "beforeend",
+      '<span id="source"></span><span id="target"></span>',
+    );
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(box(100, 100));
   });
   afterEach(() => {
@@ -132,12 +180,22 @@ describe("phone navigation morph", () => {
   it("moves the avatar's name from its old place to its new one inside the transition, then clears both", async () => {
     let finish!: () => void;
     const seen: string[] = [];
-    Object.assign(document, { startViewTransition: (callback: () => void) => {
-      seen.push(`before:${source()!.style.viewTransitionName}:${document.documentElement.dataset.navigation}`);
-      callback();
-      seen.push(`after:${source()!.style.viewTransitionName}|${target()!.style.viewTransitionName}`);
-      return { finished: new Promise<void>(resolve => { finish = resolve; }) };
-    } });
+    Object.assign(document, {
+      startViewTransition: (callback: () => void) => {
+        seen.push(
+          `before:${source()!.style.viewTransitionName}:${document.documentElement.dataset.navigation}`,
+        );
+        callback();
+        seen.push(
+          `after:${source()!.style.viewTransitionName}|${target()!.style.viewTransitionName}`,
+        );
+        return {
+          finished: new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+        };
+      },
+    });
     const update = vi.fn();
     morphNavigate(update, source, target, "back");
     expect(update).toHaveBeenCalledTimes(1);
@@ -148,13 +206,20 @@ describe("phone navigation morph", () => {
   });
   it("treats a transition a newer navigation skipped as done, not as an error", async () => {
     // A skipped transition still runs its update; only its `ready` rejects. Vitest fails the run on an unhandled rejection.
-    Object.assign(document, { startViewTransition: (callback: () => void) => {
-      callback();
-      return { finished: Promise.resolve(), ready: Promise.reject(new DOMException("Transition was skipped", "AbortError")) };
-    } });
+    Object.assign(document, {
+      startViewTransition: (callback: () => void) => {
+        callback();
+        return {
+          finished: Promise.resolve(),
+          ready: Promise.reject(new DOMException("Transition was skipped", "AbortError")),
+        };
+      },
+    });
     const update = vi.fn();
     morphNavigate(update, source, target, "forward");
-    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
     expect(update).toHaveBeenCalledTimes(1);
     expect(document.documentElement.dataset.navigation).toBeUndefined();
   });
@@ -178,7 +243,9 @@ it("lists the running turn's tools with their outcomes for screen readers", asyn
   await mount.render(createElement(WorkTape, { calls }));
   const tape = mount.container.querySelector("ol.work-tape")!;
   expect(tape.getAttribute("aria-label")).toBe("3 steps so far");
-  expect([...tape.querySelectorAll("li")].map(item => [item.className, item.textContent])).toEqual([
+  expect(
+    [...tape.querySelectorAll("li")].map((item) => [item.className, item.textContent]),
+  ).toEqual([
     ["work-tape-step is-completed", "web_search, done"],
     ["work-tape-step is-failed", "terminal, failed"],
     ["work-tape-step is-running", "browser_navigate, running"],

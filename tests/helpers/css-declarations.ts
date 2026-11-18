@@ -3,8 +3,14 @@ import { join } from "node:path";
 
 // Every stylesheet the web client ships, read as declarations that know their file, line, selector and the at-rules
 // around them. Enough structure for the cascade checks in tests/css-keyframes.test.ts and tests/motion-css-order.test.ts.
-const sheets = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
-  entry.isDirectory() ? sheets(join(dir, entry.name)) : entry.name.endsWith(".css") ? [join(dir, entry.name)] : []);
+const sheets = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory()
+      ? sheets(join(dir, entry.name))
+      : entry.name.endsWith(".css")
+        ? [join(dir, entry.name)]
+        : [],
+  );
 
 export interface Declaration {
   path: string;
@@ -30,12 +36,12 @@ export const splitTopLevel = (text: string): string[] => {
       start = index + 1;
     }
   }
-  return [...parts, text.slice(start)].map(part => part.trim()).filter(Boolean);
+  return [...parts, text.slice(start)].map((part) => part.trim()).filter(Boolean);
 };
 
 /** A small block scanner: enough structure to know which media and selector each declaration sits under. */
 const declarations = (path: string, source: string): Declaration[] => {
-  const text = source.replace(/\/\*[\s\S]*?\*\//g, comment => comment.replace(/[^\n]/g, " "));
+  const text = source.replace(/\/\*[\s\S]*?\*\//g, (comment) => comment.replace(/[^\n]/g, " "));
   const found: Declaration[] = [];
   const stack: string[] = [];
   const lines: number[] = [];
@@ -49,7 +55,7 @@ const declarations = (path: string, source: string): Declaration[] => {
       else if (char === quote) quote = "";
       continue;
     }
-    if (char === "\"" || char === "'") quote = char;
+    if (char === '"' || char === "'") quote = char;
     else if (char === "{") {
       const prelude = text.slice(start, index);
       stack.push(prelude.trim().replace(/\s+/g, " "));
@@ -68,45 +74,63 @@ const declarations = (path: string, source: string): Declaration[] => {
           value: chunk.slice(colon + 1).trim(),
         });
       }
-      if (char === "}") { stack.pop(); lines.pop(); }
+      if (char === "}") {
+        stack.pop();
+        lines.pop();
+      }
       start = index + 1;
     }
   }
   return found;
 };
 
-export const css = sheets("src").map(path => ({ path, text: readFileSync(path, "utf8") }));
+export const css = sheets("src").map((path) => ({ path, text: readFileSync(path, "utf8") }));
 export const all = css.flatMap(({ path, text }) => declarations(path, text));
-export const inKeyframes = ({ blocks }: Declaration) => blocks.some(block => block.startsWith("@keyframes"));
+export const inKeyframes = ({ blocks }: Declaration) =>
+  blocks.some((block) => block.startsWith("@keyframes"));
 
 export type Motion = "no-preference" | "reduce";
 /** Which motion settings a declaration applies under, from the `prefers-reduced-motion` media around it. */
 export const motionsOf = ({ blocks }: Declaration): Motion[] => {
-  const settings = blocks.flatMap(block => [...block.matchAll(/prefers-reduced-motion\s*:\s*(no-preference|reduce)/g)]
-    .map(match => match[1] as Motion));
+  const settings = blocks.flatMap((block) =>
+    [...block.matchAll(/prefers-reduced-motion\s*:\s*(no-preference|reduce)/g)].map(
+      (match) => match[1] as Motion,
+    ),
+  );
   return settings.length ? [...new Set(settings)] : ["no-preference", "reduce"];
 };
-export const selectorsOf = ({ blocks }: Declaration): string[] => splitTopLevel(blocks.at(-1) ?? "");
+export const selectorsOf = ({ blocks }: Declaration): string[] =>
+  splitTopLevel(blocks.at(-1) ?? "");
 export const at = ({ path, line }: Declaration) => `${path}:${line}`;
 
 /** The media, container and supports conditions around a declaration other than its motion setting, as one string. */
-export const conditionsOf = ({ blocks }: Declaration): string => blocks.slice(0, -1)
-  .map(block => block.replace(/\(\s*prefers-reduced-motion\s*:\s*[\w-]+\s*\)/g, "").replace(/^@media(\s+and)?\s*$/, ""))
-  .filter(Boolean).join(" > ");
+export const conditionsOf = ({ blocks }: Declaration): string =>
+  blocks
+    .slice(0, -1)
+    .map((block) =>
+      block
+        .replace(/\(\s*prefers-reduced-motion\s*:\s*[\w-]+\s*\)/g, "")
+        .replace(/^@media(\s+and)?\s*$/, ""),
+    )
+    .filter(Boolean)
+    .join(" > ");
 
 /**
  * Pairs of conditions that never hold at the same viewport width, in the form `conditionsOf` returns them. Only an
  * entry here keeps two different conditions apart. The phone layout's `(max-width: 620px)` and the motion layer's
  * `(width > 620px)` meet at the same pixel and split everywhere else.
  */
-const complementary: [string, string][] = [
-  ["@media (max-width: 620px)", "@media (width > 620px)"],
-];
+const complementary: [string, string][] = [["@media (max-width: 620px)", "@media (width > 620px)"]];
 
 /**
  * Whether two rules can apply to the same screen. A rule with no condition applies everywhere, so it meets every
  * other. Two different conditions are taken as overlapping too, because a width, pointer or container range in one
  * file can cover a screen another file's range covers, unless the pair is listed as complementary above.
  */
-export const conditionsMeet = (first: string, second: string) => first === second || !first || !second
-  || !complementary.some(([left, right]) => (first === left && second === right) || (first === right && second === left));
+export const conditionsMeet = (first: string, second: string) =>
+  first === second ||
+  !first ||
+  !second ||
+  !complementary.some(
+    ([left, right]) => (first === left && second === right) || (first === right && second === left),
+  );

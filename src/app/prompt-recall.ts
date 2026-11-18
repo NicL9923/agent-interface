@@ -6,7 +6,12 @@ export function ownPrompts(messages: readonly Message[] | undefined, userId: str
   const prompts: string[] = [];
   for (let index = (messages?.length ?? 0) - 1; index >= 0; index--) {
     const message = messages![index]!;
-    if (message.role !== "user" || message.sender?.id !== userId || message.id.endsWith("-inflight")) continue;
+    if (
+      message.role !== "user" ||
+      message.sender?.id !== userId ||
+      message.id.endsWith("-inflight")
+    )
+      continue;
     const text = message.text.trim();
     if (!text || seen.has(text)) continue;
     seen.add(text);
@@ -16,7 +21,10 @@ export function ownPrompts(messages: readonly Message[] | undefined, userId: str
 }
 
 /** Which earlier message the composer shows, counted from the newest; null when browsing has ended. */
-export type Recall = { index: number; /** What the composer showed when browsing started. */ draft: string } | null;
+export type Recall = {
+  index: number;
+  /** What the composer showed when browsing started. */ draft: string;
+} | null;
 export type RecallMove = { recall: Recall; text: string } | null;
 
 /**
@@ -24,7 +32,14 @@ export type RecallMove = { recall: Recall; text: string } | null;
  * earlier messages; ArrowDown walks forward and finally restores the draft that was there.
  * Returns null when the key should keep its normal meaning.
  */
-export function recallStep(recall: Recall, key: "ArrowUp" | "ArrowDown", prompts: readonly string[], text: string, caretAtStart: boolean, caretAtEnd: boolean): RecallMove {
+export function recallStep(
+  recall: Recall,
+  key: "ArrowUp" | "ArrowDown",
+  prompts: readonly string[],
+  text: string,
+  caretAtStart: boolean,
+  caretAtEnd: boolean,
+): RecallMove {
   if (!recall) {
     if (key !== "ArrowUp" || text !== "" || !caretAtStart || !prompts.length) return null;
     return { recall: { index: 0, draft: text }, text: prompts[0]! };

@@ -15,8 +15,15 @@ describe("retry request IDs", () => {
   });
 
   it("makes version 8 UUIDs the server accepts, distinct per assistant, message and failed run", async () => {
-    const ids = await Promise.all([["ranch", "m", "r"], ["barn", "m", "r"], ["ranch", "n", "r"], ["ranch", "m", "s"], ["ranch", "m", ""]]
-      .map(([botId, messageId, runId]) => retryRequestId(botId, messageId, runId)));
+    const ids = await Promise.all(
+      [
+        ["ranch", "m", "r"],
+        ["barn", "m", "r"],
+        ["ranch", "n", "r"],
+        ["ranch", "m", "s"],
+        ["ranch", "m", ""],
+      ].map(([botId, messageId, runId]) => retryRequestId(botId, messageId, runId)),
+    );
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
       expect(z.string().uuid().safeParse(id).success).toBe(true);
@@ -28,21 +35,37 @@ describe("retry request IDs", () => {
 });
 
 // The iOS app derives the same IDs; docs/native-api.md lists these vectors for it.
-const formVectors: [formKey: string, botId: string, messageId: string, cardId: string, attempt: number, id: string][] = [
+const formVectors: [
+  formKey: string,
+  botId: string,
+  messageId: string,
+  cardId: string,
+  attempt: number,
+  id: string,
+][] = [
   ["k3y_A-b", "ranch", "msg-42", "trip", 0, "1ab28536-230d-4777-84cf-8dcda31bb28c"],
   ["k3y_A-b", "ranch", "msg-42", "trip", 3, "76bbd8a5-8259-4c9e-8b2b-3b3fa7bec9d2"],
   ["café", "👋", "m", "c", 1, "f2ec6d4c-7663-410f-88ba-49c4a6921df8"],
 ];
 
 describe("form request IDs", () => {
-  it.each(formVectors)("derives the fixed ID for %s, %s, %s, %s, attempt %i", async (formKey, botId, messageId, cardId, attempt, id) => {
-    expect(await formRequestId(formKey, botId, messageId, cardId, attempt)).toBe(id);
-  });
+  it.each(formVectors)(
+    "derives the fixed ID for %s, %s, %s, %s, attempt %i",
+    async (formKey, botId, messageId, cardId, attempt, id) => {
+      expect(await formRequestId(formKey, botId, messageId, cardId, attempt)).toBe(id);
+    },
+  );
 
   it("makes one version 4 UUID per person, assistant, message, card and attempt, never a retry's", async () => {
-    const parts: [string, string, string, string, number][] = [["one", "ranch", "m", "c", 0], ["two", "ranch", "m", "c", 0], ["one", "barn", "m", "c", 0],
-      ["one", "ranch", "n", "c", 0], ["one", "ranch", "m", "d", 0], ["one", "ranch", "m", "c", 1]];
-    const ids = await Promise.all(parts.map(part => formRequestId(...part)));
+    const parts: [string, string, string, string, number][] = [
+      ["one", "ranch", "m", "c", 0],
+      ["two", "ranch", "m", "c", 0],
+      ["one", "barn", "m", "c", 0],
+      ["one", "ranch", "n", "c", 0],
+      ["one", "ranch", "m", "d", 0],
+      ["one", "ranch", "m", "c", 1],
+    ];
+    const ids = await Promise.all(parts.map((part) => formRequestId(...part)));
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) {
       expect(z.string().uuid().safeParse(id).success).toBe(true);

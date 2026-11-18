@@ -10,7 +10,15 @@ import { publicApiRoutes } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
 import { Store } from "../src/server/store.js";
 import { assistantNotFoundMessage, NotFound } from "../src/shared/errors.js";
-import type { Avatar, Bot, Capabilities, ConversationOptions, Message, Runtime, Submission } from "../src/shared/types.js";
+import type {
+  Avatar,
+  Bot,
+  Capabilities,
+  ConversationOptions,
+  Message,
+  Runtime,
+  Submission,
+} from "../src/shared/types.js";
 import { mascotFamilies } from "../src/shared/types.js";
 import { historyWindow } from "../src/shared/history.js";
 import { MAX_DOWNLOAD_BYTES } from "../src/shared/uploads.js";
@@ -125,9 +133,9 @@ function runtimeDouble() {
     },
   };
 }
-const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") => localLogin(app, origin, member);
-const config = () =>
-  loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+const login = (app: Awaited<ReturnType<typeof createApp>>["app"], member = "one") =>
+  localLogin(app, origin, member);
+const config = () => loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
 describe("default roster detail fallback", () => {
   const configuration = {
     instructions: "Keep these saved instructions",
@@ -136,10 +144,16 @@ describe("default roster detail fallback", () => {
     enabledMcpServers: ["calendar"],
   };
   const row = (id: string): Bot => ({
-    id, name: id, model: "test", shared: true, activity: "idle",
+    id,
+    name: id,
+    model: "test",
+    shared: true,
+    activity: "idle",
     // Hermes's lean rows include undefined configuration keys before serialization.
-    instructions: undefined, enabledTools: undefined,
-    enabledSkills: undefined, enabledMcpServers: undefined,
+    instructions: undefined,
+    enabledTools: undefined,
+    enabledSkills: undefined,
+    enabledMcpServers: undefined,
   });
   for (const url of ["/api/bootstrap", "/api/bots"]) {
     const botsFrom = (response: { json<T>(): T }): Bot[] =>
@@ -161,19 +175,25 @@ describe("default roster detail fallback", () => {
 
         // Hermes going down after the shared runtime read expires, which the bootstrap snapshot only holds briefly.
         vi.setSystemTime(Date.now() + 2000);
-        bots = [...bots, row("never-detailed")].map(bot => ({
-          ...bot, activity: "disconnected", lastMessage: { text: "Current preview" },
+        bots = [...bots, row("never-detailed")].map((bot) => ({
+          ...bot,
+          activity: "disconnected",
+          lastMessage: { text: "Current preview" },
         }));
-        detail.mockImplementation(async () => { throw new Error("Hermes is disconnected"); });
+        detail.mockImplementation(async () => {
+          throw new Error("Hermes is disconnected");
+        });
         // Repeat to prove a failed read never replaces the cached configuration.
         for (let attempt = 0; attempt < 2; attempt++) {
           const response = await app.inject({ url, headers });
           expect(response.statusCode).toBe(200);
           const result = botsFrom(response);
           expect(result).toHaveLength(3);
-          for (const bot of result) expect(bot).toMatchObject({
-            activity: "disconnected", lastMessage: { text: "Current preview" },
-          });
+          for (const bot of result)
+            expect(bot).toMatchObject({
+              activity: "disconnected",
+              lastMessage: { text: "Current preview" },
+            });
           for (const bot of result.slice(0, 2)) expect(bot).toMatchObject(configuration);
           expect(result[2]).toEqual(JSON.parse(JSON.stringify(bots[2])));
         }
@@ -182,19 +202,22 @@ describe("default roster detail fallback", () => {
         expect(lean.statusCode).toBe(200);
         expect(botsFrom(lean)).toEqual(JSON.parse(JSON.stringify(bots)));
         expect(detail).not.toHaveBeenCalled();
-      } finally { vi.useRealTimers(); await app.close(); }
+      } finally {
+        vi.useRealTimers();
+        await app.close();
+      }
     });
 
     it(`${url} isolates profile failures and drops a bot deleted between reads`, async () => {
       const fake = runtimeDouble();
       const bots = [row("shared"), row("broken"), row("deleted")];
       fake.runtime.listBots = async () => bots;
-      fake.runtime.botDetail = async id => ({ ...row(id), ...configuration });
+      fake.runtime.botDetail = async (id) => ({ ...row(id), ...configuration });
       const { app } = await createApp(config(), fake.runtime, { background: false });
       try {
         const headers = await login(app);
         expect((await app.inject({ url, headers })).statusCode).toBe(200);
-        fake.runtime.botDetail = async id => {
+        fake.runtime.botDetail = async (id) => {
           if (id === "broken") throw new Error("profiles.describe failed");
           if (id === "deleted") throw new NotFound(assistantNotFoundMessage, "assistant_not_found");
           return { ...row(id), ...configuration, instructions: "Fresh instructions" };
@@ -205,7 +228,9 @@ describe("default roster detail fallback", () => {
           { ...row("shared"), ...configuration, instructions: "Fresh instructions" },
           { ...row("broken"), ...configuration },
         ]);
-      } finally { await app.close(); }
+      } finally {
+        await app.close();
+      }
     });
 
     it(`${url} retains configuration previously loaded through bot detail`, async () => {
@@ -218,11 +243,15 @@ describe("default roster detail fallback", () => {
         const headers = await login(app);
         expect((await app.inject({ url: "/api/bots/shared", headers })).statusCode).toBe(200);
         bot = { ...bot, activity: "disconnected" };
-        fake.runtime.botDetail = async () => { throw new Error("Hermes is disconnected"); };
+        fake.runtime.botDetail = async () => {
+          throw new Error("Hermes is disconnected");
+        };
         const response = await app.inject({ url, headers });
         expect(response.statusCode).toBe(200);
         expect(botsFrom(response)).toEqual([{ ...bot, ...configuration }]);
-      } finally { await app.close(); }
+      } finally {
+        await app.close();
+      }
     });
   }
 });
@@ -231,47 +260,81 @@ describe("authentication and household state", () => {
     const fake = runtimeDouble();
     let nativeAvatar: Avatar | undefined;
     const originalList = fake.runtime.listBots;
-    fake.runtime.listBots = async () => (await originalList()).map(bot => ({ ...bot, avatar: nativeAvatar }));
-    fake.runtime.setAvatar = async (_id, value) => { nativeAvatar = value; };
+    fake.runtime.listBots = async () =>
+      (await originalList()).map((bot) => ({ ...bot, avatar: nativeAvatar }));
+    fake.runtime.setAvatar = async (_id, value) => {
+      nativeAvatar = value;
+    };
     const { app } = await createApp(config(), fake.runtime, { background: false });
     try {
       const headers = await login(app);
       for (const family of mascotFamilies) {
-        const value: Avatar = { mode: "mascot", family, color: "#FF9800", eyes: "round", accessory: "none", eyeWidth: 1.1 };
-        const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/avatar", headers, payload: value });
+        const value: Avatar = {
+          mode: "mascot",
+          family,
+          color: "#FF9800",
+          eyes: "round",
+          accessory: "none",
+          eyeWidth: 1.1,
+        };
+        const saved = await app.inject({
+          method: "PUT",
+          url: "/api/bots/shared/avatar",
+          headers,
+          payload: value,
+        });
         expect(saved.statusCode).toBe(200);
         expect(saved.json()).toEqual(value);
         expect(nativeAvatar).toEqual(value);
-        expect((await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar).toEqual(value);
+        expect(
+          (await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar,
+        ).toEqual(value);
         fake.capabilities.avatarMetadata.supported = false;
-        expect((await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar).toEqual(value);
+        expect(
+          (await app.inject({ url: "/api/bootstrap", headers })).json().bots[0].avatar,
+        ).toEqual(value);
         fake.capabilities.avatarMetadata.supported = true;
       }
-    } finally { await app.close(); }
+    } finally {
+      await app.close();
+    }
   });
 
   it("fails closed for production bypass and absent production identity settings", () => {
-    expect(() =>
-      loadConfig({ NODE_ENV: "production", LOCAL_DEV_AUTH: "true" }),
-    ).toThrow("Local development auth");
-    expect(() => loadConfig({ NODE_ENV: "production" })).toThrow(
-      "Production requires",
+    expect(() => loadConfig({ NODE_ENV: "production", LOCAL_DEV_AUTH: "true" })).toThrow(
+      "Local development auth",
     );
-    expect(() =>
-      loadConfig({ HOST: "0.0.0.0", LOCAL_DEV_AUTH: "true" }),
-    ).toThrow("loopback");
+    expect(() => loadConfig({ NODE_ENV: "production" })).toThrow("Production requires");
+    expect(() => loadConfig({ HOST: "0.0.0.0", LOCAL_DEV_AUTH: "true" })).toThrow("loopback");
   });
   it("requires a session on every non-public API route, including percent-encoded paths", async () => {
-    const { app, routes } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    const { app, routes } = await createApp(config(), runtimeDouble().runtime, {
+      background: false,
+    });
     try {
-      const gated = routes.filter(({ method, url }) => url.startsWith("/api/") && method !== "HEAD" && !publicApiRoutes.includes(url));
+      const gated = routes.filter(
+        ({ method, url }) =>
+          url.startsWith("/api/") && method !== "HEAD" && !publicApiRoutes.includes(url),
+      );
       expect(gated.length).toBeGreaterThan(50);
       for (const { method, url } of gated) {
         const concrete = url.replace(/:[^/]+/g, "x").replace("*", "x");
         // Fastify decodes "%61" before routing, so the encoded form must reach the same gate.
-        for (const path of [concrete, concrete.replace("/api/", "/%61pi/"), concrete.replace("/api/", "/%61%70%69/")]) {
-          const response = await app.inject({ method: method as "GET", url: path, headers: { origin: "https://attacker.invalid" } });
-          expect({ method, path, status: response.statusCode }).toEqual({ method, path, status: 401 });
+        for (const path of [
+          concrete,
+          concrete.replace("/api/", "/%61pi/"),
+          concrete.replace("/api/", "/%61%70%69/"),
+        ]) {
+          const response = await app.inject({
+            method: method as "GET",
+            url: path,
+            headers: { origin: "https://attacker.invalid" },
+          });
+          expect({ method, path, status: response.statusCode }).toEqual({
+            method,
+            path,
+            status: 401,
+          });
         }
       }
       // The built client's static wildcard also matches unknown API paths.
@@ -280,9 +343,17 @@ describe("authentication and household state", () => {
       // A signed-in browser still needs its CSRF token and Origin on an encoded write.
       const { "x-csrf-token": csrf, ...cookieOnly } = await login(app);
       expect(csrf).toBeTruthy();
-      for (const headers of [cookieOnly, { ...cookieOnly, "x-csrf-token": csrf, origin: "https://attacker.invalid" }])
-        expect((await app.inject({ method: "POST", url: "/%61pi/bots/shared/stop", headers })).statusCode).toBe(403);
-    } finally { await app.close(); }
+      for (const headers of [
+        cookieOnly,
+        { ...cookieOnly, "x-csrf-token": csrf, origin: "https://attacker.invalid" },
+      ])
+        expect(
+          (await app.inject({ method: "POST", url: "/%61pi/bots/shared/stop", headers }))
+            .statusCode,
+        ).toBe(403);
+    } finally {
+      await app.close();
+    }
   });
   it("requires login and rejects foreign-origin or missing-CSRF writes", async () => {
     const { app } = await createApp(config(), runtimeDouble().runtime, {
@@ -309,11 +380,9 @@ describe("authentication and household state", () => {
         })
       ).statusCode,
     ).toBe(403);
-    expect(
-      (await app.inject({ url: "/api/bootstrap", headers })).headers[
-        "cache-control"
-      ],
-    ).toBe("no-store");
+    expect((await app.inject({ url: "/api/bootstrap", headers })).headers["cache-control"]).toBe(
+      "no-store",
+    );
     await app.close();
   });
   it("verifies exact allowed email and verified Google identity", async () => {
@@ -356,18 +425,24 @@ describe("authentication and household state", () => {
       { id: "mine", name: "Mine", model: "test", shared: false, activity: "idle", lastMessage },
     ];
     const { app, store } = await createApp(config(), fake.runtime, { background: false });
-    const one = await login(app), two = await login(app, "two");
+    const one = await login(app),
+      two = await login(app, "two");
     const ownerId = (await app.inject({ url: "/api/bootstrap", headers: one })).json().user.id;
     store.savePresentation("mine", { shared: false, ownerId });
     for (const url of ["/api/bootstrap", "/api/bots"]) {
       const bots = (response: { json(): { bots?: unknown[] } | unknown[] }) => {
         const value = response.json();
-        return (Array.isArray(value) ? value : value.bots) as { id: string; lastMessage?: unknown }[];
+        return (Array.isArray(value) ? value : value.bots) as {
+          id: string;
+          lastMessage?: unknown;
+        }[];
       };
       const theirs = bots(await app.inject({ url, headers: two }));
-      expect(theirs.map(bot => bot.id)).toEqual(["shared"]);
+      expect(theirs.map((bot) => bot.id)).toEqual(["shared"]);
       expect(theirs[0].lastMessage).toEqual(lastMessage);
-      expect(bots(await app.inject({ url, headers: one })).find(bot => bot.id === "mine")?.lastMessage).toEqual(lastMessage);
+      expect(
+        bots(await app.inject({ url, headers: one })).find((bot) => bot.id === "mine")?.lastMessage,
+      ).toEqual(lastMessage);
     }
     await app.close();
   });
@@ -375,19 +450,39 @@ describe("authentication and household state", () => {
     const fake = runtimeDouble();
     const at = "2026-10-08T12:00:00.000Z";
     fake.runtime.listBots = async () => [
-      { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
-      { id: "quiet", name: "Quiet", model: "test", shared: true, activity: "idle", lastMessage: { text: "Reply", at } },
+      {
+        id: "shared",
+        name: "Shared",
+        model: "test",
+        shared: true,
+        activity: "idle",
+        lastMessage: { text: "Reply", at },
+      },
+      {
+        id: "quiet",
+        name: "Quiet",
+        model: "test",
+        shared: true,
+        activity: "idle",
+        lastMessage: { text: "Reply", at },
+      },
     ];
     const { app, store } = await createApp(config(), fake.runtime, { background: false });
-    const one = await login(app), two = await login(app, "two");
-    const id = async (headers: Record<string, string>) => (await app.inject({ url: "/api/bootstrap", headers })).json().user.id as string;
+    const one = await login(app),
+      two = await login(app, "two");
+    const id = async (headers: Record<string, string>) =>
+      (await app.inject({ url: "/api/bootstrap", headers })).json().user.id as string;
     const [first, second] = [await id(one), await id(two)];
     store.chatPresence(first, "shared", "phone", "left", Date.parse(at) - 1);
     store.chatPresence(second, "shared", "phone", "left", Date.parse(at) + 1);
     for (const url of ["/api/bootstrap?roster=lean", "/api/bots"]) {
       const unread = async (headers: Record<string, string>) => {
         const value = (await app.inject({ url, headers })).json();
-        return Object.fromEntries((Array.isArray(value) ? value : value.bots).map((bot: { id: string; unread?: boolean }) => [bot.id, !!bot.unread]));
+        return Object.fromEntries(
+          (Array.isArray(value) ? value : value.bots).map(
+            (bot: { id: string; unread?: boolean }) => [bot.id, !!bot.unread],
+          ),
+        );
       };
       // A chat never opened stays unmarked, so a new member's home starts quiet.
       expect(await unread(one)).toEqual({ shared: true, quiet: false });
@@ -405,7 +500,8 @@ describe("authentication and household state", () => {
     fake.runtime.conversation = async () => ({ ...conversation, messages });
     const { app } = await createApp(config(), fake.runtime, { background: false });
     const one = await login(app);
-    const read = async (query = "") => (await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json();
+    const read = async (query = "") =>
+      (await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json();
     const native = await read();
     expect(native.messages).toHaveLength(60);
     expect(native).not.toHaveProperty("earlier");
@@ -421,24 +517,51 @@ describe("authentication and household state", () => {
     expect(before).toMatchObject({ before: "p10", earlier: 16 });
     // Without a size, an earlier page is a whole page, never an empty one.
     const page10 = await read("?before=p10");
-    expect(page10.messages.map((message: Message) => message.id)).toEqual(Array.from({ length: 10 }, (_, n) => [`p${n}`, `a${n}`]).flat());
+    expect(page10.messages.map((message: Message) => message.id)).toEqual(
+      Array.from({ length: 10 }, (_, n) => [`p${n}`, `a${n}`]).flat(),
+    );
     expect(page10).toMatchObject({ before: "p10", earlier: 0 });
-    expect((await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one })).statusCode).toBe(400);
-    const both = await app.inject({ url: "/api/bots/shared/conversation?start=p1&before=p10", headers: one });
+    expect(
+      (await app.inject({ url: "/api/bots/shared/conversation?turns=-1", headers: one }))
+        .statusCode,
+    ).toBe(400);
+    const both = await app.inject({
+      url: "/api/bots/shared/conversation?start=p1&before=p10",
+      headers: one,
+    });
     expect(both.statusCode).toBe(400);
-    expect(both.json().details).toEqual([expect.objectContaining({ message: expect.stringContaining("from a start or before a message, not both") })]);
+    expect(both.json().details).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("from a start or before a message, not both"),
+      }),
+    ]);
     await app.close();
   });
   it("sends signed file references only for the window and lists earlier ones on demand", async () => {
     const fake = runtimeDouble();
     const conversation = await fake.runtime.conversation("shared");
-    const file = (n: number) => ({ id: `f${n}`, name: `file-${n}.txt`, mime: "text/plain", url: `/api/files/f${n}` });
+    const file = (n: number) => ({
+      id: `f${n}`,
+      name: `file-${n}.txt`,
+      mime: "text/plain",
+      url: `/api/files/f${n}`,
+    });
     const messages = Array.from({ length: 30 }, (_, turn) => [
-      { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}`, ...(turn === 2 ? { files: [file(2)] } : {}) },
+      {
+        id: `p${turn}`,
+        role: "user" as const,
+        text: `Prompt ${turn}`,
+        ...(turn === 2 ? { files: [file(2)] } : {}),
+      },
       // The newest reply passes along a file first shared in an early turn.
-      { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}`, files: turn === 29 ? [file(turn), file(0)] : [file(turn)] },
+      {
+        id: `a${turn}`,
+        role: "assistant" as const,
+        text: `Reply ${turn}`,
+        files: turn === 29 ? [file(turn), file(0)] : [file(turn)],
+      },
     ]).flat();
-    const files = messages.flatMap(message => message.files ?? []);
+    const files = messages.flatMap((message) => message.files ?? []);
     fake.runtime.conversation = async () => ({ ...conversation, messages, files });
     const { app } = await createApp(config(), fake.runtime, { background: false });
     const one = await login(app);
@@ -446,12 +569,18 @@ describe("authentication and household state", () => {
     // The native app reads the whole history and keeps every reference.
     expect((await read("/api/bots/shared/conversation")).files).toEqual(files);
     const page = await read("/api/bots/shared/conversation?turns=20");
-    const ids = (list: { id: string }[]) => [...new Set(list.map(item => item.id))];
+    const ids = (list: { id: string }[]) => [...new Set(list.map((item) => item.id))];
     expect(ids(page.files)).toEqual(["f0", ...Array.from({ length: 20 }, (_, n) => `f${n + 10}`)]);
     // Earlier turns hold f1 to f9 and the user's f2; f0 is also in the window.
     expect(page.earlierFiles).toBe(9);
     const earlier = await read("/api/bots/shared/files?before=p10");
-    expect(earlier.messages.map((message: { id: string }) => message.id)).toEqual(["a0", "a1", "p2", "a2", ...Array.from({ length: 7 }, (_, n) => `a${n + 3}`)]);
+    expect(earlier.messages.map((message: { id: string }) => message.id)).toEqual([
+      "a0",
+      "a1",
+      "p2",
+      "a2",
+      ...Array.from({ length: 7 }, (_, n) => `a${n + 3}`),
+    ]);
     expect(earlier.messages[2]).toEqual({ id: "p2", role: "user", files: [file(2)] });
     // A window start that left the history lists every file-bearing message.
     expect((await read("/api/bots/shared/files?before=gone")).messages).toHaveLength(31);
@@ -461,38 +590,84 @@ describe("authentication and household state", () => {
   it("answers a window Hermes already cut exactly as it answers its own cut", async () => {
     const fake = runtimeDouble();
     const conversation = await fake.runtime.conversation("shared");
-    const file = (n: number) => ({ id: `f${n}`, name: `file-${n}.txt`, mime: "text/plain", url: `/api/files/f${n}` });
+    const file = (n: number) => ({
+      id: `f${n}`,
+      name: `file-${n}.txt`,
+      mime: "text/plain",
+      url: `/api/files/f${n}`,
+    });
     const messages: Message[] = Array.from({ length: 30 }, (_, turn) => [
-      { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}`, ...(turn === 2 ? { files: [file(2)] } : {}) },
-      { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}`, ...(turn % 3 === 0 ? { files: turn === 27 ? [file(turn), file(0)] : [file(turn)] } : {}) },
+      {
+        id: `p${turn}`,
+        role: "user" as const,
+        text: `Prompt ${turn}`,
+        ...(turn === 2 ? { files: [file(2)] } : {}),
+      },
+      {
+        id: `a${turn}`,
+        role: "assistant" as const,
+        text: `Reply ${turn}`,
+        ...(turn % 3 === 0 ? { files: turn === 27 ? [file(turn), file(0)] : [file(turn)] } : {}),
+      },
     ]).flat();
     // The add-on's cut, as src/hermes/extension.py history_window makes it.
     const cut = (window: NonNullable<ConversationOptions["window"]>) => {
-      const { earlier } = historyWindow(messages, { start: window.before ?? window.start, turns: window.turns });
+      const { earlier } = historyWindow(messages, {
+        start: window.before ?? window.start,
+        turns: window.turns,
+      });
       // A page before a message ends there, and says so, even when it reaches the first turn.
-      const end = window.before ? messages.findIndex(message => message.id === window.before) : -1;
+      const end = window.before
+        ? messages.findIndex((message) => message.id === window.before)
+        : -1;
       if (!earlier && end < 0) return undefined;
-      const kept = new Set<number>(); let prompt: number | undefined;
+      const kept = new Set<number>();
+      let prompt: number | undefined;
       messages.slice(0, earlier).forEach((message, index) => {
         if (message.role === "user") prompt = index;
-        if (message.files?.length) { kept.add(index); if (message.role === "assistant" && prompt !== undefined) kept.add(prompt); }
+        if (message.files?.length) {
+          kept.add(index);
+          if (message.role === "assistant" && prompt !== undefined) kept.add(prompt);
+        }
       });
       // A start inside a turn keeps the prompt its replies answer.
       if (messages[earlier].role !== "user" && prompt !== undefined) kept.add(prompt);
-      return { earlier, context: [...kept].sort((a, b) => a - b).map(index => messages[index]), end: end < 0 ? messages.length : end,
-        ...(end >= 0 ? { before: window.before } : {}) };
+      return {
+        earlier,
+        context: [...kept].sort((a, b) => a - b).map((index) => messages[index]),
+        end: end < 0 ? messages.length : end,
+        ...(end >= 0 ? { before: window.before } : {}),
+      };
     };
-    const full = { ...conversation, messages, files: messages.flatMap(message => message.files ?? []) };
+    const full = {
+      ...conversation,
+      messages,
+      files: messages.flatMap((message) => message.files ?? []),
+    };
     const answers = async (runtime: Runtime) => {
       const { app } = await createApp(config(), runtime, { background: false });
       const one = await login(app);
       const bodies = [];
-      for (const query of ["?turns=20", "?start=p10&turns=20", "?start=p15", "?start=a12", "?turns=40", "?start=gone",
-        "?before=p15&turns=5", "?before=a12&turns=3", "?before=p2&turns=20", "?before=gone&turns=5"])
-        bodies.push((await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json());
+      for (const query of [
+        "?turns=20",
+        "?start=p10&turns=20",
+        "?start=p15",
+        "?start=a12",
+        "?turns=40",
+        "?start=gone",
+        "?before=p15&turns=5",
+        "?before=a12&turns=3",
+        "?before=p2&turns=20",
+        "?before=gone&turns=5",
+      ])
+        bodies.push(
+          (await app.inject({ url: `/api/bots/shared/conversation${query}`, headers: one })).json(),
+        );
       // Earlier files read a window too, and list the same files.
       for (const query of ["?before=p10", "?before=a12", "?before=gone", ""])
-        bodies.push((await app.inject({ url: `/api/bots/shared/files${query}`, headers: one })).json());
+        bodies.push(
+          (await app.inject({ url: `/api/bots/shared/files${query}`, headers: one })).json(),
+        );
       await app.close();
       return bodies;
     };
@@ -505,15 +680,31 @@ describe("authentication and household state", () => {
       windows++;
       const { end, ...cutWindow } = window;
       const shown = messages.slice(window.earlier, end);
-      return { ...conversation, messages: shown, window: cutWindow, files: [...window.context, ...shown].flatMap(message => message.files ?? []) };
+      return {
+        ...conversation,
+        messages: shown,
+        window: cutWindow,
+        files: [...window.context, ...shown].flatMap((message) => message.files ?? []),
+      };
     };
     expect(await answers(fake.runtime)).toEqual(ownCut);
     expect(windows).toBe(12);
     expect(ownCut[0].earlierFiles).toBeGreaterThan(0);
-    const ids = (body: { messages: Message[] }) => body.messages.map(message => message.id);
+    const ids = (body: { messages: Message[] }) => body.messages.map((message) => message.id);
     // Only the turns before the message: the client holds it and everything after.
     expect(ownCut[6]).toMatchObject({ before: "p15", earlier: 20 });
-    expect(ids(ownCut[6])).toEqual(["p10", "a10", "p11", "a11", "p12", "a12", "p13", "a13", "p14", "a14"]);
+    expect(ids(ownCut[6])).toEqual([
+      "p10",
+      "a10",
+      "p11",
+      "a11",
+      "p12",
+      "a12",
+      "p13",
+      "a13",
+      "p14",
+      "a14",
+    ]);
     // Its own files, and those only earlier messages carry: a0's f0, which a27 passes on, the client may not hold yet.
     expect(ownCut[6].files.map((file: { id: string }) => file.id)).toEqual(["f12"]);
     expect(ownCut[6].earlierFiles).toBe(5);
@@ -544,77 +735,127 @@ describe("authentication and household state", () => {
         })
       ).statusCode,
     ).toBe(200);
-    expect(
-      (
-        await app.inject({ url: "/api/bots/shared/draft", headers: two })
-      ).json(),
-    ).toBe(null);
-    expect(
-      (await app.inject({ url: "/api/bots/shared/draft", headers: one })).json()
-        .text,
-    ).toBe("Unsent");
-    const position = await app.inject({ method: "PUT", url: "/api/bots/shared/read-position",
-      headers: one, payload: { messageId: "earlier-answer" } });
+    expect((await app.inject({ url: "/api/bots/shared/draft", headers: two })).json()).toBe(null);
+    expect((await app.inject({ url: "/api/bots/shared/draft", headers: one })).json().text).toBe(
+      "Unsent",
+    );
+    const position = await app.inject({
+      method: "PUT",
+      url: "/api/bots/shared/read-position",
+      headers: one,
+      payload: { messageId: "earlier-answer" },
+    });
     expect(position.statusCode).toBe(200);
     expect(position.json()).toEqual({ messageId: "earlier-answer" });
-    expect((await app.inject({ url: "/api/bots/shared/conversation", headers: one })).json().readPosition)
-      .toEqual({ messageId: "earlier-answer" });
-    expect((await app.inject({ url: "/api/bots/shared/read-position", headers: two })).json()).toBe(null);
     expect(
-      (await app.inject({ url: "/api/bootstrap", headers: two })).json().bots[0]
-        .shared,
-    ).toBe(true);
+      (await app.inject({ url: "/api/bots/shared/conversation", headers: one })).json()
+        .readPosition,
+    ).toEqual({ messageId: "earlier-answer" });
+    expect((await app.inject({ url: "/api/bots/shared/read-position", headers: two })).json()).toBe(
+      null,
+    );
+    expect((await app.inject({ url: "/api/bootstrap", headers: two })).json().bots[0].shared).toBe(
+      true,
+    );
     await app.close();
   });
 });
 describe("safe admission, steering, and approvals", () => {
-  it.each(["a Hermes restart", "a stopped task terminal event"])("keeps interruption review retryable after %s with canonical admission", async () => {
-    const fake=runtimeDouble();
-    fake.runtime.canonicalSubmit=async()=>true;
-    fake.runtime.conversation=vi.fn().mockRejectedValue(new Error("Unexpected read"));
-    fake.runtime.submit=vi.fn(async input=>{
-      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
-      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
-    });
-    const {app,store}=await createApp(config(),fake.runtime,{background:false});
-    const headers=await login(app),payload={requestId:randomUUID(),text:"Continue"};
-    const first=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
-    expect(first.statusCode).toBe(409);
-    expect(first.json().error).toBe("Review the interrupted task before starting another message.");
-    const sent=await app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload:{...payload,reviewedInterruption:true}});
-    expect(sent.json().status).toBe("accepted");
-    expect(fake.runtime.conversation).not.toHaveBeenCalled();
-    expect(store.recipients({id:"event",botId:"shared",runId:"run",kind:"completed",title:"Done",occurredAt:""})).toEqual(["local-one"]);
-    await app.close();
-  });
+  it.each(["a Hermes restart", "a stopped task terminal event"])(
+    "keeps interruption review retryable after %s with canonical admission",
+    async () => {
+      const fake = runtimeDouble();
+      fake.runtime.canonicalSubmit = async () => true;
+      fake.runtime.conversation = vi.fn().mockRejectedValue(new Error("Unexpected read"));
+      fake.runtime.submit = vi.fn(async (input) => {
+        if (!input.reviewedInterruption)
+          throw Object.assign(new Error("Review"), {
+            code: "interruption_pending",
+            statusCode: 409,
+          });
+        return { requestId: input.requestId, status: "accepted" as const, runId: "run" };
+      });
+      const { app, store } = await createApp(config(), fake.runtime, { background: false });
+      const headers = await login(app),
+        payload = { requestId: randomUUID(), text: "Continue" };
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/bots/shared/messages",
+        headers,
+        payload,
+      });
+      expect(first.statusCode).toBe(409);
+      expect(first.json().error).toBe(
+        "Review the interrupted task before starting another message.",
+      );
+      const sent = await app.inject({
+        method: "POST",
+        url: "/api/bots/shared/messages",
+        headers,
+        payload: { ...payload, reviewedInterruption: true },
+      });
+      expect(sent.json().status).toBe("accepted");
+      expect(fake.runtime.conversation).not.toHaveBeenCalled();
+      expect(
+        store.recipients({
+          id: "event",
+          botId: "shared",
+          runId: "run",
+          kind: "completed",
+          title: "Done",
+          occurredAt: "",
+        }),
+      ).toEqual(["local-one"]);
+      await app.close();
+    },
+  );
   it("recognizes an interruption rejection by its recorded reason, and legacy rows by their sentence", async () => {
-    const fake=runtimeDouble();
-    fake.runtime.canonicalSubmit=async()=>true;
-    fake.runtime.submit=vi.fn(async input=>{
-      if(!input.reviewedInterruption)throw Object.assign(new Error("Review"),{code:"interruption_pending",statusCode:409});
-      return {requestId:input.requestId,status:"accepted" as const,runId:"run"};
+    const fake = runtimeDouble();
+    fake.runtime.canonicalSubmit = async () => true;
+    fake.runtime.submit = vi.fn(async (input) => {
+      if (!input.reviewedInterruption)
+        throw Object.assign(new Error("Review"), { code: "interruption_pending", statusCode: 409 });
+      return { requestId: input.requestId, status: "accepted" as const, runId: "run" };
     });
-    const {app,store}=await createApp(config(),fake.runtime,{background:false});
-    const headers=await login(app);
-    const send=(payload:{requestId:string;text:string;reviewedInterruption?:boolean})=>app.inject({method:"POST",url:"/api/bots/shared/messages",headers,payload});
-    const current={requestId:randomUUID(),text:"Continue"};
+    const { app, store } = await createApp(config(), fake.runtime, { background: false });
+    const headers = await login(app);
+    const send = (payload: { requestId: string; text: string; reviewedInterruption?: boolean }) =>
+      app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload });
+    const current = { requestId: randomUUID(), text: "Continue" };
     expect((await send(current)).statusCode).toBe(409);
-    expect(store.submission(current.requestId)).toMatchObject({reason:"interruption_pending",receipt:{status:"rejected"}});
+    expect(store.submission(current.requestId)).toMatchObject({
+      reason: "interruption_pending",
+      receipt: { status: "rejected" },
+    });
     expect(store.submission(current.requestId)!.receipt).not.toHaveProperty("reason");
     expect((await send(current)).statusCode).toBe(409);
     expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
     // A row stored before reasons were recorded carries only the sentence.
-    const legacy={requestId:randomUUID(),text:"Older"};
-    store.intent({...legacy,attachments:[],botId:"shared",senderId:"local-one"});
-    store.receipt({requestId:legacy.requestId,status:"rejected",message:"Review the interrupted task before starting another message."});
-    expect((await send(legacy)).json().error).toBe("Review the interrupted task before starting another message.");
+    const legacy = { requestId: randomUUID(), text: "Older" };
+    store.intent({ ...legacy, attachments: [], botId: "shared", senderId: "local-one" });
+    store.receipt({
+      requestId: legacy.requestId,
+      status: "rejected",
+      message: "Review the interrupted task before starting another message.",
+    });
+    expect((await send(legacy)).json().error).toBe(
+      "Review the interrupted task before starting another message.",
+    );
     expect(fake.runtime.submit).toHaveBeenCalledTimes(1);
-    expect((await send({...legacy,reviewedInterruption:true})).json().status).toBe("accepted");
+    expect((await send({ ...legacy, reviewedInterruption: true })).json().status).toBe("accepted");
     // Another rejection is returned as recorded, never mistaken for an interruption.
-    const other={requestId:randomUUID(),text:"Image"};
-    store.intent({...other,attachments:[],botId:"shared",senderId:"local-one"});
-    store.receipt({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
-    expect((await send(other)).json()).toEqual({requestId:other.requestId,status:"rejected",message:"Images cannot be added while Hermes is working."});
+    const other = { requestId: randomUUID(), text: "Image" };
+    store.intent({ ...other, attachments: [], botId: "shared", senderId: "local-one" });
+    store.receipt({
+      requestId: other.requestId,
+      status: "rejected",
+      message: "Images cannot be added while Hermes is working.",
+    });
+    expect((await send(other)).json()).toEqual({
+      requestId: other.requestId,
+      status: "rejected",
+      message: "Images cannot be added while Hermes is working.",
+    });
     await app.close();
   });
   it("forwards a request once, rejects reused IDs with changed content, and persists uncertain intent across app restart", async () => {
@@ -638,7 +879,12 @@ describe("safe admission, steering, and approvals", () => {
     expect((await submit()).json().status).toBe("uncertain");
     expect(fake.calls).toBe(1);
     // The code tells a client that another tab or device already sent under this ID.
-    const changed = await result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { ...payload, text: "Changed" } });
+    const changed = await result.app.inject({
+      method: "POST",
+      url: "/api/bots/shared/messages",
+      headers,
+      payload: { ...payload, text: "Changed" },
+    });
     expect([changed.statusCode, changed.json().code]).toEqual([409, "submission_conflict"]);
     await result.app.close();
     result = await createApp(c, fake.runtime, { background: false });
@@ -693,10 +939,23 @@ describe("safe admission, steering, and approvals", () => {
       payload: { decision: "approved" },
     };
     // An iOS notification action sent to one is refused when two is signed in on that phone.
-    const elsewhere = await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-one") } });
-    expect([elsewhere.statusCode, elsewhere.json().error]).toEqual([409, "This approval was sent to a different account"]);
+    const elsewhere = await app.inject({
+      ...options,
+      payload: { decision: "approved", account: accountMarker("local-one") },
+    });
+    expect([elsewhere.statusCode, elsewhere.json().error]).toEqual([
+      409,
+      "This approval was sent to a different account",
+    ]);
     expect(store.approval("approval")).toBeUndefined();
-    expect((await app.inject({ ...options, payload: { decision: "approved", account: accountMarker("local-two") } })).statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          ...options,
+          payload: { decision: "approved", account: accountMarker("local-two") },
+        })
+      ).statusCode,
+    ).toBe(200);
     expect(store.approval("approval")).toMatchObject({
       userId: "local-two",
       decision: "approved",
@@ -749,13 +1008,9 @@ it("invalidates an active session when its identity is removed from the allowlis
   const headers = {
     cookie: result.cookies[0].name + "=" + result.cookies[0].value,
   };
-  expect(
-    (await app.inject({ url: "/api/bootstrap", headers })).statusCode,
-  ).toBe(200);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
   c.householdEmails = [];
-  expect(
-    (await app.inject({ url: "/api/bootstrap", headers })).statusCode,
-  ).toBe(401);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(401);
   await app.close();
 });
 it("requires review acknowledgement before starting new work after interruption", async () => {
@@ -796,8 +1051,7 @@ it("reconciles a client-only pending ID and preserves uncertainty when the runti
   });
   const headers = await login(app),
     requestId = randomUUID();
-  const query = () =>
-    app.inject({ url: `/api/submissions/${requestId}`, headers });
+  const query = () => app.inject({ url: `/api/submissions/${requestId}`, headers });
   expect((await query()).json().status).toBe("uncertain");
   fake.runtime.lookupSubmission = async () => ({
     requestId,
@@ -876,24 +1130,47 @@ it("accepts long signed file identifiers in uploads, drafts, and authenticated d
       })
     ).statusCode,
   ).toBe(200);
-  expect(
-    (await app.inject({ url: `/api/files/${fileId}`, headers })).statusCode,
-  ).toBe(200);
+  expect((await app.inject({ url: `/api/files/${fileId}`, headers })).statusCode).toBe(200);
   await app.close();
 });
 it("keeps a draft's attachment signed with the app's own key, and refuses an identifier of no known shape by field", async () => {
   const { app } = await createApp(config(), runtimeDouble().runtime, { background: false });
   const headers = await login(app);
-  const save = (id: string) => app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Draft", attachments: [{ id, name: "photo.webp", mime: "image/webp" }] } });
-  const signed = testFiles().signFile({ path: "/staged/photo.webp", name: "photo.webp", mime: "image/webp", botId: "shared", kind: "upload", version: 1 }).id;
+  const save = (id: string) =>
+    app.inject({
+      method: "PUT",
+      url: "/api/bots/shared/draft",
+      headers,
+      payload: { text: "Draft", attachments: [{ id, name: "photo.webp", mime: "image/webp" }] },
+    });
+  const signed = testFiles().signFile({
+    path: "/staged/photo.webp",
+    name: "photo.webp",
+    mime: "image/webp",
+    botId: "shared",
+    kind: "upload",
+    version: 1,
+  }).id;
   expect(signed.split(".")).toHaveLength(4);
   const kept = await save(signed);
   expect(kept.statusCode).toBe(200);
   expect(kept.json().attachments[0].id).toBe(signed);
   // The wrong number of parts, a v2 identifier missing its signature, an unknown version prefix, and a character outside base64url.
-  for (const id of ["onlyonepart", "v2.key.body", "v3.key.body.signature", "a.b.c", "v2.key.body.sig.extra", "v2.key.bo dy.sig", ""]) {
+  for (const id of [
+    "onlyonepart",
+    "v2.key.body",
+    "v3.key.body.signature",
+    "a.b.c",
+    "v2.key.body.sig.extra",
+    "v2.key.bo dy.sig",
+    "",
+  ]) {
     const refused = await save(id);
-    expect([id, refused.statusCode, refused.json().details[0].path]).toEqual([id, 400, ["attachments", 0, "id"]]);
+    expect([id, refused.statusCode, refused.json().details[0].path]).toEqual([
+      id,
+      400,
+      ["attachments", 0, "id"],
+    ]);
   }
   await app.close();
 });
@@ -902,18 +1179,39 @@ it("streams downloads under the shared cap and explains a file that is too large
   const limits: number[] = [];
   fake.runtime.download = async (_id, maxBytes) => {
     limits.push(maxBytes);
-    if (limits.length > 1) throw Object.assign(new Error("huge.zip is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true });
-    return { name: "notes.txt", mime: "text/plain", size: 11, body: new Blob(["hello ", "world"]).stream() };
+    if (limits.length > 1)
+      throw Object.assign(new Error("huge.zip is larger than 100 MB, the most this app opens."), {
+        statusCode: 502,
+        code: "file_too_large",
+        expose: true,
+      });
+    return {
+      name: "notes.txt",
+      mime: "text/plain",
+      size: 11,
+      body: new Blob(["hello ", "world"]).stream(),
+    };
   };
-  const { app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
+  const { app } = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    fake.runtime,
+    { background: false },
+  );
   const headers = await login(app);
   const file = await app.inject({ url: "/api/files/a.b", headers });
-  expect([file.statusCode, file.body, file.headers["content-length"]]).toEqual([200, "hello world", "11"]);
+  expect([file.statusCode, file.body, file.headers["content-length"]]).toEqual([
+    200,
+    "hello world",
+    "11",
+  ]);
   // A file id is signed over a path, so one overwritten later must never come from a browser cache.
   expect(file.headers["cache-control"]).toBe("no-store");
   const tooLarge = await app.inject({ url: "/api/files/a.b", headers });
   expect(tooLarge.statusCode).toBe(502);
-  expect(tooLarge.json()).toMatchObject({ code: "file_too_large", error: "huge.zip is larger than 100 MB, the most this app opens." });
+  expect(tooLarge.json()).toMatchObject({
+    code: "file_too_large",
+    error: "huge.zip is larger than 100 MB, the most this app opens.",
+  });
   expect(limits).toEqual([MAX_DOWNLOAD_BYTES, MAX_DOWNLOAD_BYTES]);
   await app.close();
 });
@@ -921,10 +1219,23 @@ it("answers HEAD without reading the file and reports a stream that fails before
   const fake = runtimeDouble();
   const cancel = vi.fn();
   let fail = false;
-  fake.runtime.download = async () => ({ name: "notes.txt", mime: "text/plain", size: 5, body: new ReadableStream({
-    pull: controller => fail ? controller.error(Object.assign(new Error("notes.txt is larger than 100 MB, the most this app opens."), { statusCode: 502, code: "file_too_large", expose: true })) : new Promise(() => {}),
-    cancel,
-  }) });
+  fake.runtime.download = async () => ({
+    name: "notes.txt",
+    mime: "text/plain",
+    size: 5,
+    body: new ReadableStream({
+      pull: (controller) =>
+        fail
+          ? controller.error(
+              Object.assign(
+                new Error("notes.txt is larger than 100 MB, the most this app opens."),
+                { statusCode: 502, code: "file_too_large", expose: true },
+              ),
+            )
+          : new Promise(() => {}),
+      cancel,
+    }),
+  });
   const { app } = await createApp(config(), fake.runtime, { background: false });
   const headers = await login(app);
   // The response returns either way; the stalled Hermes read must also be cancelled.
@@ -933,8 +1244,15 @@ it("answers HEAD without reading the file and reports a stream that fails before
   expect(cancel.mock.calls).toEqual([[undefined]]);
   fail = true;
   const failed = await app.inject({ url: "/api/files/a.b", headers });
-  expect([failed.statusCode, failed.headers["content-type"], failed.headers["content-disposition"]]).toEqual([502, "application/json; charset=utf-8", undefined]);
-  expect(failed.json()).toMatchObject({ code: "file_too_large", error: "notes.txt is larger than 100 MB, the most this app opens." });
+  expect([
+    failed.statusCode,
+    failed.headers["content-type"],
+    failed.headers["content-disposition"],
+  ]).toEqual([502, "application/json; charset=utf-8", undefined]);
+  expect(failed.json()).toMatchObject({
+    code: "file_too_large",
+    error: "notes.txt is larger than 100 MB, the most this app opens.",
+  });
   await app.close();
 });
 it("preserves a native model confirmation request until the user explicitly confirms", async () => {
@@ -1050,15 +1368,13 @@ it("logs out and invalidates the server session immediately", async () => {
       })
     ).statusCode,
   ).toBe(200);
-  expect(
-    (await app.inject({ url: "/api/bootstrap", headers })).statusCode,
-  ).toBe(401);
+  expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(401);
   await app.close();
 });
 it("requires production identity and HTTPS on any public listener or origin, even when NODE_ENV is development", () => {
-  expect(() =>
-    loadConfig({ NODE_ENV: "development", HOST: "0.0.0.0" }),
-  ).toThrow("Production requires");
+  expect(() => loadConfig({ NODE_ENV: "development", HOST: "0.0.0.0" })).toThrow(
+    "Production requires",
+  );
   expect(() =>
     loadConfig({
       NODE_ENV: "development",
@@ -1081,10 +1397,18 @@ describe("submission records", () => {
     const store = new Store(":memory:");
     try {
       store.user({ id: "local-one", name: "One", email: "one@example.test" });
-      const input: Submission = { requestId: randomUUID(), botId: "shared", senderId: "local-one", text: "A", attachments: [] };
+      const input: Submission = {
+        requestId: randomUUID(),
+        botId: "shared",
+        senderId: "local-one",
+        text: "A",
+        attachments: [],
+      };
       expect(store.intent(input).created).toBe(true);
       expect(store.intent(input).created).toBe(false);
-      expect(() => store.intent({ ...input, text: "B" })).toThrow(expect.objectContaining({ statusCode: 409, code: "submission_conflict" }));
+      expect(() => store.intent({ ...input, text: "B" })).toThrow(
+        expect.objectContaining({ statusCode: 409, code: "submission_conflict" }),
+      );
     } finally {
       store.close();
     }
@@ -1100,7 +1424,8 @@ describe("form keys", () => {
     try {
       let store = new Store(path);
       for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
-      const one = store.formKey("one"), two = store.formKey("two");
+      const one = store.formKey("one"),
+        two = store.formKey("two");
       expect(one).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(two).not.toBe(one);
       expect(store.formKey("one")).toBe(one);
@@ -1109,17 +1434,27 @@ describe("form keys", () => {
       // Reading an existing key never writes, so it works while another connection holds the write lock.
       const locker = new DatabaseSync(path);
       locker.exec("BEGIN IMMEDIATE");
-      try { expect(store.formKey("one")).toBe(one); }
-      finally { locker.exec("ROLLBACK"); locker.close(); }
+      try {
+        expect(store.formKey("one")).toBe(one);
+      } finally {
+        locker.exec("ROLLBACK");
+        locker.close();
+      }
       store.close();
       // A store opened before another connection took the write lock never needs it for a key,
       // even for the first one it hands out.
       const fresh = join(dir, "fresh.db");
       new Store(fresh).close();
-      const opened = new Store(fresh), holder = new DatabaseSync(fresh);
+      const opened = new Store(fresh),
+        holder = new DatabaseSync(fresh);
       holder.exec("BEGIN IMMEDIATE");
-      try { expect(opened.formKey("one")).toMatch(/^[A-Za-z0-9_-]{43}$/); }
-      finally { holder.exec("ROLLBACK"); holder.close(); opened.close(); }
+      try {
+        expect(opened.formKey("one")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      } finally {
+        holder.exec("ROLLBACK");
+        holder.close();
+        opened.close();
+      }
       // Another installation's secret gives the same person a different key.
       const elsewhere = new Store(join(dir, "other.db"));
       expect(elsewhere.formKey("one")).not.toBe(one);
@@ -1130,12 +1465,21 @@ describe("form keys", () => {
   });
 
   it("hands each signed-in person only their own key in bootstrap", async () => {
-    const { app, store } = await createApp(config(), runtimeDouble().runtime, { background: false });
+    const { app, store } = await createApp(config(), runtimeDouble().runtime, {
+      background: false,
+    });
     try {
-      const keys = await Promise.all(["one", "two"].map(async member =>
-        (await app.inject({ url: "/api/bootstrap", headers: await login(app, member) })).json()));
-      expect(keys.map(boot => boot.formKey)).toEqual(keys.map(boot => store.formKey(boot.user.id)));
+      const keys = await Promise.all(
+        ["one", "two"].map(async (member) =>
+          (await app.inject({ url: "/api/bootstrap", headers: await login(app, member) })).json(),
+        ),
+      );
+      expect(keys.map((boot) => boot.formKey)).toEqual(
+        keys.map((boot) => store.formKey(boot.user.id)),
+      );
       expect(keys[0].formKey).not.toBe(keys[1].formKey);
-    } finally { await app.close(); }
+    } finally {
+      await app.close();
+    }
   });
 });

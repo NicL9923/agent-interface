@@ -15,7 +15,7 @@ left out `playwright.config.ts`. This is the second break of this kind, after
 
 ## Red and green, on Linux at 6975080a
 
-| Archive | `npm run build` in the extracted tree |
-| --- | --- |
+| Archive  | `npm run build` in the extracted tree     |
+| -------- | ----------------------------------------- |
 | Old tool | exit 2, the same TS2307 error as the host |
-| New tool | exit 0 |
+| New tool | exit 0                                    |

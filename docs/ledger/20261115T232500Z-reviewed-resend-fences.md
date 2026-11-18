@@ -14,7 +14,6 @@ The first `~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-go
 
 The retry passed on commit `e00d2d6e6078bf9f4507c3a96f3de2038f9fb961`, the same source fingerprint. It waited 4,660 seconds for the machine lock and ran for 6 minutes 17 seconds. Typecheck, lint, Ruff, the JavaScript suite (4,066 tests in 221 files), build (896 modules), and Python checks (52 files) passed. Command: `LINUX_HEAVY_LOCK_TIMEOUT=14400 ~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going --skip e2e --py always --lock-timeout 14400`. Output: `/tmp/reviewed-resend-check-all-retry.log`. Browser checks were skipped for the compatible-container validation assigned to the parent.
 
-
 ## Completed browser validation at `c407254ba5fc19bdcb880c895730ff24b2802741`
 
 The compatible Playwright 1.65.0 Noble container with Node 24.22.2 ran

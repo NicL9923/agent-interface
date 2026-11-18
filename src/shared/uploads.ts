@@ -1,5 +1,12 @@
 // One definition of what a message attachment may be, shared by the composer and the upload route.
-export const UPLOAD_MIME_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf", "text/plain"] as const;
+export const UPLOAD_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+  "text/plain",
+] as const;
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 export const MAX_ATTACHMENTS = 10;
 // Files stream to the person, so this bounds one transfer rather than server memory:
@@ -8,7 +15,12 @@ export const MAX_DOWNLOAD_BYTES = 5 * MAX_UPLOAD_BYTES;
 export const UPLOAD_KINDS = "PNG, JPEG, WebP or GIF images, PDFs, or plain text";
 // The picker also offers common text formats, which the composer sends as plain text.
 const TEXT_EXTENSIONS = ["txt", "md", "markdown", "csv", "log"];
-export const UPLOAD_ACCEPT = [...UPLOAD_MIME_TYPES, "text/markdown", "text/csv", ...TEXT_EXTENSIONS.map(extension => `.${extension}`)].join(",");
+export const UPLOAD_ACCEPT = [
+  ...UPLOAD_MIME_TYPES,
+  "text/markdown",
+  "text/csv",
+  ...TEXT_EXTENSIONS.map((extension) => `.${extension}`),
+].join(",");
 
 export function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -37,9 +49,15 @@ export const tooLarge = (file: File) =>
 // Browsers name every pasted screenshot "image.png"; give each a name worth reading in the chat.
 export function namePastedFile(file: File, at: Date, index: number) {
   if (file.name && !/^image\.(png|jpe?g|gif|webp)$/i.test(file.name)) return file;
-  const extension = /^image\/(png|jpeg|gif|webp)$/.exec(file.type)?.[1]?.replace("jpeg", "jpg") ?? "png";
-  const time = [at.getHours(), at.getMinutes(), at.getSeconds()].map(part => String(part).padStart(2, "0")).join(".");
-  return new File([file], `Pasted image ${time}${index ? ` (${index + 1})` : ""}.${extension}`, { type: file.type, lastModified: file.lastModified });
+  const extension =
+    /^image\/(png|jpeg|gif|webp)$/.exec(file.type)?.[1]?.replace("jpeg", "jpg") ?? "png";
+  const time = [at.getHours(), at.getMinutes(), at.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(".");
+  return new File([file], `Pasted image ${time}${index ? ` (${index + 1})` : ""}.${extension}`, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
 }
 
 // Pasting copied spreadsheet cells also carries a rendered picture; keep that a text paste.
@@ -49,6 +67,11 @@ export function pastedFiles(data: Pick<DataTransfer, "files" | "getData">): File
   if (!files.length) return [];
   const text = data.getData("text/plain").trim();
   if (!text) return files;
-  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  return lines.every(line => files.some(file => file.name && line.endsWith(file.name))) ? files : [];
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.every((line) => files.some((file) => file.name && line.endsWith(file.name)))
+    ? files
+    : [];
 }

@@ -4,7 +4,11 @@
  * the items' order. A rejection rejects the whole map, as Promise.all does; callers that want every
  * item's outcome catch inside `fn`.
  */
-export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const worker = async () => {
@@ -23,15 +27,24 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (it
 export function limiter(limit: number) {
   let running = 0;
   const queue: (() => void)[] = [];
-  const next = () => { running--; queue.shift()?.(); };
-  return <R>(fn: () => Promise<R>): Promise<R> => new Promise<R>((resolve, reject) => {
-    // A call that throws before it returns a promise still frees its slot.
-    const run = () => {
-      running++;
-      let called: Promise<R>;
-      try { called = fn(); } catch (error) { called = Promise.reject(error); }
-      called.then(resolve, reject).finally(next);
-    };
-    if (running < Math.max(1, limit)) run(); else queue.push(run);
-  });
+  const next = () => {
+    running--;
+    queue.shift()?.();
+  };
+  return <R>(fn: () => Promise<R>): Promise<R> =>
+    new Promise<R>((resolve, reject) => {
+      // A call that throws before it returns a promise still frees its slot.
+      const run = () => {
+        running++;
+        let called: Promise<R>;
+        try {
+          called = fn();
+        } catch (error) {
+          called = Promise.reject(error);
+        }
+        called.then(resolve, reject).finally(next);
+      };
+      if (running < Math.max(1, limit)) run();
+      else queue.push(run);
+    });
 }

@@ -1,4 +1,15 @@
-import { Children, createContext, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Children,
+  createContext,
+  isValidElement,
+  memo,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ComponentProps, ReactNode } from "react";
 import Markdown from "react-markdown";
 import type { Components } from "react-markdown";
@@ -18,49 +29,100 @@ import "./message-markdown.css";
 type Highlighter = typeof import("./code-highlight");
 let highlighter: Highlighter | undefined;
 let highlighterLoad: Promise<Highlighter> | undefined;
-const loadHighlighter = () => highlighterLoad ??= import("./code-highlight").then(module => highlighter = module);
+const loadHighlighter = () =>
+  (highlighterLoad ??= import("./code-highlight").then((module) => (highlighter = module)));
 
-interface ReplyContextValue { text: string; inlineUi?: boolean; actionableIds: Set<string>; botId?: string; messageId?: string; userId?: string; unavailable?: boolean }
+interface ReplyContextValue {
+  text: string;
+  inlineUi?: boolean;
+  actionableIds: Set<string>;
+  botId?: string;
+  messageId?: string;
+  userId?: string;
+  unavailable?: boolean;
+}
 const ReplyContext = createContext<ReplyContextValue | null>(null);
-function MessagePre({ children, node }: { children?: ReactNode; node?: { position?: { start: { offset?: number }; end: { offset?: number } } } }) {
+function MessagePre({
+  children,
+  node,
+}: {
+  children?: ReactNode;
+  node?: { position?: { start: { offset?: number }; end: { offset?: number } } };
+}) {
   const context = useContext(ReplyContext);
   const child = Children.toArray(children)[0];
-  if (!isValidElement<{ children?: ReactNode; className?: string }>(child)) return <pre>{children}</pre>;
-  const code = Children.toArray(child.props.children).map(part => typeof part === "string" || typeof part === "number" ? String(part) : "").join("");
+  if (!isValidElement<{ children?: ReactNode; className?: string }>(child))
+    return <pre>{children}</pre>;
+  const code = Children.toArray(child.props.children)
+    .map((part) => (typeof part === "string" || typeof part === "number" ? String(part) : ""))
+    .join("");
   const language = child.props.className?.match(/(?:^|\s)language-(\S+)/)?.[1];
   // A streaming fence can contain valid JSON before its closing fence arrives.
   const raw = context?.text.slice(node?.position?.start.offset, node?.position?.end.offset) || "";
   const fences = /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*\n {0,3}(`{3,}|~{3,})[ \t]*$/.exec(raw);
   const closed = fences && fences[1][0] === fences[2][0] && fences[2].length >= fences[1].length;
-  const inline = language === "wildbots-html" && context?.inlineUi && closed ? parseInlineDocument(code) : null;
+  const inline =
+    language === "wildbots-html" && context?.inlineUi && closed ? parseInlineDocument(code) : null;
   if (inline) return <InlineUi key={code} document={inline} />;
-  const document = language === "agent-ui" && context?.botId && context.messageId ? parseReplyDocument(code) : null;
-  return document && context && document.cards.every(card => context.actionableIds.has(card.id))
-    ? <ReplyCards document={document} botId={context.botId} messageId={context.messageId} userId={context.userId} unavailable={context.unavailable} />
+  const document =
+    language === "agent-ui" && context?.botId && context.messageId
+      ? parseReplyDocument(code)
+      : null;
+  return document &&
+    context &&
+    document.cards.every((card) => context.actionableIds.has(card.id)) ? (
+    <ReplyCards
+      document={document}
+      botId={context.botId}
+      messageId={context.messageId}
+      userId={context.userId}
+      unavailable={context.unavailable}
+    />
+  ) : (
     // A finished block is keyed by its code; one still streaming keeps its node, and any selection in it.
-    : <CodeBlock key={closed ? code : "open"} code={code} language={language} finished={!!closed} />;
+    <CodeBlock key={closed ? code : "open"} code={code} language={language} finished={!!closed} />
+  );
 }
 
 /**
  * A fenced block. It renders plain at once and gains colors when the highlighter chunk is ready; color
  * alone never changes the layout. A fence still streaming in stays plain until its closing line arrives.
  */
-function CodeBlock({ code, language, finished }: { code: string; language?: string; finished: boolean }) {
+function CodeBlock({
+  code,
+  language,
+  finished,
+}: {
+  code: string;
+  language?: string;
+  finished: boolean;
+}) {
   // Feedback belongs to the code it copied; once a growing block changes, it no longer applies.
-  const [copied, setCopied] = useState<{ state: "idle" | "copying" | "copied" | "failed"; code: string }>({ state: "idle", code });
+  const [copied, setCopied] = useState<{
+    state: "idle" | "copying" | "copied" | "failed";
+    code: string;
+  }>({ state: "idle", code });
   const copyState = copied.code === code ? copied.state : "idle";
   const highlightable = finished && !!language;
-  const [html, setHtml] = useState(() => highlightable && highlighter ? highlighter.highlight(code, language!) : null);
+  const [html, setHtml] = useState(() =>
+    highlightable && highlighter ? highlighter.highlight(code, language!) : null,
+  );
   // A finished block is keyed by its code, so a result can only ever belong to this code.
   useEffect(() => {
     if (!highlightable || html !== null) return;
-    loadHighlighter().then(module => setHtml(module.highlight(code, language!)), () => { /* Plain code still reads fine. */ });
+    loadHighlighter().then(
+      (module) => setHtml(module.highlight(code, language!)),
+      () => {
+        /* Plain code still reads fine. */
+      },
+    );
   }, [highlightable, html, code, language]);
 
   async function copy() {
     const text = code;
     // A copy still pending when the code changes reports nothing, since it copied the older text.
-    const settle = (state: "copied" | "failed") => setCopied(current => current.code === text ? { state, code: text } : current);
+    const settle = (state: "copied" | "failed") =>
+      setCopied((current) => (current.code === text ? { state, code: text } : current));
     setCopied({ state: "copying", code: text });
     try {
       await navigator.clipboard.writeText(text);
@@ -74,11 +136,7 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
     <div className="markdown-code-block">
       <div className="markdown-code-header">
         <span className="markdown-code-language">{language || "Code"}</span>
-        <button
-          type="button"
-          onClick={() => void copy()}
-          disabled={copyState === "copying"}
-        >
+        <button type="button" onClick={() => void copy()} disabled={copyState === "copying"}>
           {copyState === "copying" ? "Copying…" : "Copy code"}
         </button>
       </div>
@@ -87,7 +145,11 @@ function CodeBlock({ code, language, finished }: { code: string; language?: stri
         role="region"
         aria-label={language ? `${language} code block` : "Code block"}
       >
-        {html ? <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} /> : <code>{code}</code>}
+        {html ? (
+          <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+        ) : (
+          <code>{code}</code>
+        )}
       </pre>
       <span className="markdown-copy-status" role="status">
         {copyState === "copied"
@@ -120,7 +182,9 @@ const components: Components = {
         {children}
       </a>
     ) : href ? (
-      <span className="markdown-local-file" title={localFile}>{children}</span>
+      <span className="markdown-local-file" title={localFile}>
+        {children}
+      </span>
     ) : (
       <span>{children}</span>
     );
@@ -148,7 +212,9 @@ function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   async function copy(format: "Markdown" | "CSV") {
     const rows = table.current ? tableRows(table.current) : [];
     try {
-      await navigator.clipboard.writeText(format === "CSV" ? tableToCsv(rows) : tableToMarkdown(rows));
+      await navigator.clipboard.writeText(
+        format === "CSV" ? tableToCsv(rows) : tableToMarkdown(rows),
+      );
       setStatus(`Table copied as ${format}.`);
     } catch {
       setStatus("Couldn't copy. Select the table and copy it manually.");
@@ -157,25 +223,42 @@ function MarkdownTable({ children, ...props }: ComponentProps<"table">) {
   return (
     <div className="markdown-table">
       <div className="markdown-table-scroll" tabIndex={0} role="region" aria-label="Table">
-        <table ref={table} {...props}>{children}</table>
+        <table ref={table} {...props}>
+          {children}
+        </table>
       </div>
       <div className="markdown-table-actions">
-        <button type="button" onClick={() => void copy("Markdown")}>Copy as Markdown</button>
-        <button type="button" onClick={() => void copy("CSV")}>Copy as CSV</button>
-        <span className="markdown-copy-status" role="status">{status}</span>
+        <button type="button" onClick={() => void copy("Markdown")}>
+          Copy as Markdown
+        </button>
+        <button type="button" onClick={() => void copy("CSV")}>
+          Copy as CSV
+        </button>
+        <span className="markdown-copy-status" role="status">
+          {status}
+        </span>
       </div>
     </div>
   );
 }
 
 type MessageMarkdownProps = {
-  text: string; botId?: string; messageId?: string; userId?: string; unavailable?: boolean; inlineUi?: boolean;
+  text: string;
+  botId?: string;
+  messageId?: string;
+  userId?: string;
+  unavailable?: boolean;
+  inlineUi?: boolean;
 };
 
 // Memoized because the composer re-renders the app on every keystroke, and
 // re-parsing every reply in a long transcript made typing lag.
 export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkdownProps) {
-  return <div className="message-markdown"><MarkdownBlocks {...props} /></div>;
+  return (
+    <div className="message-markdown">
+      <MarkdownBlocks {...props} />
+    </div>
+  );
 });
 
 /**
@@ -183,11 +266,34 @@ export const MessageMarkdown = memo(function MessageMarkdown(props: MessageMarkd
  * ID reaches only reply cards, so a live row saved under Hermes's own ID keeps its parsed blocks
  * unless one holds a card. Every other prop changes the output.
  */
-export const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) => a.text === b.text && a.inlineUi === b.inlineUi && a.botId === b.botId
-  && a.userId === b.userId && a.unavailable === b.unavailable && (a.messageId === b.messageId || !/agent-ui/.test(b.text));
+export const sameBlock = (a: MessageMarkdownProps, b: MessageMarkdownProps) =>
+  a.text === b.text &&
+  a.inlineUi === b.inlineUi &&
+  a.botId === b.botId &&
+  a.userId === b.userId &&
+  a.unavailable === b.unavailable &&
+  (a.messageId === b.messageId || !/agent-ui/.test(b.text));
 /** One parsed piece of a reply, without its container, so several can share one. */
-const MarkdownBlocks = memo(function MarkdownBlocks({ text, botId, messageId, userId, unavailable, inlineUi = false }: MessageMarkdownProps) {
-  const context = useMemo(() => ({ text, inlineUi, actionableIds: new Set(replyCardsFromText(text).map(card => card.id)), botId, messageId, userId, unavailable }), [text, inlineUi, botId, messageId, userId, unavailable]);
+const MarkdownBlocks = memo(function MarkdownBlocks({
+  text,
+  botId,
+  messageId,
+  userId,
+  unavailable,
+  inlineUi = false,
+}: MessageMarkdownProps) {
+  const context = useMemo(
+    () => ({
+      text,
+      inlineUi,
+      actionableIds: new Set(replyCardsFromText(text).map((card) => card.id)),
+      botId,
+      messageId,
+      userId,
+      unavailable,
+    }),
+    [text, inlineUi, botId, messageId, userId, unavailable],
+  );
   return (
     <ReplyContext.Provider value={context}>
       <Markdown skipHtml remarkPlugins={[remarkGfm]} components={components}>
@@ -213,7 +319,10 @@ const containerMarker = String.raw`[ \t]*(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))`
  * together. A fence behind a quote or list marker is invisible to the fence tracker below, which
  * would then pair its indented closing line with the next fence and skip what lies between.
  */
-const wholeReply = new RegExp(String.raw`^ {0,3}(?:\`{3,}|~{3,})\s*(?:agent-ui|wildbots-html)\b|^(?:${containerMarker})+[ \t]*(?:\`{3,}|~{3,})`, "m");
+const wholeReply = new RegExp(
+  String.raw`^ {0,3}(?:\`{3,}|~{3,})\s*(?:agent-ui|wildbots-html)\b|^(?:${containerMarker})+[ \t]*(?:\`{3,}|~{3,})`,
+  "m",
+);
 /**
  * Lines outside code fences that make one block depend on another. A reference-link or footnote
  * definition resolves uses anywhere in the reply; a use without one is literal text in both parses,
@@ -222,7 +331,9 @@ const wholeReply = new RegExp(String.raw`^ {0,3}(?:\`{3,}|~{3,})\s*(?:agent-ui|w
  * may hold blank lines or fence-shaped lines that are not code. Each may sit in a quote or list
  * item; matching an indented code line or an autolink too only costs a full parse.
  */
-const spansReply = new RegExp(String.raw`^(?:${containerMarker})*[ \t]*(?:\[(?:[^\\\]]|\\.)*(?:\]:|\\?$)|<[A-Za-z/?!])`);
+const spansReply = new RegExp(
+  String.raw`^(?:${containerMarker})*[ \t]*(?:\[(?:[^\\\]]|\\.)*(?:\]:|\\?$)|<[A-Za-z/?!])`,
+);
 const indent = (line: string) => {
   const space = /^[ \t]*/.exec(line)![0];
   return space.includes("\t") ? 4 : space.length;
@@ -242,7 +353,10 @@ const indent = (line: string) => {
 export function streamingBlocks(text: string): string[] | null {
   if (wholeReply.test(text)) return null;
   // Each block is cut from the text itself, so its line endings stay as they arrived.
-  const lines: string[] = [], starts: number[] = [], ends: number[] = [], blocks: string[] = [];
+  const lines: string[] = [],
+    starts: number[] = [],
+    ends: number[] = [],
+    blocks: string[] = [];
   let at = 0;
   for (const ending of text.matchAll(lineEnding)) {
     lines.push(text.slice(at, ending.index));
@@ -252,7 +366,10 @@ export function streamingBlocks(text: string): string[] | null {
   }
   lines.push(text.slice(at));
   starts.push(at);
-  let start = 0, open: string | undefined, openIndent = 0, listed = false;
+  let start = 0,
+    open: string | undefined,
+    openIndent = 0,
+    listed = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (open && !blank(line) && indent(line) < openIndent) return null;
@@ -261,12 +378,26 @@ export function streamingBlocks(text: string): string[] | null {
     const marker = fence.exec(line)?.[1];
     if (marker) {
       if (!open) [open, openIndent] = [marker, indent(line)];
-      else if (marker[0] === open[0] && marker.length >= open.length && blank(line.slice(line.indexOf(marker) + marker.length))) open = undefined;
+      else if (
+        marker[0] === open[0] &&
+        marker.length >= open.length &&
+        blank(line.slice(line.indexOf(marker) + marker.length))
+      )
+        open = undefined;
       continue;
     }
     if (!open && spansReply.test(line)) return null;
     const next = lines[index + 1];
-    if (open || !blank(line) || index === start || next === undefined || blank(next) || /^[ \t]/.test(next) || listItem.test(next)) continue;
+    if (
+      open ||
+      !blank(line) ||
+      index === start ||
+      next === undefined ||
+      blank(next) ||
+      /^[ \t]/.test(next) ||
+      listItem.test(next)
+    )
+      continue;
     blocks.push(text.slice(starts[start], ends[index - 1]));
     start = index + 1;
   }
@@ -274,8 +405,10 @@ export function streamingBlocks(text: string): string[] | null {
   return blocks;
 }
 
-const parsed = (text: string) => fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
-const shape = (nodes: unknown[]) => JSON.stringify(nodes, (key, value: unknown) => key === "position" ? undefined : value);
+const parsed = (text: string) =>
+  fromMarkdown(text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] }).children;
+const shape = (nodes: unknown[]) =>
+  JSON.stringify(nodes, (key, value: unknown) => (key === "position" ? undefined : value));
 /**
  * The longest saved reply whose blocks are checked against the whole parse (`blocksAgree`). The check
  * runs on the main thread the moment a reply is saved and grows with the reply. In a production
@@ -304,16 +437,29 @@ export function blocksAgree(text: string, blocks: string[]): boolean {
  * from its raw text, so a row that streamed keeps its nodes when saved. `whole` parses it whole,
  * in the same container.
  */
-export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = true, whole: parseWhole = false, ...props }: MessageMarkdownProps & { holdBack?: boolean; whole?: boolean }) {
+export const StreamingMarkdown = memo(function StreamingMarkdown({
+  holdBack = true,
+  whole: parseWhole = false,
+  ...props
+}: MessageMarkdownProps & { holdBack?: boolean; whole?: boolean }) {
   const blocks = useMemo(() => {
     const split = parseWhole ? null : streamingBlocks(props.text);
     return split && holdBack ? [...split.slice(0, -1), streamingHoldBack(split.at(-1)!)] : split;
   }, [props.text, holdBack, parseWhole]);
-  const whole = useMemo(() => blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text, [blocks, holdBack, props.text]);
+  const whole = useMemo(
+    () => (blocks ? "" : holdBack ? streamingHoldBack(props.text) : props.text),
+    [blocks, holdBack, props.text],
+  );
   // One container however the reply splits, so the reply's node never changes while it streams.
-  return <div className="message-markdown">
-    {blocks ? blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />) : <MarkdownBlocks key="whole" {...props} text={whole} />}
-  </div>;
+  return (
+    <div className="message-markdown">
+      {blocks ? (
+        blocks.map((block, index) => <MarkdownBlocks key={index} {...props} text={block} />)
+      ) : (
+        <MarkdownBlocks key="whole" {...props} text={whole} />
+      )}
+    </div>
+  );
 });
 
 /**
@@ -329,7 +475,10 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({ holdBack = tr
  * (`blocksAgree`) and the reply is short enough to check (`MAX_CHECKED_REPLY`). Otherwise it parses
  * whole, in the same container: a saved reply never shows a gap in the splitter. A reply that was never live renders as MessageMarkdown.
  */
-export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: MessageMarkdownProps & { live: boolean }) {
+export const ReplyMarkdown = memo(function ReplyMarkdown({
+  live,
+  ...props
+}: MessageMarkdownProps & { live: boolean }) {
   const [streamed, setStreamed] = useState(live);
   if (live && !streamed) setStreamed(true);
   const text = useRevealed(props.text, live);
@@ -342,10 +491,12 @@ export const ReplyMarkdown = memo(function ReplyMarkdown({ live, ...props }: Mes
     return !!blocks && !blocksAgree(text, blocks);
   }, [live, streamed, text]);
   if (!live && !streamed) return <MessageMarkdown {...props} />;
-  return <>
-    <StreamingMarkdown {...props} text={text} holdBack={live} whole={whole} />
-    {live && <StreamingCaret text={text} />}
-  </>;
+  return (
+    <>
+      <StreamingMarkdown {...props} text={text} holdBack={live} whole={whole} />
+      {live && <StreamingCaret text={text} />}
+    </>
+  );
 });
 
 // Text a person reads in the reply, not a control's label or a status line.
@@ -355,7 +506,8 @@ type Box = { left: number; right: number; top: number; bottom: number };
 /** Digits run left to right even inside right-to-left text. */
 const digit = /^\p{Nd}/u;
 /** Letters of the scripts written right to left. */
-const rightToLeft = /^[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]/u;
+const rightToLeft =
+  /^[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}\p{Script=Samaritan}\p{Script=Mandaic}\p{Script=Adlam}]/u;
 const letter = /^\p{L}/u;
 /**
  * Which edge of the reply's last grapheme is the text's logical end: its trailing edge in the
@@ -365,7 +517,12 @@ const letter = /^\p{L}/u;
  * the text runs right to left there. With nothing before it on the line, the paragraph's direction
  * decides, as it does for the browser.
  */
-export function logicalEndSide(grapheme: string, last: Box, previous: Box | undefined, direction: string): "left" | "right" {
+export function logicalEndSide(
+  grapheme: string,
+  last: Box,
+  previous: Box | undefined,
+  direction: string,
+): "left" | "right" {
   if (digit.test(grapheme)) return "right";
   if (rightToLeft.test(grapheme)) return "left";
   if (letter.test(grapheme)) return "right";
@@ -382,13 +539,21 @@ export function logicalEndSide(grapheme: string, last: Box, previous: Box | unde
  * it runs in that direction. `line` holds the boxes of the line's other glyphs; a space is not one, so
  * the caret may sit in it.
  */
-export function clearEnd(last: Box, side: "left" | "right", line: Box[], direction: string, reach: number): { x: number; side: "left" | "right" } {
+export function clearEnd(
+  last: Box,
+  side: "left" | "right",
+  line: Box[],
+  direction: string,
+  reach: number,
+): { x: number; side: "left" | "right" } {
   const x = side === "left" ? last.left : last.right;
-  const from = side === "left" ? x - reach : x, to = side === "left" ? x : x + reach;
-  if (!line.some(glyph => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
+  const from = side === "left" ? x - reach : x,
+    to = side === "left" ? x : x + reach;
+  if (!line.some((glyph) => glyph.right > from + 0.5 && glyph.left < to - 0.5)) return { x, side };
   // The final grapheme counts whole: in "helloم" it is the line's end itself.
-  if (direction === "rtl") return { x: Math.min(last.left, ...line.map(glyph => glyph.left)), side: "left" };
-  return { x: Math.max(last.right, ...line.map(glyph => glyph.right)), side: "right" };
+  if (direction === "rtl")
+    return { x: Math.min(last.left, ...line.map((glyph) => glyph.left)), side: "left" };
+  return { x: Math.max(last.right, ...line.map((glyph) => glyph.right)), side: "right" };
 }
 
 const space = /\s/;
@@ -399,7 +564,11 @@ const space = /\s/;
  */
 function lineGlyphs(walker: TreeWalker, node: Text, before: number, last: Box): Box[] {
   const glyphs: Box[] = [];
-  for (let text: Text | null = node, end = before; text; text = walker.previousNode() as Text | null, end = text?.data.length ?? 0) {
+  for (
+    let text: Text | null = node, end = before;
+    text;
+    text = walker.previousNode() as Text | null, end = text?.data.length ?? 0
+  ) {
     for (let start = end; end > 0; end = start) {
       while (end > 0 && space.test(text.data[end - 1])) end--;
       for (start = end; start > 0 && !space.test(text.data[start - 1]);) start--;
@@ -433,9 +602,15 @@ const measure = (node: Text, start: number, end: number) => {
  * measures the last grapheme and the one before it, not a collapsed range, since browsers differ
  * on a collapsed range's rectangle and on which side of a bidirectional boundary it lies.
  */
-function textEnd(box: Element, reach: number): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
+function textEnd(
+  box: Element,
+  reach: number,
+): { x: number; side: "left" | "right"; top: number; height: number; node: Text } | undefined {
   const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, {
-    acceptNode: node => /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+    acceptNode: (node) =>
+      /\S/.test(node.nodeValue ?? "") && !node.parentElement?.closest(notReplyText)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_SKIP,
   });
   const node = walker.lastChild() as Text | null;
   if (!node) return undefined;
@@ -446,16 +621,31 @@ function textEnd(box: Element, reach: number): { x: number; side: "left" | "righ
   const previous = start > 0 ? measure(node, graphemeCut(node.data, start - 1), start) : undefined;
   const direction = node.parentElement ? getComputedStyle(node.parentElement).direction : "ltr";
   const logical = logicalEndSide(node.data.slice(start, end), last, previous, direction);
-  const { x, side } = clearEnd(last, logical, lineGlyphs(walker, node, start, last), direction, reach);
+  const { x, side } = clearEnd(
+    last,
+    logical,
+    lineGlyphs(walker, node, start, last),
+    direction,
+    reach,
+  );
   return { x, side, top: last.top, height: last.height, node };
 }
 /** The part of the reply where the text shows: inside the code block or table that scrolls it sideways, if any. */
 function visibleArea(from: Node, box: Element): Box {
   const area = box.getBoundingClientRect();
-  for (let element = from.parentElement; element && element !== box; element = element.parentElement) {
+  for (
+    let element = from.parentElement;
+    element && element !== box;
+    element = element.parentElement
+  ) {
     if (!/auto|scroll|hidden/.test(getComputedStyle(element).overflowX)) continue;
     const clip = element.getBoundingClientRect();
-    return { left: Math.max(area.left, clip.left), right: Math.min(area.right, clip.right), top: clip.top, bottom: clip.bottom };
+    return {
+      left: Math.max(area.left, clip.left),
+      right: Math.min(area.right, clip.right),
+      top: clip.top,
+      bottom: clip.bottom,
+    };
   }
   return area;
 }
@@ -469,13 +659,18 @@ const CARET_GAP = 2;
  * select or read. It stays inside the visible part of a code block or table that scrolls sideways.
  */
 function placeCaret(caret: HTMLElement) {
-  const box = caret.previousElementSibling, parent = caret.offsetParent;
+  const box = caret.previousElementSibling,
+    parent = caret.offsetParent;
   if (!box || !(parent instanceof HTMLElement)) return;
-  const width = caret.offsetWidth, base = parent.getBoundingClientRect(), end = textEnd(box, CARET_GAP + width);
+  const width = caret.offsetWidth,
+    base = parent.getBoundingClientRect(),
+    end = textEnd(box, CARET_GAP + width);
   const area = visibleArea(end?.node ?? box, box);
-  const side = end?.side ?? "right", at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
+  const side = end?.side ?? "right",
+    at = !end ? area.left : side === "left" ? end.x - CARET_GAP - width : end.x + CARET_GAP;
   // Text flush with an edge, such as Arabic in a left-to-right paragraph, puts the caret just outside it.
-  const least = area.left - (side === "left" ? CARET_GAP + width : 0), most = area.right + (side === "right" ? CARET_GAP : -width);
+  const least = area.left - (side === "left" ? CARET_GAP + width : 0),
+    most = area.right + (side === "right" ? CARET_GAP : -width);
   const x = Math.max(least, Math.min(at, most)) - base.left - parent.clientLeft + parent.scrollLeft;
   const y = (end ? end.top : area.top) - base.top - parent.clientTop + parent.scrollTop;
   caret.style.transform = `translate(${x}px, ${y}px)`;
@@ -483,17 +678,28 @@ function placeCaret(caret: HTMLElement) {
 }
 function StreamingCaret({ text }: { text: string }) {
   const caret = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => { if (caret.current) placeCaret(caret.current); }, [text]);
+  useLayoutEffect(() => {
+    if (caret.current) placeCaret(caret.current);
+  }, [text]);
   useEffect(() => {
-    const element = caret.current, box = element?.previousElementSibling;
+    const element = caret.current,
+      box = element?.previousElementSibling;
     if (!element || !box) return;
     // Scrolling a code block or table sideways moves the text under the caret. Scroll events do not
     // bubble, so the reply hears its own blocks' in the capture phase, and places the caret once a frame.
     let frame = 0;
-    const scrolled = () => { frame ||= requestAnimationFrame(() => { frame = 0; placeCaret(element); }); };
+    const scrolled = () => {
+      frame ||= requestAnimationFrame(() => {
+        frame = 0;
+        placeCaret(element);
+      });
+    };
     box.addEventListener("scroll", scrolled, { capture: true, passive: true });
     // A narrower window or a late image moves the text without changing it.
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => placeCaret(element));
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => placeCaret(element));
     observer?.observe(box);
     return () => {
       box.removeEventListener("scroll", scrolled, { capture: true });

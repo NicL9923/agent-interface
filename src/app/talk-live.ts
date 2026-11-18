@@ -11,5 +11,14 @@ export function setTalkLive(value: boolean) {
 }
 export const talkLive = () => talking;
 export function useTalkLive() {
-  return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, talkLive, talkLive);
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    talkLive,
+    talkLive,
+  );
 }

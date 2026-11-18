@@ -81,31 +81,31 @@ full Chromium four times (39 tests each), and `badge.spec.ts` alone eight times.
 
 Each protecting line broken by hand, the file restored. "Orders" are the seeded walks, 4,000 from seed 1.
 
-| Mutation | Result |
-| --- | --- |
-| Page badge steps off the chain | failed: 3 tests; 211 orders (badge not the latest's 151, cleared under the latest 211) |
-| The word taken at the step's start | failed: 157 orders (cleared under the latest); no named test, only the walk, then the older-generation test was added |
-| No newer-word check | failed: the older-generation test; 306 orders (cleared 221, set by a departed account 88) |
-| A count set for any account | failed: 2 named tests; 1,321 orders |
-| Any clear applies | failed: the two stale-tab tests; 816 orders |
-| A clear refused when the latest word does not allow the badge | failed: the stopped-worker test |
-| A clear refused for the badge's own account | failed: the own-page clear test |
-| The page's count not recorded as owned | failed: 2 named tests; 450 orders |
-| Count not validated | failed: 4 cases |
-| A count with no account accepted | survived the table, which signs one in first; the "before any word" test was added and it went red |
-| No guard for a browser without the badge API | survived; the test only set a count; it now also clears, and went red |
-| No answer on the port | failed: 2 named tests |
-| The page always writes the badge itself | failed: 7 page tests; the end-to-end test |
-| No fallback after the answer timeout | failed: 4 page tests |
-| An older count keeps waiting after a newer one | failed: 2 page tests |
-| A late answer forgets the newest wait | failed: the late-answer test |
-| The port is not closed | failed: the answered test |
-| The unmount clear names no account | failed: the clear test |
-| A badge message does not wait behind the account words | failed: the slow-registration test |
-| No controller check | failed: 4 tests |
-| The worker ignores `BADGE` | failed: the end-to-end test |
-| `user` out of the hook's dependency list | survived: equivalent; a change of `user` alone for the same count needs no new write, and the list stays for the lint rule |
-| The `setAppBadge` existence check before a count | removed, not tested: a browser without `setAppBadge` throws into a chain that swallows it, the same outcome |
+| Mutation                                                      | Result                                                                                                                     |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Page badge steps off the chain                                | failed: 3 tests; 211 orders (badge not the latest's 151, cleared under the latest 211)                                     |
+| The word taken at the step's start                            | failed: 157 orders (cleared under the latest); no named test, only the walk, then the older-generation test was added      |
+| No newer-word check                                           | failed: the older-generation test; 306 orders (cleared 221, set by a departed account 88)                                  |
+| A count set for any account                                   | failed: 2 named tests; 1,321 orders                                                                                        |
+| Any clear applies                                             | failed: the two stale-tab tests; 816 orders                                                                                |
+| A clear refused when the latest word does not allow the badge | failed: the stopped-worker test                                                                                            |
+| A clear refused for the badge's own account                   | failed: the own-page clear test                                                                                            |
+| The page's count not recorded as owned                        | failed: 2 named tests; 450 orders                                                                                          |
+| Count not validated                                           | failed: 4 cases                                                                                                            |
+| A count with no account accepted                              | survived the table, which signs one in first; the "before any word" test was added and it went red                         |
+| No guard for a browser without the badge API                  | survived; the test only set a count; it now also clears, and went red                                                      |
+| No answer on the port                                         | failed: 2 named tests                                                                                                      |
+| The page always writes the badge itself                       | failed: 7 page tests; the end-to-end test                                                                                  |
+| No fallback after the answer timeout                          | failed: 4 page tests                                                                                                       |
+| An older count keeps waiting after a newer one                | failed: 2 page tests                                                                                                       |
+| A late answer forgets the newest wait                         | failed: the late-answer test                                                                                               |
+| The port is not closed                                        | failed: the answered test                                                                                                  |
+| The unmount clear names no account                            | failed: the clear test                                                                                                     |
+| A badge message does not wait behind the account words        | failed: the slow-registration test                                                                                         |
+| No controller check                                           | failed: 4 tests                                                                                                            |
+| The worker ignores `BADGE`                                    | failed: the end-to-end test                                                                                                |
+| `user` out of the hook's dependency list                      | survived: equivalent; a change of `user` alone for the same count needs no new write, and the list stays for the lint rule |
+| The `setAppBadge` existence check before a count              | removed, not tested: a browser without `setAppBadge` throws into a chain that swallows it, the same outcome                |
 
 ## Checks
 

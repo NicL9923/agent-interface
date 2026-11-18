@@ -8,27 +8,45 @@ import { useDeviceActivity } from "../src/app/use-device-activity";
 import { deviceIdleMs, deviceIdPattern } from "../src/shared/device-activity";
 import { advance, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), write: vi.fn() }))(original)));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest(
+    await (async (original) => ({
+      ...(await original<typeof import("../src/client-api")>()),
+      write: vi.fn(),
+    }))(original),
+  ),
+);
 let root: Root, visibility: DocumentVisibilityState, focused: boolean;
 function Shell({ userId }: { userId?: string }) {
   useDeviceActivity(userId);
   return null;
 }
-const reports = () => vi.mocked(write).mock.calls.map(([path, body, method]) => {
-  const { deviceId: id, state, idleMs } = body as { deviceId: string; state: string; idleMs?: number };
-  expect([path, method, id]).toEqual(["/devices/activity", "PUT", deviceId()]);
-  return idleMs === undefined ? state : `${state} ${idleMs}`;
-});
-async function render(userId?: string) { await act(async () => root.render(createElement(Shell, { userId }))); }
+const reports = () =>
+  vi.mocked(write).mock.calls.map(([path, body, method]) => {
+    const {
+      deviceId: id,
+      state,
+      idleMs,
+    } = body as { deviceId: string; state: string; idleMs?: number };
+    expect([path, method, id]).toEqual(["/devices/activity", "PUT", deviceId()]);
+    return idleMs === undefined ? state : `${state} ${idleMs}`;
+  });
+async function render(userId?: string) {
+  await act(async () => root.render(createElement(Shell, { userId })));
+}
 beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(write).mockReset().mockResolvedValue({ ok: true });
-  visibility = "visible"; focused = true;
+  visibility = "visible";
+  focused = true;
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   vi.spyOn(document, "hasFocus").mockImplementation(() => focused);
   ({ root } = mountRoot());
 });
-afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); localStorage.clear(); });
+afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
+  localStorage.clear();
+});
 
 it("beats from any screen while focused and used, and stops at five minutes without input", async () => {
   await render("one");
@@ -81,24 +99,40 @@ it("keeps one device ID per browser profile and replaces one that storage corrup
   expect(replaced).not.toBe(first);
   expect(localStorage.getItem("wildbots.device-id")).toBe(replaced);
   // Blocked storage still gives one stable ID for this page.
-  const blocked = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+  const blocked = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    throw new DOMException("blocked", "SecurityError");
+  });
   try {
     const page = deviceId();
     expect(page).toMatch(deviceIdPattern);
     expect(deviceId()).toBe(page);
-  } finally { blocked.mockRestore(); }
+  } finally {
+    blocked.mockRestore();
+  }
 });
 
 it("never sends an old active report after the window was left, and stamps idle time when a report goes", async () => {
   // The server answers slowly: each report waits for the test to let it through.
   const pending: (() => void)[] = [];
-  vi.mocked(write).mockImplementation(() => new Promise(resolve => { pending.push(() => resolve({ ok: true })); }));
-  const release = async () => { await act(async () => { pending.shift()!(); await Promise.resolve(); }); };
+  vi.mocked(write).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        pending.push(() => resolve({ ok: true }));
+      }),
+  );
+  const release = async () => {
+    await act(async () => {
+      pending.shift()!();
+      await Promise.resolve();
+    });
+  };
   await render("one");
   expect(reports()).toEqual(["active 0"]);
   // Two beats while the first report is still out: only the latest waits, and is worked out when it goes.
   await advance(30_000);
-  await act(async () => { vi.advanceTimersByTime(5_000); });
+  await act(async () => {
+    vi.advanceTimersByTime(5_000);
+  });
   await release();
   expect(reports()).toEqual(["active 0", "active 35000"]);
   // Hidden while that one is out: what goes next is inactive, never the beats queued before.
@@ -117,5 +151,10 @@ it("keeps the inactive report alive after the page hides and tolerates a failed 
   await render("one");
   visibility = "hidden";
   await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-  expect(vi.mocked(write).mock.calls.at(-1)).toEqual(["/devices/activity", { deviceId: deviceId(), state: "inactive" }, "PUT", { keepalive: true }]);
+  expect(vi.mocked(write).mock.calls.at(-1)).toEqual([
+    "/devices/activity",
+    { deviceId: deviceId(), state: "inactive" },
+    "PUT",
+    { keepalive: true },
+  ]);
 });

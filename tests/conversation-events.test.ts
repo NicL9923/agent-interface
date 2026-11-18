@@ -14,14 +14,19 @@ const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void }
 // shutdown test below calls app.close() directly, with a stream open, so preClose stays covered.
 afterEach(async () => {
   vi.useRealTimers();
-  for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
+  for (const app of apps.splice(0)) {
+    app.server.closeAllConnections();
+    await app.close();
+  }
 });
 
 // The server throttles notices with setTimeout and Date.now (a second for roster and change notices, a quarter
 // second for live reply growth). Every test runs those on virtual time, so a throttle costs nothing to wait out
 // and its length is still observable. Sockets and streams stay real, so after moving the clock a test gives
 // them a moment of real time to deliver whatever the server wrote.
-const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = { toFake: ["setTimeout", "clearTimeout", "Date"] };
+const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = {
+  toFake: ["setTimeout", "clearTimeout", "Date"],
+};
 /** Moves virtual time forward, then lets real sockets deliver what the server wrote meanwhile. */
 async function pass(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
@@ -32,19 +37,48 @@ async function pass(ms: number) {
 function runtimeDouble() {
   const watchers = new Map<string, Set<(kind?: "inflight", turnVersion?: string) => void>>();
   const rosterWatchers = new Set<() => void>();
-  const bots: Bot[] = [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }];
+  const bots: Bot[] = [
+    { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" },
+  ];
   const fixed: Partial<Runtime> = {
-    watchRoster(changed) { rosterWatchers.add(changed); return () => { rosterWatchers.delete(changed); }; },
-    botDetail: async botId => ({id:botId,name:"Shared",model:"test",shared:true,activity:"idle",instructions:"Saved soul",enabledMcpServers:["calendar"],availableMcpServers:["calendar","notes"],enabledTools:["terminal"],enabledSkills:["research"]}),
+    watchRoster(changed) {
+      rosterWatchers.add(changed);
+      return () => {
+        rosterWatchers.delete(changed);
+      };
+    },
+    botDetail: async (botId) => ({
+      id: botId,
+      name: "Shared",
+      model: "test",
+      shared: true,
+      activity: "idle",
+      instructions: "Saved soul",
+      enabledMcpServers: ["calendar"],
+      availableMcpServers: ["calendar", "notes"],
+      enabledTools: ["terminal"],
+      enabledSkills: ["research"],
+    }),
     status: async () => ({ connected: true }),
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: vi.fn(async () => bots),
-    inflight: botId => ({botId,message:{id:"sid-inflight",role:"assistant",text:"Live reply"},activity:{state:"thinking"},toolCalls:[]}),
-    conversation: async botId => ({ botId, messages: [], activity: { state: "idle" }, approvals: [], files: [] }),
-    submit: async input => ({ requestId: input.requestId, status: "accepted", runId: "run" }),
+    inflight: (botId) => ({
+      botId,
+      message: { id: "sid-inflight", role: "assistant", text: "Live reply" },
+      activity: { state: "thinking" },
+      toolCalls: [],
+    }),
+    conversation: async (botId) => ({
+      botId,
+      messages: [],
+      activity: { state: "idle" },
+      approvals: [],
+      files: [],
+    }),
+    submit: async (input) => ({ requestId: input.requestId, status: "accepted", runId: "run" }),
     lookupSubmission: async () => null,
     routines: async () => [],
-    discoverEvents: async cursor => ({ cursor, events: [] }),
+    discoverEvents: async (cursor) => ({ cursor, events: [] }),
     close: async () => {},
     watch(botId, changed) {
       const set = watchers.get(botId) ?? new Set();
@@ -52,16 +86,34 @@ function runtimeDouble() {
       return () => set.delete(changed);
     },
   };
-  return { bots, rosterChanged: () => { for (const changed of rosterWatchers) changed(); }, runtime: fixed as Runtime, change: (botId: string, kind?: "inflight", turnVersion?: string) => { for (const changed of watchers.get(botId) ?? []) changed(kind, turnVersion); }, watchers };
+  return {
+    bots,
+    rosterChanged: () => {
+      for (const changed of rosterWatchers) changed();
+    },
+    runtime: fixed as Runtime,
+    change: (botId: string, kind?: "inflight", turnVersion?: string) => {
+      for (const changed of watchers.get(botId) ?? []) changed(kind, turnVersion);
+    },
+    watchers,
+  };
 }
 async function setup() {
   const fake = runtimeDouble();
-  const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fake.runtime, { background: false });
+  const { app, store } = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    fake.runtime,
+    { background: false },
+  );
   apps.push(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });
-  const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
+  const signIn = await fetch(`${base}/api/auth/local`, {
+    method: "POST",
+    headers: { origin, "content-type": "application/json" },
+    body: JSON.stringify({ member: "one" }),
+  });
   const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
-  const { csrfToken } = await signIn.json() as { csrfToken: string };
+  const { csrfToken } = (await signIn.json()) as { csrfToken: string };
   vi.useFakeTimers(virtualClock);
   return { ...fake, app, store, base, cookie, csrfToken };
 }
@@ -69,26 +121,37 @@ async function setup() {
 async function stream(url: string, cookie: string, headers: Record<string, string> = { cookie }) {
   const response = await fetch(url, { headers });
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let text = "", done = false;
+  let text = "",
+    done = false;
   const pump = (async () => {
     for (;;) {
       const chunk = await reader.read();
-      if (chunk.done) { done = true; return; }
+      if (chunk.done) {
+        done = true;
+        return;
+      }
       text += chunk.value;
     }
-  })().catch(() => { done = true; });
+  })().catch(() => {
+    done = true;
+  });
   return {
     response,
-    get text() { return text; },
-    get done() { return done; },
+    get text() {
+      return text;
+    },
+    get done() {
+      return done;
+    },
     notices: () => text.split("data: change\n\n").length - 1,
     until: async (ready: () => boolean, ms = 3000) => {
       // Real elapsed time bounds the wait, since Date is virtual.
       const deadline = performance.now() + ms;
       while (!ready()) {
-        if (performance.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
+        if (performance.now() > deadline)
+          throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
         await vi.advanceTimersByTimeAsync(10);
-        await new Promise(resolve => setImmediate(resolve));
+        await new Promise((resolve) => setImmediate(resolve));
       }
     },
     close: () => reader.cancel().then(() => pump),
@@ -97,13 +160,32 @@ async function stream(url: string, cookie: string, headers: Record<string, strin
 
 describe("conversation change stream", () => {
   it("rebuilds inflight redaction when another assistant becomes private", async () => {
-    const s=await setup();
-    const events=await stream(`${s.base}/api/bots/shared/events?inflight=1`,s.cookie);
-    await events.until(()=>events.text.includes("retry"));
-    s.runtime.inflight=botId=>({botId,message:{id:"sid-inflight",role:"assistant",text:"Private reply",reasoning:"Private thought",origin:{kind:"agent",visibility:"activity",handle:"hidden"}},activity:{state:"working"},toolCalls:[{id:"call",name:"message_agent",arguments:JSON.stringify({target:"hidden",text:"private input"}),result:"private output",status:"running"}]});
-    s.store.savePresentation("hidden",{shared:false,ownerId:"local-two"});
-    s.change("shared","inflight");
-    await events.until(()=>events.text.includes("event: inflight"));
+    const s = await setup();
+    const events = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
+    await events.until(() => events.text.includes("retry"));
+    s.runtime.inflight = (botId) => ({
+      botId,
+      message: {
+        id: "sid-inflight",
+        role: "assistant",
+        text: "Private reply",
+        reasoning: "Private thought",
+        origin: { kind: "agent", visibility: "activity", handle: "hidden" },
+      },
+      activity: { state: "working" },
+      toolCalls: [
+        {
+          id: "call",
+          name: "message_agent",
+          arguments: JSON.stringify({ target: "hidden", text: "private input" }),
+          result: "private output",
+          status: "running",
+        },
+      ],
+    });
+    s.store.savePresentation("hidden", { shared: false, ownerId: "local-two" });
+    s.change("shared", "inflight");
+    await events.until(() => events.text.includes("event: inflight"));
     expect(events.text).not.toContain("Private reply");
     expect(events.text).not.toContain("Private thought");
     expect(events.text).not.toContain("private input");
@@ -126,45 +208,82 @@ describe("conversation change stream", () => {
   });
   // An empty tick finds no reply because a structural read is pending. On ?inflight=1, as before turn streams,
   // it spends its quarter second; a turn stream gives it back, so the reply its server read restores goes at once.
-  it.each([["1", "inflight", 250], ["3", "turn", 0]] as const)("?inflight=%s sends the reply after an empty tick %s event at %i ms", async (mode, event, wait) => {
-    const s = await setup();
-    const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
-    await events.until(() => events.text.includes("retry"));
-    s.runtime.inflight = () => undefined;
-    s.runtime.turn = () => undefined;
-    s.change("shared", "inflight");
-    await pass(10);
-    const reply = { botId: "shared", message: { id: "sid-inflight", role: "assistant" as const, text: "Back" }, activity: { state: "thinking" as const, runId: "run" }, toolCalls: [] };
-    s.runtime.inflight = () => reply;
-    s.runtime.turn = () => ({ ...reply, version: "b:1:1", turn: { messages: [], after: null } });
-    s.change("shared", "inflight");
-    await pass(wait ? wait - 50 : 0);
-    expect(events.text.includes(`event: ${event}`)).toBe(!wait);
-    await pass(100);
-    expect(events.text).toContain(`event: ${event}`);
-    await events.close();
-  });
+  it.each([
+    ["1", "inflight", 250],
+    ["3", "turn", 0],
+  ] as const)(
+    "?inflight=%s sends the reply after an empty tick %s event at %i ms",
+    async (mode, event, wait) => {
+      const s = await setup();
+      const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+      await events.until(() => events.text.includes("retry"));
+      s.runtime.inflight = () => undefined;
+      s.runtime.turn = () => undefined;
+      s.change("shared", "inflight");
+      await pass(10);
+      const reply = {
+        botId: "shared",
+        message: { id: "sid-inflight", role: "assistant" as const, text: "Back" },
+        activity: { state: "thinking" as const, runId: "run" },
+        toolCalls: [],
+      };
+      s.runtime.inflight = () => reply;
+      s.runtime.turn = () => ({ ...reply, version: "b:1:1", turn: { messages: [], after: null } });
+      s.change("shared", "inflight");
+      await pass(wait ? wait - 50 : 0);
+      expect(events.text.includes(`event: ${event}`)).toBe(!wait);
+      await pass(100);
+      expect(events.text).toContain(`event: ${event}`);
+      await events.close();
+    },
+  );
   describe("inflight growth notices", () => {
-    const live = (text: string, extra: Partial<Message> = {}, id = "sid-inflight", toolCalls: ToolCall[] = [], activity: Activity = { state: "thinking", runId: "run" }) =>
-      ({ botId: "shared", message: { id, role: "assistant" as const, text, ...extra }, activity, toolCalls });
+    const live = (
+      text: string,
+      extra: Partial<Message> = {},
+      id = "sid-inflight",
+      toolCalls: ToolCall[] = [],
+      activity: Activity = { state: "thinking", runId: "run" },
+    ) => ({
+      botId: "shared",
+      message: { id, role: "assistant" as const, text, ...extra },
+      activity,
+      toolCalls,
+    });
     /**
      * Sets the live reply, notices it, and resolves with what the stream wrote for it, if anything.
      * Pass `writes: false` when the server should stay silent: it then waits out the throttle and a moment more.
      */
-    async function send(s: Awaited<ReturnType<typeof setup>>, events: Awaited<ReturnType<typeof stream>>, value: Inflight, writes = true) {
+    async function send(
+      s: Awaited<ReturnType<typeof setup>>,
+      events: Awaited<ReturnType<typeof stream>>,
+      value: Inflight,
+      writes = true,
+    ) {
       let reads = 0;
-      s.runtime.inflight = () => { reads++; return value; };
+      s.runtime.inflight = () => {
+        reads++;
+        return value;
+      };
       const before = events.text.length;
       s.change("shared", "inflight");
       await vi.advanceTimersByTimeAsync(250);
-      if (writes) await events.until(() => events.text.length > before && events.text.endsWith("\n\n"));
-      else { await events.until(() => reads > 0); await realDelay(25); }
+      if (writes)
+        await events.until(() => events.text.length > before && events.text.endsWith("\n\n"));
+      else {
+        await events.until(() => reads > 0);
+        await realDelay(25);
+      }
       return events.text.slice(before);
     }
-    const frames = (text: string) => text.split("\n\n").filter(frame => frame.startsWith("event:")).map(frame => {
-      const [event, data] = frame.split("\n");
-      return [event.slice(7), JSON.parse(data.slice(6))] as const;
-    });
+    const frames = (text: string) =>
+      text
+        .split("\n\n")
+        .filter((frame) => frame.startsWith("event:"))
+        .map((frame) => {
+          const [event, data] = frame.split("\n");
+          return [event.slice(7), JSON.parse(data.slice(6))] as const;
+        });
 
     it("keeps the ?inflight=1 payload as it was, whole on every notice", async () => {
       const s = await setup();
@@ -172,8 +291,12 @@ describe("conversation change stream", () => {
       await events.until(() => events.text.includes("retry"));
       const first = await send(s, events, live("Hello"));
       const second = await send(s, events, live("Hello there", { reasoning: "Hmm" }));
-      expect(first).toBe('event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n');
-      expect(second).toBe('event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello there","reasoning":"Hmm"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n');
+      expect(first).toBe(
+        'event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n',
+      );
+      expect(second).toBe(
+        'event: inflight\ndata: {"botId":"shared","message":{"id":"sid-inflight","role":"assistant","text":"Hello there","reasoning":"Hmm"},"activity":{"state":"thinking","runId":"run"},"toolCalls":[]}\n\n',
+      );
       await events.close();
     });
 
@@ -185,26 +308,81 @@ describe("conversation change stream", () => {
       const out = [
         await send(s, events, live("Hello")),
         await send(s, events, live("Hello there", { reasoning: "Hm" })),
-        await send(s, events, live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], { state: "working", runId: "run" })),
+        await send(
+          s,
+          events,
+          live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], {
+            state: "working",
+            runId: "run",
+          }),
+        ),
         // Nothing grew: no event at all.
-        await send(s, events, live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], { state: "working", runId: "run" }), false),
+        await send(
+          s,
+          events,
+          live("Hello there, partner", { reasoning: "Hm, ok" }, "sid-inflight", [call], {
+            state: "working",
+            runId: "run",
+          }),
+          false,
+        ),
         // Not an extension of what was sent: whole again, then a delta from there.
         await send(s, events, live("Howdy", { reasoning: "Hm, ok" })),
         await send(s, events, live("Howdy y'all", { reasoning: "Hm, ok" })),
         // A new message id starts over.
         await send(s, events, live("Howdy y'all, again", {}, "next-inflight")),
         // Anything else about the message changing cannot ride on a delta.
-        await send(s, events, live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight")),
+        await send(
+          s,
+          events,
+          live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight"),
+        ),
       ];
       expect(out[3]).toBe("");
       expect(frames(out.join(""))).toEqual([
         ["inflight", live("Hello")],
-        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 5, baseReasoningLength: 0, appendText: " there", appendReasoning: "Hm", activity: { state: "thinking", runId: "run" } }],
-        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 11, baseReasoningLength: 2, appendText: ", partner", appendReasoning: ", ok", activity: { state: "working", runId: "run" }, toolCalls: [call] }],
+        [
+          "inflight-delta",
+          {
+            botId: "shared",
+            messageId: "sid-inflight",
+            baseTextLength: 5,
+            baseReasoningLength: 0,
+            appendText: " there",
+            appendReasoning: "Hm",
+            activity: { state: "thinking", runId: "run" },
+          },
+        ],
+        [
+          "inflight-delta",
+          {
+            botId: "shared",
+            messageId: "sid-inflight",
+            baseTextLength: 11,
+            baseReasoningLength: 2,
+            appendText: ", partner",
+            appendReasoning: ", ok",
+            activity: { state: "working", runId: "run" },
+            toolCalls: [call],
+          },
+        ],
         ["inflight", live("Howdy", { reasoning: "Hm, ok" })],
-        ["inflight-delta", { botId: "shared", messageId: "sid-inflight", baseTextLength: 5, baseReasoningLength: 6, appendText: " y'all", activity: { state: "thinking", runId: "run" } }],
+        [
+          "inflight-delta",
+          {
+            botId: "shared",
+            messageId: "sid-inflight",
+            baseTextLength: 5,
+            baseReasoningLength: 6,
+            appendText: " y'all",
+            activity: { state: "thinking", runId: "run" },
+          },
+        ],
         ["inflight", live("Howdy y'all, again", {}, "next-inflight")],
-        ["inflight", live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight")],
+        [
+          "inflight",
+          live("Howdy y'all, again!", { createdAt: "2026-10-25T00:00:00Z" }, "next-inflight"),
+        ],
       ]);
       await events.close();
     });
@@ -216,7 +394,9 @@ describe("conversation change stream", () => {
       await send(s, events, live("Hello"));
       s.change("shared");
       await events.until(() => events.notices() === 1);
-      expect(frames(await send(s, events, live("Hello there")))).toEqual([["inflight", live("Hello there")]]);
+      expect(frames(await send(s, events, live("Hello there")))).toEqual([
+        ["inflight", live("Hello there")],
+      ]);
       await events.close();
     });
 
@@ -225,12 +405,32 @@ describe("conversation change stream", () => {
       const events = await stream(`${s.base}/api/bots/shared/events?inflight=2`, s.cookie);
       await events.until(() => events.text.includes("retry"));
       s.store.savePresentation("hidden", { shared: false, ownerId: "local-two" });
-      const handoff = (text: string, reasoning: string, result: string): Inflight => live(text, { reasoning, origin: { kind: "agent", visibility: "activity", handle: "hidden" } }, "sid-inflight",
-        [{ id: "call", name: "message_agent", arguments: JSON.stringify({ target: "hidden", text: "private input" }), result, status: "running" }]);
-      const out = [await send(s, events, handoff("Private reply", "Private thought", "private output")),
+      const handoff = (text: string, reasoning: string, result: string): Inflight =>
+        live(
+          text,
+          { reasoning, origin: { kind: "agent", visibility: "activity", handle: "hidden" } },
+          "sid-inflight",
+          [
+            {
+              id: "call",
+              name: "message_agent",
+              arguments: JSON.stringify({ target: "hidden", text: "private input" }),
+              result,
+              status: "running",
+            },
+          ],
+        );
+      const out = [
+        await send(s, events, handoff("Private reply", "Private thought", "private output")),
         // Raw text keeps growing while what this person may see stays the same.
-        await send(s, events, handoff("Private reply, more", "Private thought, more", "private output, more"), false),
-        await send(s, events, live("Public now"))].join("");
+        await send(
+          s,
+          events,
+          handoff("Private reply, more", "Private thought, more", "private output, more"),
+          false,
+        ),
+        await send(s, events, live("Public now")),
+      ].join("");
       expect(out).not.toMatch(/Private (reply|thought)|private (input|output)|more/);
       expect(frames(out).map(([event]) => event)).toEqual(["inflight", "inflight"]);
       await events.close();
@@ -238,31 +438,42 @@ describe("conversation change stream", () => {
 
     // Turn streams feed the web client's paced reveal, which hides the shorter wait; the iOS app and older
     // bundles show each update as it lands, so theirs stays as it was.
-    it.each([["1", LIVE_TICK_MS], ["2", LIVE_TICK_MS], ["3", TURN_TICK_MS]] as const)("?inflight=%s sends growth at most once every %i ms, and nothing while nothing changes", async (mode, tick) => {
-      const s = await setup();
-      const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
-      await events.until(() => events.text.includes("retry"));
-      const grow = (text: string) => {
-        const value = live(text);
-        s.runtime.inflight = () => value;
-        s.runtime.turn = () => ({ ...value, version: "b:1:1", turn: { messages: [], after: null } });
-        s.change("shared", "inflight");
-      };
-      const count = () => frames(events.text).length;
-      // The first growth goes at once, and the clock stands still from here, so the window is measured from it.
-      grow("Hello");
-      await pass(0);
-      expect(count()).toBe(1);
-      grow("Hello there");
-      await pass(tick - 1);
-      expect(count()).toBe(1);
-      await pass(1);
-      expect(count()).toBe(2);
-      // No timer runs without a notice.
-      await pass(tick * 5);
-      expect(count()).toBe(2);
-      await events.close();
-    });
+    it.each([
+      ["1", LIVE_TICK_MS],
+      ["2", LIVE_TICK_MS],
+      ["3", TURN_TICK_MS],
+    ] as const)(
+      "?inflight=%s sends growth at most once every %i ms, and nothing while nothing changes",
+      async (mode, tick) => {
+        const s = await setup();
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        const grow = (text: string) => {
+          const value = live(text);
+          s.runtime.inflight = () => value;
+          s.runtime.turn = () => ({
+            ...value,
+            version: "b:1:1",
+            turn: { messages: [], after: null },
+          });
+          s.change("shared", "inflight");
+        };
+        const count = () => frames(events.text).length;
+        // The first growth goes at once, and the clock stands still from here, so the window is measured from it.
+        grow("Hello");
+        await pass(0);
+        expect(count()).toBe(1);
+        grow("Hello there");
+        await pass(tick - 1);
+        expect(count()).toBe(1);
+        await pass(1);
+        expect(count()).toBe(2);
+        // No timer runs without a notice.
+        await pass(tick * 5);
+        expect(count()).toBe(2);
+        await events.close();
+      },
+    );
 
     it("sends a turn stream nothing when a notice finds the reply unchanged", async () => {
       const s = await setup();
@@ -271,7 +482,10 @@ describe("conversation change stream", () => {
       let reads = 0;
       const value = live("Hello");
       s.runtime.inflight = () => value;
-      s.runtime.turn = () => { reads++; return { ...value, version: "b:1:1", turn: { messages: [], after: null } }; };
+      s.runtime.turn = () => {
+        reads++;
+        return { ...value, version: "b:1:1", turn: { messages: [], after: null } };
+      };
       s.change("shared", "inflight");
       await events.until(() => frames(events.text).length === 1);
       s.change("shared", "inflight");
@@ -285,17 +499,34 @@ describe("conversation change stream", () => {
     // names that change's version, calls `restored` when its read lands, and answers `turn` with what it built.
     describe("the change notice on a turn stream, for a change a turn event carries", () => {
       type Turn = NonNullable<ReturnType<NonNullable<Runtime["turn"]>>>;
-      const turnOf = (text: string, version: string): Turn => ({ ...live(text), version, turn: { messages: [], after: null } });
+      const turnOf = (text: string, version: string): Turn => ({
+        ...live(text),
+        version,
+        turn: { messages: [], after: null },
+      });
       async function turnStream(version = "b:1:1") {
         const s = await setup();
         let restored: (() => void) | undefined, built: Turn | undefined;
-        s.runtime.followTurns = (_botId, callback) => { restored = callback; return () => { restored = undefined; }; };
+        s.runtime.followTurns = (_botId, callback) => {
+          restored = callback;
+          return () => {
+            restored = undefined;
+          };
+        };
         s.runtime.turn = () => built;
         const events = await stream(`${s.base}/api/bots/shared/events?inflight=3`, s.cookie);
         await events.until(() => events.text.includes("retry"));
-        return { s, events, version,
+        return {
+          s,
+          events,
+          version,
           /** The server's read landed with this live reply, or with none. */
-          land: async (reply: Turn | undefined) => { built = reply; restored!(); await pass(TURN_TICK_MS); } };
+          land: async (reply: Turn | undefined) => {
+            built = reply;
+            restored!();
+            await pass(TURN_TICK_MS);
+          },
+        };
       }
 
       it("sends the turn event and no change notice when the event reaches the change", async () => {
@@ -365,21 +596,42 @@ describe("conversation change stream", () => {
       it("sends the change notice when the read that landed during a stalled client's backlog is answered", async () => {
         const s = await setup();
         let restored: (() => void) | undefined, built: Turn | undefined;
-        s.runtime.followTurns = (_botId, callback) => { restored = callback; return () => { restored = undefined; }; };
+        s.runtime.followTurns = (_botId, callback) => {
+          restored = callback;
+          return () => {
+            restored = undefined;
+          };
+        };
         s.runtime.turn = () => built;
         const responses: import("node:http").ServerResponse[] = [];
-        s.app.server.on("request", (req, res) => { if (req.url?.includes("/events")) responses.push(res); });
+        s.app.server.on("request", (req, res) => {
+          if (req.url?.includes("/events")) responses.push(res);
+        });
         // A real client socket that stops reading after the stream opens, as a stalled phone does.
         const url = new URL(s.base);
-        const response = await new Promise<import("node:http").IncomingMessage>(resolve => {
-          httpRequest({ host: url.hostname, port: url.port, path: "/api/bots/shared/events?inflight=3", headers: { cookie: s.cookie } }, resolve).end();
+        const response = await new Promise<import("node:http").IncomingMessage>((resolve) => {
+          httpRequest(
+            {
+              host: url.hostname,
+              port: url.port,
+              path: "/api/bots/shared/events?inflight=3",
+              headers: { cookie: s.cookie },
+            },
+            resolve,
+          ).end();
         });
         let text = "";
         response.setEncoding("utf8");
-        response.on("data", chunk => { text += chunk; });
-        for (let waited = 0; !text.includes("retry"); waited++) { if (waited > 200) throw new Error("The stream never opened"); await realDelay(5); }
+        response.on("data", (chunk) => {
+          text += chunk;
+        });
+        for (let waited = 0; !text.includes("retry"); waited++) {
+          if (waited > 200) throw new Error("The stream never opened");
+          await realDelay(5);
+        }
         response.pause();
-        const socket = responses[0], write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+        const socket = responses[0],
+          write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
         const noticeWrites: number[] = [];
         vi.spyOn(socket, "write").mockImplementation(((...args: unknown[]) => {
           if (args[0] === "data: change\n\n") noticeWrites.push(Date.now());
@@ -404,7 +656,10 @@ describe("conversation change stream", () => {
         expect(noticeWrites).toEqual([]);
         // The client catches up. The answer to that read finds nothing to send, so it releases the held notice now.
         response.resume();
-        for (let waited = 0; socket.writableNeedDrain; waited++) { if (waited > 2000) throw new Error("The client never caught up"); await realDelay(5); }
+        for (let waited = 0; socket.writableNeedDrain; waited++) {
+          if (waited > 2000) throw new Error("The client never caught up");
+          await realDelay(5);
+        }
         await pass(TURN_TICK_MS);
         await pass(0);
         expect(noticeWrites).toHaveLength(1);
@@ -433,31 +688,45 @@ describe("conversation change stream", () => {
         await events.close();
       });
 
-      it.each(["1", "2"])("never waits on ?inflight=%s, which gets no turn events", async mode => {
-        const s = await setup();
-        s.runtime.followTurns = () => () => {};
-        s.runtime.turn = () => undefined;
-        const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
-        await events.until(() => events.text.includes("retry"));
-        s.change("shared", undefined, "b:1:2");
-        await pass(0);
-        expect(events.notices()).toBe(1);
-        await events.close();
-      });
+      it.each(["1", "2"])(
+        "never waits on ?inflight=%s, which gets no turn events",
+        async (mode) => {
+          const s = await setup();
+          s.runtime.followTurns = () => () => {};
+          s.runtime.turn = () => undefined;
+          const events = await stream(
+            `${s.base}/api/bots/shared/events?inflight=${mode}`,
+            s.cookie,
+          );
+          await events.until(() => events.text.includes("retry"));
+          s.change("shared", undefined, "b:1:2");
+          await pass(0);
+          expect(events.notices()).toBe(1);
+          await events.close();
+        },
+      );
 
       it("stops waiting when the stream closes, leaving no timer behind", async () => {
         const { s, events } = await turnStream();
         await events.close();
         // Watch the hold's own timer rather than the global count, which other timers of the app change on their
         // own schedule (a throttle firing during the wait made the count drop on a busy runner).
-        const holds: unknown[] = [], cleared: unknown[] = [];
-        const set = globalThis.setTimeout, clear = globalThis.clearTimeout;
-        const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...rest: unknown[]) => {
+        const holds: unknown[] = [],
+          cleared: unknown[] = [];
+        const set = globalThis.setTimeout,
+          clear = globalThis.clearTimeout;
+        const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+          handler: () => void,
+          ms?: number,
+          ...rest: unknown[]
+        ) => {
           const timer = set(handler, ms, ...rest);
           if (ms === TURN_HOLD_MS) holds.push(timer);
           return timer;
         }) as typeof setTimeout);
-        const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((timer?: Parameters<typeof clearTimeout>[0]) => {
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((
+          timer?: Parameters<typeof clearTimeout>[0],
+        ) => {
           cleared.push(timer);
           return clear(timer);
         }) as typeof clearTimeout);
@@ -478,55 +747,80 @@ describe("conversation change stream", () => {
 
     // The turn ends with a structural notice. Growth still waiting for its tick is dropped, not sent after the
     // notice, and the notice goes at once: the client's read on it brings the saved reply.
-    it.each(["1", "2"])("?inflight=%s drops growth held for the tick when the turn ends, and sends the change notice at once", async mode => {
-      const s = await setup();
-      const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
-      await events.until(() => events.text.includes("retry"));
-      s.runtime.inflight = () => live("Hello");
-      s.change("shared", "inflight");
-      await pass(0);
-      s.runtime.inflight = () => live("Hello there");
-      s.change("shared", "inflight");
-      s.change("shared");
-      await pass(0);
-      expect(events.notices()).toBe(1);
-      await pass(LIVE_TICK_MS * 2);
-      expect(frames(events.text).map(([, data]) => data.message?.text ?? data.appendText)).toEqual(["Hello"]);
-      await events.close();
-    });
+    it.each(["1", "2"])(
+      "?inflight=%s drops growth held for the tick when the turn ends, and sends the change notice at once",
+      async (mode) => {
+        const s = await setup();
+        const events = await stream(`${s.base}/api/bots/shared/events?inflight=${mode}`, s.cookie);
+        await events.until(() => events.text.includes("retry"));
+        s.runtime.inflight = () => live("Hello");
+        s.change("shared", "inflight");
+        await pass(0);
+        s.runtime.inflight = () => live("Hello there");
+        s.change("shared", "inflight");
+        s.change("shared");
+        await pass(0);
+        expect(events.notices()).toBe(1);
+        await pass(LIVE_TICK_MS * 2);
+        expect(
+          frames(events.text).map(([, data]) => data.message?.text ?? data.appendText),
+        ).toEqual(["Hello"]);
+        await events.close();
+      },
+    );
 
     it("writes nothing more to a client that stops reading until it catches up, then sends all it missed as one delta", async () => {
       const s = await setup();
       const responses: import("node:http").ServerResponse[] = [];
-      s.app.server.on("request", (req, res) => { if (req.url?.includes("/events")) responses.push(res); });
+      s.app.server.on("request", (req, res) => {
+        if (req.url?.includes("/events")) responses.push(res);
+      });
       // A real client socket that stops reading after the stream opens, as a stalled phone does.
       const url = new URL(s.base);
-      const response = await new Promise<import("node:http").IncomingMessage>(resolve => {
-        httpRequest({ host: url.hostname, port: url.port, path: "/api/bots/shared/events?inflight=2", headers: { cookie: s.cookie } }, resolve).end();
+      const response = await new Promise<import("node:http").IncomingMessage>((resolve) => {
+        httpRequest(
+          {
+            host: url.hostname,
+            port: url.port,
+            path: "/api/bots/shared/events?inflight=2",
+            headers: { cookie: s.cookie },
+          },
+          resolve,
+        ).end();
       });
       let text = "";
       response.setEncoding("utf8");
-      response.on("data", chunk => { text += chunk; });
+      response.on("data", (chunk) => {
+        text += chunk;
+      });
       await events(() => text.includes("retry"));
       response.pause();
       // What the server writes, and whether the socket still held an earlier write when it did. How much the
       // kernel takes before the socket fills differs between machines, so nothing here counts on a size for it.
-      const socket = responses[0], write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+      const socket = responses[0],
+        write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
       let largest = 0;
       const writtenWhileFull: number[] = [];
       vi.spyOn(socket, "write").mockImplementation(((...args: unknown[]) => {
-        const size = typeof args[0] === "string" && args[0].startsWith("event: ") ? Buffer.byteLength(args[0]) : 0;
+        const size =
+          typeof args[0] === "string" && args[0].startsWith("event: ")
+            ? Buffer.byteLength(args[0])
+            : 0;
         if (size && socket.writableNeedDrain) writtenWhileFull.push(size);
         largest = Math.max(largest, size);
         return write(...args);
       }) as typeof socket.write);
       // Each tick grows the reply by half a megabyte, far more than loopback buffers hold over 40 ticks.
       const piece = "x".repeat(512 * 1024);
-      let reply = "", reads = 0;
+      let reply = "",
+        reads = 0;
       for (let tick = 0; tick < 40; tick++) {
         reply += piece;
         const value = live(reply);
-        s.runtime.inflight = () => { reads++; return value; };
+        s.runtime.inflight = () => {
+          reads++;
+          return value;
+        };
         s.change("shared", "inflight");
         await pass(LIVE_TICK_MS);
         // The socket never holds more than the one update it has not finished sending. That update is everything
@@ -542,7 +836,10 @@ describe("conversation change stream", () => {
         let held = "";
         for (const [event, data] of frames(text.slice(0, text.lastIndexOf("\n\n") + 2))) {
           if (event === "inflight") held = data.message.text;
-          else { expect(data.baseTextLength).toBe(held.length); held += data.appendText ?? ""; }
+          else {
+            expect(data.baseTextLength).toBe(held.length);
+            held += data.appendText ?? "";
+          }
         }
         return held;
       };
@@ -552,7 +849,8 @@ describe("conversation change stream", () => {
       async function events(ready: () => boolean, ms = 3000) {
         const deadline = performance.now() + ms;
         while (!ready()) {
-          if (performance.now() > deadline) throw new Error(`Stream never got there after ${text.length} characters`);
+          if (performance.now() > deadline)
+            throw new Error(`Stream never got there after ${text.length} characters`);
           await vi.advanceTimersByTimeAsync(10);
           await realDelay(5);
         }
@@ -561,17 +859,22 @@ describe("conversation change stream", () => {
   });
 
   it("returns configuration through the lazy detail route", async () => {
-    const s=await setup();
-    const response=await fetch(`${s.base}/api/bots/shared`,{headers:{cookie:s.cookie}});
+    const s = await setup();
+    const response = await fetch(`${s.base}/api/bots/shared`, { headers: { cookie: s.cookie } });
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({instructions:"Saved soul",enabledMcpServers:["calendar"],enabledTools:["terminal"],enabledSkills:["research"]});
+    expect(await response.json()).toMatchObject({
+      instructions: "Saved soul",
+      enabledMcpServers: ["calendar"],
+      enabledTools: ["terminal"],
+      enabledSkills: ["research"],
+    });
   });
   it("sends opted-in deltas without conversation notices and keeps legacy delta notices", async () => {
     const s = await setup();
     const current = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
     const legacy = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
     await current.until(() => current.text.includes("retry"));
-    for (let i=0;i<20;i++) s.change("shared", "inflight");
+    for (let i = 0; i < 20; i++) s.change("shared", "inflight");
     await current.until(() => current.text.includes("event: inflight"));
     await legacy.until(() => legacy.notices() === 1);
     expect(current.text).toContain('"text":"Live reply"');
@@ -579,13 +882,18 @@ describe("conversation change stream", () => {
     expect(current.notices()).toBe(0);
     s.change("shared");
     await current.until(() => current.notices() === 1);
-    await current.close(); await legacy.close();
+    await current.close();
+    await legacy.close();
   });
   it("refuses a request without a session, as the conversation read does", async () => {
     const s = await setup();
     for (const path of ["events", "conversation"]) {
       const response = await fetch(`${s.base}/api/bots/shared/${path}`);
-      expect([path, response.status, (await response.json()).code]).toEqual([path, 401, "session_expired"]);
+      expect([path, response.status, (await response.json()).code]).toEqual([
+        path,
+        401,
+        "session_expired",
+      ]);
     }
     expect(s.watchers.get("shared")?.size ?? 0).toBe(0);
   });
@@ -616,9 +924,16 @@ describe("conversation change stream", () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
     await events.until(() => events.text.includes("retry"));
-    const sent = await fetch(`${s.base}/api/bots/shared/messages`, { method: "POST",
-      headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" },
-      body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }) });
+    const sent = await fetch(`${s.base}/api/bots/shared/messages`, {
+      method: "POST",
+      headers: {
+        cookie: s.cookie,
+        origin,
+        "x-csrf-token": s.csrfToken,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }),
+    });
     expect(sent.status).toBe(200);
     await events.until(() => events.notices() === 1);
     await events.close();
@@ -626,22 +941,40 @@ describe("conversation change stream", () => {
 
   it("announces a person's new draft revisions only on their own opted-in streams, without the draft", async () => {
     const s = await setup();
-    const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
+    const login = await fetch(`${s.base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: "two" }),
+    });
     const other = login.headers.getSetCookie()[0].split(";")[0];
     const mine = await stream(`${s.base}/api/bots/shared/events?drafts=1`, s.cookie);
     const theirs = await stream(`${s.base}/api/bots/shared/events?drafts=1`, other);
     // The iOS app reads every data line as a change, so a stream that did not ask hears no drafts.
     const legacy = await stream(`${s.base}/api/bots/shared/events?inflight=1`, s.cookie);
-    for (const opened of [mine, theirs, legacy]) await opened.until(() => opened.text.includes("retry"));
-    const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
-    const save = (text: string) => fetch(`${s.base}/api/bots/shared/draft`, { method: "PUT", headers, body: JSON.stringify({ text, attachments: [] }) });
+    for (const opened of [mine, theirs, legacy])
+      await opened.until(() => opened.text.includes("retry"));
+    const headers = {
+      cookie: s.cookie,
+      origin,
+      "x-csrf-token": s.csrfToken,
+      "content-type": "application/json",
+    };
+    const save = (text: string) =>
+      fetch(`${s.base}/api/bots/shared/draft`, {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({ text, attachments: [] }),
+      });
     expect((await save("Buy feed")).status).toBe(200);
     await mine.until(() => mine.text.includes("event: draft\ndata: 1\n\n"));
     // The same content again is no new revision.
     expect((await save("Buy feed")).status).toBe(200);
     // Sending clears the draft, which is the next revision.
-    const sent = await fetch(`${s.base}/api/bots/shared/messages`, { method: "POST", headers,
-      body: JSON.stringify({ requestId: randomUUID(), text: "Buy feed", draftBaseRevision: 1 }) });
+    const sent = await fetch(`${s.base}/api/bots/shared/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ requestId: randomUUID(), text: "Buy feed", draftBaseRevision: 1 }),
+    });
     expect(sent.status).toBe(200);
     await mine.until(() => mine.text.includes("event: draft\ndata: 2\n\n"));
     expect(mine.text.match(/event: draft/g)).toHaveLength(2);
@@ -649,14 +982,23 @@ describe("conversation change stream", () => {
     await pass(1000);
     expect(theirs.text).not.toContain("event: draft");
     expect(legacy.text).not.toContain("event: draft");
-    await mine.close(); await theirs.close(); await legacy.close();
+    await mine.close();
+    await theirs.close();
+    await legacy.close();
   });
 
   it("ends the stream instead of notifying once its session is signed out", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/bots/shared/events`, s.cookie);
     await events.until(() => events.text.includes("retry"));
-    expect((await fetch(`${s.base}/api/auth/logout`, { method: "POST", headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken } })).status).toBe(200);
+    expect(
+      (
+        await fetch(`${s.base}/api/auth/logout`, {
+          method: "POST",
+          headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken },
+        })
+      ).status,
+    ).toBe(200);
     s.change("shared");
     await events.until(() => events.done);
     expect(events.notices()).toBe(0);
@@ -667,7 +1009,9 @@ describe("conversation change stream", () => {
     const s = await setup();
     const token = randomBytes(32).toString("base64url");
     s.store.nativeSession(hash(token), "local-one", Date.now() + 60_000);
-    const events = await stream(`${s.base}/api/bots/shared/events`, "", { authorization: `Bearer ${token}` });
+    const events = await stream(`${s.base}/api/bots/shared/events`, "", {
+      authorization: `Bearer ${token}`,
+    });
     expect(events.response.status).toBe(200);
     await events.until(() => events.text.includes("retry"));
     s.change("shared");
@@ -688,22 +1032,35 @@ describe("conversation change stream", () => {
   });
 });
 
-
 describe("roster compatibility and household events", () => {
   it("keeps full configuration by default and omits it only for opted-in rosters", async () => {
     const s = await setup();
     for (const route of ["bootstrap", "bots"]) {
       const read = async (suffix: string) => {
-        const response = await fetch(`${s.base}/api/${route}${suffix}`, { headers: { cookie: s.cookie } });
+        const response = await fetch(`${s.base}/api/${route}${suffix}`, {
+          headers: { cookie: s.cookie },
+        });
         expect(response.status).toBe(200);
         const value = await response.json();
         return route === "bootstrap" ? value.bots[0] : value[0];
       };
       const full = await read("");
-      expect(full).toMatchObject({ instructions: "Saved soul", enabledMcpServers: ["calendar"], availableMcpServers: ["calendar", "notes"],
-        enabledTools: ["terminal"], enabledSkills: ["research"] });
+      expect(full).toMatchObject({
+        instructions: "Saved soul",
+        enabledMcpServers: ["calendar"],
+        availableMcpServers: ["calendar", "notes"],
+        enabledTools: ["terminal"],
+        enabledSkills: ["research"],
+      });
       const lean = await read("?roster=lean");
-      for (const key of ["instructions", "enabledMcpServers", "availableMcpServers", "enabledTools", "enabledSkills"]) expect(lean).not.toHaveProperty(key);
+      for (const key of [
+        "instructions",
+        "enabledMcpServers",
+        "availableMcpServers",
+        "enabledTools",
+        "enabledSkills",
+      ])
+        expect(lean).not.toHaveProperty(key);
     }
   });
 
@@ -718,7 +1075,11 @@ describe("roster compatibility and household events", () => {
     const s = await setup();
     s.bots.push({ ...s.bots[0], id: "private", name: "Secret assistant" });
     s.store.savePresentation("private", { shared: false, ownerId: "local-one" });
-    const login = await fetch(`${s.base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "two" }) });
+    const login = await fetch(`${s.base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: "two" }),
+    });
     const twoCookie = login.headers.getSetCookie()[0].split(";")[0];
     const owner = await stream(`${s.base}/api/events`, s.cookie);
     const other = await stream(`${s.base}/api/events`, twoCookie);
@@ -739,13 +1100,14 @@ describe("roster compatibility and household events", () => {
     expect(s.runtime.listBots).toHaveBeenCalledTimes(2);
     expect(owner.text).toBe("retry: 3000\n\nevent: roster\ndata: roster\n\n");
     expect(owner.text).not.toMatch(/private|Secret|working/);
-    await owner.close(); await other.close();
+    await owner.close();
+    await other.close();
   });
 
   it("lets the bootstrap that follows a roster notice reuse the evaluation's read", async () => {
     const s = await setup();
     // Copies, as Hermes answers: a held read must not change because the double's rows did.
-    s.runtime.listBots = vi.fn(async () => s.bots.map(bot => ({ ...bot })));
+    s.runtime.listBots = vi.fn(async () => s.bots.map((bot) => ({ ...bot })));
     const events = await stream(`${s.base}/api/events`, s.cookie);
     await events.until(() => events.text.includes("retry"));
     s.bots[0].activity = "working";
@@ -754,7 +1116,12 @@ describe("roster compatibility and household events", () => {
     await events.until(() => events.text.includes("event: roster"));
     expect(s.runtime.listBots).toHaveBeenCalledTimes(1);
     // The stream's own opening read is still inside the hold, so only the evaluation's read can show this.
-    const read = async () => (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { bots: Bot[] }).bots[0].activity;
+    const read = async () =>
+      (
+        (await (
+          await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })
+        ).json()) as { bots: Bot[] }
+      ).bots[0].activity;
     expect(await read()).toBe("working");
     expect(await read()).toBe("working");
     expect(s.runtime.listBots).toHaveBeenCalledTimes(1);
@@ -769,13 +1136,29 @@ describe("roster compatibility and household events", () => {
     await pass(1600);
     const row = (activity: Bot["activity"]) => [{ ...s.bots[0], activity }];
     let releaseCapabilities!: () => void;
-    const capabilitiesHeld = new Promise<void>(resolve => { releaseCapabilities = resolve; });
+    const capabilitiesHeld = new Promise<void>((resolve) => {
+      releaseCapabilities = resolve;
+    });
     const everything = await s.runtime.capabilities();
     // The bootstrap's read sees an idle roster, then waits on capabilities. The evaluation's read, begun
     // later, sees the assistant working and finishes first.
-    s.runtime.listBots = vi.fn().mockResolvedValueOnce(row("idle")).mockResolvedValue(row("working"));
-    s.runtime.capabilities = vi.fn().mockImplementationOnce(async () => { await capabilitiesHeld; return everything; }).mockResolvedValue(everything);
-    const read = async () => (await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })).json() as { bots: Bot[] }).bots[0].activity;
+    s.runtime.listBots = vi
+      .fn()
+      .mockResolvedValueOnce(row("idle"))
+      .mockResolvedValue(row("working"));
+    s.runtime.capabilities = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await capabilitiesHeld;
+        return everything;
+      })
+      .mockResolvedValue(everything);
+    const read = async () =>
+      (
+        (await (
+          await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.cookie } })
+        ).json()) as { bots: Bot[] }
+      ).bots[0].activity;
     const older = read();
     await events.until(() => vi.mocked(s.runtime.capabilities).mock.calls.length === 1);
     s.rosterChanged();
@@ -792,19 +1175,35 @@ describe("roster compatibility and household events", () => {
   it("notifies on an app write only when the visible roster changes and ends on sign-out", async () => {
     const s = await setup();
     const events = await stream(`${s.base}/api/events`, s.cookie);
-    s.runtime.submit = async input => {
+    s.runtime.submit = async (input) => {
       s.bots[0].activity = "thinking";
       return { requestId: input.requestId, status: "accepted", runId: "run" };
     };
-    const headers = { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken, "content-type": "application/json" };
-    const send = () => fetch(`${s.base}/api/bots/shared/messages`, { method: "POST", headers,
-      body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }) });
+    const headers = {
+      cookie: s.cookie,
+      origin,
+      "x-csrf-token": s.csrfToken,
+      "content-type": "application/json",
+    };
+    const send = () =>
+      fetch(`${s.base}/api/bots/shared/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ requestId: randomUUID(), text: "Hello" }),
+      });
     expect((await send()).status).toBe(200);
     await events.until(() => events.text.includes("event: roster"));
     expect((await send()).status).toBe(200);
     await pass(1100);
     expect(events.text.split("event: roster")).toHaveLength(2);
-    expect((await fetch(`${s.base}/api/auth/logout`, { method: "POST", headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken } })).status).toBe(200);
+    expect(
+      (
+        await fetch(`${s.base}/api/auth/logout`, {
+          method: "POST",
+          headers: { cookie: s.cookie, origin, "x-csrf-token": s.csrfToken },
+        })
+      ).status,
+    ).toBe(200);
     s.rosterChanged();
     await events.until(() => events.done);
   });

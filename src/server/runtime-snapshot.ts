@@ -21,7 +21,8 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
   // Every read, from a bootstrap or a roster evaluation, takes the next number when it starts. Only
   // a read that started after the last publication may publish, so a slow read never overwrites
   // what a newer one saw. An invalidation counts as a publication: reads begun before it are dropped.
-  let readsStarted = 0, readPublished = 0;
+  let readsStarted = 0,
+    readPublished = 0;
   const begin = (): SnapshotRead => ({ startedAt: Date.now(), order: ++readsStarted });
   /**
    * Keeps a read only while the runtime is connected and answering, so an outage is never served
@@ -31,14 +32,22 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
   const keep = (value: RuntimeSnapshot, { startedAt, order }: SnapshotRead) => {
     if (order < readPublished) return;
     readPublished = order;
-    snapshotKept = value.connection.connected && !value.bots.some(bot => bot.activity === "disconnected") ? { value, at: startedAt } : undefined;
+    snapshotKept =
+      value.connection.connected && !value.bots.some((bot) => bot.activity === "disconnected")
+        ? { value, at: startedAt }
+        : undefined;
     // Callers that arrive now take this read, not an older one still in flight.
     snapshotRead = undefined;
   };
   /** Forgets the snapshot after this app changed runtime state, so the next read sees the change. */
-  const invalidate = () => { readPublished = readsStarted + 1; snapshotKept = undefined; snapshotRead = undefined; };
+  const invalidate = () => {
+    readPublished = readsStarted + 1;
+    snapshotKept = undefined;
+    snapshotRead = undefined;
+  };
   const read = (): Promise<RuntimeSnapshot> => {
-    if (snapshotKept && Date.now() - snapshotKept.at < SNAPSHOT_TTL_MS) return Promise.resolve(snapshotKept.value);
+    if (snapshotKept && Date.now() - snapshotKept.at < SNAPSHOT_TTL_MS)
+      return Promise.resolve(snapshotKept.value);
     if (snapshotRead) return snapshotRead;
     const began = begin();
     // Share only runtime reads, undecorated: presentation, identity, preferences and CSRF stay request-scoped.
@@ -48,8 +57,15 @@ export function runtimeSnapshots(runtime: Pick<Runtime, "listBots" | "capabiliti
     })();
     snapshotRead = reading;
     // A rejected read is never kept: the next caller reads again.
-    reading.then(value => { if (snapshotRead === reading) snapshotRead = undefined; keep(value, began); },
-      () => { if (snapshotRead === reading) snapshotRead = undefined; });
+    reading.then(
+      (value) => {
+        if (snapshotRead === reading) snapshotRead = undefined;
+        keep(value, began);
+      },
+      () => {
+        if (snapshotRead === reading) snapshotRead = undefined;
+      },
+    );
     return reading;
   };
   return { read, begin, keep, invalidate };
@@ -60,7 +76,8 @@ export type RuntimeSnapshots = ReturnType<typeof runtimeSnapshots>;
  * Writes to assistants that can change the roster. Drafts, read positions, presence and uploads
  * touch only this app's own state.
  */
-export const changesRoster = (path: string) => path.startsWith("/api/bots") && !/\/(draft|read-position|presence|uploads)$/.test(path);
+export const changesRoster = (path: string) =>
+  path.startsWith("/api/bots") && !/\/(draft|read-position|presence|uploads)$/.test(path);
 
 /**
  * The next bootstrap must show what this app just changed, whether or not the write succeeded:
@@ -71,8 +88,12 @@ export const changesRoster = (path: string) => path.startsWith("/api/bots") && !
 export function installSnapshotInvalidation(app: FastifyInstance, snapshot: RuntimeSnapshots) {
   app.addHook("onSend", async (req, _reply, payload) => {
     const path = routePattern(req);
-    if (!["GET", "HEAD", "OPTIONS"].includes(req.method)
-      && (changesRoster(path) || /^\/api\/(hermes|integrations|routines|push\/actions)(\/|$)/.test(path))) snapshot.invalidate();
+    if (
+      !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+      (changesRoster(path) ||
+        /^\/api\/(hermes|integrations|routines|push\/actions)(\/|$)/.test(path))
+    )
+      snapshot.invalidate();
     return payload;
   });
 }

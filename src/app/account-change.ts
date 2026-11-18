@@ -1,13 +1,25 @@
 import { ApiError, request, setCsrf, write } from "../client-api";
-import { accountMark, accountMarkUnchanged, beginAccountChange, closeShownNotifications, endPushSubscription, forgetSignIn, pendingSignOut, rememberSignIn, signOutFinished } from "./account-epoch";
+import {
+  accountMark,
+  accountMarkUnchanged,
+  beginAccountChange,
+  closeShownNotifications,
+  endPushSubscription,
+  forgetSignIn,
+  pendingSignOut,
+  rememberSignIn,
+  signOutFinished,
+} from "./account-epoch";
 import { forgetAccountContent } from "./storage";
 
 // A separate lock covers the network request as well as the record writes. Web Locks release it
 // when a tab closes; the record lock remains separate because begin and settle acquire it too.
 export const canChangeAccounts = () => typeof navigator !== "undefined" && !!navigator.locks;
-export const accountChangeUnavailable = "This browser can't safely change accounts. Use an updated browser and open WildBots over HTTPS.";
+export const accountChangeUnavailable =
+  "This browser can't safely change accounts. Use an updated browser and open WildBots over HTTPS.";
 function authOperation<T>(work: () => Promise<T>, localOnly = false): Promise<T> {
-  if (!canChangeAccounts()) return localOnly ? work() : Promise.reject(new Error(accountChangeUnavailable));
+  if (!canChangeAccounts())
+    return localOnly ? work() : Promise.reject(new Error(accountChangeUnavailable));
   return navigator.locks.request("agent-interface:auth-operation", work);
 }
 
@@ -28,7 +40,9 @@ export function signInWith(path: string, body: unknown) {
     }
     rememberSignIn();
     // The first bootstrap names the account if the answer does not.
-    await change.settle({ user: typeof answer?.user?.id === "string" ? answer.user.id : undefined });
+    await change.settle({
+      user: typeof answer?.user?.id === "string" ? answer.user.id : undefined,
+    });
   });
 }
 
@@ -101,7 +115,12 @@ export function finishSignOut() {
       if (accountMarkUnchanged(mark)) setCsrf("");
     }
     if (accountMarkUnchanged(mark)) signOutFinished();
-  }).catch(() => { /* Keep the pending mark for the next attempt, including when a lock is denied. */ })
-    .finally(() => { finishing = null; });
+  })
+    .catch(() => {
+      /* Keep the pending mark for the next attempt, including when a lock is denied. */
+    })
+    .finally(() => {
+      finishing = null;
+    });
   return finishing;
 }

@@ -7,9 +7,7 @@
       {
         "id": "anthropic",
         "name": "Anthropic",
-        "aliases": [
-          "claude"
-        ],
+        "aliases": ["claude"],
         "authenticated": true,
         "warning": "Usage is billed to the household account.",
         "models": [

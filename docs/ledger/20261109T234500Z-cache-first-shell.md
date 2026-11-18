@@ -41,22 +41,22 @@ stayed active for about a second after that. A newly active worker could still s
 
 Each line was broken by hand, the focused tests run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| Network first again | failed: 6 shell tests, including "opens from this release's cache without waiting on the network" |
-| No network fallback without a cached shell | failed: "opens from the network when this release holds no shell…" |
-| Update check on a changed shell removed | failed: "checks the server's shell afterwards…" |
-| Shell comparison inverted | failed: same |
-| `redirect: 'manual'` dropped | failed: same |
-| Served shell's body reused for the comparison | failed: same, "Body has already been consumed" |
-| `unregister()` removed | failed: 3 "removes itself and reloads open windows…" cases |
-| Window reload after unregister removed | failed: same 3 |
-| 403 not treated as a gate | failed: the 403 case |
-| Redirect not treated as a gate | failed: the redirect case |
-| Error status not ignored | failed: "keeps opening from the cache through a server error" |
-| A build waiting at load only offered | failed: "moves a load to a build that was already waiting…" |
+| Mutation                                           | Result                                                                                                                 |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Network first again                                | failed: 6 shell tests, including "opens from this release's cache without waiting on the network"                      |
+| No network fallback without a cached shell         | failed: "opens from the network when this release holds no shell…"                                                     |
+| Update check on a changed shell removed            | failed: "checks the server's shell afterwards…"                                                                        |
+| Shell comparison inverted                          | failed: same                                                                                                           |
+| `redirect: 'manual'` dropped                       | failed: same                                                                                                           |
+| Served shell's body reused for the comparison      | failed: same, "Body has already been consumed"                                                                         |
+| `unregister()` removed                             | failed: 3 "removes itself and reloads open windows…" cases                                                             |
+| Window reload after unregister removed             | failed: same 3                                                                                                         |
+| 403 not treated as a gate                          | failed: the 403 case                                                                                                   |
+| Redirect not treated as a gate                     | failed: the redirect case                                                                                              |
+| Error status not ignored                           | failed: "keeps opening from the cache through a server error"                                                          |
+| A build waiting at load only offered               | failed: "moves a load to a build that was already waiting…"                                                            |
 | A build installed mid-visit applied without asking | failed: "finds a build deployed while the app stays open", "offers a build that finishes installing during the visit…" |
-| e2e: a build waiting at load only offered, rebuilt | failed: "an open tab is offered a new release…" at the cache-name poll |
+| e2e: a build waiting at load only offered, rebuilt | failed: "an open tab is offered a new release…" at the cache-name poll                                                 |
 
 ## Not exercised
 
@@ -118,17 +118,17 @@ shell…" failed earlier, at its first reload, because the head applied the wait
 
 ### Mutants
 
-| Mutation | Result |
-| --- | --- |
-| Note ignored on open | failed: "notes a changed shell…", "keeps the note when the browser stops the worker…" |
-| Non-200 probe compared | failed: the 401, 403 and 500 cases |
-| Probe errors not caught | failed: "no network", "a body that breaks off" and 2 older offline cases |
-| Comparison inverted | failed: 3 cases |
-| Note not written | failed: 2 cases |
-| `update()` not run | failed: "notes a changed shell…" |
-| No offline fallback once noted | failed: "opens the cached shell offline once the note is set" |
-| Probe awaited before answering | failed: "opens from this release's cache without waiting on the network" |
-| Note kept in a cache that outlives the release | failed: "starts a new release with no note…" |
+| Mutation                                       | Result                                                                                |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Note ignored on open                           | failed: "notes a changed shell…", "keeps the note when the browser stops the worker…" |
+| Non-200 probe compared                         | failed: the 401, 403 and 500 cases                                                    |
+| Probe errors not caught                        | failed: "no network", "a body that breaks off" and 2 older offline cases              |
+| Comparison inverted                            | failed: 3 cases                                                                       |
+| Note not written                               | failed: 2 cases                                                                       |
+| `update()` not run                             | failed: "notes a changed shell…"                                                      |
+| No offline fallback once noted                 | failed: "opens the cached shell offline once the note is set"                         |
+| Probe awaited before answering                 | failed: "opens from this release's cache without waiting on the network"              |
+| Note kept in a cache that outlives the release | failed: "starts a new release with no note…"                                          |
 
 ### Checks
 

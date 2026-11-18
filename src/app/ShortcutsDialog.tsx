@@ -9,8 +9,12 @@ import "./shell.css";
 const order: ShortcutId[] = ["palette", "pinned", "find", "stop", "undo", "help"];
 /** What Enter does depends on the device's pointers. See enter-key.ts. */
 const composerKeys = (enterSends: boolean): [string, string][] => [
-  ...enterSends ? [["Enter", "Send your message"], ["Shift+Enter", "Start a new line"]] as [string, string][]
-    : [["Enter", "Start a new line"]] as [string, string][],
+  ...(enterSends
+    ? ([
+        ["Enter", "Send your message"],
+        ["Shift+Enter", "Start a new line"],
+      ] as [string, string][])
+    : ([["Enter", "Start a new line"]] as [string, string][])),
   ["Ctrl+Enter or ⌘Enter", "Send your message"],
   ["↑", "Recall your earlier messages from an empty composer"],
   ["↓", "Move forward, then back to your draft"],
@@ -20,18 +24,42 @@ const composerKeys = (enterSends: boolean): [string, string][] => [
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   const titleId = useId();
   const enterSends = useEnterSends();
-  const row = ([keys, label]: [string, string]) => <div className="shortcut-row" key={label}><dt>{label}</dt><dd><kbd>{keys}</kbd></dd></div>;
-  return <Dialog className="settings-sheet shortcuts-dialog" aria-labelledby={titleId} onCancel={onClose} onClose={onClose}>
-    <header className="sheet-header">
-      <Button className="sheet-close" aria-label="Close keyboard shortcuts" onClick={onClose}><Icon name="close" /></Button>
-      <h2 id={titleId}>Keyboard shortcuts</h2>
-    </header>
-    <div className="sheet-body">
-      <h3 className="shortcut-heading">Anywhere</h3>
-      <dl className="shortcut-list">{order.map(id => row([formatCombo(shortcuts[id]), shortcuts[id].label]))}</dl>
-      <h3 className="shortcut-heading">In the composer</h3>
-      {!enterSends && <p className="shortcut-note">On this touch screen, Return starts a new line and the Send button sends. A keyboard without a trackpad does the same, so send from it with Ctrl+Enter or ⌘Enter. With a mouse or trackpad, Enter sends.</p>}
-      <dl className="shortcut-list">{composerKeys(enterSends).map(row)}</dl>
+  const row = ([keys, label]: [string, string]) => (
+    <div className="shortcut-row" key={label}>
+      <dt>{label}</dt>
+      <dd>
+        <kbd>{keys}</kbd>
+      </dd>
     </div>
-  </Dialog>;
+  );
+  return (
+    <Dialog
+      className="settings-sheet shortcuts-dialog"
+      aria-labelledby={titleId}
+      onCancel={onClose}
+      onClose={onClose}
+    >
+      <header className="sheet-header">
+        <Button className="sheet-close" aria-label="Close keyboard shortcuts" onClick={onClose}>
+          <Icon name="close" />
+        </Button>
+        <h2 id={titleId}>Keyboard shortcuts</h2>
+      </header>
+      <div className="sheet-body">
+        <h3 className="shortcut-heading">Anywhere</h3>
+        <dl className="shortcut-list">
+          {order.map((id) => row([formatCombo(shortcuts[id]), shortcuts[id].label]))}
+        </dl>
+        <h3 className="shortcut-heading">In the composer</h3>
+        {!enterSends && (
+          <p className="shortcut-note">
+            On this touch screen, Return starts a new line and the Send button sends. A keyboard
+            without a trackpad does the same, so send from it with Ctrl+Enter or ⌘Enter. With a
+            mouse or trackpad, Enter sends.
+          </p>
+        )}
+        <dl className="shortcut-list">{composerKeys(enterSends).map(row)}</dl>
+      </div>
+    </Dialog>
+  );
 }

@@ -19,8 +19,7 @@ export interface ReplyWatch {
 }
 // Hermes shows the unsaved tail of a reply as a message that is replaced by saved rows with new IDs.
 const saved = (message: Message) => !message.id.endsWith("-inflight");
-const speakable = (message: Message) =>
-  isConversationReply(message) && !!message.text.trim();
+const speakable = (message: Message) => isConversationReply(message) && !!message.text.trim();
 /** Markdown read aloud as written would spell out its symbols, so keep only the words. */
 export function replySnippet(text: string) {
   const plain = text
@@ -42,7 +41,8 @@ const bare = (text: string) => text.replace(/\s+/g, "");
 function afterHeard(parts: string[], heard: string): string[] {
   const words = bare(heard);
   for (let end = parts.length; end > 0; end--) {
-    for (let start = 0; start < end; start++) if (bare(parts.slice(start, end).join("")) === words) return parts.slice(end);
+    for (let start = 0; start < end; start++)
+      if (bare(parts.slice(start, end).join("")) === words) return parts.slice(end);
   }
   return parts;
 }
@@ -54,18 +54,29 @@ function afterHeard(parts: string[], heard: string): string[] {
  * all of them, joined, including the rows of an earlier read that were still waiting. An unsaved reply
  * that was already read is not read again when saved rows replace it, however many rows they are.
  */
-export function watchReplies(watch: ReplyWatch, conversation: SavedConversation, baseline: boolean): { watch: ReplyWatch; reply?: Message } {
+export function watchReplies(
+  watch: ReplyWatch,
+  conversation: SavedConversation,
+  baseline: boolean,
+): { watch: ReplyWatch; reply?: Message } {
   const { messages } = conversation;
   // Steered guidance belongs to the running turn; only a new prompt changes its identity.
-  const turnAt = (index: number) => messages.slice(0, index + 1).findLast(message => message.role === "user" && message.steered !== true)?.id;
+  const turnAt = (index: number) =>
+    messages
+      .slice(0, index + 1)
+      .findLast((message) => message.role === "user" && message.steered !== true)?.id;
   const tail = messages.at(-1);
   const unsaved = tail && !saved(tail) && speakable(tail) ? tail : undefined;
   const unsavedHeard = unsaved && { text: unsaved.text, turn: turnAt(messages.length - 1) };
   const lastId = messages.findLast(saved)?.id;
-  const known = watch.lastId === undefined ? -1 : messages.findIndex(message => message.id === watch.lastId);
+  const known =
+    watch.lastId === undefined ? -1 : messages.findIndex((message) => message.id === watch.lastId);
   // A conversation that no longer contains the last message seen was replaced, not extended.
-  if (baseline || watch.lastId !== undefined && known < 0) return { watch: { lastId, heard: unsavedHeard } };
-  const arrivedAt = messages.findLastIndex((message, index) => index > known && saved(message) && speakable(message));
+  if (baseline || (watch.lastId !== undefined && known < 0))
+    return { watch: { lastId, heard: unsavedHeard } };
+  const arrivedAt = messages.findLastIndex(
+    (message, index) => index > known && saved(message) && speakable(message),
+  );
   const arrived = messages[arrivedAt];
   const heard = watch.heard;
   // The reply is every speakable saved row of the newest turn that arrived since the last read, and the rows
@@ -73,24 +84,66 @@ export function watchReplies(watch: ReplyWatch, conversation: SavedConversation,
   // can grow in place while that lasts, so a held one is read again from the conversation. The newest turn is
   // the one the unsaved tail belongs to, or else the one of the newest saved row.
   const newest = unsaved ? messages.length - 1 : arrivedAt;
-  const turnStart = messages.findLastIndex((message, index) => index <= newest && message.role === "user" && message.steered !== true);
-  const heldRow = watch.waiting && (messages.find(message => message.id === watch.waiting?.id) ?? watch.waiting);
-  const held = watch.waiting && watch.waitingTurn === turnAt(newest)
-    ? [...watch.waitingBefore ?? [], ...heldRow && saved(heldRow) ? [heldRow.text] : []] : [];
-  let parts = arrived || unsaved ? [...held, ...messages.slice(Math.max(known, turnStart) + 1, newest + 1).filter(message => saved(message) && speakable(message)).map(message => message.text)] : [];
+  const turnStart = messages.findLastIndex(
+    (message, index) => index <= newest && message.role === "user" && message.steered !== true,
+  );
+  const heldRow =
+    watch.waiting &&
+    (messages.find((message) => message.id === watch.waiting?.id) ?? watch.waiting);
+  const held =
+    watch.waiting && watch.waitingTurn === turnAt(newest)
+      ? [...(watch.waitingBefore ?? []), ...(heldRow && saved(heldRow) ? [heldRow.text] : [])]
+      : [];
+  let parts =
+    arrived || unsaved
+      ? [
+          ...held,
+          ...messages
+            .slice(Math.max(known, turnStart) + 1, newest + 1)
+            .filter((message) => saved(message) && speakable(message))
+            .map((message) => message.text),
+        ]
+      : [];
   // The saved rows of a reply that was already read replace it silently, and only rows after what was read are new.
   if (!unsaved && arrived && heard && turnAt(arrivedAt) === heard.turn) {
     parts = afterHeard(parts, heard.text);
     if (!parts.length) return { watch: { lastId } };
   }
-  const unread = unsaved && unsavedHeard && (unsaved.text !== heard?.text || unsavedHeard.turn !== heard.turn) ? unsaved : undefined;
+  const unread =
+    unsaved && unsavedHeard && (unsaved.text !== heard?.text || unsavedHeard.turn !== heard.turn)
+      ? unsaved
+      : undefined;
   // The row that ends the reply, the words of the rows before it, and the turn they belong to.
-  let last: Message | undefined, before: string[] = [], turn = watch.waitingTurn;
-  if (unsaved) { last = unread; before = parts; turn = unsavedHeard?.turn; }
-  else if (arrived) { last = arrived; before = parts.slice(0, -1); turn = turnAt(arrivedAt); }
-  else { last = heldRow; before = watch.waitingBefore ?? []; }
-  if (last && !replying.has(conversation.activity.state)) {
-    return { watch: { lastId, heard: last === unsaved ? unsavedHeard : heard }, reply: before.length ? { ...last, text: [...before, last.text].map(part => part.trim()).join("\n\n") } : last };
+  let last: Message | undefined,
+    before: string[] = [],
+    turn = watch.waitingTurn;
+  if (unsaved) {
+    last = unread;
+    before = parts;
+    turn = unsavedHeard?.turn;
+  } else if (arrived) {
+    last = arrived;
+    before = parts.slice(0, -1);
+    turn = turnAt(arrivedAt);
+  } else {
+    last = heldRow;
+    before = watch.waitingBefore ?? [];
   }
-  return { watch: { lastId, waiting: last, waitingBefore: before.length ? before : undefined, waitingTurn: last ? turn : undefined, heard } };
+  if (last && !replying.has(conversation.activity.state)) {
+    return {
+      watch: { lastId, heard: last === unsaved ? unsavedHeard : heard },
+      reply: before.length
+        ? { ...last, text: [...before, last.text].map((part) => part.trim()).join("\n\n") }
+        : last,
+    };
+  }
+  return {
+    watch: {
+      lastId,
+      waiting: last,
+      waitingBefore: before.length ? before : undefined,
+      waitingTurn: last ? turn : undefined,
+      heard,
+    },
+  };
 }

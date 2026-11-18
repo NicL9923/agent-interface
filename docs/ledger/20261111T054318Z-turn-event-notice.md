@@ -42,12 +42,12 @@ kept the notice "for approvals, requests, files, the draft and the read position
 
 ## Measured
 
-| | main | this branch |
-| --- | --- | --- |
-| `tests/live-turn-timing.test.ts`, ten-tool turn, Hermes opens on `?inflight=3` | 26 | 18 |
-| same, two-tool turn | 10 | 10 (too short for the notice throttle to have sent more) |
-| browser, `count-stream-requests.mjs --only turn` (Trail Cook, one tool), conversation reads after the first | 3 | 2 |
-| same, all `/api` requests | 10 | 9 |
+|                                                                                                             | main | this branch                                              |
+| ----------------------------------------------------------------------------------------------------------- | ---- | -------------------------------------------------------- |
+| `tests/live-turn-timing.test.ts`, ten-tool turn, Hermes opens on `?inflight=3`                              | 26   | 18                                                       |
+| same, two-tool turn                                                                                         | 10   | 10 (too short for the notice throttle to have sent more) |
+| browser, `count-stream-requests.mjs --only turn` (Trail Cook, one tool), conversation reads after the first | 3    | 2                                                        |
+| same, all `/api` requests                                                                                   | 10   | 9                                                        |
 
 The browser figure is one run each: this branch against `e2e/server.ts` with `conversation-routes.ts` from `origin/main`, then with
 this branch's. The scenario is new in the tool; `e2e/server.ts` now names the version for the tool's finish, as the runtime does.
@@ -67,16 +67,16 @@ Reads saved per turn are one per covered frame the notice throttle would not alr
 
 ## Red runs
 
-| Broken | Result |
-| --- | --- |
-| the hold never taken (`changed()` always) | 8 red across stream, route and timing tests |
-| the hold released by any turn event | "keeps waiting through a turn event from before the change…" red |
-| the fallback after a read with no turn event removed | "sends the change notice the moment a read lands…" red |
-| `holds` true for every opted-in stream | 6 red, incl. both legacy streams and a runtime without turn reads |
-| the hold timer not cleared on teardown | "stops waiting when the stream closes…" red |
-| `message.start` covered | 20 red: the runtime table, the native-turn cases, the timing figures |
-| `message.complete` covered | the runtime table and the settling test red |
-| `withTurn` not merging files | "gains the files a turn's rows carry…" red |
+| Broken                                                             | Result                                                                                                                                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| the hold never taken (`changed()` always)                          | 8 red across stream, route and timing tests                                                                                                                                                            |
+| the hold released by any turn event                                | "keeps waiting through a turn event from before the change…" red                                                                                                                                       |
+| the fallback after a read with no turn event removed               | "sends the change notice the moment a read lands…" red                                                                                                                                                 |
+| `holds` true for every opted-in stream                             | 6 red, incl. both legacy streams and a runtime without turn reads                                                                                                                                      |
+| the hold timer not cleared on teardown                             | "stops waiting when the stream closes…" red                                                                                                                                                            |
+| `message.start` covered                                            | 20 red: the runtime table, the native-turn cases, the timing figures                                                                                                                                   |
+| `message.complete` covered                                         | the runtime table and the settling test red                                                                                                                                                            |
+| `withTurn` not merging files                                       | "gains the files a turn's rows carry…" red                                                                                                                                                             |
 | `restoredRead` consumed before the `writable()` check (review fix) | only the new "sends the change notice when the read that landed during a stalled client's backlog is answered" red: no notice written after the client catches up. It survived every other test before |
 
 ## Review fixes (Claude Opus 5.5 on `fa11cc9`)

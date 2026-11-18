@@ -21,7 +21,12 @@ describe("formatModelSlugName", () => {
 describe("createModelNames", () => {
   const opus = { provider: "anthropic", model: "claude-opus-5-5" };
   it("asks once for what it lacks, keeps the answer, and falls back to the formatter for null", async () => {
-    const ask = vi.fn(async (models: typeof opus[]) => models.map(model => ({ ...model, name: model.provider === "anthropic" ? " Claude Opus 5.5 (latest) " : null })));
+    const ask = vi.fn(async (models: (typeof opus)[]) =>
+      models.map((model) => ({
+        ...model,
+        name: model.provider === "anthropic" ? " Claude Opus 5.5 (latest) " : null,
+      })),
+    );
     const names = createModelNames(() => ask);
     const house = { provider: "house", model: "gpt-6.1-terra" };
     expect(names.name(opus)).toBe("Claude Opus 5.5");
@@ -34,7 +39,12 @@ describe("createModelNames", () => {
   });
   it("shares one request between overlapping loads and never asks for a model without a provider", async () => {
     let answer!: (rows: { provider: string; model: string; name: string | null }[]) => void;
-    const ask = vi.fn(() => new Promise<{ provider: string; model: string; name: string | null }[]>(done => { answer = done; }));
+    const ask = vi.fn(
+      () =>
+        new Promise<{ provider: string; model: string; name: string | null }[]>((done) => {
+          answer = done;
+        }),
+    );
     const names = createModelNames(() => ask);
     const first = names.load([opus, { model: "gpt-6.1-terra" }]);
     const second = names.load([opus]);
@@ -47,8 +57,14 @@ describe("createModelNames", () => {
   });
   it("shows the formatted name when the add-on fails, and asks again after a minute", async () => {
     let time = 0;
-    const ask = vi.fn().mockRejectedValueOnce(new Error("Unknown experience operation.")).mockResolvedValue([{ ...opus, name: "Opus" }]);
-    const names = createModelNames(() => ask, () => time);
+    const ask = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Unknown experience operation."))
+      .mockResolvedValue([{ ...opus, name: "Opus" }]);
+    const names = createModelNames(
+      () => ask,
+      () => time,
+    );
     await names.load([opus]);
     expect(names.name(opus)).toBe("Claude Opus 5.5");
     await names.load([opus]);

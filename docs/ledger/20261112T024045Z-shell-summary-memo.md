@@ -34,16 +34,16 @@ The helpers kept 2.04, 1.99, 0.71 and 0.68 million characters.
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_shell_summary_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| no memo installed | failed: test_a_repeated_command_is_parsed_once_with_the_same_summary (exit 1) |
-| cache never answers | failed: test_a_repeated_command_is_parsed_once_with_the_same_summary (exit 1) |
-| list answer shared | failed: test_a_list_answer_is_a_new_list_each_time (exit 1) |
-| no eviction | failed: test_the_least_recently_used_answer_leaves_first_within_the_budget (exit 1) |
-| FIFO not LRU | failed: test_the_least_recently_used_answer_leaves_first_within_the_budget (exit 1) |
+| Mutation            | Result                                                                                                 |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| no memo installed   | failed: test_a_repeated_command_is_parsed_once_with_the_same_summary (exit 1)                          |
+| cache never answers | failed: test_a_repeated_command_is_parsed_once_with_the_same_summary (exit 1)                          |
+| list answer shared  | failed: test_a_list_answer_is_a_new_list_each_time (exit 1)                                            |
+| no eviction         | failed: test_the_least_recently_used_answer_leaves_first_within_the_budget (exit 1)                    |
+| FIFO not LRU        | failed: test_the_least_recently_used_answer_leaves_first_within_the_budget (exit 1)                    |
 | no long-text bypass | failed: test_a_string_too_long_to_keep_and_anything_not_a_string_go_to_the_function_each_time (exit 1) |
-| double wrap | failed: test_installing_again_keeps_one_memo (exit 1) |
-| missing not warned | failed: test_a_missing_helper_is_named_and_the_rest_are_kept (exit 1) |
+| double wrap         | failed: test_installing_again_keeps_one_memo (exit 1)                                                  |
+| missing not warned  | failed: test_a_missing_helper_is_named_and_the_rest_are_kept (exit 1)                                  |
 
 ## Checks
 

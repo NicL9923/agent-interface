@@ -1,7 +1,7 @@
 # November 9 iOS watch-only computer preview
 
 Branch `parity/ios-computer-peek` on the Mac mini, iPhone 18 Pro Max simulator, iOS 27. Source
-fingerprint of the tested state: sha256:a26a6613c05eb9a8911daba61f9bf3f700fee34953bd1a0ac01c21257a1f1ef1 (1644 source files) 
+fingerprint of the tested state: sha256:a26a6613c05eb9a8911daba61f9bf3f700fee34953bd1a0ac01c21257a1f1ef1 (1644 source files)
 
 `ComputerPeekView` docks the web's watch-only desktop view in the chat's bottom trailing corner
 through the existing `/native/computer` page with `control=0` and its own ticket.

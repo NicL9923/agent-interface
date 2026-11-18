@@ -4,7 +4,8 @@ import { waitingOnClose } from "../src/app/close-request";
 // What waits on a sheet's close is bound to that mount of the sheet and the account it was raised
 // for. The app-level cases in worker-opens-ui.test.ts drive it through the real sheets.
 describe("something waiting on a sheet's close", () => {
-  const sheet = {}, other = {};
+  const sheet = {},
+    other = {};
 
   it.each([
     ["the sheet it waited on, for the same account", sheet, "one", "ranch"],

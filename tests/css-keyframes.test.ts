@@ -1,18 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { all, at, conditionsMeet, conditionsOf, css, inKeyframes, motionsOf, selectorsOf, splitTopLevel, type Declaration } from "./helpers/css-declarations";
+import {
+  all,
+  at,
+  conditionsMeet,
+  conditionsOf,
+  css,
+  inKeyframes,
+  motionsOf,
+  selectorsOf,
+  splitTopLevel,
+  type Declaration,
+} from "./helpers/css-declarations";
 
 // Keyframes share one global namespace, so a second definition of a name silently replaces the first wherever it
 // loads later, and an animation naming a missing one does nothing.
-const defined = css.flatMap(({ path, text }) => [...text.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/@keyframes\s+([\w-]+)/g)]
-  .map(match => ({ name: match[1], path })));
-const animating = all.filter(declaration =>
-  (declaration.property === "animation" || declaration.property === "animation-name") && !inKeyframes(declaration));
+const defined = css.flatMap(({ path, text }) =>
+  [...text.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/@keyframes\s+([\w-]+)/g)].map((match) => ({
+    name: match[1],
+    path,
+  })),
+);
+const animating = all.filter(
+  (declaration) =>
+    (declaration.property === "animation" || declaration.property === "animation-name") &&
+    !inKeyframes(declaration),
+);
 const removesAnimation = ({ value }: Declaration) => /^none(\s*!important)?$/i.test(value);
 
 describe("CSS keyframes", () => {
   it("defines each keyframe name once across the app's stylesheets", () => {
     const seen = new Map<string, string[]>();
-    for (const { name, path } of defined) seen.set(name, [...seen.get(name) ?? [], path]);
+    for (const { name, path } of defined) seen.set(name, [...(seen.get(name) ?? []), path]);
     expect([...seen].filter(([, paths]) => paths.length > 1)).toEqual([]);
   });
 
@@ -21,10 +39,16 @@ describe("CSS keyframes", () => {
     // Each animation layer must name a defined keyframe. Whatever else the layer holds (durations, easings,
     // keywords this test has never heard of) does not matter; a layer naming no keyframe at all is a typo or
     // a deleted keyframe. `none`, CSS-wide keywords and a layer that is only a custom property are left alone.
-    const unnamed = animating.flatMap(declaration => splitTopLevel(declaration.value.replace(/!important$/i, ""))
-      .filter(layer => !/^(none|inherit|initial|unset|revert|revert-layer)$/i.test(layer) && !/^var\(.*\)$/.test(layer)
-        && !layer.split(/\s+/).some(token => names.has(token)))
-      .map(layer => `${at(declaration)} ${layer}`));
+    const unnamed = animating.flatMap((declaration) =>
+      splitTopLevel(declaration.value.replace(/!important$/i, ""))
+        .filter(
+          (layer) =>
+            !/^(none|inherit|initial|unset|revert|revert-layer)$/i.test(layer) &&
+            !/^var\(.*\)$/.test(layer) &&
+            !layer.split(/\s+/).some((token) => names.has(token)),
+        )
+        .map((layer) => `${at(declaration)} ${layer}`),
+    );
     expect(unnamed).toEqual([]);
   });
 
@@ -40,32 +64,54 @@ describe("CSS keyframes", () => {
     // an override, such as a phone variant, and both stay live. A rule is its file and the line its selector starts on.
     type Owner = { path: string; line: number; conditions: string };
     const rules = new Map<string, Owner[]>();
-    for (const declaration of animating.filter(declaration => !removesAnimation(declaration))) {
-      const owner = { path: declaration.path, line: declaration.ruleLine, conditions: conditionsOf(declaration) };
+    for (const declaration of animating.filter((declaration) => !removesAnimation(declaration))) {
+      const owner = {
+        path: declaration.path,
+        line: declaration.ruleLine,
+        conditions: conditionsOf(declaration),
+      };
       for (const motion of motionsOf(declaration)) {
         for (const selector of selectorsOf(declaration)) {
           const key = `${motion} | ${selector}`;
           const owners = rules.get(key) ?? [];
-          if (!owners.some(({ path, line }) => path === owner.path && line === owner.line)) owners.push(owner);
+          if (!owners.some(({ path, line }) => path === owner.path && line === owner.line))
+            owners.push(owner);
           rules.set(key, owners);
         }
       }
     }
     const override = (base: Owner, variant: Owner) =>
-      base.path === variant.path && !base.conditions && !!variant.conditions && variant.line > base.line;
-    const clash = (first: Owner, second: Owner) => (first.path !== second.path || first.line !== second.line)
-      && conditionsMeet(first.conditions, second.conditions) && !override(first, second) && !override(second, first);
+      base.path === variant.path &&
+      !base.conditions &&
+      !!variant.conditions &&
+      variant.line > base.line;
+    const clash = (first: Owner, second: Owner) =>
+      (first.path !== second.path || first.line !== second.line) &&
+      conditionsMeet(first.conditions, second.conditions) &&
+      !override(first, second) &&
+      !override(second, first);
     const named = ({ path, line, conditions }: Owner) => `${path}:${line} [${conditions}]`;
-    const repeated = [...rules].flatMap(([key, owners]) => owners.flatMap((first, index) => owners.slice(index + 1)
-      .filter(second => clash(first, second)).map(second => `${key}: ${named(first)} and ${named(second)}`)));
+    const repeated = [...rules].flatMap(([key, owners]) =>
+      owners.flatMap((first, index) =>
+        owners
+          .slice(index + 1)
+          .filter((second) => clash(first, second))
+          .map((second) => `${key}: ${named(first)} and ${named(second)}`),
+      ),
+    );
     expect(repeated).toEqual([]);
   });
 
   it("animates the sent message from one rule, only when motion is allowed", () => {
-    const outgoing = animating.filter(declaration => selectorsOf(declaration).includes(".message-outgoing"));
-    expect(outgoing.map(declaration => ({ motions: motionsOf(declaration), value: declaration.value }))).toEqual([
-      { motions: ["no-preference"], value: expect.stringMatching(/^message-send\b/) },
-    ]);
+    const outgoing = animating.filter((declaration) =>
+      selectorsOf(declaration).includes(".message-outgoing"),
+    );
+    expect(
+      outgoing.map((declaration) => ({
+        motions: motionsOf(declaration),
+        value: declaration.value,
+      })),
+    ).toEqual([{ motions: ["no-preference"], value: expect.stringMatching(/^message-send\b/) }]);
   });
 
   it("runs every animation in the motion layer only when motion is allowed, bar the two listed", () => {
@@ -78,16 +124,32 @@ describe("CSS keyframes", () => {
       [/^\.chat-header-identity$/, "scroll-driven header lift"],
       // Set only while a view transition runs, and navigation-morph.ts starts none when reduced motion is asked for,
       // so `data-navigation` never appears under it.
-      [/^:root\[data-navigation="(forward|back)"\]::view-transition-(old|new)\(root\)$/, "phone navigation slide"],
+      [
+        /^:root\[data-navigation="(forward|back)"\]::view-transition-(old|new)\(root\)$/,
+        "phone navigation slide",
+      ],
     ];
-    const layer = animating.filter(declaration => declaration.path === "src/motion.css");
-    const allowed = (declaration: Declaration) => selectorsOf(declaration)
-      .every(selector => exceptions.some(([pattern]) => pattern.test(selector)));
-    const ungated = layer.filter(declaration => motionsOf(declaration).join() !== "no-preference" && !allowed(declaration));
-    expect(ungated.map(declaration => `${at(declaration)} ${declaration.property}: ${declaration.value}`)).toEqual([]);
+    const layer = animating.filter((declaration) => declaration.path === "src/motion.css");
+    const allowed = (declaration: Declaration) =>
+      selectorsOf(declaration).every((selector) =>
+        exceptions.some(([pattern]) => pattern.test(selector)),
+      );
+    const ungated = layer.filter(
+      (declaration) => motionsOf(declaration).join() !== "no-preference" && !allowed(declaration),
+    );
+    expect(
+      ungated.map(
+        (declaration) => `${at(declaration)} ${declaration.property}: ${declaration.value}`,
+      ),
+    ).toEqual([]);
     // An exception nothing uses any more is a hole waiting to be refilled.
     for (const [pattern] of exceptions) {
-      expect(layer.some(declaration => selectorsOf(declaration).some(selector => pattern.test(selector))), String(pattern)).toBe(true);
+      expect(
+        layer.some((declaration) =>
+          selectorsOf(declaration).some((selector) => pattern.test(selector)),
+        ),
+        String(pattern),
+      ).toBe(true);
     }
   });
 });

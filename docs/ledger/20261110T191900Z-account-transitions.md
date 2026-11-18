@@ -42,21 +42,21 @@ uncertain sends, group drafts and form answers in localStorage.
 
 ## What outlives a change, and why it cannot leak
 
-| Held | Handling |
-| --- | --- |
-| React state: boot, conversation, drafts in memory, uploads, panels, toast | Unmounted with the generation |
-| Conversation cache, prefetched and linked chats | `clearResponseCache` at end of generation; `conversation-page` follows its scope |
-| Reads in flight, a bootstrap that answers late | Discarded as `AccountChanged` |
-| Live streams | Closed with the generation; an event after the change drops the stream |
-| CSRF token | Cleared at end of generation; the server also checks it against the session |
-| Settled receipts, declined prompts, earlier files | Cleared at end of generation |
-| Presence and device-activity reports queued or sent at unmount | Fenced by generation |
-| Draft saves, sends | Their live checks read the shared generation |
-| Service worker messages | Carry only an address, opened under the account signed in now |
-| Notifications on screen | Closed at sign-out, refusal and another account, by the page and by the service worker |
-| A push on its way for the last account | The service worker shows a push only for the account its pages last named (second round) |
-| `<html data-theme>`, tab title, app badge, favicon dot | Reset as the generation unmounts (second round; the first round's claim about the theme was wrong) |
-| The address | Query, fragment and path reset to `/` when the last generation drew an account (second round) |
+| Held                                                                      | Handling                                                                                           |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| React state: boot, conversation, drafts in memory, uploads, panels, toast | Unmounted with the generation                                                                      |
+| Conversation cache, prefetched and linked chats                           | `clearResponseCache` at end of generation; `conversation-page` follows its scope                   |
+| Reads in flight, a bootstrap that answers late                            | Discarded as `AccountChanged`                                                                      |
+| Live streams                                                              | Closed with the generation; an event after the change drops the stream                             |
+| CSRF token                                                                | Cleared at end of generation; the server also checks it against the session                        |
+| Settled receipts, declined prompts, earlier files                         | Cleared at end of generation                                                                       |
+| Presence and device-activity reports queued or sent at unmount            | Fenced by generation                                                                               |
+| Draft saves, sends                                                        | Their live checks read the shared generation                                                       |
+| Service worker messages                                                   | Carry only an address, opened under the account signed in now                                      |
+| Notifications on screen                                                   | Closed at sign-out, refusal and another account, by the page and by the service worker             |
+| A push on its way for the last account                                    | The service worker shows a push only for the account its pages last named (second round)           |
+| `<html data-theme>`, tab title, app badge, favicon dot                    | Reset as the generation unmounts (second round; the first round's claim about the theme was wrong) |
+| The address                                                               | Query, fragment and path reset to `/` when the last generation drew an account (second round)      |
 
 ## Accepted limit
 
@@ -90,20 +90,20 @@ server, which refuses the session and is then the refused-session transition.
   a 401 from `/api/devices/activity`, the old generation's unmount report going out under the
   next account. That is why the unmount now has a commit of its own.
 
-| Mutation, `tests/account-transitions-ui.test.ts` | Result |
-| --- | --- |
-| Answer check after a request removed | failed: B signs in while A shows |
-| Check before a request removed | failed: a typed draft after an unheard sign-out |
-| `pageshow` listener removed | failed: the back-forward cache case |
-| Storage listener removed | failed: 4 cases |
-| Hint lapse timer does nothing | failed: the lapse case |
-| Content removal at sign-out removed | failed: A signs out elsewhere |
-| No wait during another tab's change | failed: 2 cases |
-| A stale mark still waited for | failed: the stale mark case |
-| A failed sign-in keeps the mark | failed: the refused sign-in case |
-| Stream events not checked | failed: the stream event case |
-| Presence fence removed | failed: the typed draft case, a "left" report sent as nobody |
-| Device-activity fence removed | survived, here and in the e2e case: jsdom never has focus, and in Chromium the separate unmount commit already refuses the report. Kept for a report queued behind a slow one. |
+| Mutation, `tests/account-transitions-ui.test.ts` | Result                                                                                                                                                                         |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Answer check after a request removed             | failed: B signs in while A shows                                                                                                                                               |
+| Check before a request removed                   | failed: a typed draft after an unheard sign-out                                                                                                                                |
+| `pageshow` listener removed                      | failed: the back-forward cache case                                                                                                                                            |
+| Storage listener removed                         | failed: 4 cases                                                                                                                                                                |
+| Hint lapse timer does nothing                    | failed: the lapse case                                                                                                                                                         |
+| Content removal at sign-out removed              | failed: A signs out elsewhere                                                                                                                                                  |
+| No wait during another tab's change              | failed: 2 cases                                                                                                                                                                |
+| A stale mark still waited for                    | failed: the stale mark case                                                                                                                                                    |
+| A failed sign-in keeps the mark                  | failed: the refused sign-in case                                                                                                                                               |
+| Stream events not checked                        | failed: the stream event case                                                                                                                                                  |
+| Presence fence removed                           | failed: the typed draft case, a "left" report sent as nobody                                                                                                                   |
+| Device-activity fence removed                    | survived, here and in the e2e case: jsdom never has focus, and in Chromium the separate unmount commit already refuses the report. Kept for a report queued behind a slow one. |
 
 ## Not exercised
 
@@ -188,22 +188,22 @@ script ran, which is the reviewer's P1 seen in a browser rather than read.
 
 The new tests against `148d8ef`'s `src` and `scripts`, with the new tests in place:
 
-| Test | Failed at |
-| --- | --- |
-| Covers the account as the page is put away | `covered()` false after `pagehide` |
-| Keeps it covered after a sign-out elsewhere | `{ covered: false, one: true }` at `pageshow` |
-| Member two's own chat after another tab's sign-in | "Barn door sticks" missing: two's home chat opened from `?bot=home` |
-| No address after a sign-out in another tab | search still `?bot=home` |
-| No unread count, badge or theme between accounts | title still `(1) WildBots` |
-| A stale mark on waking | no bootstrap after `focus` |
-| A refused sign-in's undo beside another tab's settle | record lost `user: "two"`, kept the mark |
-| Sign-out with storage refusing writes | timed out: the bootstrap loop |
-| Upload and send in flight | two's home chat from the carried address (item 2) |
-| Web push names its account (server) | `account` undefined |
-| Worker: shows for the account, keeps whose it is | `data.account` missing |
-| Worker: drops another account's push after a restart | shown |
-| Worker: shows nothing signed out | shown |
-| Worker: Decline for another account | `fetch` called |
+| Test                                                 | Failed at                                                             |
+| ---------------------------------------------------- | --------------------------------------------------------------------- |
+| Covers the account as the page is put away           | `covered()` false after `pagehide`                                    |
+| Keeps it covered after a sign-out elsewhere          | `{ covered: false, one: true }` at `pageshow`                         |
+| Member two's own chat after another tab's sign-in    | "Barn door sticks" missing: two's home chat opened from `?bot=home`   |
+| No address after a sign-out in another tab           | search still `?bot=home`                                              |
+| No unread count, badge or theme between accounts     | title still `(1) WildBots`                                            |
+| A stale mark on waking                               | no bootstrap after `focus`                                            |
+| A refused sign-in's undo beside another tab's settle | record lost `user: "two"`, kept the mark                              |
+| Sign-out with storage refusing writes                | timed out: the bootstrap loop                                         |
+| Upload and send in flight                            | two's home chat from the carried address (item 2)                     |
+| Web push names its account (server)                  | `account` undefined                                                   |
+| Worker: shows for the account, keeps whose it is     | `data.account` missing                                                |
+| Worker: drops another account's push after a restart | shown                                                                 |
+| Worker: shows nothing signed out                     | shown                                                                 |
+| Worker: Decline for another account                  | `fetch` called                                                        |
 | The worker told again after another tab told it none | written against this round's draft, which failed it: last word `null` |
 
 The lock test first passed against `148d8ef` because its storage hook fired the other tab's
@@ -212,38 +212,38 @@ fails for the reviewer's reason.
 
 Mutations of this round's code, each run against the tests that cover it:
 
-| Mutation | Result |
-| --- | --- |
-| `pagehide` cover not registered | failed: both cache tests |
-| Same-account `woke` does not uncover | failed: the same-account case |
-| App never uncovers after a change | failed: the change case |
-| Cover keeps the title | failed: the same-account case |
-| A later end forgets the shown account | failed: both address cases |
-| Start does not clear the flag | survived: no flow writes an address between a clear and the next start |
-| Fragment not checked | survived: `useUrlSync` writes a query whenever an account shows a chat, so a fragment alone never names one today |
-| Badge not cleared at unmount | failed |
-| Theme not reset at unmount | failed |
-| Waking ignores a stale mark | failed |
-| No Web Lock | failed: the lock test |
-| Refused write not kept in memory | failed: the write-refusal test times out in the loop |
-| Unreadable record left unwritten | failed: the newer-format test |
-| A refused read throws | failed: the read-refusal test |
-| Storage listener removed | failed: the three-tab test |
-| Uploads not aborted at unmount | failed: the in-flight test |
-| Send answer unchecked in `api` | survived; with `use-submission`'s generation check also removed, survived: the tree is gone, so a late answer has nothing to draw into and sends nothing |
-| Worker shows every push / when signed out / declines for anyone / keeps others' notifications / drops pushes naming no account / keeps the account only in memory | each failed its test |
-| The page's word to the worker not reset at a start | failed: the told-again test |
-| A bootstrap does not tell the worker | failed: the told-again test |
+| Mutation                                                                                                                                                          | Result                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pagehide` cover not registered                                                                                                                                   | failed: both cache tests                                                                                                                                 |
+| Same-account `woke` does not uncover                                                                                                                              | failed: the same-account case                                                                                                                            |
+| App never uncovers after a change                                                                                                                                 | failed: the change case                                                                                                                                  |
+| Cover keeps the title                                                                                                                                             | failed: the same-account case                                                                                                                            |
+| A later end forgets the shown account                                                                                                                             | failed: both address cases                                                                                                                               |
+| Start does not clear the flag                                                                                                                                     | survived: no flow writes an address between a clear and the next start                                                                                   |
+| Fragment not checked                                                                                                                                              | survived: `useUrlSync` writes a query whenever an account shows a chat, so a fragment alone never names one today                                        |
+| Badge not cleared at unmount                                                                                                                                      | failed                                                                                                                                                   |
+| Theme not reset at unmount                                                                                                                                        | failed                                                                                                                                                   |
+| Waking ignores a stale mark                                                                                                                                       | failed                                                                                                                                                   |
+| No Web Lock                                                                                                                                                       | failed: the lock test                                                                                                                                    |
+| Refused write not kept in memory                                                                                                                                  | failed: the write-refusal test times out in the loop                                                                                                     |
+| Unreadable record left unwritten                                                                                                                                  | failed: the newer-format test                                                                                                                            |
+| A refused read throws                                                                                                                                             | failed: the read-refusal test                                                                                                                            |
+| Storage listener removed                                                                                                                                          | failed: the three-tab test                                                                                                                               |
+| Uploads not aborted at unmount                                                                                                                                    | failed: the in-flight test                                                                                                                               |
+| Send answer unchecked in `api`                                                                                                                                    | survived; with `use-submission`'s generation check also removed, survived: the tree is gone, so a late answer has nothing to draw into and sends nothing |
+| Worker shows every push / when signed out / declines for anyone / keeps others' notifications / drops pushes naming no account / keeps the account only in memory | each failed its test                                                                                                                                     |
+| The page's word to the worker not reset at a start                                                                                                                | failed: the told-again test                                                                                                                              |
+| A bootstrap does not tell the worker                                                                                                                              | failed: the told-again test                                                                                                                              |
 
 The reviewer's pin of the separate unmount commit:
 
-| Mutation | Result |
-| --- | --- |
-| `accountStart()` during the pending render | survived |
-| Device-activity fence removed | survived |
-| Presence fence removed | failed |
-| Both of the first two | failed: an `inactive` report for member one |
-| Pending render and presence fence | failed |
+| Mutation                                   | Result                                      |
+| ------------------------------------------ | ------------------------------------------- |
+| `accountStart()` during the pending render | survived                                    |
+| Device-activity fence removed              | survived                                    |
+| Presence fence removed                     | failed                                      |
+| Both of the first two                      | failed: an `inactive` report for member one |
+| Pending render and presence fence          | failed                                      |
 
 Every request today's tree makes from an unmount cleanup is also fenced by generation, so the
 separate commit and the device-activity fence back each other up, and a test can see either only
@@ -278,14 +278,14 @@ alone. A future cleanup without a fence of its own is what the separate commit i
   started, or the account its bootstrap named since, and the next settled record resets it unless
   it names that same account.
 
-| Case | Before | Now |
-| --- | --- | --- |
-| Same account put back by another tab's failed sign-in | reset to `/`, chat and fragment lost | kept |
-| Another account settles | reset | reset |
-| Sign-out, here or in another tab | reset | reset |
-| Address opened while signed out, then a sign-in here or in another tab | kept | kept |
-| Connecting screen, record names member one, then sign-out or another account | kept | reset |
-| Page opened during another tab's change, which then settles elsewhere | kept | reset |
+| Case                                                                         | Before                               | Now   |
+| ---------------------------------------------------------------------------- | ------------------------------------ | ----- |
+| Same account put back by another tab's failed sign-in                        | reset to `/`, chat and fragment lost | kept  |
+| Another account settles                                                      | reset                                | reset |
+| Sign-out, here or in another tab                                             | reset                                | reset |
+| Address opened while signed out, then a sign-in here or in another tab       | kept                                 | kept  |
+| Connecting screen, record names member one, then sign-out or another account | kept                                 | reset |
+| Page opened during another tab's change, which then settles elsewhere        | kept                                 | reset |
 
 - Finding 4: on this branch the online sign-out already ends the push subscription, on the server
   and in the browser, through `notifications.disable()` before `signOutOf` (`src/App.tsx`, as on
@@ -301,19 +301,19 @@ alone. A future cleanup without a fence of its own is what the separate commit i
 
 Each line broken by hand, the suite run, the line restored.
 
-| Mutation | Result |
-| --- | --- |
-| Push not checked again once shown | failed: the held-show sign-out test |
-| Badge not cleared for a late push | failed: the held-show sign-out test |
-| Late push closes whatever the account | failed: the same-account held-show test and the badge test |
-| `readAccount` returns the promise it began with | failed: the in-flight read test |
-| Same-account comparison removed (`!!before`) | failed: the failed-sign-in test |
-| A start takes no account from the record | failed: both connecting-screen tests |
-| `location.hash ||` removed from the reset | failed: the fragment-alone test |
-| The page that opens during a change takes no account | failed: the opened-during-a-change test |
-| The waiting start overwrites a signed-out address (`??=`) | failed: the other-tab sign-in test |
-| A bootstrap's account not recorded | failed: the unnamed-record test |
-| This branch's account-epoch.ts before the change | five new tests failed |
+| Mutation                                                  | Result                                                     |
+| --------------------------------------------------------- | ---------------------------------------------------------- |
+| Push not checked again once shown                         | failed: the held-show sign-out test                        |
+| Badge not cleared for a late push                         | failed: the held-show sign-out test                        |
+| Late push closes whatever the account                     | failed: the same-account held-show test and the badge test |
+| `readAccount` returns the promise it began with           | failed: the in-flight read test                            |
+| Same-account comparison removed (`!!before`)              | failed: the failed-sign-in test                            |
+| A start takes no account from the record                  | failed: both connecting-screen tests                       |
+| `location.hash                                            |                                                            | ` removed from the reset | failed: the fragment-alone test |
+| The page that opens during a change takes no account      | failed: the opened-during-a-change test                    |
+| The waiting start overwrites a signed-out address (`??=`) | failed: the other-tab sign-in test                         |
+| A bootstrap's account not recorded                        | failed: the unnamed-record test                            |
+| This branch's account-epoch.ts before the change          | five new tests failed                                      |
 
 The `??=` row was a bug in the first draft of this change, which the mutation found: a page on
 sign-in would have lost an address opened while signed out when another tab signed in.
@@ -375,12 +375,12 @@ queued behind it. The invariants, as written at the top of that code in
 
 How each nameless mark resolves for a page that opens during it:
 
-| Mark | Began with | Address owner | Settles as another member | Put back |
-| --- | --- | --- | --- | --- |
-| `fromSignedOut`, no user | a fresh or signed-out browser | none | kept | kept |
-| `fromSignedOut`, user one | a sign-out of member one | none | kept | kept |
-| no flag, no user | an account no record named (a sign-in answer without an ID, before any bootstrap) | an unnamed account | dropped | dropped: the browser cannot tell it is the same account |
-| either, gone stale | | the account it began with, or none | bootstrap decides | |
+| Mark                      | Began with                                                                        | Address owner                      | Settles as another member | Put back                                                |
+| ------------------------- | --------------------------------------------------------------------------------- | ---------------------------------- | ------------------------- | ------------------------------------------------------- |
+| `fromSignedOut`, no user  | a fresh or signed-out browser                                                     | none                               | kept                      | kept                                                    |
+| `fromSignedOut`, user one | a sign-out of member one                                                          | none                               | kept                      | kept                                                    |
+| no flag, no user          | an account no record named (a sign-in answer without an ID, before any bootstrap) | an unnamed account                 | dropped                   | dropped: the browser cannot tell it is the same account |
+| either, gone stale        |                                                                                   | the account it began with, or none | bootstrap decides         |                                                         |
 
 A sign-out begins from a tab that drew its account, whose bootstrap names the record first, so a
 nameless sign-out mark needs storage that refused that write. It falls in the third row and drops
@@ -415,28 +415,28 @@ What a tab does with each record another tab can leave, by what the tab shows. C
 already covered keep those tests; `tests/account-epoch.test.ts` adds one case per branch for the
 rest.
 
-| This tab | Record another tab left | Address | Test |
-| --- | --- | --- | --- |
-| Opening | Mark from member one, then one put back | kept | account-epoch: "a mark that began with member one signed in, put back" |
-| Opening | Mark from member one, then a sign-out | dropped | UI: "drops member one's address from a page that opened while another tab was signing them out" |
-| Opening | Mark from member one, then member two | dropped | same branch as the sign-out row |
-| Opening | Mark from signed out, no user, then member two | kept | UI: "keeps an address the person opened while another tab was signing in from signed out" (P3) |
-| Opening | Mark from signed out after member one, then member two | kept | account-epoch: "a mark that began signed out after member one" |
-| Opening | Mark from an unnamed account, then member two | dropped | account-epoch: "a mark that began with an unnamed account" |
-| Opening | A mark gone stale, from member one or from signed out | kept; bootstrap decides | account-epoch: both stale rows |
-| Opening | Settled, unreadable or nothing | kept: the page opened with it | every UI test that opens with an address |
-| Connecting, record names member one | Mark, then a sign-out | dropped | UI: "drops an address member one opened while still connecting" and the fragment-alone test |
-| Showing member one | Mark, then one put back | kept | UI: "keeps member one's address, open chat and fragment when another tab's sign-in fails" |
-| Showing member one | Mark, then member two | dropped | UI: "opens member two's own chat, not the one member one was at" |
-| Showing member one | Mark, then a sign-out | dropped | UI: "leaves no address of member one's on the sign-in screen" |
-| Showing member one | Settled member two with no mark first | dropped | account-epoch |
-| Showing member one | Settled with no account named | dropped | account-epoch |
-| Showing member one | Storage cleared | dropped | account-epoch |
-| Showing member one | Unreadable | dropped, and bootstrap asked | same branch as storage cleared; UI: "treats a record it cannot read as a change" |
-| Showing member one | Same account, new ID (the hint lapsed) | kept | same branch as the put-back row; UI: the hint-lapse test |
-| Showing member one | A mark from signed out, gone stale | dropped | account-epoch: "drops the address when a sign-in that began signed out goes stale" |
-| Sign-in screen | Any record | kept | UI: both "keeps an address the person opened while signed out" tests |
-| Any | A write storage refused | the old record stays, so other tabs see nothing; the writing tab acts alone | UI: "drops member one at its own sign-out when storage refuses every write" |
+| This tab                            | Record another tab left                                | Address                                                                     | Test                                                                                            |
+| ----------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Opening                             | Mark from member one, then one put back                | kept                                                                        | account-epoch: "a mark that began with member one signed in, put back"                          |
+| Opening                             | Mark from member one, then a sign-out                  | dropped                                                                     | UI: "drops member one's address from a page that opened while another tab was signing them out" |
+| Opening                             | Mark from member one, then member two                  | dropped                                                                     | same branch as the sign-out row                                                                 |
+| Opening                             | Mark from signed out, no user, then member two         | kept                                                                        | UI: "keeps an address the person opened while another tab was signing in from signed out" (P3)  |
+| Opening                             | Mark from signed out after member one, then member two | kept                                                                        | account-epoch: "a mark that began signed out after member one"                                  |
+| Opening                             | Mark from an unnamed account, then member two          | dropped                                                                     | account-epoch: "a mark that began with an unnamed account"                                      |
+| Opening                             | A mark gone stale, from member one or from signed out  | kept; bootstrap decides                                                     | account-epoch: both stale rows                                                                  |
+| Opening                             | Settled, unreadable or nothing                         | kept: the page opened with it                                               | every UI test that opens with an address                                                        |
+| Connecting, record names member one | Mark, then a sign-out                                  | dropped                                                                     | UI: "drops an address member one opened while still connecting" and the fragment-alone test     |
+| Showing member one                  | Mark, then one put back                                | kept                                                                        | UI: "keeps member one's address, open chat and fragment when another tab's sign-in fails"       |
+| Showing member one                  | Mark, then member two                                  | dropped                                                                     | UI: "opens member two's own chat, not the one member one was at"                                |
+| Showing member one                  | Mark, then a sign-out                                  | dropped                                                                     | UI: "leaves no address of member one's on the sign-in screen"                                   |
+| Showing member one                  | Settled member two with no mark first                  | dropped                                                                     | account-epoch                                                                                   |
+| Showing member one                  | Settled with no account named                          | dropped                                                                     | account-epoch                                                                                   |
+| Showing member one                  | Storage cleared                                        | dropped                                                                     | account-epoch                                                                                   |
+| Showing member one                  | Unreadable                                             | dropped, and bootstrap asked                                                | same branch as storage cleared; UI: "treats a record it cannot read as a change"                |
+| Showing member one                  | Same account, new ID (the hint lapsed)                 | kept                                                                        | same branch as the put-back row; UI: the hint-lapse test                                        |
+| Showing member one                  | A mark from signed out, gone stale                     | dropped                                                                     | account-epoch: "drops the address when a sign-in that began signed out goes stale"              |
+| Sign-in screen                      | Any record                                             | kept                                                                        | UI: both "keeps an address the person opened while signed out" tests                            |
+| Any                                 | A write storage refused                                | the old record stays, so other tabs see nothing; the writing tab acts alone | UI: "drops member one at its own sign-out when storage refuses every write"                     |
 
 The mark's flag over each record a sign-in or sign-out can begin from (nothing, a sign-out, member
 one, unreadable) is one table in account-epoch.test.ts.
@@ -451,27 +451,27 @@ refused notification; the address went to `/` and the default chat.
 Each line of this round's code broken by hand, both worker test files or both account test files
 run, the line restored:
 
-| Mutation | Result |
-| --- | --- |
-| No generation check after the reads | passed here, and wrongly called redundant: the fifth round found it protects the badge clear, see its red runs |
-| No check after opening the cache | passed, for the same reason: the check after the write stops the step, and the next step writes the latest word over the stale one. Confirmed redundant in the fifth round |
-| Neither of those two | passed here; the first of them is not redundant, so this row proved nothing about it |
-| No check after the write | failed: enumeration, the latest account's badge cleared in 66 orders |
-| No check after `getNotifications` | failed: enumeration, the latest account's notification closed in 36 orders |
-| No check after the badge clear | passed: the check after `getNotifications` follows it. Confirmed redundant in the fifth round |
-| None of the four checks in the account step | failed: the overtaken sign-out test, and 432 orders |
-| No chain | failed: the overtaken sign-out test, and 280 orders (cache 234) |
-| Push sets its badge without the second account check | failed: three named badge tests, and 505 orders |
-| Push step goes on after a newer word arrived | failed: enumeration, 2 orders set a departed account's badge |
-| A refused `showNotification` rejects `waitUntil` | failed: both refused-show tests, and 799 orders |
-| No badge clear at a new account | failed: the restart badge test, and 854 orders |
-| Badge owner kept only in memory | failed: the restart badge test, and 492 orders |
-| Owner recorded before the badge is set | failed: enumeration, 19 orders (this round's first draft) |
-| A mark that began signed out names its account | failed: the P3 UI test and both account-epoch rows that depend on it |
-| The writer counts nothing stored as signed in | failed: the "nothing stored" writer row |
-| The writer counts a sign-out as signed in | failed: the sign-out writer row |
-| The writer counts an unreadable record as signed out | failed: the unreadable writer row |
-| A mark begun over another tab's mark takes its `fromSignedOut` | not run in this round; the fifth round added its row and ran it |
+| Mutation                                                       | Result                                                                                                                                                                     |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No generation check after the reads                            | passed here, and wrongly called redundant: the fifth round found it protects the badge clear, see its red runs                                                             |
+| No check after opening the cache                               | passed, for the same reason: the check after the write stops the step, and the next step writes the latest word over the stale one. Confirmed redundant in the fifth round |
+| Neither of those two                                           | passed here; the first of them is not redundant, so this row proved nothing about it                                                                                       |
+| No check after the write                                       | failed: enumeration, the latest account's badge cleared in 66 orders                                                                                                       |
+| No check after `getNotifications`                              | failed: enumeration, the latest account's notification closed in 36 orders                                                                                                 |
+| No check after the badge clear                                 | passed: the check after `getNotifications` follows it. Confirmed redundant in the fifth round                                                                              |
+| None of the four checks in the account step                    | failed: the overtaken sign-out test, and 432 orders                                                                                                                        |
+| No chain                                                       | failed: the overtaken sign-out test, and 280 orders (cache 234)                                                                                                            |
+| Push sets its badge without the second account check           | failed: three named badge tests, and 505 orders                                                                                                                            |
+| Push step goes on after a newer word arrived                   | failed: enumeration, 2 orders set a departed account's badge                                                                                                               |
+| A refused `showNotification` rejects `waitUntil`               | failed: both refused-show tests, and 799 orders                                                                                                                            |
+| No badge clear at a new account                                | failed: the restart badge test, and 854 orders                                                                                                                             |
+| Badge owner kept only in memory                                | failed: the restart badge test, and 492 orders                                                                                                                             |
+| Owner recorded before the badge is set                         | failed: enumeration, 19 orders (this round's first draft)                                                                                                                  |
+| A mark that began signed out names its account                 | failed: the P3 UI test and both account-epoch rows that depend on it                                                                                                       |
+| The writer counts nothing stored as signed in                  | failed: the "nothing stored" writer row                                                                                                                                    |
+| The writer counts a sign-out as signed in                      | failed: the sign-out writer row                                                                                                                                            |
+| The writer counts an unreadable record as signed out           | failed: the unreadable writer row                                                                                                                                          |
+| A mark begun over another tab's mark takes its `fromSignedOut` | not run in this round; the fifth round added its row and ran it                                                                                                            |
 
 ### Checks on the final head
 
@@ -552,23 +552,23 @@ Each protecting line broken by hand, the line restored. The named tests are in
 `tests/service-worker.test.ts`; "orders" are the seeded walks, 4,000 from seed 1 unless it says
 otherwise.
 
-| Mutation | Result |
-| --- | --- |
-| No check after the account step's reads | failed: the named test "words two, one, two, one"; 4 of 40,000 four-word orders (badge cleared under the latest), none of 4,000 with three words |
-| The chain without its `catch` | failed: the named test where a refused badge record ends a push and the next word still applies |
-| `clearBadge` without `keepBadgeFor(null)` | failed: the named test with exactly one clear across a sign-out and two sign-ins |
-| A refused cache write stops the step | failed: the named test where the sign-out's write is refused and the notification still closes |
-| `restore` without the settle after its display | failed: two named tests (sign-out, and a switch, while the display is on its way); 2 orders (screen) |
-| `restore` without the account check before its display | failed: the named "never displayed" test; 437 orders (shown after its word), none on the screen |
-| `decline` with no account in its notice | failed: the named test; 1,145 orders (screen 744, shown after its word 925) |
-| `decline` without the account check before its notice | failed: the named test; 329 orders (shown after its word) |
-| `decline` without the settle after its notice | failed: the named test; 2 orders (screen) |
-| An unscripted call inside the account step | failed: all 4,000 orders (the refused-call list); the chain swallowed every throw |
-| `accountStart` does not tell a settled sign-out | failed: two UI tests (another tab's sign-out, and a page opened after one) |
-| `accountRefused`'s early return does not tell | failed: the UI test of a page opened with nothing stored |
-| The page does not clear the app badge at a count of zero | failed: the UI test of a page started signed out |
-| A mark begun over a mark takes its `fromSignedOut` | failed: the new writer row |
-| No check after opening the cache; no check after the badge clear | passed, with the named tests and 40,000 four-word orders each: redundant, as the fourth round said |
+| Mutation                                                         | Result                                                                                                                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No check after the account step's reads                          | failed: the named test "words two, one, two, one"; 4 of 40,000 four-word orders (badge cleared under the latest), none of 4,000 with three words |
+| The chain without its `catch`                                    | failed: the named test where a refused badge record ends a push and the next word still applies                                                  |
+| `clearBadge` without `keepBadgeFor(null)`                        | failed: the named test with exactly one clear across a sign-out and two sign-ins                                                                 |
+| A refused cache write stops the step                             | failed: the named test where the sign-out's write is refused and the notification still closes                                                   |
+| `restore` without the settle after its display                   | failed: two named tests (sign-out, and a switch, while the display is on its way); 2 orders (screen)                                             |
+| `restore` without the account check before its display           | failed: the named "never displayed" test; 437 orders (shown after its word), none on the screen                                                  |
+| `decline` with no account in its notice                          | failed: the named test; 1,145 orders (screen 744, shown after its word 925)                                                                      |
+| `decline` without the account check before its notice            | failed: the named test; 329 orders (shown after its word)                                                                                        |
+| `decline` without the settle after its notice                    | failed: the named test; 2 orders (screen)                                                                                                        |
+| An unscripted call inside the account step                       | failed: all 4,000 orders (the refused-call list); the chain swallowed every throw                                                                |
+| `accountStart` does not tell a settled sign-out                  | failed: two UI tests (another tab's sign-out, and a page opened after one)                                                                       |
+| `accountRefused`'s early return does not tell                    | failed: the UI test of a page opened with nothing stored                                                                                         |
+| The page does not clear the app badge at a count of zero         | failed: the UI test of a page started signed out                                                                                                 |
+| A mark begun over a mark takes its `fromSignedOut`               | failed: the new writer row                                                                                                                       |
+| No check after opening the cache; no check after the badge clear | passed, with the named tests and 40,000 four-word orders each: redundant, as the fourth round said                                               |
 
 The first draft of `decline` kept a refused notice's rejection, and the new Decline events failed
 363 of 4,000 orders on `waitUntil`. It is caught now.

@@ -11,13 +11,13 @@ A send's photos are staged on the session every client shares (`image.attach` ap
 turn takes the list when `_run_prompt_submit` admits it (`prompt_turn.py:150-152`). It was already recorded as a known
 defect in `docs/HermesCapabilityMatrix.md`. Its length, step by step, for a send with one photo:
 
-| Step | Whose | Time |
-| --- | --- | --- |
-| `image.attach` after its append: `_attached_image_result`, a header read (`methods_prompt.py:1351-1355`) | Hermes | one file read per photo |
-| Registering the request ID, the check of the list, the call | the add-on | a dict insert and one list copy: no I/O |
-| `prompt.submit` up to marking the session running: stop phrase, lookup, ownership slot, transport rebind, busy check (`:835-909`) | Hermes | unbounded by the add-on; the ownership slot can wait on another gateway |
-| Marking it running (`:806`), row write, agent build, thread start (`:918-972`), `_run_after_agent_ready` waiting for a deferred build (`:674-713`) | Hermes | seconds on a cold session |
-| `_admit_prompt_turn`'s snapshot (`prompt_turn.py:150-152`) | Hermes | closes it |
+| Step                                                                                                                                               | Whose      | Time                                                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------- |
+| `image.attach` after its append: `_attached_image_result`, a header read (`methods_prompt.py:1351-1355`)                                           | Hermes     | one file read per photo                                                 |
+| Registering the request ID, the check of the list, the call                                                                                        | the add-on | a dict insert and one list copy: no I/O                                 |
+| `prompt.submit` up to marking the session running: stop phrase, lookup, ownership slot, transport rebind, busy check (`:835-909`)                  | Hermes     | unbounded by the add-on; the ownership slot can wait on another gateway |
+| Marking it running (`:806`), row write, agent build, thread start (`:918-972`), `_run_after_agent_ready` waiting for a deferred build (`:674-713`) | Hermes     | seconds on a cold session                                               |
+| `_admit_prompt_turn`'s snapshot (`prompt_turn.py:150-152`)                                                                                         | Hermes     | closes it                                                               |
 
 Who can take the photo: a turn another client admits in the first rows takes it with its own snapshot; a prompt that finds the
 session running in the last rows claims it for its own queue entry (`session_auto_continue.py:418-420`). I could not measure
@@ -71,34 +71,34 @@ uses upstream's `image_paths` key:
 Each line broken by hand with `python -B`, `PYTHONDONTWRITEBYTECODE=1` and `__pycache__` cleared, the new file run (22 tests),
 the file restored. 29 breaks: 26 killed at once, 3 survived, and are resolved below.
 
-| Broken line | Result |
-| --- | --- |
-| the gate never finds a photo gone | 3 failed |
-| the gate's refusal never taken | 3 failed |
-| the refusal keeps the registered request ID | 1 failed (after adding `turn_requests == {}`; it survived before) |
-| the refusal leaves the photos staged | 2 failed |
-| the refusal leaves the receipt unrefused | 3 failed |
-| the answered path not recorded | 3 failed |
-| a photo attached twice counted once | 1 failed |
-| the turn-start check never runs | 4 failed |
-| the count at turn start fixed at 1 | 1 failed |
-| the turn-start check's exception not caught | 1 failed |
-| the claim carries no photos | 4 failed |
-| the registered request carries no photos | 4 failed |
-| `queued` or `joined` not accounted (each) | 2 failed |
-| the accounting not noted | 4 failed |
-| `joined` leaves the photos staged | 1 failed |
-| `joined` reports none | 2 failed |
-| queued, no entry still said missing | 1 failed |
-| queued, entries' photos not looked in | 1 failed |
-| queued, the list not looked in | 2 failed |
-| the answer's count left in memory | 1 failed |
-| lookup ignores the count noted before the answer | 5 failed |
-| a count of any type, or 0, shown | 1 error, 1 failed |
-| a zero count noted | 1 failed (after adding a test; it survived before) |
-| the count lowered by a later note | 1 failed |
-| a count before the answer not kept | 5 failed |
-| plural and singular swapped | 3 failed |
+| Broken line                                      | Result                                                            |
+| ------------------------------------------------ | ----------------------------------------------------------------- |
+| the gate never finds a photo gone                | 3 failed                                                          |
+| the gate's refusal never taken                   | 3 failed                                                          |
+| the refusal keeps the registered request ID      | 1 failed (after adding `turn_requests == {}`; it survived before) |
+| the refusal leaves the photos staged             | 2 failed                                                          |
+| the refusal leaves the receipt unrefused         | 3 failed                                                          |
+| the answered path not recorded                   | 3 failed                                                          |
+| a photo attached twice counted once              | 1 failed                                                          |
+| the turn-start check never runs                  | 4 failed                                                          |
+| the count at turn start fixed at 1               | 1 failed                                                          |
+| the turn-start check's exception not caught      | 1 failed                                                          |
+| the claim carries no photos                      | 4 failed                                                          |
+| the registered request carries no photos         | 4 failed                                                          |
+| `queued` or `joined` not accounted (each)        | 2 failed                                                          |
+| the accounting not noted                         | 4 failed                                                          |
+| `joined` leaves the photos staged                | 1 failed                                                          |
+| `joined` reports none                            | 2 failed                                                          |
+| queued, no entry still said missing              | 1 failed                                                          |
+| queued, entries' photos not looked in            | 1 failed                                                          |
+| queued, the list not looked in                   | 2 failed                                                          |
+| the answer's count left in memory                | 1 failed                                                          |
+| lookup ignores the count noted before the answer | 5 failed                                                          |
+| a count of any type, or 0, shown                 | 1 error, 1 failed                                                 |
+| a zero count noted                               | 1 failed (after adding a test; it survived before)                |
+| the count lowered by a later note                | 1 failed                                                          |
+| a count before the answer not kept               | 5 failed                                                          |
+| plural and singular swapped                      | 3 failed                                                          |
 
 The third survivor, clearing the memory entry after amending a saved answer, is unreachable: the entry exists only until the
 answer is saved, and the answer is saved under the same lock, so the line was removed instead of tested.
@@ -107,15 +107,15 @@ answer is saved, and the answer is saved under the same lock, so the line was re
 
 `.agents/tools/check-all --py always` on the committed tree over `origin/main` at `7d794ef` (the commit before this entry):
 
-| Check | Result | Queued | Run | Counts |
-| --- | --- | --- | --- | --- |
-| typecheck | pass | - | 0.6s | - |
-| lint | pass | - | 0.2s | - |
-| ruff | pass | - | 0.0s | - |
-| test | pass | 3m30s | 17.8s | 208 files, 3771 tests |
-| build | pass | - | 1.7s | 894 modules |
-| e2e | pass | 7m03s | 2m00s | 55 tests |
-| py | pass | - | 5m10s | 47 files |
+| Check     | Result | Queued | Run   | Counts                |
+| --------- | ------ | ------ | ----- | --------------------- |
+| typecheck | pass   | -      | 0.6s  | -                     |
+| lint      | pass   | -      | 0.2s  | -                     |
+| ruff      | pass   | -      | 0.0s  | -                     |
+| test      | pass   | 3m30s  | 17.8s | 208 files, 3771 tests |
+| build     | pass   | -      | 1.7s  | 894 modules           |
+| e2e       | pass   | 7m03s  | 2m00s | 55 tests              |
+| py        | pass   | -      | 5m10s | 47 files              |
 
 The queue time is other worktrees' suites holding the machine's one heavy slot. Before it, the Python files that exercise
 admission passed on their own: `hermes_turn_binding_test.py` (39), `hermes_send_lanes_test.py` (16),
@@ -163,26 +163,25 @@ so the test still reaches the list check.
 run left one survivor, the text check, because the second test's entry held the photo and passed without it; the entry now
 holds none, and the rerun killed all four.
 
-| Broken line | Result |
-| --- | --- |
-| the lookup reads every entry's photos (the old behavior) | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
-| the lookup reads the first entry, not the last | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
-| the entry's text is not checked against the send's (before the test fix) | survived |
-| the entry's text is not checked against the send's (after) | failed (the test that is not the last entry) |
-| no entry still said missing | failed |
+| Broken line                                                              | Result                                                                     |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| the lookup reads every entry's photos (the old behavior)                 | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
+| the lookup reads the first entry, not the last                           | failed: `test_a_photo_in_another_senders_queue_entry_is_not_the_sends_own` |
+| the entry's text is not checked against the send's (before the test fix) | survived                                                                   |
+| the entry's text is not checked against the send's (after)               | failed (the test that is not the last entry)                               |
+| no entry still said missing                                              | failed                                                                     |
 
 ### Checks
 
 `.agents/tools/check-all --py always` on the committed tree (the commit before this entry), over the merge of
 `origin/main` at `fe4026f0`:
 
-| Check | Result | Queued | Run | Counts |
-| --- | --- | --- | --- | --- |
-| typecheck | pass | - | 0.7s | - |
-| lint | pass | - | 0.2s | - |
-| ruff | pass | - | 0.0s | - |
-| test | pass | - | 17.6s | 209 files, 3779 tests |
-| build | pass | - | 2.7s | 894 modules |
-| e2e | pass | 13.5s | 1m58s | 55 tests |
-| py | pass | - | 5m16s | 48 files |
-
+| Check     | Result | Queued | Run   | Counts                |
+| --------- | ------ | ------ | ----- | --------------------- |
+| typecheck | pass   | -      | 0.7s  | -                     |
+| lint      | pass   | -      | 0.2s  | -                     |
+| ruff      | pass   | -      | 0.0s  | -                     |
+| test      | pass   | -      | 17.6s | 209 files, 3779 tests |
+| build     | pass   | -      | 2.7s  | 894 modules           |
+| e2e       | pass   | 13.5s  | 1m58s | 55 tests              |
+| py        | pass   | -      | 5m16s | 48 files              |

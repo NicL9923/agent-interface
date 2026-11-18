@@ -29,14 +29,14 @@ receipt has `admittedVersion`.
 
 Readers of a receipt's `turn` for a lookup-recovered typed stop (`none`):
 
-| Reader | Before | Now |
-| --- | --- | --- |
-| `SubmissionRepository.receipt` (`store-submissions.ts`), reached from `GET /submissions/:id` and Talk's refresh | no turn, so the draft was cleared | draft and photo stay, `sentRevision` unchanged |
-| `GET /submissions/:id` (`conversation-routes.ts`) | answered the recorded turn only | answers the lookup's turn, else the recorded one |
-| `use-submission.ts` `notTaken` | false, send treated as taken | true, words go back into the draft; the composer shows the fixed fallback text, since a lookup carries no `message` |
-| `sent-echo.ts` | echo kept | echo dropped at acceptance |
-| `talk.ts` `talkAnswer` | waited for a turn that never comes | answers `refused` with the fallback text |
-| `conversation-routes.ts` timing (`receipt.turn`) | admission answers only | same; a lookup is never timed |
+| Reader                                                                                                          | Before                             | Now                                                                                                                 |
+| --------------------------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `SubmissionRepository.receipt` (`store-submissions.ts`), reached from `GET /submissions/:id` and Talk's refresh | no turn, so the draft was cleared  | draft and photo stay, `sentRevision` unchanged                                                                      |
+| `GET /submissions/:id` (`conversation-routes.ts`)                                                               | answered the recorded turn only    | answers the lookup's turn, else the recorded one                                                                    |
+| `use-submission.ts` `notTaken`                                                                                  | false, send treated as taken       | true, words go back into the draft; the composer shows the fixed fallback text, since a lookup carries no `message` |
+| `sent-echo.ts`                                                                                                  | echo kept                          | echo dropped at acceptance                                                                                          |
+| `talk.ts` `talkAnswer`                                                                                          | waited for a turn that never comes | answers `refused` with the fallback text                                                                            |
+| `conversation-routes.ts` timing (`receipt.turn`)                                                                | admission answers only             | same; a lookup is never timed                                                                                       |
 
 For a lookup-recovered `started`, `sent-echo.ts` `settledHere` has no `admittedVersion` and falls back to the
 copy-version rule, as for `queued`. The web client needed no change; `tests/thinking-at-send-ui.test.ts` already feeds
@@ -61,18 +61,18 @@ Docs: `docs/native-api.md` (Admission turn, timing), `docs/HermesCapabilityMatri
 Each replacement applied in turn, the named files run (Python with `python3 -B`, `PYTHONDONTWRITEBYTECODE=1`, every
 `__pycache__` deleted; vitest for TypeScript), then restored. All ten went red.
 
-| Broken | Red |
-| --- | --- |
-| `streaming` answered with no turn | table, typed-stop and pre-change replay tests |
-| Lookup carries no turn | table and typed-stop tests |
-| Lookup invents `started` for a saved answer without a turn | refusal, steer and pre-change tests |
-| `started` not saved with the answer | table, typed-stop, pre-change, unknown-answer tests |
-| Missing turn read as `started` | adapter test, receipt-turn tests |
-| Explicit `started` read as `unknown` | adapter test |
-| A refusal keeps its turn | adapter test |
-| A steer keeps its turn | adapter test |
-| The recorded turn wins over the lookup's | receipt-turn "the add-on saved" test |
-| The recorded turn ignored when the lookup has none | receipt-turn tests |
+| Broken                                                     | Red                                                 |
+| ---------------------------------------------------------- | --------------------------------------------------- |
+| `streaming` answered with no turn                          | table, typed-stop and pre-change replay tests       |
+| Lookup carries no turn                                     | table and typed-stop tests                          |
+| Lookup invents `started` for a saved answer without a turn | refusal, steer and pre-change tests                 |
+| `started` not saved with the answer                        | table, typed-stop, pre-change, unknown-answer tests |
+| Missing turn read as `started`                             | adapter test, receipt-turn tests                    |
+| Explicit `started` read as `unknown`                       | adapter test                                        |
+| A refusal keeps its turn                                   | adapter test                                        |
+| A steer keeps its turn                                     | adapter test                                        |
+| The recorded turn wins over the lookup's                   | receipt-turn "the add-on saved" test                |
+| The recorded turn ignored when the lookup has none         | receipt-turn tests                                  |
 
 ## Checks
 

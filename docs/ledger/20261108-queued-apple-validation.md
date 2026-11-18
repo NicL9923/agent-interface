@@ -36,8 +36,7 @@ Logs live under `/Volumes/DevSSD/scratch/apple-validation-rollout-20261108/`.
 After merging main, native validation at
 `135350652b66282f6b9ef6bcab98e0759aa76846` again passed all 20
 PresentationTests. The identical second invocation returned the original passing
-summary and result bundle without building or running tests. Both commands exited
-0. The enclosing shared lock queued for 285.265 seconds and was held for
+summary and result bundle without building or running tests. Both commands exited 0. The enclosing shared lock queued for 285.265 seconds and was held for
 157.332 seconds, including device setup, both requests and shutdown. The simulator
 was shut down before release.
 

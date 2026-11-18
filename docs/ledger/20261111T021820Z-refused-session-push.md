@@ -61,18 +61,18 @@ test did not configure. `tests/notifications.test.ts` runs the real `BackgroundW
 Each protecting line broken by hand, the file restored. The runner is a scratch script that applies one replacement, runs
 `tests/push-status-api.test.ts` and `tests/notifications.test.ts`, and restores the file.
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                       | Result                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------- |
 | Any other member's endpoint refused, as before | failed: the takeover, the body-identity and both delivery tests (4) |
-| No key proof, any member takes any endpoint | failed: the four refusal tests (4) |
-| Upsert without `user_id=excluded.user_id` | failed: the takeover, the body-identity and both delivery tests (4) |
-| `p256dh` not compared | failed: the different-`p256dh` refusal |
-| `auth` not compared | failed: the two `auth` refusals |
-| The length check in `sameKeys` removed | failed: the four refusal tests, which now throw |
-| `timingSafeEqual` replaced by `true` | failed: the same-length `auth` refusal (added for this) |
-| `timingSafeEqual` replaced by `a === b` | survived: equivalent |
-| No `held` check before a send | failed: the in-flight takeover test |
-| The taken endpoint not recorded `dead:` | failed: the in-flight takeover test |
+| No key proof, any member takes any endpoint    | failed: the four refusal tests (4)                                  |
+| Upsert without `user_id=excluded.user_id`      | failed: the takeover, the body-identity and both delivery tests (4) |
+| `p256dh` not compared                          | failed: the different-`p256dh` refusal                              |
+| `auth` not compared                            | failed: the two `auth` refusals                                     |
+| The length check in `sameKeys` removed         | failed: the four refusal tests, which now throw                     |
+| `timingSafeEqual` replaced by `true`           | failed: the same-length `auth` refusal (added for this)             |
+| `timingSafeEqual` replaced by `a === b`        | survived: equivalent                                                |
+| No `held` check before a send                  | failed: the in-flight takeover test                                 |
+| The taken endpoint not recorded `dead:`        | failed: the in-flight takeover test                                 |
 
 The first run of the same-length mutation survived; the same-length `auth` case was added and it went red.
 

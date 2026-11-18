@@ -52,13 +52,13 @@ branch: the server change follows separately.
 Each line was broken with a scripted text replacement, the test files run, and the source restored and checked.
 Every one went red:
 
-| Broken | Red |
-| --- | --- |
-| No `turn` reported | the new-task table (3 cases) and the preempt sequence (2 cases) |
-| A steer's native answer read as a `turn` | `test_a_steer_carries_no_turn_though_hermes_answers_it_queued` |
-| `turn` left out of the saved answer | the new-task table's replay checks |
-| `steered`, `redirected` or `queued` missing from the map | the table, and the preempt sequence for the last two |
-| The capability not reported | `test_the_add_on_says_it_reports_the_turn` |
+| Broken                                                   | Red                                                             |
+| -------------------------------------------------------- | --------------------------------------------------------------- |
+| No `turn` reported                                       | the new-task table (3 cases) and the preempt sequence (2 cases) |
+| A steer's native answer read as a `turn`                 | `test_a_steer_carries_no_turn_though_hermes_answers_it_queued`  |
+| `turn` left out of the saved answer                      | the new-task table's replay checks                              |
+| `steered`, `redirected` or `queued` missing from the map | the table, and the preempt sequence for the last two            |
+| The capability not reported                              | `test_the_add_on_says_it_reports_the_turn`                      |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
 
@@ -109,13 +109,13 @@ the send-lanes fixes ([20261110T083417Z-send-lanes.md](20261110T083417Z-send-lan
 
 ## Review red proof
 
-| Broken | Red |
-| --- | --- |
-| A typed stop read as an unknown answer | `test_a_typed_stop_admits_nothing_and_holds_up_no_later_send` |
-| A typed stop's receipt left unsettled | the same test: the next send is refused as finishing |
-| A typed stop clears the interruption review | the same test |
-| An unknown answer reported with no `turn` | the answer table, 3 cases |
-| `streaming` not the only answer read as started | the answer table and the typed-stop test |
+| Broken                                                    | Red                                                                                  |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| A typed stop read as an unknown answer                    | `test_a_typed_stop_admits_nothing_and_holds_up_no_later_send`                        |
+| A typed stop's receipt left unsettled                     | the same test: the next send is refused as finishing                                 |
+| A typed stop clears the interruption review               | the same test                                                                        |
+| An unknown answer reported with no `turn`                 | the answer table, 3 cases                                                            |
+| `streaming` not the only answer read as started           | the answer table and the typed-stop test                                             |
 | A queued or joined send bound by `main`'s completion hook | `test_a_new_task_hermes_queued_or_joined_says_so_and_is_bound_to_no_row`, both cases |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
@@ -139,11 +139,11 @@ its root's finished turn. See
 - `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
   251 tests passed.
 
-| Broken | Red |
-| --- | --- |
+| Broken                                                      | Red                                                                      |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `ea84953`'s add-on, with image recovery, under the new test | the queued-or-joined test, image case: `alice-1` shown on her queued row |
-| `main`'s completion hook restored | the queued-or-joined test, among others |
-| The 15 mutants of the binding entry's second round | each its own test, on this merged source |
+| `main`'s completion hook restored                           | the queued-or-joined test, among others                                  |
+| The 15 mutants of the binding entry's second round          | each its own test, on this merged source                                 |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
 
@@ -243,12 +243,12 @@ before it, `['/uploads/desktop/chart.png', '/uploads/shared/photo.png']`.
 Each line was then broken with a scripted text replacement, the test run, and the source restored and checked. The script
 runs tests without writing bytecode and deletes the source's `__pycache__` after restoring:
 
-| Broken | Red |
-| --- | --- |
-| A typed stop's images left staged | the typed-stop test, both cases |
-| A typed stop clearing every staged image | the typed-stop test, with an image staged before it |
-| An unknown answer's images removed too | `test_an_answer_the_add_on_does_not_know_leaves_its_photo_for_the_turn_it_may_have_started` |
-| An unknown answer settled, as the reviewer's probe did | `test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started` |
+| Broken                                                 | Red                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| A typed stop's images left staged                      | the typed-stop test, both cases                                                             |
+| A typed stop clearing every staged image               | the typed-stop test, with an image staged before it                                         |
+| An unknown answer's images removed too                 | `test_an_answer_the_add_on_does_not_know_leaves_its_photo_for_the_turn_it_may_have_started` |
+| An unknown answer settled, as the reviewer's probe did | `test_an_unknown_answer_stays_open_for_the_turn_it_may_have_started`                        |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production.
 
@@ -317,16 +317,16 @@ survived its first two.
 Each line was then broken with a scripted text replacement, the binding tests and `tests/hermes_extension_journal_test.py`
 run without writing bytecode, and the source restored, checked by hash, and every `__pycache__` deleted:
 
-| Broken | Red |
-| --- | --- |
-| Every new entry recorded, `main`'s staging | the attach test, all five cases |
+| Broken                                              | Red                                                                            |
+| --------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Every new entry recorded, `main`'s staging          | the attach test, all five cases                                                |
 | The answer's path only, no fallback after a failure | the attach test, both after-append cases; the journal's image-preparation case |
-| The symlink-resolved path dropped from the fallback | the attach test, the resolved-path case |
-| Entries staged before the call not subtracted | the attach test, the fails-before-its-append case |
-| Every equal new entry claimed, not one | the attach test, the same-photo case |
-| Copy and store, `main`'s cleanup | the cleanup test: the scan lost |
-| The cleanup outside `history_lock` | the cleanup test: the lock was free at the write |
-| A typed stop's images left staged | the attach test, the cleanup test and the earlier typed-stop test |
+| The symlink-resolved path dropped from the fallback | the attach test, the resolved-path case                                        |
+| Entries staged before the call not subtracted       | the attach test, the fails-before-its-append case                              |
+| Every equal new entry claimed, not one              | the attach test, the same-photo case                                           |
+| Copy and store, `main`'s cleanup                    | the cleanup test: the scan lost                                                |
+| The cleanup outside `history_lock`                  | the cleanup test: the lock was free at the write                               |
+| A typed stop's images left staged                   | the attach test, the cleanup test and the earlier typed-stop test              |
 
 Two mutants survived this round, the answer's path ignored in favor of the fallback and the first equal entry removed
 instead of the last. They are not equivalent; the fourth round kills both.
@@ -390,15 +390,15 @@ Each line was then broken with a scripted text replacement on the fixed source, 
 `tests/hermes_extension_journal_test.py` run with `-B` and `PYTHONDONTWRITEBYTECODE=1`, and the source restored, checked
 by hash, and every `__pycache__` deleted:
 
-| Broken | Red |
-| --- | --- |
-| The absolute-path guard dropped | the rewrite test, relative case |
-| The `$` guard dropped | the rewrite test, variable case |
-| The `\` guard dropped | the rewrite test, escaped-space case |
-| The answered path ignored in favor of the fallback | the rewrite test, relative answered case |
-| The first equal entry removed, not the last | the typed-stop test, `[photo, scan]` staged before: `['…/scan.png', '…/photo.png'] != ['…/photo.png', '…/scan.png']` |
-| The fallback without symlink resolution | the attach test, resolved-path case |
-| No fallback after a failure | the attach test, both after-append cases; the journal's image-preparation case |
+| Broken                                             | Red                                                                                                                  |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| The absolute-path guard dropped                    | the rewrite test, relative case                                                                                      |
+| The `$` guard dropped                              | the rewrite test, variable case                                                                                      |
+| The `\` guard dropped                              | the rewrite test, escaped-space case                                                                                 |
+| The answered path ignored in favor of the fallback | the rewrite test, relative answered case                                                                             |
+| The first equal entry removed, not the last        | the typed-stop test, `[photo, scan]` staged before: `['…/scan.png', '…/photo.png'] != ['…/photo.png', '…/scan.png']` |
+| The fallback without symlink resolution            | the attach test, resolved-path case                                                                                  |
+| No fallback after a failure                        | the attach test, both after-append cases; the journal's image-preparation case                                       |
 
 No mutant of this round survived.
 

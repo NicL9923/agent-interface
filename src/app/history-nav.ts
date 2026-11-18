@@ -42,7 +42,7 @@ export function leaveAccountEntries(): Promise<void> {
   // The entry stepped in from is the one Forward returns to, so it names nothing either.
   history.replaceState(null, "", "/");
   if (depth === 0) return Promise.resolve();
-  leaving = new Promise<void>(resolve => {
+  leaving = new Promise<void>((resolve) => {
     const landed = () => {
       window.removeEventListener("popstate", landed);
       clearTimeout(timer);
@@ -74,11 +74,15 @@ export function useBackNavigation({ depth, stepBack, stepForward, syncUrl }: Opt
   const expected = useRef<number | null>(null);
   const [turn, setTurn] = useState(0);
   const latest = useRef({ stepBack, stepForward, syncUrl });
-  useEffect(() => { shown.current = depth; latest.current = { stepBack, stepForward, syncUrl }; });
+  useEffect(() => {
+    shown.current = depth;
+    latest.current = { stepBack, stepForward, syncUrl };
+  });
 
   useEffect(() => {
     const popped = (event: PopStateEvent) => {
-      const landed = depthOf(event.state), ours = expected.current === landed;
+      const landed = depthOf(event.state),
+        ours = expected.current === landed;
       expected.current = null;
       if (ours) latest.current.syncUrl();
       else if (landed < shown.current) {
@@ -86,7 +90,7 @@ export function useBackNavigation({ depth, stepBack, stepForward, syncUrl }: Opt
         if (!latest.current.stepBack()) return;
       } else if (landed > shown.current) latest.current.stepForward();
       // Something stayed open or came back, so the screen may be a step in from the entry it landed on.
-      setTurn(count => count + 1);
+      setTurn((count) => count + 1);
     };
     window.addEventListener("popstate", popped);
     return () => window.removeEventListener("popstate", popped);
@@ -96,7 +100,8 @@ export function useBackNavigation({ depth, stepBack, stepForward, syncUrl }: Opt
     const landed = depthOf(history.state);
     if (depth > landed) {
       // The entry stepped in from stands for home, so a Back that lands on it, even after a reload, shows home.
-      if ((history.state as Record<string, unknown> | null)?.[KEY] === undefined) history.replaceState({ [KEY]: 0 }, "", location.href);
+      if ((history.state as Record<string, unknown> | null)?.[KEY] === undefined)
+        history.replaceState({ [KEY]: 0 }, "", location.href);
       history.pushState({ [KEY]: depth }, "", location.href);
     } else if (depth < landed) {
       expected.current = depth;

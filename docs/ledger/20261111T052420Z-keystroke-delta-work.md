@@ -27,14 +27,14 @@ Same tests run on main's sources (the four changed files restored from `origin/m
 through the real client against a fake fetch and event stream; `Date.parse` is counted per message time, and the header's renders
 are counted at its 42 px avatar.
 
-| | main | this branch |
-| --- | --- | --- |
-| header renders, 5 keystrokes | 5 | 0 |
-| scans of the saved messages, 5 keystrokes | 5 | 0 |
-| scans, 3 streamed deltas | 9 | 0 |
-| scans, 1 delta under StrictMode | 6 | 0 |
-| App commits, 5 keystrokes (React `Profiler`) | 5 | 5 |
-| scans when a message is saved | at least 1 | at least 1, and the delivered run leaves the transcript |
+|                                              | main       | this branch                                             |
+| -------------------------------------------- | ---------- | ------------------------------------------------------- |
+| header renders, 5 keystrokes                 | 5          | 0                                                       |
+| scans of the saved messages, 5 keystrokes    | 5          | 0                                                       |
+| scans, 3 streamed deltas                     | 9          | 0                                                       |
+| scans, 1 delta under StrictMode              | 6          | 0                                                       |
+| App commits, 5 keystrokes (React `Profiler`) | 5          | 5                                                       |
+| scans when a message is saved                | at least 1 | at least 1, and the delivered run leaves the transcript |
 
 The `Profiler` count stays at one commit per keystroke on both: it cannot show the header's saving, because a `Profiler` reports a commit
 when its own parent re-renders even if the memo below bails out, so the header is counted at its leaf. The isolated header tests
@@ -51,16 +51,16 @@ when its own parent re-renders even if the memo below bails out, so the header i
 
 ## Red runs
 
-| Broken | Result |
-| --- | --- |
-| `memo` removed from `ChatHeader` | header test and the isolated "same props" test red |
-| inline `onDetails` back in `App` | "does not render the chat header again" red (memo alone is not enough) |
-| `useLatestMessageAt` without its `useMemo` | 4 red: both keystroke/delta scan tests, StrictMode, the hook's read count |
-| `use-routine-runs` memo keyed on `messages` again | delta and StrictMode scan tests red |
-| `sameRows` always false | 4 red: list identity, read count, delta, StrictMode |
-| `sameRows` compares length only | "returns a new list when a saved message is edited" red |
+| Broken                                                                    | Result                                                                                                                                                         |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `memo` removed from `ChatHeader`                                          | header test and the isolated "same props" test red                                                                                                             |
+| inline `onDetails` back in `App`                                          | "does not render the chat header again" red (memo alone is not enough)                                                                                         |
+| `useLatestMessageAt` without its `useMemo`                                | 4 red: both keystroke/delta scan tests, StrictMode, the hook's read count                                                                                      |
+| `use-routine-runs` memo keyed on `messages` again                         | delta and StrictMode scan tests red                                                                                                                            |
+| `sameRows` always false                                                   | 4 red: list identity, read count, delta, StrictMode                                                                                                            |
+| `sameRows` compares length only                                           | "returns a new list when a saved message is edited" red                                                                                                        |
 | `useLatestMessageAt`'s `useMemo` dependencies cut to `[bot]` (review fix) | "moves when one arrives" red: `10:00` where `11:00` is expected. It survived before: each step built a fresh roster row, so the memo recomputed on `bot` alone |
-| the same dependencies cut to `[saved]` | the same test red at its roster step: `10:30` where `10:00` is expected |
+| the same dependencies cut to `[saved]`                                    | the same test red at its roster step: `10:30` where `10:00` is expected                                                                                        |
 
 ## Review fix (Claude Opus 5.5 on `18ad9c7`)
 

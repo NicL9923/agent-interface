@@ -14,18 +14,18 @@ docs/Plan.md forbids an animation or status claiming work continues when its sta
 the detail "Can't check on this right now", which the widget shows (`ios/Shared/Widgets/WidgetViews.swift`), and while
 every running row is held no heartbeat is sent, so the 15-minute stale date lapses and iOS marks the card out of date.
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| Heartbeat sent while every running row is held | `holds work when a conversation read fails despite an idle roster` | a push was sent during the 30 held minutes |
-| Held row keeps its old detail | same test | the detail was not "Can't check on this right now" |
+| Break                                          | Test                                                               | Failure                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------- |
+| Heartbeat sent while every running row is held | `holds work when a conversation read fails despite an idle roster` | a push was sent during the 30 held minutes         |
+| Held row keeps its old detail                  | same test                                                          | the detail was not "Can't check on this right now" |
 
 Both restored; `tests/live-activity.test.ts` passed 42 of 42, with typecheck and lint clean.
 
 GPT-6.1 Sol's review of that fix found the held check read only the four displayed rows, so a fresh assistant past
 the fourth lost its heartbeat. It now reads every observed row.
 
-| Break | Test | Failure |
-| --- | --- | --- |
+| Break                                   | Test                                                                               | Failure                     |
+| --------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------- |
 | Held check over the displayed rows only | `keeps the heartbeat while a running assistant past the fourth row is still fresh` | no heartbeat in six minutes |
 
 Restored; 43 of 43 pass.

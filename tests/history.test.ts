@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { HISTORY_PAGE_TURNS, historyWindow } from "../src/shared/history.js";
 import type { Message } from "../src/shared/types.js";
 // Each turn is a prompt, a tool row and a reply.
-const history = (turns: number, lead: Message[] = []): Message[] => [...lead, ...Array.from({ length: turns }, (_, turn) => [
-  { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}` },
-  { id: `t${turn}`, role: "tool" as const, text: "" },
-  { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}` },
-]).flat()];
-const ids = (messages: Message[]) => messages.map(message => message.id);
+const history = (turns: number, lead: Message[] = []): Message[] => [
+  ...lead,
+  ...Array.from({ length: turns }, (_, turn) => [
+    { id: `p${turn}`, role: "user" as const, text: `Prompt ${turn}` },
+    { id: `t${turn}`, role: "tool" as const, text: "" },
+    { id: `a${turn}`, role: "assistant" as const, text: `Reply ${turn}` },
+  ]).flat(),
+];
+const ids = (messages: Message[]) => messages.map((message) => message.id);
 describe("conversation history window", () => {
   it("opens on the latest page, starting at a prompt", () => {
     const messages = history(HISTORY_PAGE_TURNS + 5);

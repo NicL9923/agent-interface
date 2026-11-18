@@ -32,29 +32,29 @@ The roster loop in `bot-routes.ts` matched a deleted bot by the text "Unknown He
 Each line was broken by hand in the working tree, the named test run alone, and the file restored byte for byte
 (checked by SHA-256). Every test went red.
 
-| Mutation | Test | Result |
-| --- | --- | --- |
-| `hermes-files.ts` unsigned ID throws a plain `Error` | answers a file ID this server did not issue with 404 | failed |
-| `bot-routes.ts` empty-ID guard removed | refuses a new assistant whose name makes no ID | failed |
-| `conversation-routes.ts` claim check removed | sends only the first decision to Hermes | failed |
-| `conversation-routes.ts` claim never released | lets the approval be decided again after a decision Hermes failed | failed |
-| `store-submissions.ts` `ON CONFLICT DO NOTHING` removed | keeps the first decision recorded | failed |
-| `hermes.ts` expired approval throws a plain `Error` | answers an approval Hermes no longer has open with 409 | failed |
-| `hermes.ts` saveBot empty-ID guard removed | refuses a new profile whose name makes no ID | failed |
-| `hermes.ts` botDetail missing profile throws a plain `Error` | reports a profile deleted since the roster read | failed |
-| `bot-routes.ts` deleted bot matched by message again | drops a bot deleted between reads (both routes) | failed |
-| `Artifacts.tsx` 404 branch removed | reports text download failures | failed |
+| Mutation                                                     | Test                                                              | Result |
+| ------------------------------------------------------------ | ----------------------------------------------------------------- | ------ |
+| `hermes-files.ts` unsigned ID throws a plain `Error`         | answers a file ID this server did not issue with 404              | failed |
+| `bot-routes.ts` empty-ID guard removed                       | refuses a new assistant whose name makes no ID                    | failed |
+| `conversation-routes.ts` claim check removed                 | sends only the first decision to Hermes                           | failed |
+| `conversation-routes.ts` claim never released                | lets the approval be decided again after a decision Hermes failed | failed |
+| `store-submissions.ts` `ON CONFLICT DO NOTHING` removed      | keeps the first decision recorded                                 | failed |
+| `hermes.ts` expired approval throws a plain `Error`          | answers an approval Hermes no longer has open with 409            | failed |
+| `hermes.ts` saveBot empty-ID guard removed                   | refuses a new profile whose name makes no ID                      | failed |
+| `hermes.ts` botDetail missing profile throws a plain `Error` | reports a profile deleted since the roster read                   | failed |
+| `bot-routes.ts` deleted bot matched by message again         | drops a bot deleted between reads (both routes)                   | failed |
+| `Artifacts.tsx` 404 branch removed                           | reports text download failures                                    | failed |
 
 ## Checks
 
 `.agents/tools/check-all --keep-going` on the rebased commit:
 
-| check | result | counts |
-| --- | --- | --- |
-| typecheck, lint, ruff, build | pass | 894 modules |
-| test | 3 failed of 3,912 | all three need the `127.0.0.2` loopback alias (`EADDRNOTAVAIL`): two in `direct-routes`, one in `native-contract` |
-| e2e | 1 failed of 55, then 55 of 55 | the failure was the live reply across a tool call timing out at 5 s while the run waited 23 minutes for heavy slots; `check-all --only e2e` passed |
-| py | 3 failed of 52 files | `deploy_common`, `mutate_py` and `release_app` fail the same way on a clean `origin/main` `fa0243ee`: macOS `/private/var` paths and Linux process facts. No Python changed |
+| check                        | result                        | counts                                                                                                                                                                      |
+| ---------------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| typecheck, lint, ruff, build | pass                          | 894 modules                                                                                                                                                                 |
+| test                         | 3 failed of 3,912             | all three need the `127.0.0.2` loopback alias (`EADDRNOTAVAIL`): two in `direct-routes`, one in `native-contract`                                                           |
+| e2e                          | 1 failed of 55, then 55 of 55 | the failure was the live reply across a tool call timing out at 5 s while the run waited 23 minutes for heavy slots; `check-all --only e2e` passed                          |
+| py                           | 3 failed of 52 files          | `deploy_common`, `mutate_py` and `release_app` fail the same way on a clean `origin/main` `fa0243ee`: macOS `/private/var` paths and Linux process facts. No Python changed |
 
 Application tests use the real Fastify app with the in-memory store, and either a fake runtime or the real Hermes
 adapter over a fake socket and `fetch`. Since #396, a refusal is logged once at warn level as "Request answered with
@@ -73,9 +73,9 @@ Both race tests now wait until the second request has passed the route's capabil
 released or failed. Without that wait, both mutants below passed, because the second request reached the decision only
 after the first had settled.
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| Refuse a second decision at once while one is in flight | `sends the waiting member's decision when the first one fails, instead of telling them it closed` | 1 failed |
+| Break                                                     | Test                                                                                                     | Failure  |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------- |
+| Refuse a second decision at once while one is in flight   | `sends the waiting member's decision when the first one fails, instead of telling them it closed`        | 1 failed |
 | Never record the in-flight decision, so both reach Hermes | `sends only the first decision to Hermes, records it, and refuses the second once the first is recorded` | 1 failed |
 
 `tests/runtime-refusals-api.test.ts` passed 6 of 6 after each restore, and three more times in a row.

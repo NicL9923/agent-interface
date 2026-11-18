@@ -42,7 +42,17 @@ type State =
   | { kind: "idle" }
   | { kind: "one"; id: number; start: Point; at: number; afterTap: boolean }
   | { kind: "drag"; id: number; last: Point; held: boolean }
-  | { kind: "two"; ids: [number, number]; start: Point; spread: number; last: Point; lastSpread: number; at: number; mode: "pending" | "scroll" | "view"; wheel: Point }
+  | {
+      kind: "two";
+      ids: [number, number];
+      start: Point;
+      spread: number;
+      last: Point;
+      lastSpread: number;
+      at: number;
+      mode: "pending" | "scroll" | "view";
+      wheel: Point;
+    }
   /** The gesture is over; nothing happens until every finger lifts. */
   | { kind: "spent" };
 
@@ -56,7 +66,10 @@ export class TouchGestures {
   private touches = new Map<number, Point>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   private lastTap: { at: number; point: Point } | undefined;
-  constructor(private emit: (action: TouchAction) => void, private zoomed: () => boolean) {}
+  constructor(
+    private emit: (action: TouchAction) => void,
+    private zoomed: () => boolean,
+  ) {}
 
   start(id: number, point: Point, now: number) {
     this.touches.set(id, point);
@@ -69,8 +82,19 @@ export class TouchGestures {
     } else if (state.kind === "one") {
       this.clearTimer();
       const [a, b] = [...this.touches.entries()];
-      const start = middle(a[1], b[1]), spread = distance(a[1], b[1]);
-      this.state = { kind: "two", ids: [a[0], b[0]], start, spread, last: start, lastSpread: spread, at: now, mode: "pending", wheel: { x: 0, y: 0 } };
+      const start = middle(a[1], b[1]),
+        spread = distance(a[1], b[1]);
+      this.state = {
+        kind: "two",
+        ids: [a[0], b[0]],
+        start,
+        spread,
+        last: start,
+        lastSpread: spread,
+        at: now,
+        mode: "pending",
+        wheel: { x: 0, y: 0 },
+      };
       this.lastTap = undefined;
     }
   }
@@ -87,7 +111,8 @@ export class TouchGestures {
       this.moveOne(state, point(state.id));
     } else if (state.kind === "drag" && has(state.id)) {
       const now = point(state.id);
-      if (this.trackpad) this.emit({ type: "nudge", dx: now.x - state.last.x, dy: now.y - state.last.y });
+      if (this.trackpad)
+        this.emit({ type: "nudge", dx: now.x - state.last.x, dy: now.y - state.last.y });
       else this.emit({ type: "point", at: now });
       state.last = now;
     } else if (state.kind === "two" && (has(state.ids[0]) || has(state.ids[1]))) {
@@ -113,27 +138,37 @@ export class TouchGestures {
   }
 
   private moveTwo(state: Extract<State, { kind: "two" }>, a: Point, b: Point) {
-    const mid = middle(a, b), spread = distance(a, b);
+    const mid = middle(a, b),
+      spread = distance(a, b);
     if (state.mode === "pending") {
       if (Math.abs(spread - state.spread) > touchTuning.pinchSlop) state.mode = "view";
       else if (distance(mid, state.start) > touchTuning.slop) {
         state.mode = this.zoomed() ? "view" : "scroll";
-        if (state.mode === "scroll" && !this.trackpad) this.emit({ type: "point", at: state.start });
+        if (state.mode === "scroll" && !this.trackpad)
+          this.emit({ type: "point", at: state.start });
       } else return;
     }
     if (state.mode === "view") {
-      this.emit({ type: "view", scale: spread / state.lastSpread, center: mid, dx: mid.x - state.last.x, dy: mid.y - state.last.y });
+      this.emit({
+        type: "view",
+        scale: spread / state.lastSpread,
+        center: mid,
+        dx: mid.x - state.last.x,
+        dy: mid.y - state.last.y,
+      });
     } else {
       // Fingers moving down bring what is above into view: the wheel turns up.
       const wheel = state.wheel;
-      wheel.x += mid.x - state.last.x; wheel.y += mid.y - state.last.y;
+      wheel.x += mid.x - state.last.x;
+      wheel.y += mid.y - state.last.y;
       const step = touchTuning.wheelStep;
       for (; wheel.y >= step; wheel.y -= step) this.emit({ type: "wheel", direction: "up" });
       for (; wheel.y <= -step; wheel.y += step) this.emit({ type: "wheel", direction: "down" });
       for (; wheel.x >= step; wheel.x -= step) this.emit({ type: "wheel", direction: "left" });
       for (; wheel.x <= -step; wheel.x += step) this.emit({ type: "wheel", direction: "right" });
     }
-    state.last = mid; state.lastSpread = spread;
+    state.last = mid;
+    state.lastSpread = spread;
   }
 
   end(id: number, now: number) {
@@ -145,7 +180,12 @@ export class TouchGestures {
       if (!this.trackpad) {
         // A double-click needs both clicks on one spot; fingers rarely land twice on the same pixel.
         const last = this.lastTap;
-        if (last && state.at - last.at < touchTuning.doubleTap && distance(last.point, at) < touchTuning.doubleTapSlop) at = last.point;
+        if (
+          last &&
+          state.at - last.at < touchTuning.doubleTap &&
+          distance(last.point, at) < touchTuning.doubleTapSlop
+        )
+          at = last.point;
         this.emit({ type: "point", at });
       }
       this.emit({ type: "button", button: "left", down: true });
@@ -154,7 +194,8 @@ export class TouchGestures {
     } else if (state.kind === "drag" && state.id === id) {
       if (state.held) this.emit({ type: "button", button: "left", down: false });
     } else if (state.kind === "two" && state.ids.includes(id)) {
-      if (state.mode === "pending" && now - state.at <= touchTuning.twoFingerTap) this.rightClick(state.start);
+      if (state.mode === "pending" && now - state.at <= touchTuning.twoFingerTap)
+        this.rightClick(state.start);
     } else if (state.kind !== "spent") return;
     this.state = this.touches.size ? { kind: "spent" } : { kind: "idle" };
   }
@@ -162,7 +203,8 @@ export class TouchGestures {
   /** The system took the touches, as for an incoming call. A held button is let go. */
   cancel() {
     this.clearTimer();
-    if (this.state.kind === "drag" && this.state.held) this.emit({ type: "button", button: "left", down: false });
+    if (this.state.kind === "drag" && this.state.held)
+      this.emit({ type: "button", button: "left", down: false });
     this.touches.clear();
     this.state = { kind: "idle" };
     this.lastTap = undefined;
@@ -198,7 +240,10 @@ type Pointer = {
 };
 function pointerOf(rfb: RFB): Pointer | null {
   const candidate = rfb as unknown as Partial<Pointer>;
-  return typeof candidate._handleMouseButton === "function" && typeof candidate._handleMouseMove === "function" ? candidate as Pointer : null;
+  return typeof candidate._handleMouseButton === "function" &&
+    typeof candidate._handleMouseMove === "function"
+    ? (candidate as Pointer)
+    : null;
 }
 
 const buttons = { left: 0x1, right: 0x4 } as const;
@@ -223,7 +268,11 @@ export interface DesktopTouch {
  * them against the zoomed canvas. `onZoom` reports whether the view is zoomed in. Null, leaving
  * noVNC's own gestures in place, if its pointer methods are gone.
  */
-export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { onZoom?: (zoomed: boolean) => void } = {}): DesktopTouch | null {
+export function attachDesktopTouch(
+  rfb: RFB,
+  target: HTMLElement,
+  { onZoom }: { onZoom?: (zoomed: boolean) => void } = {},
+): DesktopTouch | null {
   const pointer = pointerOf(rfb);
   if (!pointer) {
     console.error("Desktop touch controls are off: noVNC's pointer methods changed.");
@@ -238,8 +287,16 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   marker.className = "desktop-touch-pointer";
   marker.setAttribute("aria-hidden", "true");
   marker.hidden = true;
-  marker.innerHTML = '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2l14 9-6.2 1.3L7.5 19Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>';
-  Object.assign(marker.style, { position: "absolute", left: "0", top: "0", pointerEvents: "none", zIndex: "2", filter: "drop-shadow(0 1px 2px #0008)" });
+  marker.innerHTML =
+    '<svg width="22" height="22" viewBox="0 0 22 22"><path d="M3 2l14 9-6.2 1.3L7.5 19Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+  Object.assign(marker.style, {
+    position: "absolute",
+    left: "0",
+    top: "0",
+    pointerEvents: "none",
+    zIndex: "2",
+    filter: "drop-shadow(0 1px 2px #0008)",
+  });
   target.parentElement?.append(marker);
   const touchAction = target.style.touchAction;
   target.style.touchAction = "none";
@@ -255,13 +312,21 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   /** The canvas's own box without the zoom, in screen coordinates. */
   const base = (element: HTMLCanvasElement) => {
     const box = element.getBoundingClientRect();
-    return { left: box.left - view.x, top: box.top - view.y, width: element.clientWidth, height: element.clientHeight };
+    return {
+      left: box.left - view.x,
+      top: box.top - view.y,
+      width: element.clientWidth,
+      height: element.clientHeight,
+    };
   };
   const fromScreen = (point: Point) => {
     const element = canvas();
     if (!element) return undefined;
     const box = element.getBoundingClientRect();
-    return { x: clamp((point.x - box.left) / box.width, 0, 1), y: clamp((point.y - box.top) / box.height, 0, 1) };
+    return {
+      x: clamp((point.x - box.left) / box.width, 0, 1),
+      y: clamp((point.y - box.top) / box.height, 0, 1),
+    };
   };
   const toScreen = (fraction: Point) => {
     const element = canvas();
@@ -273,7 +338,10 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   const canvasPoint = () => {
     const element = canvas();
     if (!element || !at) return undefined;
-    return { x: Math.min(at.x * element.clientWidth, element.clientWidth - 1), y: Math.min(at.y * element.clientHeight, element.clientHeight - 1) };
+    return {
+      x: Math.min(at.x * element.clientWidth, element.clientWidth - 1),
+      y: Math.min(at.y * element.clientHeight, element.clientHeight - 1),
+    };
   };
   const move = () => {
     const point = canvasPoint();
@@ -302,10 +370,12 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   function setView(scale: number, x: number, y: number) {
     const element = canvas();
     if (!element) return;
-    const own = base(element), box = stage();
+    const own = base(element),
+      box = stage();
     view.scale = clamp(scale, 1, maxZoom);
     const fit = (offset: number, size: number, room: number, value: number) => {
-      const scaled = size * view.scale, centred = (room - scaled) / 2;
+      const scaled = size * view.scale,
+        centred = (room - scaled) / 2;
       return clamp(value, Math.min(room - scaled, centred) - offset, Math.max(0, centred) - offset);
     };
     view.x = view.scale === 1 ? 0 : fit(own.left - box.left, own.width, box.width, x);
@@ -327,7 +397,8 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   function unzoom() {
     if (!zoomedCanvas) return;
     const { element, overflow } = zoomedCanvas;
-    element.style.transform = ""; element.style.transformOrigin = "";
+    element.style.transform = "";
+    element.style.transformOrigin = "";
     if (element.parentElement) element.parentElement.style.overflow = overflow;
     zoomedCanvas = undefined;
   }
@@ -335,9 +406,14 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
   function follow() {
     const screen = at && toScreen(at);
     if (!screen || view.scale === 1) return;
-    const box = stage(), margin = 24;
-    const dx = Math.max(0, box.left + margin - screen.x) - Math.max(0, screen.x - (box.left + box.width - margin));
-    const dy = Math.max(0, box.top + margin - screen.y) - Math.max(0, screen.y - (box.top + box.height - margin));
+    const box = stage(),
+      margin = 24;
+    const dx =
+      Math.max(0, box.left + margin - screen.x) -
+      Math.max(0, screen.x - (box.left + box.width - margin));
+    const dy =
+      Math.max(0, box.top + margin - screen.y) -
+      Math.max(0, screen.y - (box.top + box.height - margin));
     if (dx || dy) setView(view.scale, view.x + dx, view.y + dy);
   }
   function act(action: TouchAction) {
@@ -351,7 +427,10 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
         at ??= center();
         if (!element || !at) return;
         const box = element.getBoundingClientRect();
-        at = { x: clamp(at.x + action.dx * trackpadGain / box.width, 0, 1), y: clamp(at.y + action.dy * trackpadGain / box.height, 0, 1) };
+        at = {
+          x: clamp(at.x + (action.dx * trackpadGain) / box.width, 0, 1),
+          y: clamp(at.y + (action.dy * trackpadGain) / box.height, 0, 1),
+        };
         move();
         follow();
         render();
@@ -373,9 +452,14 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
         const own = base(element);
         // Scale around where the fingers' midpoint was, so the desktop under it stays under it, then
         // follow the midpoint's travel.
-        const ax = action.center.x - action.dx - own.left, ay = action.center.y - action.dy - own.top;
+        const ax = action.center.x - action.dx - own.left,
+          ay = action.center.y - action.dy - own.top;
         const scale = clamp(view.scale * action.scale, 1, maxZoom);
-        setView(scale, ax - (ax - view.x) * scale / view.scale + action.dx, ay - (ay - view.y) * scale / view.scale + action.dy);
+        setView(
+          scale,
+          ax - ((ax - view.x) * scale) / view.scale + action.dx,
+          ay - ((ay - view.y) * scale) / view.scale + action.dy,
+        );
         break;
       }
     }
@@ -386,10 +470,19 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
     event.preventDefault();
     event.stopPropagation();
     if (event.type === "touchstart" && !rfb.viewOnly) rfb.focus({ preventScroll: true });
-    if (event.type === "touchcancel") { gestures.cancel(); return; }
+    if (event.type === "touchcancel") {
+      gestures.cancel();
+      return;
+    }
     const now = Date.now();
-    const changed = Array.from(event.changedTouches, touch => [touch.identifier, { x: touch.clientX, y: touch.clientY }] as [number, Point]);
-    if (event.type === "touchmove") { gestures.move(changed); return; }
+    const changed = Array.from(
+      event.changedTouches,
+      (touch) => [touch.identifier, { x: touch.clientX, y: touch.clientY }] as [number, Point],
+    );
+    if (event.type === "touchmove") {
+      gestures.move(changed);
+      return;
+    }
     for (const [id, point] of changed) {
       if (event.type === "touchstart") gestures.start(id, point, now);
       else gestures.end(id, now);
@@ -406,7 +499,10 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
     if (event.type === "contextmenu") return;
     if (event.type === "mousedown" && !rfb.viewOnly) rfb.focus({ preventScroll: true });
     at = fromScreen({ x: event.clientX, y: event.clientY }) ?? at;
-    if (event.type === "mousemove") { move(); return; }
+    if (event.type === "mousemove") {
+      move();
+      return;
+    }
     // DOM buttons are left 1, right 2, middle 4; the desktop's are left 1, middle 2, right 4.
     mask = (event.buttons & 1) | (event.buttons & 2 ? 4 : 0) | (event.buttons & 4 ? 2 : 0);
     mouseHeld = mask !== 0;
@@ -419,11 +515,18 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
     at = fromScreen({ x: event.clientX, y: event.clientY }) ?? at;
     // Wheel steps as noVNC counts them: 50 pixels, or a line as 19.
     wheel += event.deltaMode === 0 ? event.deltaY : event.deltaY * 19;
-    for (; wheel >= 50; wheel -= 50) { press(wheelButtons.down); press(); }
-    for (; wheel <= -50; wheel += 50) { press(wheelButtons.up); press(); }
+    for (; wheel >= 50; wheel -= 50) {
+      press(wheelButtons.down);
+      press();
+    }
+    for (; wheel <= -50; wheel += 50) {
+      press(wheelButtons.up);
+      press();
+    }
   };
   const types = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
-  for (const type of types) target.addEventListener(type, handle, { capture: true, passive: false });
+  for (const type of types)
+    target.addEventListener(type, handle, { capture: true, passive: false });
   target.addEventListener("mousedown", mouse, { capture: true });
   target.addEventListener("contextmenu", mouse, { capture: true });
   target.addEventListener("wheel", scroll, { capture: true, passive: false });
@@ -448,7 +551,9 @@ export function attachDesktopTouch(rfb: RFB, target: HTMLElement, { onZoom }: { 
       move();
       render();
     },
-    resetZoom() { setView(1, 0, 0); },
+    resetZoom() {
+      setView(1, 0, 0);
+    },
     detach() {
       gestures.cancel();
       for (const type of types) target.removeEventListener(type, handle, { capture: true });

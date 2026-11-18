@@ -6,12 +6,26 @@ import { useAction } from "../src/app/use-action";
 import { useResource, type Resource } from "../src/app/use-resource";
 import { advance, mountRoot } from "./ui-harness";
 
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn() }))(original)));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest(
+    await (async (original) => ({
+      ...(await original<typeof import("../src/client-api")>()),
+      api: vi.fn(),
+    }))(original),
+  ),
+);
 
-type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void };
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+};
 function deferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void, reject!: (error: Error) => void;
-  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
   return { promise, resolve, reject };
 }
 const signalOf = (call: number) => (vi.mocked(api).mock.calls[call][1] as RequestInit).signal!;
@@ -19,11 +33,15 @@ const signalOf = (call: number) => (vi.mocked(api).mock.calls[call][1] as Reques
 describe("useResource", () => {
   let latest: Resource<string>;
   let view: ReturnType<typeof mountRoot>;
-  function Probe({ path, ...options }: { path: string | null } & Parameters<typeof useResource<string>>[1]) {
+  function Probe({
+    path,
+    ...options
+  }: { path: string | null } & Parameters<typeof useResource<string>>[1]) {
     latest = useResource<string>(path, options);
     return null;
   }
-  const show = (path: string | null, options: Parameters<typeof useResource<string>>[1] = {}) => view.render(createElement(Probe, { path, ...options }));
+  const show = (path: string | null, options: Parameters<typeof useResource<string>>[1] = {}) =>
+    view.render(createElement(Probe, { path, ...options }));
   beforeEach(() => {
     vi.mocked(api).mockReset();
     view = mountRoot();
@@ -35,9 +53,14 @@ describe("useResource", () => {
     await show("/a");
     expect(latest).toMatchObject({ data: "first", loading: false, error: "" });
     let settled!: Promise<void>;
-    await act(async () => { settled = latest.reload(); });
+    await act(async () => {
+      settled = latest.reload();
+    });
     expect(latest).toMatchObject({ data: "first", loading: true });
-    await act(async () => { reload.resolve("second"); await settled; });
+    await act(async () => {
+      reload.resolve("second");
+      await settled;
+    });
     expect(latest).toMatchObject({ data: "second", loading: false });
   });
 
@@ -82,14 +105,19 @@ describe("useResource", () => {
     vi.mocked(api).mockRejectedValueOnce(new Error("raw")).mockResolvedValueOnce("ok");
     await show("/a", { errorMessage: () => "Could not load." });
     expect(latest).toMatchObject({ data: null, error: "Could not load.", loading: false });
-    await act(async () => { await latest.reload(); });
+    await act(async () => {
+      await latest.reload();
+    });
     expect(latest).toMatchObject({ data: "ok", error: "" });
   });
 
   it("uses a custom loader with the path and an abort signal, and drops its result for an old path", async () => {
     const slow = deferred<string>();
     const signals: AbortSignal[] = [];
-    const load = vi.fn((path: string, signal: AbortSignal) => { signals.push(signal); return path === "/a" ? slow.promise : Promise.resolve("b text"); });
+    const load = vi.fn((path: string, signal: AbortSignal) => {
+      signals.push(signal);
+      return path === "/a" ? slow.promise : Promise.resolve("b text");
+    });
     await show("/a", { load });
     await show("/b", { load });
     expect(load.mock.calls.map(([path]) => path)).toEqual(["/a", "/b"]);
@@ -100,13 +128,19 @@ describe("useResource", () => {
   });
 
   it("ignores a reload kept from an older path, so the new path's handlers never see its result", async () => {
-    const onData = vi.fn(), errorMessage = vi.fn(() => "failed");
-    vi.mocked(api).mockResolvedValueOnce("a data").mockResolvedValueOnce("b data").mockRejectedValue(new Error("gone"));
+    const onData = vi.fn(),
+      errorMessage = vi.fn(() => "failed");
+    vi.mocked(api)
+      .mockResolvedValueOnce("a data")
+      .mockResolvedValueOnce("b data")
+      .mockRejectedValue(new Error("gone"));
     await show("/a");
     const old = latest.reload;
     await show("/b", { onData, errorMessage });
     onData.mockClear();
-    await act(async () => { await old(); });
+    await act(async () => {
+      await old();
+    });
     expect(api).toHaveBeenCalledTimes(2);
     expect(onData).not.toHaveBeenCalled();
     expect(errorMessage).not.toHaveBeenCalled();
@@ -116,7 +150,9 @@ describe("useResource", () => {
   it("clears a load error when a fresher copy replaces the data", async () => {
     vi.mocked(api).mockResolvedValueOnce("first").mockRejectedValueOnce(new Error("offline"));
     await show("/a");
-    await act(async () => { await latest.reload(); });
+    await act(async () => {
+      await latest.reload();
+    });
     expect(latest).toMatchObject({ data: "first", error: "offline" });
     await act(async () => latest.setData("fresher"));
     expect(latest).toMatchObject({ data: "fresher", error: "" });
@@ -124,7 +160,11 @@ describe("useResource", () => {
 
   it("rejects an unusable response through validate", async () => {
     vi.mocked(api).mockResolvedValueOnce("");
-    await show("/a", { validate: value => { if (!value) throw new Error("Incomplete."); } });
+    await show("/a", {
+      validate: (value) => {
+        if (!value) throw new Error("Incomplete.");
+      },
+    });
     expect(latest).toMatchObject({ data: null, error: "Incomplete." });
   });
 
@@ -171,34 +211,65 @@ describe("useAction", () => {
     const first = deferred<string>();
     const work = vi.fn(() => first.promise);
     let pending!: Promise<string | undefined>;
-    await act(async () => { pending = latest.run(work); });
+    await act(async () => {
+      pending = latest.run(work);
+    });
     expect(latest.busy).toBe(true);
     const second = vi.fn(async () => "second");
-    await act(async () => { expect(await latest.run(second)).toBeUndefined(); });
+    await act(async () => {
+      expect(await latest.run(second)).toBeUndefined();
+    });
     expect(second).not.toHaveBeenCalled();
-    await act(async () => { first.resolve("done"); await pending; });
+    await act(async () => {
+      first.resolve("done");
+      await pending;
+    });
     expect(latest.busy).toBe(false);
-    await act(async () => { await latest.run(second); });
+    await act(async () => {
+      await latest.run(second);
+    });
     expect(second).toHaveBeenCalledOnce();
   });
 
   it("keeps errors and notices apart, and clears both when the next run starts", async () => {
-    await act(async () => { await latest.run(async () => "ok", { success: "Saved." }); });
+    await act(async () => {
+      await latest.run(async () => "ok", { success: "Saved." });
+    });
     expect(latest).toMatchObject({ notice: "Saved.", error: "" });
-    await act(async () => { await latest.run(async () => { throw new Error("Nope."); }); });
+    await act(async () => {
+      await latest.run(async () => {
+        throw new Error("Nope.");
+      });
+    });
     expect(latest).toMatchObject({ notice: "", error: "Nope." });
   });
 
   it("lets onError choose the text, or show nothing with null", async () => {
-    await act(async () => { await latest.run(async () => { throw new Error("raw"); }, { onError: () => "Friendly." }); });
+    await act(async () => {
+      await latest.run(
+        async () => {
+          throw new Error("raw");
+        },
+        { onError: () => "Friendly." },
+      );
+    });
     expect(latest.error).toBe("Friendly.");
-    await act(async () => { await latest.run(async () => { throw new Error("raw"); }, { onError: () => null }); });
+    await act(async () => {
+      await latest.run(
+        async () => {
+          throw new Error("raw");
+        },
+        { onError: () => null },
+      );
+    });
     expect(latest.error).toBe("");
   });
 
   it("calls onSuccess with the result", async () => {
     const onSuccess = vi.fn();
-    await act(async () => { await latest.run(async () => 7, { onSuccess }); });
+    await act(async () => {
+      await latest.run(async () => 7, { onSuccess });
+    });
     expect(onSuccess).toHaveBeenCalledWith(7);
   });
 
@@ -206,12 +277,19 @@ describe("useAction", () => {
     const stale = deferred<string>();
     const onSuccess = vi.fn();
     let pending!: Promise<unknown>;
-    await act(async () => { pending = latest.run(() => stale.promise, { success: "Stale.", onSuccess }); });
+    await act(async () => {
+      pending = latest.run(() => stale.promise, { success: "Stale.", onSuccess });
+    });
     await act(async () => latest.reset());
     expect(latest.busy).toBe(false);
     const fresh = vi.fn(async () => "fresh");
-    await act(async () => { await latest.run(fresh, { success: "Fresh." }); });
-    await act(async () => { stale.resolve("late"); await pending; });
+    await act(async () => {
+      await latest.run(fresh, { success: "Fresh." });
+    });
+    await act(async () => {
+      stale.resolve("late");
+      await pending;
+    });
     expect(onSuccess).not.toHaveBeenCalled();
     expect(latest).toMatchObject({ busy: false, notice: "Fresh." });
   });
@@ -221,10 +299,21 @@ describe("useAction", () => {
     const onSuccess = vi.fn();
     let current: (() => boolean) | undefined;
     let pending!: Promise<unknown>;
-    await act(async () => { pending = latest.run(async context => { current = context.current; return late.promise; }, { onSuccess }); });
+    await act(async () => {
+      pending = latest.run(
+        async (context) => {
+          current = context.current;
+          return late.promise;
+        },
+        { onSuccess },
+      );
+    });
     expect(current!()).toBe(true);
     await act(async () => view.root.unmount());
-    await act(async () => { late.resolve("late"); await pending; });
+    await act(async () => {
+      late.resolve("late");
+      await pending;
+    });
     expect(current!()).toBe(false);
     expect(onSuccess).not.toHaveBeenCalled();
   });

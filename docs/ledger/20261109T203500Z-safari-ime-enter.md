@@ -30,15 +30,15 @@ modified keys, not text entry.
 
 Each line was broken by hand, its focused test run, and the source restored.
 
-| Mutation | Test | Result |
-| --- | --- | --- |
-| Composer guard back to `isComposing` only | shell-ui "confirms an IME word" | failed: recall replaced the draft |
-| Composer guard skips Enter | same | failed: a `/bots/shared/messages` write |
-| `imeKey` drops the `keyCode === 229` check | same | failed |
-| Palette guard back to `isComposing` only | shell-ui "filters, and opens an assistant with Enter" | failed: palette closed |
-| Find bar Enter guard back to `isComposing` only | transcript-ui "counts loaded matches" | failed: `2 of 3` |
-| Find bar Escape unguarded | same | failed: find bar closed |
-| Group chat guard back to `isComposing` only | collaboration-ui "shows a sent group message at once" | failed: a `/groups/room/messages` write |
+| Mutation                                        | Test                                                  | Result                                  |
+| ----------------------------------------------- | ----------------------------------------------------- | --------------------------------------- |
+| Composer guard back to `isComposing` only       | shell-ui "confirms an IME word"                       | failed: recall replaced the draft       |
+| Composer guard skips Enter                      | same                                                  | failed: a `/bots/shared/messages` write |
+| `imeKey` drops the `keyCode === 229` check      | same                                                  | failed                                  |
+| Palette guard back to `isComposing` only        | shell-ui "filters, and opens an assistant with Enter" | failed: palette closed                  |
+| Find bar Enter guard back to `isComposing` only | transcript-ui "counts loaded matches"                 | failed: `2 of 3`                        |
+| Find bar Escape unguarded                       | same                                                  | failed: find bar closed                 |
+| Group chat guard back to `isComposing` only     | collaboration-ui "shows a sent group message at once" | failed: a `/groups/room/messages` write |
 
 ## Not exercised
 

@@ -5,7 +5,12 @@ import type { Bot, Message, Runtime, ToolCall } from "../shared/types.js";
 import { routePattern } from "./route-path.js";
 import { httpError } from "./http-error.js";
 import type { Store } from "./store.js";
-declare module "fastify" { interface FastifyRequest { privacyVersion?: number; assistantId?: string } }
+declare module "fastify" {
+  interface FastifyRequest {
+    privacyVersion?: number;
+    assistantId?: string;
+  }
+}
 
 // A personal assistant with a recorded owner is private: for anyone else it does not
 // exist anywhere in WildBots. Shared assistants and older personal ones without a
@@ -21,9 +26,14 @@ export function visibleTo(store: Store, botId: string | undefined, userId: strin
 }
 
 /** The roster this person sees, with each assistant's presentation applied. */
-export async function visibleBots(runtime: Pick<Runtime, "listBots">, store: Store, userId: string) {
-  return (await runtime.listBots()).map(bot => ({ ...bot, ...store.presentation(bot.id) }) as Bot)
-    .filter(bot => visible(bot, userId));
+export async function visibleBots(
+  runtime: Pick<Runtime, "listBots">,
+  store: Store,
+  userId: string,
+) {
+  return (await runtime.listBots())
+    .map((bot) => ({ ...bot, ...store.presentation(bot.id) }) as Bot)
+    .filter((bot) => visible(bot, userId));
 }
 
 export const notFound = { error: assistantNotFoundMessage, code: "assistant_not_found" } as const;
@@ -33,9 +43,21 @@ export const notFound = { error: assistantNotFoundMessage, code: "assistant_not_
  * ID, so the ID alone can name several: it means the one this person can see, and Hermes is then told its
  * assistant. A copy they cannot see is never chosen or revealed, and two they can see are ambiguous.
  */
-export function routineById<T extends { id: string; botId: string }>(routines: T[], routineId: string, store: Store, userId: string): T | undefined {
-  const seen = routines.filter(routine => routine.id === routineId && visibleTo(store, routine.botId, userId));
-  if (seen.length > 1) throw httpError(409, "More than one of your assistants has a routine with this ID. Change it from that assistant's routines.", { code: "routine_ambiguous" });
+export function routineById<T extends { id: string; botId: string }>(
+  routines: T[],
+  routineId: string,
+  store: Store,
+  userId: string,
+): T | undefined {
+  const seen = routines.filter(
+    (routine) => routine.id === routineId && visibleTo(store, routine.botId, userId),
+  );
+  if (seen.length > 1)
+    throw httpError(
+      409,
+      "More than one of your assistants has a routine with this ID. Change it from that assistant's routines.",
+      { code: "routine_ambiguous" },
+    );
   return seen[0];
 }
 
@@ -43,9 +65,18 @@ export function routineById<T extends { id: string; botId: string }>(routines: T
 // fails exactly like any other forged ID. A runtime without signatures, as in tests,
 // falls back to the readable body.
 export function fileBotId(runtime: Pick<Runtime, "fileBotId">, fileId: string) {
-  if (runtime.fileBotId) { const botId = runtime.fileBotId(fileId); return typeof botId === "string" ? botId : undefined; }
-  try { const botId = (JSON.parse(Buffer.from(fileId.split(".")[0], "base64url").toString()) as { botId?: unknown }).botId; return typeof botId === "string" ? botId : undefined; }
-  catch { return undefined; }
+  if (runtime.fileBotId) {
+    const botId = runtime.fileBotId(fileId);
+    return typeof botId === "string" ? botId : undefined;
+  }
+  try {
+    const botId = (
+      JSON.parse(Buffer.from(fileId.split(".")[0], "base64url").toString()) as { botId?: unknown }
+    ).botId;
+    return typeof botId === "string" ? botId : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -60,38 +91,55 @@ export class Roster {
   private at = 0;
   private refreshing?: Promise<void>;
   // Every name an assistant has had is stored, so an old agent message still matches after a rename or restart.
-  constructor(private runtime: Pick<Runtime, "listBots">, private store?: Pick<Store, "rememberNames" | "nameHistory">) {}
+  constructor(
+    private runtime: Pick<Runtime, "listBots">,
+    private store?: Pick<Store, "rememberNames" | "nameHistory">,
+  ) {}
   note(bots: unknown) {
     // A disconnected Hermes reports its last roster as disconnected; it proves nothing.
-    if (!Array.isArray(bots) || !bots.some(bot => bot?.activity !== "disconnected")) return;
+    if (!Array.isArray(bots) || !bots.some((bot) => bot?.activity !== "disconnected")) return;
     this.bots = bots;
     this.at = Date.now();
     this.store?.rememberNames(bots as Bot[]);
   }
   /** After this app creates, renames or deletes an assistant, the next check reads Hermes again. */
-  forget() { this.at = 0; }
+  forget() {
+    this.at = 0;
+  }
   private refresh() {
-    this.refreshing ??= (async () => { try { this.note(await this.runtime.listBots()); } catch { /* Keep the last roster. */ } })()
-      .finally(() => { this.refreshing = undefined; });
+    this.refreshing ??= (async () => {
+      try {
+        this.note(await this.runtime.listBots());
+      } catch {
+        /* Keep the last roster. */
+      }
+    })().finally(() => {
+      this.refreshing = undefined;
+    });
     return this.refreshing;
   }
-  private fresh() { return this.bots && Date.now() - this.at < 10_000; }
+  private fresh() {
+    return this.bots && Date.now() - this.at < 10_000;
+  }
   /** False only when Hermes's current roster lacks it. */
   async exists(botId: string) {
-    if (this.fresh() && this.bots!.some(bot => bot.id === botId)) return true;
+    if (this.fresh() && this.bots!.some((bot) => bot.id === botId)) return true;
     if (typeof this.runtime.listBots !== "function") return true;
     await this.refresh();
-    return !this.bots || this.bots.some(bot => bot.id === botId);
+    return !this.bots || this.bots.some((bot) => bot.id === botId);
   }
   /** True only when Hermes's current roster has it. */
   async has(botId: string) {
     if (typeof this.runtime.listBots === "function") await this.refresh();
-    return !!this.bots?.some(bot => bot.id === botId);
+    return !!this.bots?.some((bot) => bot.id === botId);
   }
   /** Each assistant's current and earlier names. */
   async names() {
     if (!this.fresh()) await this.refresh();
-    return this.store?.nameHistory() ?? new Map((this.bots ?? []).map(bot => [bot.id, new Set([bot.name])]));
+    return (
+      this.store?.nameHistory() ??
+      new Map((this.bots ?? []).map((bot) => [bot.id, new Set([bot.name])]))
+    );
   }
 }
 
@@ -101,38 +149,98 @@ const hiddenText = "Message from another member's assistant: This message is pri
  * person can see: incoming envelopes and message_agent handoffs keep their place, not their content.
  */
 export async function redactAgents(store: Store, roster: Roster, userId: string) {
-  const hidden = store.privateBots().filter(bot => bot.ownerId !== userId).map(bot => bot.botId);
-  if (!hidden.length) return { message: <T extends Message>(message: T) => message, call: (call: ToolCall) => call, text: (text: string) => text };
+  const hidden = store
+    .privateBots()
+    .filter((bot) => bot.ownerId !== userId)
+    .map((bot) => bot.botId);
+  if (!hidden.length)
+    return {
+      message: <T extends Message>(message: T) => message,
+      call: (call: ToolCall) => call,
+      text: (text: string) => text,
+    };
   const names = await roster.names();
-  const handles = new Set(hidden), labels = new Set(hidden.flatMap(id => [id, ...names.get(id) ?? []]).map(name => name.toLowerCase()));
-  const named = (value: unknown) => typeof value === "string" && (handles.has(value) || labels.has(value.toLowerCase()));
-  const target = (args?: string) => { try { return (JSON.parse(args ?? "") as { target?: unknown }).target; } catch { return undefined; } };
+  const handles = new Set(hidden),
+    labels = new Set(
+      hidden.flatMap((id) => [id, ...(names.get(id) ?? [])]).map((name) => name.toLowerCase()),
+    );
+  const named = (value: unknown) =>
+    typeof value === "string" && (handles.has(value) || labels.has(value.toLowerCase()));
+  const target = (args?: string) => {
+    try {
+      return (JSON.parse(args ?? "") as { target?: unknown }).target;
+    } catch {
+      return undefined;
+    }
+  };
   // Any tool detail mentioning a hidden assistant is hidden, whatever the tool, as in a combined
   // "message_agent, web_search" batch. A handoff whose target cannot be read counts as hidden too.
   // IDs and handles match exactly. Names match as whole words, ignoring case, with Unicode word
   // boundaries, however short: "Penny" hides "Penny's" but not "halfpenny". A shared tool detail
   // that happens to use the word, like "penny", is hidden too, erring toward privacy.
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const words = [...new Set(hidden.flatMap(id => [...names.get(id) ?? []]))].filter(name => name.trim())
-    .map(name => new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name.trim())}(?![\\p{L}\\p{N}_])`, "iu"));
-  const mentions = (value?: string) => !!value && ([...handles].some(id => value.includes(id)) || words.some(word => word.test(value)));
-  const handoff = (name?: string) => !!name?.split(",").some(part => part.trim() === "message_agent");
-  const hides = (call: ToolCall) => mentions(call.arguments) || mentions(call.result) || mentions(call.error)
-    || handoff(call.name) && (named(target(call.arguments)) || !target(call.arguments));
-  const call = (call: ToolCall): ToolCall => hides(call) ? { ...call, arguments: JSON.stringify({ target: "another member's assistant" }), result: undefined, error: undefined } : call;
+  const words = [...new Set(hidden.flatMap((id) => [...(names.get(id) ?? [])]))]
+    .filter((name) => name.trim())
+    .map(
+      (name) => new RegExp(`(?<![\\p{L}\\p{N}_])${escape(name.trim())}(?![\\p{L}\\p{N}_])`, "iu"),
+    );
+  const mentions = (value?: string) =>
+    !!value &&
+    ([...handles].some((id) => value.includes(id)) || words.some((word) => word.test(value)));
+  const handoff = (name?: string) =>
+    !!name?.split(",").some((part) => part.trim() === "message_agent");
+  const hides = (call: ToolCall) =>
+    mentions(call.arguments) ||
+    mentions(call.result) ||
+    mentions(call.error) ||
+    (handoff(call.name) && (named(target(call.arguments)) || !target(call.arguments)));
+  const call = (call: ToolCall): ToolCall =>
+    hides(call)
+      ? {
+          ...call,
+          arguments: JSON.stringify({ target: "another member's assistant" }),
+          result: undefined,
+          error: undefined,
+        }
+      : call;
   return {
     message: <T extends Message>(message: T): T => {
       const envelope = agentEnvelope(message);
-      const originHidden = message.origin && (named(message.origin.handle) || named(message.origin.name) || mentions(message.origin.title));
-      if (originHidden || envelope && (named(envelope.handle) || named(envelope.name))) return { ...message, text: hiddenText, origin: { kind: "agent", visibility: "activity" }, files: undefined, reasoning: undefined, toolCall: undefined };
-      if (message.toolCall ? hides(message.toolCall) || message.role === "tool" && mentions(message.text) : handoff(message.toolName) || message.role === "tool" && mentions(message.text))
-        return { ...message, text: "", origin: message.origin ? { kind: message.origin.kind, visibility: message.origin.visibility } : undefined, files: undefined, reasoning: undefined, ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}) };
+      const originHidden =
+        message.origin &&
+        (named(message.origin.handle) ||
+          named(message.origin.name) ||
+          mentions(message.origin.title));
+      if (originHidden || (envelope && (named(envelope.handle) || named(envelope.name))))
+        return {
+          ...message,
+          text: hiddenText,
+          origin: { kind: "agent", visibility: "activity" },
+          files: undefined,
+          reasoning: undefined,
+          toolCall: undefined,
+        };
+      if (
+        message.toolCall
+          ? hides(message.toolCall) || (message.role === "tool" && mentions(message.text))
+          : handoff(message.toolName) || (message.role === "tool" && mentions(message.text))
+      )
+        return {
+          ...message,
+          text: "",
+          origin: message.origin
+            ? { kind: message.origin.kind, visibility: message.origin.visibility }
+            : undefined,
+          files: undefined,
+          reasoning: undefined,
+          ...(message.toolCall ? { toolCall: call(message.toolCall) } : {}),
+        };
       return message;
     },
     // Calls still running are listed beside the messages.
     call,
     // Search snippets and previews are fragments, so any mention of a hidden handle or name hides them.
-    text: (text: string) => mentions(text) ? hiddenText : text,
+    text: (text: string) => (mentions(text) ? hiddenText : text),
   };
 }
 
@@ -148,7 +256,15 @@ export async function redactAgents(store: Store, roster: Roster, userId: string)
 //   routine  the :id routine's assistant; "routine and body" also checks the body.
 //   file     the assistant a signed file belongs to.
 //   group    its handler checks every member of the group or proposed group.
-export type BotScope = "none" | "list" | "body" | "query" | "routine" | "routine and body" | "file" | "group";
+export type BotScope =
+  | "none"
+  | "list"
+  | "body"
+  | "query"
+  | "routine"
+  | "routine and body"
+  | "file"
+  | "group";
 export const assistantRoutes: Readonly<Record<string, BotScope>> = {
   "GET /api/auth/config": "none",
   "POST /api/auth/confirm": "none",
@@ -266,18 +382,26 @@ const scoped = /^\/api\/bots\/:(\w+)(?:\/|$)/;
 // Fastify derives a HEAD route from each GET.
 const key = (method: string, url: string) => `${method === "HEAD" ? "GET" : method} ${url}`;
 const named = (value: unknown) => {
-  const fields = value && typeof value === "object" ? value as { botId?: unknown; profile?: unknown } : {};
+  const fields =
+    value && typeof value === "object" ? (value as { botId?: unknown; profile?: unknown }) : {};
   const botId = fields.botId ?? fields.profile;
   return typeof botId === "string" ? botId : undefined;
 };
 
 /** Install after authentication and before any assistant route. */
-export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pick<Runtime, "routines" | "listBots" | "fileBotId">, roster = new Roster(runtime, store)) {
+export function installBotAccess(
+  app: FastifyInstance,
+  store: Store,
+  runtime: Pick<Runtime, "routines" | "listBots" | "fileBotId">,
+  roster = new Roster(runtime, store),
+) {
   app.addHook("onRoute", (route) => {
     if (!route.url.startsWith("/api/") || scoped.test(route.url)) return;
     for (const method of [route.method].flat())
       if (!assistantRoutes[key(method, route.url)])
-        throw new Error(`Classify ${method} ${route.url} for assistant visibility in src/server/bot-access.ts`);
+        throw new Error(
+          `Classify ${method} ${route.url} for assistant visibility in src/server/bot-access.ts`,
+        );
   });
   // Without a signed-in person, as for a path the sign-in hook missed, nobody sees a private assistant.
   const hidden = (req: FastifyRequest, botId: unknown) =>
@@ -289,11 +413,15 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     const scope = assistantRoutes[key(req.method, url)];
     if (!param && !scope) return;
     req.privacyVersion = store.privacyVersion;
-    const botId = param ? (req.params as Record<string, string>)[param]
-      : scope === "query" ? named(req.query)
-      : scope === "file" ? fileBotId(runtime, (req.params as { id: string }).id) : undefined;
+    const botId = param
+      ? (req.params as Record<string, string>)[param]
+      : scope === "query"
+        ? named(req.query)
+        : scope === "file"
+          ? fileBotId(runtime, (req.params as { id: string }).id)
+          : undefined;
     req.assistantId = botId;
-    if (hidden(req, botId) || param && !(await roster.exists(botId!))) return refuse(reply);
+    if (hidden(req, botId) || (param && !(await roster.exists(botId!)))) return refuse(reply);
   });
   // Body and routine checks need the parsed body or the scheduler, so they run just before the handler.
   app.addHook("preHandler", async (req, reply) => {
@@ -301,12 +429,18 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
     if (scope?.startsWith("routine")) {
       const routineId = (req.params as { id?: string }).id;
       // Refused only when every routine with this ID is hidden; the handler acts on the one this person sees.
-      const rows = (await runtime.routines()).filter(routine => routine.id === routineId);
+      const rows = (await runtime.routines()).filter((routine) => routine.id === routineId);
       // A trial remembers its assistant even after its routine is deleted.
-      const requestId = (req.params as { requestId?: unknown }).requestId ?? (req.body as { requestId?: unknown } | undefined)?.requestId;
+      const requestId =
+        (req.params as { requestId?: unknown }).requestId ??
+        (req.body as { requestId?: unknown } | undefined)?.requestId;
       const trial = typeof requestId === "string" ? store.routineTrial(requestId) : undefined;
       // A missing routine is the handler's 404, worded the same.
-      if (rows.length && rows.every(row => hidden(req, row.botId)) || trial && hidden(req, trial.botId)) return reply.code(404).send({ error: "Routine not found" });
+      if (
+        (rows.length && rows.every((row) => hidden(req, row.botId))) ||
+        (trial && hidden(req, trial.botId))
+      )
+        return reply.code(404).send({ error: "Routine not found" });
     }
     if (scope === "body" || scope === "routine and body") {
       req.assistantId ??= named(req.body);
@@ -318,15 +452,25 @@ export function installBotAccess(app: FastifyInstance, store: Store, runtime: Pi
   // other read asks to be retried, so every list re-filters without each handler remembering.
   // Writes and streamed downloads already under way are not recalled: a documented privacy limit.
   app.addHook("onSend", async (req, reply, payload) => {
-    if (req.privacyVersion === undefined || !["GET", "HEAD"].includes(req.method) || reply.statusCode === 404) return payload;
-    const changed = store.changedSince(req.privacyVersion).filter(botId => hidden(req, botId));
+    if (
+      req.privacyVersion === undefined ||
+      !["GET", "HEAD"].includes(req.method) ||
+      reply.statusCode === 404
+    )
+      return payload;
+    const changed = store.changedSince(req.privacyVersion).filter((botId) => hidden(req, botId));
     if (!changed.length) return payload;
     (payload as { destroy?: () => void } | null)?.destroy?.();
-    for (const header of ["ETag", "Content-Length", "Content-Disposition"]) reply.removeHeader(header);
+    for (const header of ["ETag", "Content-Length", "Content-Disposition"])
+      reply.removeHeader(header);
     reply.type("application/json; charset=utf-8");
-    if (req.assistantId && changed.includes(req.assistantId)) return reply.code(404), JSON.stringify(notFound);
+    if (req.assistantId && changed.includes(req.assistantId))
+      return (reply.code(404), JSON.stringify(notFound));
     reply.code(503);
-    return JSON.stringify({ error: "Assistants changed while this loaded. Try again.", code: "assistants_changed" });
+    return JSON.stringify({
+      error: "Assistants changed while this loaded. Try again.",
+      code: "assistants_changed",
+    });
   });
   return roster;
 }

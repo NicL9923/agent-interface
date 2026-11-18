@@ -4,58 +4,94 @@ import { controlPort } from "./ports.js";
 const controlUrl = `http://127.0.0.1:${controlPort}/csp-violations`;
 /** Clears recorded violations and puts the scripted conversations back as they started. */
 const resetServer = () => fetch(controlUrl, { method: "DELETE" });
-const violations = async () => await (await fetch(controlUrl)).json() as unknown[];
+const violations = async () => (await (await fetch(controlUrl)).json()) as unknown[];
 /**
  * Makes the server answer sw.js and the app shell as a new release would, until the next test starts.
  * With `installs: false` the new worker refuses to install. The new shell carries `meta[name=release]`.
  */
 export const deployNextRelease = ({ installs = true } = {}) =>
-  fetch(`http://127.0.0.1:${controlPort}/next-release${installs ? "" : "?install=fail"}`, { method: "POST" });
+  fetch(`http://127.0.0.1:${controlPort}/next-release${installs ? "" : "?install=fail"}`, {
+    method: "POST",
+  });
 /** Gives an assistant this roster activity from the next bootstrap on, such as "waiting", which counts on the app badge, until the next test starts. */
 export const setActivity = (botId: string, state: string) =>
-  fetch(`http://127.0.0.1:${controlPort}/activity?bot=${encodeURIComponent(botId)}&state=${encodeURIComponent(state)}`, { method: "POST" });
+  fetch(
+    `http://127.0.0.1:${controlPort}/activity?bot=${encodeURIComponent(botId)}&state=${encodeURIComponent(state)}`,
+    { method: "POST" },
+  );
 /** The files the browser uploaded since the test started, with their bytes as base64. */
-export const uploadedFiles = async () => await (await fetch(`http://127.0.0.1:${controlPort}/uploads`)).json() as { name: string; mime: string; base64: string }[];
-export const enableGroupCatalog = () => fetch(`http://127.0.0.1:${controlPort}/group-catalog`, { method: "POST" });
-export const releaseChat = () => fetch(`http://127.0.0.1:${controlPort}/release-chat`, { method: "POST" });
+export const uploadedFiles = async () =>
+  (await (await fetch(`http://127.0.0.1:${controlPort}/uploads`)).json()) as {
+    name: string;
+    mime: string;
+    base64: string;
+  }[];
+export const enableGroupCatalog = () =>
+  fetch(`http://127.0.0.1:${controlPort}/group-catalog`, { method: "POST" });
+export const releaseChat = () =>
+  fetch(`http://127.0.0.1:${controlPort}/release-chat`, { method: "POST" });
 /** Holds each send's admission this long before the server answers, as a slow Hermes would, until the next test starts. */
-export const slowAdmission = (ms: number) => fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
+export const slowAdmission = (ms: number) =>
+  fetch(`http://127.0.0.1:${controlPort}/admission-delay?ms=${ms}`, { method: "POST" });
 
 /**
  * A signed-out page probes /api/bootstrap and Chromium logs the 401 as a console error. Nothing else is
  * excused here; a test that goes offline on purpose adds its own entries through `allowConsoleError`.
  */
 const signedOutProbe = (message: ConsoleMessage) =>
-  message.text().includes("401") && new URL(message.location().url || "http://none").pathname === "/api/bootstrap";
+  message.text().includes("401") &&
+  new URL(message.location().url || "http://none").pathname === "/api/bootstrap";
 
 export const test = base.extend<{ allowConsoleError: RegExp[]; pageHealth: void }>({
   allowConsoleError: [[], { option: false }],
   // Every page the test opens must stay free of uncaught errors, console errors and CSP violation reports.
-  pageHealth: [async ({ context, allowConsoleError, browserName }, use) => {
-    if (browserName === "webkit") await context.addInitScript(() => {
-      // Playwright WebKit has no push service; leave the app and its error handling real.
-      if (typeof PushManager === "undefined") return;
-      PushManager.prototype.getSubscription = async () => null;
-      PushManager.prototype.subscribe = async () => { throw new Error("no push service in Playwright WebKit"); };
-    });
-    const problems: string[] = [];
-    const watch = (page: Page) => {
-      page.on("pageerror", error => problems.push(`Uncaught error: ${error.message}`));
-      page.on("console", message => {
-        // Linux WebKit ignores this Chromium viewport extension and reports the ignored key as an error.
-        if (browserName === "webkit" && message.text() === 'Viewport argument key "interactive-widget" not recognized and ignored.') return;
-        if (message.type() !== "error" || signedOutProbe(message) || allowConsoleError.some(allowed => allowed.test(message.text()))) return;
-        problems.push(`Console error: ${message.text()} (${message.location().url})`);
+  pageHealth: [
+    async ({ context, allowConsoleError, browserName }, use) => {
+      if (browserName === "webkit")
+        await context.addInitScript(() => {
+          // Playwright WebKit has no push service; leave the app and its error handling real.
+          if (typeof PushManager === "undefined") return;
+          PushManager.prototype.getSubscription = async () => null;
+          PushManager.prototype.subscribe = async () => {
+            throw new Error("no push service in Playwright WebKit");
+          };
+        });
+      const problems: string[] = [];
+      const watch = (page: Page) => {
+        page.on("pageerror", (error) => problems.push(`Uncaught error: ${error.message}`));
+        page.on("console", (message) => {
+          // Linux WebKit ignores this Chromium viewport extension and reports the ignored key as an error.
+          if (
+            browserName === "webkit" &&
+            message.text() ===
+              'Viewport argument key "interactive-widget" not recognized and ignored.'
+          )
+            return;
+          if (
+            message.type() !== "error" ||
+            signedOutProbe(message) ||
+            allowConsoleError.some((allowed) => allowed.test(message.text()))
+          )
+            return;
+          problems.push(`Console error: ${message.text()} (${message.location().url})`);
+        });
+      };
+      context.pages().forEach(watch);
+      context.on("page", watch);
+      await resetServer();
+      await use();
+      // The browser posts a report after it blocks something, so give a late one a moment to land.
+      await expect
+        .poll(violations, { timeout: 1000 })
+        .toEqual([])
+        .catch(() => {});
+      expect({ problems, cspViolations: await violations() }).toEqual({
+        problems: [],
+        cspViolations: [],
       });
-    };
-    context.pages().forEach(watch);
-    context.on("page", watch);
-    await resetServer();
-    await use();
-    // The browser posts a report after it blocks something, so give a late one a moment to land.
-    await expect.poll(violations, { timeout: 1000 }).toEqual([]).catch(() => {});
-    expect({ problems, cspViolations: await violations() }).toEqual({ problems: [], cspViolations: [] });
-  }, { auto: true }],
+    },
+    { auto: true },
+  ],
 });
 
 export { expect };
@@ -71,9 +107,17 @@ export const conversation = (page: Page) => page.getByRole("region", { name: "Co
 /** Saves the dark theme for the signed-in member, and reloads so this device keeps it for boot.js. */
 export async function chooseDark(page: Page) {
   const saved = await page.evaluate(async () => {
-    const boot = await (await fetch("/api/bootstrap")).json() as { csrfToken: string; preferences: Record<string, unknown> };
-    return (await fetch("/api/preferences", { method: "PATCH", headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken },
-      body: JSON.stringify({ ...boot.preferences, theme: "dark" }) })).status;
+    const boot = (await (await fetch("/api/bootstrap")).json()) as {
+      csrfToken: string;
+      preferences: Record<string, unknown>;
+    };
+    return (
+      await fetch("/api/preferences", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": boot.csrfToken },
+        body: JSON.stringify({ ...boot.preferences, theme: "dark" }),
+      })
+    ).status;
   });
   expect(saved).toBe(200);
   await page.reload();
@@ -82,9 +126,9 @@ export async function chooseDark(page: Page) {
 
 /** Exercise the worker's notification handler through the page on both browser engines. */
 export async function tapNotification(page: Page, url: string) {
-  await page.evaluate(async address => {
+  await page.evaluate(async (address) => {
     const worker = (await navigator.serviceWorker.ready).active!;
-    await new Promise<void>(resolve => {
+    await new Promise<void>((resolve) => {
       const channel = new MessageChannel();
       channel.port1.onmessage = () => resolve();
       worker.postMessage({ type: "TEST_OPEN_CHAT", url: address }, [channel.port2]);

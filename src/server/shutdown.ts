@@ -10,17 +10,23 @@ export function installShutdown(app: FastifyInstance) {
   const sockets = new Set<Socket>();
   let draining = false;
   let deadline: ReturnType<typeof setTimeout> | undefined;
-  app.server.on("connection", socket => {
+  app.server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  const clearDeadline = () => { clearTimeout(deadline); deadline = undefined; };
+  const clearDeadline = () => {
+    clearTimeout(deadline);
+    deadline = undefined;
+  };
   app.server.once("close", clearDeadline);
   app.addHook("onClose", async () => clearDeadline());
   app.addHook("preClose", async () => {
     draining = true;
     deadline = setTimeout(() => {
-      app.log.warn({ connections: sockets.size }, "Closing connections after the shutdown grace period");
+      app.log.warn(
+        { connections: sockets.size },
+        "Closing connections after the shutdown grace period",
+      );
       // Node's closeAllConnections skips upgraded sockets. Raw connections cover those too,
       // along with peers that never sent a request and responses that could not finish.
       for (const socket of sockets) socket.destroy();

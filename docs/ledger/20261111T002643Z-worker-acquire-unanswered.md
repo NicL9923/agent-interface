@@ -49,24 +49,24 @@ Retry only when the lease exists and names the operation (`src/server/upgrades.t
 A scratch runner applied each replacement, deleted every `__pycache__`, ran the file with `python3 -B` and
 `PYTHONDONTWRITEBYTECODE=1`, and restored it. All 16 went red; the restored tree then passed.
 
-| Broken | File run | Red |
-| --- | --- | --- |
-| Unanswered acquire released and refused at once (the old behavior) | `tests/hermes_upgrade_linux_test.py` | held test, another-lease test |
-| No watch for a late lease | `tests/hermes_upgrade_linux_test.py` | late-lease test, another-lease test |
-| Late-lease watch accepts any lease | `tests/hermes_upgrade_linux_test.py` | another-lease test |
-| Unanswered acquire exits 75 | `tests/hermes_upgrade_linux_test.py` | held test, another-lease test |
-| Phase `acquire_unanswered` not saved | `tests/hermes_upgrade_linux_test.py` | held test |
-| Any error answer treated as the busy refusal | `tests/hermes_upgrade_linux_test.py` | other-error test |
-| `rpc` never raises `Answered` | `tests/hermes_upgrade_linux_test.py` | busy, other-error and unanswered-release tests |
-| `rpc` re-raises a failed child instead of `Unanswered` | `tests/hermes_upgrade_linux_test.py` | 7 errors in 5 tests |
-| `answered_error` without the one-key check | `tests/hermes_upgrade_linux_test.py` | failed-child test |
-| `answered_error` without the error-object check | `tests/hermes_upgrade_linux_test.py` | failed-child test |
-| `answered_error` lets a non-JSON line raise | `tests/hermes_upgrade_linux_test.py` | failed-child test |
-| Acquire keeps the 15 s wait | `tests/hermes_upgrade_linux_test.py` | 8 failures in 6 tests |
-| `NATIVE` gets no `wait` | `tests/hermes_upgrade_linux_test.py` | 8 failures in 6 tests |
-| The helper's busy text differs from the add-on's | `tests/hermes_send_lanes_test.py` | the maintenance active-work test |
-| Worker treats exit 76 as a generic failure | `scripts/hermes-upgrade-worker-test.py` | the unanswered-acquire test |
-| Worker shows the generic held message | `scripts/hermes-upgrade-worker-test.py` | the unanswered-acquire test |
+| Broken                                                             | File run                                | Red                                            |
+| ------------------------------------------------------------------ | --------------------------------------- | ---------------------------------------------- |
+| Unanswered acquire released and refused at once (the old behavior) | `tests/hermes_upgrade_linux_test.py`    | held test, another-lease test                  |
+| No watch for a late lease                                          | `tests/hermes_upgrade_linux_test.py`    | late-lease test, another-lease test            |
+| Late-lease watch accepts any lease                                 | `tests/hermes_upgrade_linux_test.py`    | another-lease test                             |
+| Unanswered acquire exits 75                                        | `tests/hermes_upgrade_linux_test.py`    | held test, another-lease test                  |
+| Phase `acquire_unanswered` not saved                               | `tests/hermes_upgrade_linux_test.py`    | held test                                      |
+| Any error answer treated as the busy refusal                       | `tests/hermes_upgrade_linux_test.py`    | other-error test                               |
+| `rpc` never raises `Answered`                                      | `tests/hermes_upgrade_linux_test.py`    | busy, other-error and unanswered-release tests |
+| `rpc` re-raises a failed child instead of `Unanswered`             | `tests/hermes_upgrade_linux_test.py`    | 7 errors in 5 tests                            |
+| `answered_error` without the one-key check                         | `tests/hermes_upgrade_linux_test.py`    | failed-child test                              |
+| `answered_error` without the error-object check                    | `tests/hermes_upgrade_linux_test.py`    | failed-child test                              |
+| `answered_error` lets a non-JSON line raise                        | `tests/hermes_upgrade_linux_test.py`    | failed-child test                              |
+| Acquire keeps the 15 s wait                                        | `tests/hermes_upgrade_linux_test.py`    | 8 failures in 6 tests                          |
+| `NATIVE` gets no `wait`                                            | `tests/hermes_upgrade_linux_test.py`    | 8 failures in 6 tests                          |
+| The helper's busy text differs from the add-on's                   | `tests/hermes_send_lanes_test.py`       | the maintenance active-work test               |
+| Worker treats exit 76 as a generic failure                         | `scripts/hermes-upgrade-worker-test.py` | the unanswered-acquire test                    |
+| Worker shows the generic held message                              | `scripts/hermes-upgrade-worker-test.py` | the unanswered-acquire test                    |
 
 ## Tests
 
@@ -85,16 +85,16 @@ and `MAINTENANCE_OVERHEAD` to 1 gives a 1 s child timeout, so its test takes abo
 
 ## Checks
 
-| Check | Result |
-| --- | --- |
-| `npm run test:py` | 44 files passed, 0 skipped, 0 failed (252.7 s) |
-| `tests/hermes_upgrade_linux_test.py` | 58 tests, 8 new |
-| `scripts/hermes-upgrade-worker-test.py` | 81 tests, 1 new, 1 skipped (existing optional native source test) |
-| `tests/deploy_common_test.py` | 32 tests, unchanged |
-| `ruff check .` (0.17.3) | all checks passed |
-| `npm run typecheck` | passed |
-| `npm run lint` | passed |
-| `npm test` | 195 files, 3,271 tests passed; the three Hermes update files (`tests/upgrades.test.ts`, `tests/hermes-upgrade-ui.test.ts`, `tests/hermes-update-tool.test.ts`) 47 tests passed. No TypeScript changed |
+| Check                                   | Result                                                                                                                                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run test:py`                       | 44 files passed, 0 skipped, 0 failed (252.7 s)                                                                                                                                                        |
+| `tests/hermes_upgrade_linux_test.py`    | 58 tests, 8 new                                                                                                                                                                                       |
+| `scripts/hermes-upgrade-worker-test.py` | 81 tests, 1 new, 1 skipped (existing optional native source test)                                                                                                                                     |
+| `tests/deploy_common_test.py`           | 32 tests, unchanged                                                                                                                                                                                   |
+| `ruff check .` (0.17.3)                 | all checks passed                                                                                                                                                                                     |
+| `npm run typecheck`                     | passed                                                                                                                                                                                                |
+| `npm run lint`                          | passed                                                                                                                                                                                                |
+| `npm test`                              | 195 files, 3,271 tests passed; the three Hermes update files (`tests/upgrades.test.ts`, `tests/hermes-upgrade-ui.test.ts`, `tests/hermes-update-tool.test.ts`) 47 tests passed. No TypeScript changed |
 
 The worker was not run against a real system, and `NATIVE` has not reached a real Hermes. The 120 s acquire wait
 and the 300 s watch are sized from the add-on's source, not measured.
@@ -134,18 +134,18 @@ wrong-key and wrong-route checks only assert a nonzero exit and keep the `/api/w
 Same method as above: each replacement applied, every `__pycache__` deleted, the test file run with `python3 -B` and
 `PYTHONDONTWRITEBYTECODE=1`, and the line restored. All ten went red; the restored tree passed.
 
-| Broken | Class run | Red |
-| --- | --- | --- |
-| `NATIVE` prints no unsent line | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
-| `rpc` never raises `NotSent` | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
-| `unsent` accepts any JSON object | `MaintenanceRpcTests` | the unsent-line test, the answered-line test |
-| `unsent` accepts extra keys | `MaintenanceRpcTests` | the unsent-line test |
-| `quiescence` has no `NotSent` release path | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
-| `baseline` does not read the key | `PlatformTests` | the missing-key-or-drain test |
-| `baseline` does not check the drain marker | `PlatformTests` | the missing-key-or-drain test |
-| `late_lease` treats an unreadable lease as this operation's | `MaintenanceRpcTests` | the unreadable-lease test, all three cases |
-| `rpc` lets a child timeout escape | `MaintenanceRpcTests` | the timed-out-child test |
-| Child timeout uses 30 instead of `MAINTENANCE_OVERHEAD` | `MaintenanceRpcTests` | the timed-out-child test |
+| Broken                                                      | Class run             | Red                                             |
+| ----------------------------------------------------------- | --------------------- | ----------------------------------------------- |
+| `NATIVE` prints no unsent line                              | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `rpc` never raises `NotSent`                                | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `unsent` accepts any JSON object                            | `MaintenanceRpcTests` | the unsent-line test, the answered-line test    |
+| `unsent` accepts extra keys                                 | `MaintenanceRpcTests` | the unsent-line test                            |
+| `quiescence` has no `NotSent` release path                  | `MaintenanceRpcTests` | the before-send test, the release-confirms test |
+| `baseline` does not read the key                            | `PlatformTests`       | the missing-key-or-drain test                   |
+| `baseline` does not check the drain marker                  | `PlatformTests`       | the missing-key-or-drain test                   |
+| `late_lease` treats an unreadable lease as this operation's | `MaintenanceRpcTests` | the unreadable-lease test, all three cases      |
+| `rpc` lets a child timeout escape                           | `MaintenanceRpcTests` | the timed-out-child test                        |
+| Child timeout uses 30 instead of `MAINTENANCE_OVERHEAD`     | `MaintenanceRpcTests` | the timed-out-child test                        |
 
 New tests: a wrong key, a closed port and a refused connection each raise `NotSent`, reach no add-on, and fail the
 release at once with no watch; an acquire refused once before it is sent exits 75 when the release confirms; the exact
@@ -156,14 +156,14 @@ the watch with exit 76 and are left alone; a missing key and an existing drain e
 
 On `59a1b49` (the branch merged with `origin/main` at `785f4f2`) plus these changes, same machine and tool versions.
 
-| Check | Result |
-| --- | --- |
-| `npm run test:py` | 44 files passed, 0 skipped, 0 failed (245.1 s) |
-| `tests/hermes_upgrade_linux_test.py` | 64 tests, 6 new since the first round |
-| `ruff check .` (0.17.3) | all checks passed |
-| `npm run typecheck` | passed |
-| `npm run lint` | passed |
-| `tests/upgrades.test.ts`, `tests/hermes-upgrade-ui.test.ts`, `tests/hermes-update-tool.test.ts` | 47 tests passed |
+| Check                                                                                           | Result                                         |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `npm run test:py`                                                                               | 44 files passed, 0 skipped, 0 failed (245.1 s) |
+| `tests/hermes_upgrade_linux_test.py`                                                            | 64 tests, 6 new since the first round          |
+| `ruff check .` (0.17.3)                                                                         | all checks passed                              |
+| `npm run typecheck`                                                                             | passed                                         |
+| `npm run lint`                                                                                  | passed                                         |
+| `tests/upgrades.test.ts`, `tests/hermes-upgrade-ui.test.ts`, `tests/hermes-update-tool.test.ts` | 47 tests passed                                |
 
 `NATIVE` still has not reached a real Hermes; the wrong-key, closed-port and refused-connection cases run the real
 `NATIVE` against the local ticket server and the fake WebSocket client. A failure of the interpreter's own

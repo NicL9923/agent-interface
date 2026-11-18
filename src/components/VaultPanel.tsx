@@ -9,8 +9,17 @@ import "./vault.css";
 function validOrigin(value: string) {
   try {
     const url = new URL(value);
-    return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash && url.pathname === "/";
-  } catch { return false; }
+    return (
+      ["https:", "http:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname === "/"
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function VaultPanel({ botId }: { botId: string }) {
@@ -33,10 +42,16 @@ export function VaultPanel({ botId }: { botId: string }) {
   const [unlock, setUnlock] = useState<VaultSourceName | null>(null);
   const [password, setPassword] = useState("");
   const [master, setMaster] = useState("");
-  const [form, setForm] = useState<Omit<AddVaultLogin, "password">>({ label: "", origin: "", identifier: "", identifierType: "email" });
+  const [form, setForm] = useState<Omit<AddVaultLogin, "password">>({
+    label: "",
+    origin: "",
+    identifier: "",
+    identifierType: "email",
+  });
   const path = `/bots/${encodeURIComponent(botId)}/vault`;
   const vaultResource = useResource<ProfileVault>(path, {
-    errorMessage: () => "Could not load this Hermes profile's logins. Check the connection and reload.",
+    errorMessage: () =>
+      "Could not load this Hermes profile's logins. Check the connection and reload.",
     onData: () => setUncertain(false),
   });
   const { data: vault, loading } = vaultResource;
@@ -44,19 +59,40 @@ export function VaultPanel({ botId }: { botId: string }) {
   const { busy } = action;
   const error = action.error || vaultResource.error;
   useEffect(() => {
-    const clear = () => { setPassword(""); setMaster(""); };
-    const hidden = () => { if (document.visibilityState === "hidden") clear(); };
-    document.addEventListener("visibilitychange", hidden); window.addEventListener("pagehide", clear);
-    return () => { document.removeEventListener("visibilitychange", hidden); window.removeEventListener("pagehide", clear); };
+    const clear = () => {
+      setPassword("");
+      setMaster("");
+    };
+    const hidden = () => {
+      if (document.visibilityState === "hidden") clear();
+    };
+    document.addEventListener("visibilitychange", hidden);
+    window.addEventListener("pagehide", clear);
+    return () => {
+      document.removeEventListener("visibilitychange", hidden);
+      window.removeEventListener("pagehide", clear);
+    };
   }, []);
   // Reloading is how a person reviews an uncertain change, so it retires that warning.
-  function reload() { returnToReload.current = true; setPassword(""); setMaster(""); action.setError(""); void vaultResource.reload(); }
+  function reload() {
+    returnToReload.current = true;
+    setPassword("");
+    setMaster("");
+    action.setError("");
+    void vaultResource.reload();
+  }
   async function mutate(work: () => Promise<unknown>, success: string) {
     if (loading || uncertain) return;
-    setPassword(""); setMaster("");
+    setPassword("");
+    setMaster("");
     await action.run(work, {
       success,
-      onSuccess: () => { setRemove(null); setUnlock(null); setAdding(false); void vaultResource.reload(); },
+      onSuccess: () => {
+        setRemove(null);
+        setUnlock(null);
+        setAdding(false);
+        void vaultResource.reload();
+      },
       onError: () => {
         setUncertain(true);
         return "Hermes could not confirm this change. Reload and review the saved entries before trying again. Secret fields have been cleared.";
@@ -73,16 +109,28 @@ export function VaultPanel({ botId }: { botId: string }) {
       return;
     }
     if (returnToReload.current) {
-      reloadButton.current?.focus(); returnToReload.current = false; return;
+      reloadButton.current?.focus();
+      returnToReload.current = false;
+      return;
     }
-    if (remove) { keepButton.current?.focus(); return; }
+    if (remove) {
+      keepButton.current?.focus();
+      return;
+    }
     if (returnToRemove.current) {
       const trigger = removeButtons.current.get(returnToRemove.current);
-      (trigger && !trigger.disabled ? trigger : !disabled ? addButton.current : reloadButton.current)?.focus();
+      (trigger && !trigger.disabled
+        ? trigger
+        : !disabled
+          ? addButton.current
+          : reloadButton.current
+      )?.focus();
       returnToRemove.current = null;
     }
     if (!unlock && returnToUnlock.current) {
-      const trigger = unlockButtons.current.get(returnToUnlock.current) || lockButtons.current.get(returnToUnlock.current);
+      const trigger =
+        unlockButtons.current.get(returnToUnlock.current) ||
+        lockButtons.current.get(returnToUnlock.current);
       (trigger && !trigger.disabled ? trigger : reloadButton.current)?.focus();
       returnToUnlock.current = null;
     }
@@ -91,51 +139,373 @@ export function VaultPanel({ botId }: { botId: string }) {
       returnToAdd.current = false;
     }
   }, [remove, adding, unlock, busy, loading, disabled, uncertain]);
-  return <section className="vault-panel">
-    <div className="vault-heading"><h2>Passwords &amp; logins</h2><div className="vault-heading-actions"><button ref={addButton} type="button" aria-expanded={adding} disabled={disabled} onClick={() => {
-      returnToAdd.current = true; returnToUnlock.current = null; returnToRemove.current = null; setRemove(null);
-      if (!adding) setForm({ label: "", origin: "", identifier: "", identifierType: "email" });
-      setAdding(!adding); setPassword(""); setMaster(""); setUnlock(null);
-    }}>Add login</button><button ref={reloadButton} className="vault-reload" type="button" aria-describedby={uncertain ? errorId : undefined} disabled={busy || loading} onClick={reload}>Reload logins</button></div></div>
-    <p className="muted">Manage this assistant's Hermes vault. Passwords stay out of your conversation and draft; usernames and labels are visible metadata.</p>
-    {vault && <p className="capability-note"><strong>Profile: {vault.profile}.</strong> {vault.notice}</p>}
-    {loading && <p role="status">Loading Hermes vault...</p>}
-    {error && <FormMessage ref={errorMessage} id={errorId} tone="error">{error}</FormMessage>}{action.notice && <FormMessage tone="notice">{action.notice}</FormMessage>}
-    {adding && <form className="vault-form" autoComplete="off" onSubmit={event => {
-      event.preventDefault();
-      if (!validOrigin(form.origin)) { action.setError("Enter the website address through the hostname, such as https://example.com."); return; }
-      const input = { ...form, password };
-      void mutate(() => write(path + "/logins", input), "Login saved in Hermes.");
-    }}>
-      <label>Label<input autoFocus required maxLength={200} value={form.label} disabled={disabled} onChange={event => setForm({ ...form, label: event.target.value })} placeholder="Ranch supply account" /></label>
-      <label>Website address<input required type="url" maxLength={2048} value={form.origin} disabled={disabled} onChange={event => setForm({ ...form, origin: event.target.value })} placeholder="https://example.com" /></label>
-      <p className="muted">Use the exact website, such as https://example.com, without a page path. Hermes checks the website before filling credentials.</p>
-      <label>Identifier type<select value={form.identifierType} disabled={disabled} onChange={event => setForm({ ...form, identifierType: event.target.value as AddVaultLogin["identifierType"] })}>
-        <option value="email">Email</option><option value="username">Username</option><option value="phone">Phone</option></select></label>
-      <label>{form.identifierType === "email" ? "Email" : form.identifierType === "phone" ? "Phone" : "Username"}<input required maxLength={1000} autoComplete="off" value={form.identifier} disabled={disabled} onChange={event => setForm({ ...form, identifier: event.target.value })} /></label>
-      <label>Password<input required type="password" maxLength={4096} autoComplete="off" autoCorrect="off" spellCheck={false} value={password} disabled={disabled} onChange={event => setPassword(event.target.value)} /></label>
-      <div className="actions"><button className="primary" disabled={disabled || !password || !validOrigin(form.origin)}>{busy ? "Saving..." : "Save login"}</button>
-        <button type="button" disabled={busy} onClick={() => { setAdding(false); setPassword(""); }}>Cancel</button></div>
-    </form>}
-    {vault && <><div><h3>Saved logins</h3>{!vault.items.length && <p className="muted">No saved logins in the enabled sources.</p>}
-      {vault.items.map(item => <article className="vault-entry" key={item.id}><div className="vault-entry-heading"><h4>{item.label}</h4><small className="vault-source-tag">{item.backend === "local" ? "Hermes vault" : item.backend === "onepassword" ? "1Password" : "Bitwarden"}</small></div>
-        <p className="vault-identifier">{item.identifier}</p><p className="vault-origin">{item.origin}</p>{item.hasOtp && <small>Includes a saved authenticator secret.</small>}
-        {item.canRemove && (remove === item.id ? <div className="vault-remove-confirmation"><p id={removePromptId}>Remove {item.label} from Hermes?</p><div className="actions"><button aria-describedby={removePromptId} type="button" className="danger" disabled={disabled}
-          onClick={() => void mutate(() => write(path + `/logins/${encodeURIComponent(item.id)}`, {}, "DELETE"), "Login removed from Hermes.")}>Remove login</button>
-          <button ref={keepButton} type="button" aria-describedby={removePromptId} disabled={busy} onClick={() => setRemove(null)}>Keep login</button></div></div> : <button ref={node => { if (node) removeButtons.current.set(item.id, node); else removeButtons.current.delete(item.id); }} type="button" disabled={disabled} onClick={() => { returnToRemove.current = item.id; setRemove(item.id); }}>Remove...</button>)}
-      </article>)}</div>
-      <div><h3>Hermes vault sources</h3>{vault.sources.map(source => <div className="vault-source" key={source.name}>
-        <div className="vault-source-summary"><div><strong>{source.displayName}</strong><p className="muted">{!source.installed ? "CLI is not installed" : source.name === "local" ? "Available to Hermes in this profile" : !source.enabled ? "Disabled" : source.unlocked ? "Unlocked for this profile" : "Locked"}</p></div>
-        <div className="vault-source-actions">{source.canToggle && <label className="checkbox-label"><input type="checkbox" checked={source.enabled} disabled={disabled} onChange={event => {
-          const enabled = event.target.checked; void mutate(() => write(path + `/sources/${source.name}`, { enabled }, "PUT"), enabled ? "Vault source enabled." : "Vault source disabled.");
-        }} /> Use {source.displayName}</label>}
-          {source.canUnlock && unlock !== source.name && <button ref={node => { if (node) unlockButtons.current.set(source.name, node); else unlockButtons.current.delete(source.name); }} type="button" disabled={disabled} onClick={() => { returnToAdd.current = false; returnToRemove.current = null; setRemove(null); returnToUnlock.current = source.name; setUnlock(source.name); setMaster(""); setPassword(""); setAdding(false); }}>Unlock</button>}
-          {source.canLock && <button ref={node => { if (node) lockButtons.current.set(source.name, node); else lockButtons.current.delete(source.name); }} type="button" disabled={disabled} onClick={() => { returnToUnlock.current = source.name; void mutate(() => write(path + `/sources/${source.name}/lock`, {}), "Vault source locked."); }}>Lock</button>}
-        </div></div>
-          {unlock === source.name && <form className="vault-unlock-form" autoComplete="off" onSubmit={event => { event.preventDefault(); const value = master; void mutate(() => write(path + `/sources/${source.name}/unlock`, { password: value }), "Vault source unlocked for this profile."); }}>
-            <label>Master password<input autoFocus required type="password" autoComplete="off" maxLength={4096} value={master} disabled={disabled} onChange={event => setMaster(event.target.value)} /></label>
-            <div className="actions"><button className="primary" disabled={disabled || !master}>Unlock source</button><button type="button" disabled={busy} onClick={() => { setUnlock(null); setMaster(""); }}>Cancel</button></div>
-          </form>}
-      </div>)}</div></>}
-  </section>;
+  return (
+    <section className="vault-panel">
+      <div className="vault-heading">
+        <h2>Passwords &amp; logins</h2>
+        <div className="vault-heading-actions">
+          <button
+            ref={addButton}
+            type="button"
+            aria-expanded={adding}
+            disabled={disabled}
+            onClick={() => {
+              returnToAdd.current = true;
+              returnToUnlock.current = null;
+              returnToRemove.current = null;
+              setRemove(null);
+              if (!adding)
+                setForm({ label: "", origin: "", identifier: "", identifierType: "email" });
+              setAdding(!adding);
+              setPassword("");
+              setMaster("");
+              setUnlock(null);
+            }}
+          >
+            Add login
+          </button>
+          <button
+            ref={reloadButton}
+            className="vault-reload"
+            type="button"
+            aria-describedby={uncertain ? errorId : undefined}
+            disabled={busy || loading}
+            onClick={reload}
+          >
+            Reload logins
+          </button>
+        </div>
+      </div>
+      <p className="muted">
+        Manage this assistant's Hermes vault. Passwords stay out of your conversation and draft;
+        usernames and labels are visible metadata.
+      </p>
+      {vault && (
+        <p className="capability-note">
+          <strong>Profile: {vault.profile}.</strong> {vault.notice}
+        </p>
+      )}
+      {loading && <p role="status">Loading Hermes vault...</p>}
+      {error && (
+        <FormMessage ref={errorMessage} id={errorId} tone="error">
+          {error}
+        </FormMessage>
+      )}
+      {action.notice && <FormMessage tone="notice">{action.notice}</FormMessage>}
+      {adding && (
+        <form
+          className="vault-form"
+          autoComplete="off"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!validOrigin(form.origin)) {
+              action.setError(
+                "Enter the website address through the hostname, such as https://example.com.",
+              );
+              return;
+            }
+            const input = { ...form, password };
+            void mutate(() => write(path + "/logins", input), "Login saved in Hermes.");
+          }}
+        >
+          <label>
+            Label
+            <input
+              autoFocus
+              required
+              maxLength={200}
+              value={form.label}
+              disabled={disabled}
+              onChange={(event) => setForm({ ...form, label: event.target.value })}
+              placeholder="Ranch supply account"
+            />
+          </label>
+          <label>
+            Website address
+            <input
+              required
+              type="url"
+              maxLength={2048}
+              value={form.origin}
+              disabled={disabled}
+              onChange={(event) => setForm({ ...form, origin: event.target.value })}
+              placeholder="https://example.com"
+            />
+          </label>
+          <p className="muted">
+            Use the exact website, such as https://example.com, without a page path. Hermes checks
+            the website before filling credentials.
+          </p>
+          <label>
+            Identifier type
+            <select
+              value={form.identifierType}
+              disabled={disabled}
+              onChange={(event) =>
+                setForm({
+                  ...form,
+                  identifierType: event.target.value as AddVaultLogin["identifierType"],
+                })
+              }
+            >
+              <option value="email">Email</option>
+              <option value="username">Username</option>
+              <option value="phone">Phone</option>
+            </select>
+          </label>
+          <label>
+            {form.identifierType === "email"
+              ? "Email"
+              : form.identifierType === "phone"
+                ? "Phone"
+                : "Username"}
+            <input
+              required
+              maxLength={1000}
+              autoComplete="off"
+              value={form.identifier}
+              disabled={disabled}
+              onChange={(event) => setForm({ ...form, identifier: event.target.value })}
+            />
+          </label>
+          <label>
+            Password
+            <input
+              required
+              type="password"
+              maxLength={4096}
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
+              value={password}
+              disabled={disabled}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </label>
+          <div className="actions">
+            <button
+              className="primary"
+              disabled={disabled || !password || !validOrigin(form.origin)}
+            >
+              {busy ? "Saving..." : "Save login"}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setAdding(false);
+                setPassword("");
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {vault && (
+        <>
+          <div>
+            <h3>Saved logins</h3>
+            {!vault.items.length && (
+              <p className="muted">No saved logins in the enabled sources.</p>
+            )}
+            {vault.items.map((item) => (
+              <article className="vault-entry" key={item.id}>
+                <div className="vault-entry-heading">
+                  <h4>{item.label}</h4>
+                  <small className="vault-source-tag">
+                    {item.backend === "local"
+                      ? "Hermes vault"
+                      : item.backend === "onepassword"
+                        ? "1Password"
+                        : "Bitwarden"}
+                  </small>
+                </div>
+                <p className="vault-identifier">{item.identifier}</p>
+                <p className="vault-origin">{item.origin}</p>
+                {item.hasOtp && <small>Includes a saved authenticator secret.</small>}
+                {item.canRemove &&
+                  (remove === item.id ? (
+                    <div className="vault-remove-confirmation">
+                      <p id={removePromptId}>Remove {item.label} from Hermes?</p>
+                      <div className="actions">
+                        <button
+                          aria-describedby={removePromptId}
+                          type="button"
+                          className="danger"
+                          disabled={disabled}
+                          onClick={() =>
+                            void mutate(
+                              () =>
+                                write(
+                                  path + `/logins/${encodeURIComponent(item.id)}`,
+                                  {},
+                                  "DELETE",
+                                ),
+                              "Login removed from Hermes.",
+                            )
+                          }
+                        >
+                          Remove login
+                        </button>
+                        <button
+                          ref={keepButton}
+                          type="button"
+                          aria-describedby={removePromptId}
+                          disabled={busy}
+                          onClick={() => setRemove(null)}
+                        >
+                          Keep login
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      ref={(node) => {
+                        if (node) removeButtons.current.set(item.id, node);
+                        else removeButtons.current.delete(item.id);
+                      }}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => {
+                        returnToRemove.current = item.id;
+                        setRemove(item.id);
+                      }}
+                    >
+                      Remove...
+                    </button>
+                  ))}
+              </article>
+            ))}
+          </div>
+          <div>
+            <h3>Hermes vault sources</h3>
+            {vault.sources.map((source) => (
+              <div className="vault-source" key={source.name}>
+                <div className="vault-source-summary">
+                  <div>
+                    <strong>{source.displayName}</strong>
+                    <p className="muted">
+                      {!source.installed
+                        ? "CLI is not installed"
+                        : source.name === "local"
+                          ? "Available to Hermes in this profile"
+                          : !source.enabled
+                            ? "Disabled"
+                            : source.unlocked
+                              ? "Unlocked for this profile"
+                              : "Locked"}
+                    </p>
+                  </div>
+                  <div className="vault-source-actions">
+                    {source.canToggle && (
+                      <label className="checkbox-label">
+                        <input
+                          type="checkbox"
+                          checked={source.enabled}
+                          disabled={disabled}
+                          onChange={(event) => {
+                            const enabled = event.target.checked;
+                            void mutate(
+                              () => write(path + `/sources/${source.name}`, { enabled }, "PUT"),
+                              enabled ? "Vault source enabled." : "Vault source disabled.",
+                            );
+                          }}
+                        />{" "}
+                        Use {source.displayName}
+                      </label>
+                    )}
+                    {source.canUnlock && unlock !== source.name && (
+                      <button
+                        ref={(node) => {
+                          if (node) unlockButtons.current.set(source.name, node);
+                          else unlockButtons.current.delete(source.name);
+                        }}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          returnToAdd.current = false;
+                          returnToRemove.current = null;
+                          setRemove(null);
+                          returnToUnlock.current = source.name;
+                          setUnlock(source.name);
+                          setMaster("");
+                          setPassword("");
+                          setAdding(false);
+                        }}
+                      >
+                        Unlock
+                      </button>
+                    )}
+                    {source.canLock && (
+                      <button
+                        ref={(node) => {
+                          if (node) lockButtons.current.set(source.name, node);
+                          else lockButtons.current.delete(source.name);
+                        }}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => {
+                          returnToUnlock.current = source.name;
+                          void mutate(
+                            () => write(path + `/sources/${source.name}/lock`, {}),
+                            "Vault source locked.",
+                          );
+                        }}
+                      >
+                        Lock
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {unlock === source.name && (
+                  <form
+                    className="vault-unlock-form"
+                    autoComplete="off"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      const value = master;
+                      void mutate(
+                        () => write(path + `/sources/${source.name}/unlock`, { password: value }),
+                        "Vault source unlocked for this profile.",
+                      );
+                    }}
+                  >
+                    <label>
+                      Master password
+                      <input
+                        autoFocus
+                        required
+                        type="password"
+                        autoComplete="off"
+                        maxLength={4096}
+                        value={master}
+                        disabled={disabled}
+                        onChange={(event) => setMaster(event.target.value)}
+                      />
+                    </label>
+                    <div className="actions">
+                      <button className="primary" disabled={disabled || !master}>
+                        Unlock source
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => {
+                          setUnlock(null);
+                          setMaster("");
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
 }

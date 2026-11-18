@@ -43,8 +43,8 @@ existing case is unchanged.
 
 ## Red runs
 
-| Line broken by hand | Result |
-| --- | --- |
+| Line broken by hand                                                  | Result                                                                                                                                         |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | deleted `if (echo.turn === "queued") return false;` in `settledHere` | 2 failed, 60 passed: "keeps the row through the settle…" and "ends when a read shows the queued run start, or at the handoff bound". Restored. |
 
 ## Checks

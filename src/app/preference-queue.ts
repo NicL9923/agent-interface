@@ -28,19 +28,24 @@ export function preferenceQueue(options: {
     newest = entry;
     generation++;
     saving++;
-    const run = tail.then(async () => {
-      if (!current()) return;
-      try {
-        const saved = await options.send(value);
+    const run = tail
+      .then(async () => {
         if (!current()) return;
-        if (newest === entry) newest = null;
-        options.apply(saved);
-      } catch (error) {
-        if (!current()) return;
-        if (newest === entry) newest = null;
-        options.failed(error as Error);
-      }
-    }).finally(() => { saving--; generation++; });
+        try {
+          const saved = await options.send(value);
+          if (!current()) return;
+          if (newest === entry) newest = null;
+          options.apply(saved);
+        } catch (error) {
+          if (!current()) return;
+          if (newest === entry) newest = null;
+          options.failed(error as Error);
+        }
+      })
+      .finally(() => {
+        saving--;
+        generation++;
+      });
     tail = run;
     return run;
   };
@@ -50,7 +55,7 @@ export function preferenceQueue(options: {
     return latest ? save(change(latest)) : Promise.resolve();
   };
   /** Taken when a read starts; `fresh` is true only if no save was running or ran since. */
-  const mark = () => saving ? -1 : generation;
+  const mark = () => (saving ? -1 : generation);
   const fresh = (marked: number) => marked === generation && !saving;
   return { save, edit, mark, fresh };
 }

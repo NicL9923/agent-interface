@@ -21,12 +21,12 @@ unanswered-acquire case in `20261111T002643Z-worker-acquire-unanswered.md`) stuc
 Read from `src/hermes/extension.py` at this commit. `agent-interface.submit` answers a JSON-RPC error from exactly these places; a handler
 that raises is answered `-32000 handler error`, which can follow admission.
 
-| Code | Where | Why nothing was admitted |
-| --- | --- | --- |
-| 409 | `guarded_call` (line 797) | the lease is held; answered before `route` or the handler runs |
-| 5035 | `route` (line 848) | `retirement.acquire()` failed, which `guarded_acquire` does while a lease is held; answered before the send is queued |
+| Code   | Where                                     | Why nothing was admitted                                                                                                   |
+| ------ | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 409    | `guarded_call` (line 797)                 | the lease is held; answered before `route` or the handler runs                                                             |
+| 5035   | `route` (line 848)                        | `retirement.acquire()` failed, which `guarded_acquire` does while a lease is held; answered before the send is queued      |
 | -32602 | `submit` (line 1803), `admit` (line 1863) | invalid parameters; or no canonical session for the profile, or not the one the call named; both before the receipt insert |
-| 4093 | `admit` (line 1858) | the request ID has a receipt with a different digest; this call writes nothing, and that receipt is untouched |
+| 4093   | `admit` (line 1858)                       | the request ID has a receipt with a different digest; this call writes nothing, and that receipt is untouched              |
 
 Not in the set: `-32000` (a raise anywhere in the handler or a lane), `4094` (already mapped to a 409 the person reviews), `4091` (a retry's
 own guard, mapped to `rejected` for a retry only, unchanged), the native refusals `4090`, `4010`, `4001` (the add-on turns those into a
@@ -73,33 +73,33 @@ rejected receipt itself and answers a result, never an error), and every failure
 A scratch runner applied each replacement, deleted every `__pycache__`, ran the named file (`python3 -B`, `PYTHONDONTWRITEBYTECODE=1`, or
 `npx vitest run`), and restored the file. All 13 went red; the restored tree then passed both files.
 
-| Broken | File run | Red |
-| --- | --- | --- |
-| 409 left out of the set | `tests/hermes-adapter.test.ts` | the rejected-errors test |
-| 5035 left out | same | same |
-| -32602 left out | same | same |
-| 4093 left out | same | same |
-| -32000 added | same | the uncertain test |
-| 4091 added | same | the uncertain test and the existing retry test |
-| Any code in the set | same | the uncertain test and the retry test |
-| 409 shows the add-on's text | same | the rejected-errors test |
-| Trailing period doubled | same | the rejected-errors test |
-| No generic message without add-on text | same | the rejected-errors test |
-| A pre-admission error answers `uncertain` | same | the rejected-errors test |
-| Add-on rewrites a receipt before answering 4093 | `tests/hermes_extension_journal_test.py` | the new test |
-| Add-on calls Hermes before answering -32602 | same | the new test, 2 failures |
+| Broken                                          | File run                                 | Red                                            |
+| ----------------------------------------------- | ---------------------------------------- | ---------------------------------------------- |
+| 409 left out of the set                         | `tests/hermes-adapter.test.ts`           | the rejected-errors test                       |
+| 5035 left out                                   | same                                     | same                                           |
+| -32602 left out                                 | same                                     | same                                           |
+| 4093 left out                                   | same                                     | same                                           |
+| -32000 added                                    | same                                     | the uncertain test                             |
+| 4091 added                                      | same                                     | the uncertain test and the existing retry test |
+| Any code in the set                             | same                                     | the uncertain test and the retry test          |
+| 409 shows the add-on's text                     | same                                     | the rejected-errors test                       |
+| Trailing period doubled                         | same                                     | the rejected-errors test                       |
+| No generic message without add-on text          | same                                     | the rejected-errors test                       |
+| A pre-admission error answers `uncertain`       | same                                     | the rejected-errors test                       |
+| Add-on rewrites a receipt before answering 4093 | `tests/hermes_extension_journal_test.py` | the new test                                   |
+| Add-on calls Hermes before answering -32602     | same                                     | the new test, 2 failures                       |
 
 ## Checks
 
 `.agents/tools/check-all --keep-going`: all 7 passed in 5m50s, none of it queued.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 205 files, 3,636 tests passed |
-| `npm run build` | 891 modules |
-| `npm run test:e2e` | 40 tests passed |
-| `npm run test:py` | 45 files passed in 4m16s |
+| Check                                    | Result                        |
+| ---------------------------------------- | ----------------------------- |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                        |
+| `npm test`                               | 205 files, 3,636 tests passed |
+| `npm run build`                          | 891 modules                   |
+| `npm run test:e2e`                       | 40 tests passed               |
+| `npm run test:py`                        | 45 files passed in 4m16s      |
 
 ## Not exercised
 
@@ -147,24 +147,24 @@ answers a `talk/ask` with the same text, which `src/app/talk-loop.ts` speaks as 
 
 Each break was made by hand, the named files run, and the line restored. The restored tree then passed all three files (296 tests).
 
-| Broken | Red |
-| --- | --- |
-| The retry exemption replaced by `true` | both retry tests (409 expected `uncertain`; the route test expected `uncertain` after the refusal) |
-| `talkAnswer` returns `receipt.message` unchanged | the three table cases in `tests/talk-api.test.ts` |
-| `talk-loop` speaks `error.message` unchanged | the maintenance-gate test in `tests/talk-loop.test.ts` |
+| Broken                                           | Red                                                                                                |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| The retry exemption replaced by `true`           | both retry tests (409 expected `uncertain`; the route test expected `uncertain` after the refusal) |
+| `talkAnswer` returns `receipt.message` unchanged | the three table cases in `tests/talk-api.test.ts`                                                  |
+| `talk-loop` speaks `error.message` unchanged     | the maintenance-gate test in `tests/talk-loop.test.ts`                                             |
 
 ### Checks
 
 `.agents/tools/check-all --keep-going`: all 7 passed in 11m07s, 5m03s of it queued for the machine's heavy slot. A first run found two
 type errors in the new code (an optional `message`, an option typed `false`); both were fixed and the run above is the second.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` | passed |
-| `npm test` | 205 files, 3,653 tests passed |
-| `npm run build` | 892 modules |
-| `npm run test:e2e` | 40 tests passed |
-| `npm run test:py` | 45 files passed in 4m25s |
+| Check                           | Result                        |
+| ------------------------------- | ----------------------------- |
+| typecheck, lint, `ruff check .` | passed                        |
+| `npm test`                      | 205 files, 3,653 tests passed |
+| `npm run build`                 | 892 modules                   |
+| `npm run test:e2e`              | 40 tests passed               |
+| `npm run test:py`               | 45 files passed in 4m25s      |
 
 Not exercised: no real add-on answered a retry. The Talk sentence filter is a text rule, so a refusal whose only useful sentence mentions a
 draft is spoken with that sentence missing. The three messages Talk can receive today read correctly without it.

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { changeStream, LATE_TIMER_MS, MAX_RETRY_MS, retryDelay, streamSilence } from "../src/client-api";
+import {
+  changeStream,
+  LATE_TIMER_MS,
+  MAX_RETRY_MS,
+  retryDelay,
+  streamSilence,
+} from "../src/client-api";
 import { FakeEventSource } from "./fake-event-source";
 
 // A stream that a proxy, a sleeping laptop or a phone's radio cut can stay open and silent. Each stream
@@ -38,7 +44,10 @@ function start(path = "/bots/shared/events?inflight=3", onChange = vi.fn(), rand
 /** A stream that has been live for a minute, its pings arriving on time, so it has recovered. */
 function healthy(random = middle) {
   const started = start(undefined, undefined, random);
-  for (let ping = 0; ping < 6; ping++) { vi.advanceTimersByTime(10_000); live().emit("ping", "10"); }
+  for (let ping = 0; ping < 6; ping++) {
+    vi.advanceTimersByTime(10_000);
+    live().emit("ping", "10");
+  }
   return started;
 }
 /**
@@ -46,17 +55,27 @@ function healthy(random = middle) {
  * the owner's `open` every `ownerMs` as the household, room and chat owners do. Returns the second, from
  * the outage's start, of each new connection.
  */
-function outage(stream: { open: () => void }, serve: (source: FakeEventSource) => void, ownerMs: number, minutes = 10) {
-  const from = Date.now(), seen = opened();
+function outage(
+  stream: { open: () => void },
+  serve: (source: FakeEventSource) => void,
+  ownerMs: number,
+  minutes = 10,
+) {
+  const from = Date.now(),
+    seen = opened();
   FakeEventSource.serve = serve;
   try {
     for (let step = 1; step <= minutes * 60; step++) {
       vi.advanceTimersByTime(1_000);
-      if (step * 1000 % ownerMs === 0) stream.open();
+      if ((step * 1000) % ownerMs === 0) stream.open();
     }
-  } finally { FakeEventSource.serve = undefined; }
+  } finally {
+    FakeEventSource.serve = undefined;
+  }
   // To a tenth of a second: the network and each silent verdict add a millisecond on the fake clock.
-  return FakeEventSource.opened.slice(seen).map(source => Math.round((source.at - from) / 100) / 10);
+  return FakeEventSource.opened
+    .slice(seen)
+    .map((source) => Math.round((source.at - from) / 100) / 10);
 }
 
 describe("stream silence", () => {
@@ -83,7 +102,10 @@ describe("the stream watchdog", () => {
   it("asks the server to ping every 10 seconds, whatever the path's query", () => {
     changeStream("/events", vi.fn()).open();
     changeStream("/events?group=room", vi.fn()).open();
-    expect(FakeEventSource.created).toEqual(["/api/events?ping=10", "/api/events?group=room&ping=10"]);
+    expect(FakeEventSource.created).toEqual([
+      "/api/events?ping=10",
+      "/api/events?group=room&ping=10",
+    ]);
   });
 
   it("keeps a stream whose ping arrives just before the deadline, and closes it to retry just after the next one", () => {
@@ -181,26 +203,39 @@ describe("the stream watchdog", () => {
 
   // The schedules in the ledger, at the middle of the jitter, with the household owner calling `open`
   // every 45 seconds and the chat owner every 30: neither adds an attempt.
-  it.each([45_000, 30_000])("follows one schedule through a ten-minute outage whatever the owner asks, every %i ms", ownerMs => {
-    const refusing = healthy();
-    live().fail();
-    expect(outage(refusing.stream, source => source.fail(), ownerMs))
-      .toEqual([1.5, 4.5, 10.5, 22.5, 46.5, 94.5, 190.5, 382.5]);
-    refusing.stream.close();
-    FakeEventSource.reset();
+  it.each([45_000, 30_000])(
+    "follows one schedule through a ten-minute outage whatever the owner asks, every %i ms",
+    (ownerMs) => {
+      const refusing = healthy();
+      live().fail();
+      expect(outage(refusing.stream, (source) => source.fail(), ownerMs)).toEqual([
+        1.5, 4.5, 10.5, 22.5, 46.5, 94.5, 190.5, 382.5,
+      ]);
+      refusing.stream.close();
+      FakeEventSource.reset();
 
-    // A server that accepts and never speaks: each connection gets the default interval's 55 seconds.
-    const silent = healthy();
-    expect(outage(silent.stream, source => source.connect(), ownerMs))
-      .toEqual([26.5, 84.5, 145.5, 212.5, 291.5, 394.5, 545.5]);
-    silent.stream.close();
-    FakeEventSource.reset();
+      // A server that accepts and never speaks: each connection gets the default interval's 55 seconds.
+      const silent = healthy();
+      expect(outage(silent.stream, (source) => source.connect(), ownerMs)).toEqual([
+        26.5, 84.5, 145.5, 212.5, 291.5, 394.5, 545.5,
+      ]);
+      silent.stream.close();
+      FakeEventSource.reset();
 
-    // A server that greets and then stalls. The greeting is not recovery, so the backoff keeps growing.
-    const stalling = healthy();
-    expect(outage(stalling.stream, source => { source.connect(); source.emit("ping", "10"); }, ownerMs))
-      .toEqual([26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5]);
-  });
+      // A server that greets and then stalls. The greeting is not recovery, so the backoff keeps growing.
+      const stalling = healthy();
+      expect(
+        outage(
+          stalling.stream,
+          (source) => {
+            source.connect();
+            source.emit("ping", "10");
+          },
+          ownerMs,
+        ),
+      ).toEqual([26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5]);
+    },
+  );
 
   it("does not count the greeting of a connection that took long to open as recovery", () => {
     start();
@@ -265,7 +300,10 @@ describe("the stream watchdog", () => {
 
   it("starts at once when the owner reconnects for the network returning, dropping the backoff", () => {
     const { stream } = start();
-    for (let failure = 0; failure < 6; failure++) { live().fail(); vi.runOnlyPendingTimers(); }
+    for (let failure = 0; failure < 6; failure++) {
+      live().fail();
+      vi.runOnlyPendingTimers();
+    }
     live().fail();
     const before = opened();
     stream.open();
@@ -377,7 +415,10 @@ describe("the stream watchdog", () => {
 
   it("connects at once after its owner closed it mid-backoff, then backs off from the first failure", () => {
     const { stream } = start();
-    for (let failure = 0; failure < 6; failure++) { live().fail(); vi.runOnlyPendingTimers(); }
+    for (let failure = 0; failure < 6; failure++) {
+      live().fail();
+      vi.runOnlyPendingTimers();
+    }
     // The sixth failure in a row waits about a minute.
     live().fail();
     const before = opened();
@@ -391,7 +432,14 @@ describe("the stream watchdog", () => {
 
   it("reconnects a stream whose growth notice it cannot apply, without counting a failure", () => {
     const onChange = vi.fn();
-    const stream = changeStream("/bots/shared/events?inflight=3", onChange, vi.fn(), {}, () => false, { random: middle });
+    const stream = changeStream(
+      "/bots/shared/events?inflight=3",
+      onChange,
+      vi.fn(),
+      {},
+      () => false,
+      { random: middle },
+    );
     stream.open();
     const first = live();
     first.connect();
@@ -401,18 +449,21 @@ describe("the stream watchdog", () => {
     expect(onChange).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["close", "suspend"] as const)("stops watching once it is told to %s, leaving no timer behind, whether a stream or a retry was pending", end => {
-    const { stream } = start();
-    stream[end]();
-    expect(vi.getTimerCount()).toBe(0);
-    stream.open();
-    live().fail();
-    expect(vi.getTimerCount()).toBe(1);
-    stream[end]();
-    expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(10 * 60_000);
-    expect(opened()).toBe(2);
-  });
+  it.each(["close", "suspend"] as const)(
+    "stops watching once it is told to %s, leaving no timer behind, whether a stream or a retry was pending",
+    (end) => {
+      const { stream } = start();
+      stream[end]();
+      expect(vi.getTimerCount()).toBe(0);
+      stream.open();
+      live().fail();
+      expect(vi.getTimerCount()).toBe(1);
+      stream[end]();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(opened()).toBe(2);
+    },
+  );
 });
 
 // Owners report each stream's health, so polls that stand in for it slow down only while it is live and
@@ -420,7 +471,10 @@ describe("the stream watchdog", () => {
 describe("stream health", () => {
   const watched = () => {
     const heard: (boolean | undefined)[] = [];
-    const stream = changeStream("/events", vi.fn(), undefined, {}, undefined, { random: middle, onHealth: up => heard.push(up) });
+    const stream = changeStream("/events", vi.fn(), undefined, {}, undefined, {
+      random: middle,
+      onHealth: (up) => heard.push(up),
+    });
     stream.open();
     return { stream, heard };
   };
@@ -457,7 +511,11 @@ describe("stream health", () => {
     expect(heard).toEqual([false, undefined, false]);
     vi.advanceTimersByTime(1_000);
     expect(opened()).toBe(2);
-    expect(heard, "the attempt changes nothing it already reported").toEqual([false, undefined, false]);
+    expect(heard, "the attempt changes nothing it already reported").toEqual([
+      false,
+      undefined,
+      false,
+    ]);
   });
 
   // The reviewer's reproduction: a watchdog replacement that sends headers and `retry: 3000`, then nothing.

@@ -1,15 +1,34 @@
-import type { AutomationRequester } from './automation.js';
+import type { AutomationRequester } from "./automation.js";
 import type { ExperienceRequester } from "./experience.js";
-import type { IntegrationRequest, IntegrationCatalog, IntegrationConnection, IntegrationFlow, ConnectionRequestSettle, ConnectionRequestResult, ConnectionRequest } from "./integrations.js";
-import type { ComputerRequest, ComputerStatus, ComputerAttachment, ComputerHandoff, TerminalRequest } from "./computer.js";
+import type {
+  IntegrationRequest,
+  IntegrationCatalog,
+  IntegrationConnection,
+  IntegrationFlow,
+  ConnectionRequestSettle,
+  ConnectionRequestResult,
+  ConnectionRequest,
+} from "./integrations.js";
+import type {
+  ComputerRequest,
+  ComputerStatus,
+  ComputerAttachment,
+  ComputerHandoff,
+  TerminalRequest,
+} from "./computer.js";
 import type { SecureRequest, VaultRequest, VaultResponse } from "./vault.js";
-import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from './collaboration.js';
+import type { GroupRequest, GroupResponse, RoutineOutput, RoutineResult } from "./collaboration.js";
 import type { TalkSession, TalkVoice } from "./voice.js";
 /** What the app chooses in a Realtime session. The Hermes add-on fixes the model's other settings. */
 export interface RealtimeSessionInput {
   voice: TalkVoice;
   instructions: string;
-  tools: { type: "function"; name: string; description: string; parameters: Record<string, unknown> }[];
+  tools: {
+    type: "function";
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  }[];
 }
 export type ActivityState =
   | "idle"
@@ -46,7 +65,16 @@ export const avatarShapes = [
 ] as const;
 export type AvatarShape = (typeof avatarShapes)[number];
 /** Mascot characters in picker order. ios/AgentInterface/Models.swift mirrors both lists. */
-export const everydayFamilies = ["bear", "fox", "sprout", "panda", "raccoon", "owl", "cactus", "dinosaur"] as const;
+export const everydayFamilies = [
+  "bear",
+  "fox",
+  "sprout",
+  "panda",
+  "raccoon",
+  "owl",
+  "cactus",
+  "dinosaur",
+] as const;
 /** Listed under their own "Seasonal" heading, in calendar order from spring. */
 export const seasonalFamilies = [
   "leprechaun",
@@ -104,7 +132,12 @@ export interface Preferences {
   sections: { id: string; name: string; botIds: string[] }[];
   followBots: string[];
   startPage?: "today" | "assistant";
-  notifications?: { timezone: string; quietStart?: string; quietEnd?: string; batchMinutes: number };
+  notifications?: {
+    timezone: string;
+    quietStart?: string;
+    quietEnd?: string;
+    batchMinutes: number;
+  };
   /** Routines whose runs this person keeps out of their assistant's chat. Runs show by default. */
   hiddenRoutineRuns?: { botId: string; routineId: string }[];
   // --- Main assistant and check-ins (src/shared/main-assistant.ts) ---
@@ -128,15 +161,24 @@ export interface CheckInSettings {
   timezone: string;
 }
 // --- End main assistant ---
-export const reasoningLevels = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
+export const reasoningLevels = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "ultra",
+] as const;
 /**
  * Auto is Hermes's bounded fast window: Fast opens at the start of every reply and closes after
  * `agent.fast_auto_seconds`. Hermes's first-turn-only `cold` mode is not offered.
  */
 export const serviceTiers = ["normal", "auto", "fast", "ultrafast"] as const;
 export interface InferenceSettings {
-  reasoning: typeof reasoningLevels[number];
-  speed: typeof serviceTiers[number];
+  reasoning: (typeof reasoningLevels)[number];
+  speed: (typeof serviceTiers)[number];
 }
 export interface ModelChoice {
   provider: string;
@@ -210,7 +252,11 @@ export interface Bot {
   unread?: boolean;
 }
 /** The Hermes profile ID a new assistant gets from its name. */
-export const botIdFor = (name: string) => name.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
+export const botIdFor = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-|-$/g, "");
 export interface BotInput {
   confirmModel?: boolean;
   name: string;
@@ -295,7 +341,13 @@ export interface AttentionRequest {
    * `multiple` lets a person choose several options, sent as one JSON array of strings. Absent means one.
    * `recommended` indexes the one option Hermes marked " (Recommended)"; see src/shared/recommended.ts.
    */
-  questions?: { id: string; prompt: string; options?: string[]; multiple?: boolean; recommended?: number }[];
+  questions?: {
+    id: string;
+    prompt: string;
+    options?: string[];
+    multiple?: boolean;
+    recommended?: number;
+  }[];
   secure?: SecureRequest;
   computer?: ComputerHandoff;
   terminal?: TerminalRequest;
@@ -518,13 +570,26 @@ export interface RuntimeEvent {
   occurredAt: string;
 }
 // --- Main assistant delegation ---
-export interface DelegationTarget { id: string; name: string; description?: string }
+export interface DelegationTarget {
+  id: string;
+  name: string;
+  description?: string;
+}
 /**
  * Per profile, every assistant: the member it serves ("the household" for a shared one), whether it is
  * that member's main assistant (which must ask before reaching `shared`), whether it is anyone's own,
  * the member's personal assistants it may reach, and the household-visible ones.
  */
-export type DelegationPolicies = Record<string, { member: string; main: boolean; owned: boolean; personal: DelegationTarget[]; shared: DelegationTarget[] }>;
+export type DelegationPolicies = Record<
+  string,
+  {
+    member: string;
+    main: boolean;
+    owned: boolean;
+    personal: DelegationTarget[];
+    shared: DelegationTarget[];
+  }
+>;
 // --- End main assistant delegation ---
 export interface RuntimeDiscovery {
   cursor: string;
@@ -532,7 +597,17 @@ export interface RuntimeDiscovery {
 }
 export interface RuntimeStatus {
   connected: boolean;
-  code?: "not_configured" | "invalid_config" | "connecting" | "unreachable" | "unauthorized" | "addon_missing" | "incompatible" | "ready" | "reconnecting" | "closed";
+  code?:
+    | "not_configured"
+    | "invalid_config"
+    | "connecting"
+    | "unreachable"
+    | "unauthorized"
+    | "addon_missing"
+    | "incompatible"
+    | "ready"
+    | "reconnecting"
+    | "closed";
   version?: string;
   /** ISO 8601 commit time of `version`, when the Hermes updater has recorded it. */
   revisionDate?: string;
@@ -565,16 +640,27 @@ export interface Runtime {
   routineResults?: (botId: string, routineId: string) => Promise<RoutineResult[]>;
   routineOutput?: (botId: string, routineId: string, resultId: string) => Promise<RoutineOutput>;
   groupRequest?: (input: GroupRequest) => Promise<GroupResponse>;
-  transcribeVoice?: (botId: string, input: { mime: string; data: Buffer }) => Promise<{ text: string; provider?: string }>;
-  synthesizeVoice?: (botId: string, text: string) => Promise<{ data: Buffer; mime: string; provider?: string }>;
+  transcribeVoice?: (
+    botId: string,
+    input: { mime: string; data: Buffer },
+  ) => Promise<{ text: string; provider?: string }>;
+  synthesizeVoice?: (
+    botId: string,
+    text: string,
+  ) => Promise<{ data: Buffer; mime: string; provider?: string }>;
   automationRequest?: AutomationRequester;
   experienceRequest?: ExperienceRequester;
   vaultRequest?: (input: VaultRequest) => Promise<VaultResponse>;
   computerRequest?: (input: ComputerRequest) => Promise<ComputerStatus | ComputerAttachment>;
   connectComputerDisplay?: (attachment: ComputerAttachment) => import("ws").WebSocket;
-  inferenceSettings?: (botId: string, update?: Partial<InferenceSettings>) => Promise<InferenceSettings>;
+  inferenceSettings?: (
+    botId: string,
+    update?: Partial<InferenceSettings>,
+  ) => Promise<InferenceSettings>;
   modelOptions?: (profile?: string) => Promise<ModelCatalog>;
-  integrationRequest?: (input: IntegrationRequest) => Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | {ok: true}>;
+  integrationRequest?: (
+    input: IntegrationRequest,
+  ) => Promise<IntegrationCatalog | IntegrationConnection | IntegrationFlow | { ok: true }>;
   /** Continue or Not now on an assistant's connection request. Hermes checks it belongs to that profile's conversation. */
   connectionRequest?: (input: ConnectionRequestSettle) => Promise<ConnectionRequestResult>;
   status: () => Promise<RuntimeStatus>;
@@ -628,11 +714,7 @@ export interface Runtime {
   /** `botId` names the assistant the request was sent to, when the caller knows it. Without it, every runtime is asked. */
   lookupSubmission: (requestId: string, botId?: string) => Promise<SubmissionReceipt | null>;
   steer: (input: Submission) => Promise<SubmissionReceipt>;
-  answerRequest: (
-    botId: string,
-    id: string,
-    answers: Record<string, string>,
-  ) => Promise<void>;
+  answerRequest: (botId: string, id: string, answers: Record<string, string>) => Promise<void>;
   approve: (
     botId: string,
     approvalId: string,
@@ -641,10 +723,7 @@ export interface Runtime {
     /** How far an approval reaches. Absent means this one command. */
     scope?: ApprovalScope,
   ) => Promise<void>;
-  upload: (
-    botId: string,
-    input: { name: string; mime: string; data: Buffer },
-  ) => Promise<FileRef>;
+  upload: (botId: string, input: { name: string; mime: string; data: Buffer }) => Promise<FileRef>;
   /**
    * The body never yields more than maxBytes; a larger file is refused with file_too_large. `botId` is the assistant
    * the ID's signature names (see `fileBotId`), when the caller already checked it.

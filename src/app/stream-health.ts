@@ -27,8 +27,10 @@ let version = 0;
 /** Records a stream's state; `undefined` forgets it. A state it already has keeps its time. */
 export function reportStream(name: string, up: boolean | undefined) {
   const held = streams.get(name);
-  if (up === undefined) { if (!held) return; streams.delete(name); }
-  else if (held?.up === up) return;
+  if (up === undefined) {
+    if (!held) return;
+    streams.delete(name);
+  } else if (held?.up === up) return;
   else streams.set(name, { up, since: Date.now() });
   version++;
   for (const listener of listeners) listener();
@@ -44,12 +46,18 @@ function downSince(names: readonly string[]) {
   let earliest: number | undefined;
   for (const name of names) {
     const held = streams.get(name);
-    if (held && !held.up && (earliest === undefined || held.since < earliest)) earliest = held.since;
+    if (held && !held.up && (earliest === undefined || held.since < earliest))
+      earliest = held.since;
   }
   return earliest;
 }
 
-const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
 
 /**
  * True once one of `names` has been down for `afterMs` without a break, so a brief reconnect never
@@ -63,7 +71,7 @@ export function useStreamsDown(names: readonly string[], afterMs: number) {
     if (since === undefined) return;
     const wait = since + afterMs - Date.now();
     if (wait <= 0) return;
-    const timer = setTimeout(() => wake(count => count + 1), wait);
+    const timer = setTimeout(() => wake((count) => count + 1), wait);
     return () => clearTimeout(timer);
   }, [since, afterMs]);
   return since !== undefined && Date.now() - since >= afterMs;

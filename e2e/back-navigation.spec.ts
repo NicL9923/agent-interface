@@ -1,22 +1,40 @@
 import type { BrowserContext, Page } from "@playwright/test";
-import { assistants, conversation, enableGroupCatalog, expect, signIn, tapNotification, test } from "./fixtures.js";
+import {
+  assistants,
+  conversation,
+  enableGroupCatalog,
+  expect,
+  signIn,
+  tapNotification,
+  test,
+} from "./fixtures.js";
 
 /**
  * On a phone one step in from home, a chat, Today, Search or a sheet over home, is one history entry, so the
  * system Back gesture and the browser's Back button take the on-screen Back's step instead of leaving the
  * app. A two-pane layout gains no entries. See src/app/history-nav.ts.
  */
-const phone = { width: 390, height: 844 }, desktop = { width: 1280, height: 800 };
+const phone = { width: 390, height: 844 },
+  desktop = { width: 1280, height: 800 };
 const row = (page: Page, name: RegExp) => assistants(page).getByRole("button", { name });
 const ranchRow = (page: Page) => row(page, /Ranch Hand/);
-const leaves = async (page: Page) => { await page.goBack(); expect(page.url()).toBe("about:blank"); };
+const leaves = async (page: Page) => {
+  await page.goBack();
+  expect(page.url()).toBe("about:blank");
+};
 /** Signs the account out from a second tab, which signs out every tab of the profile. */
 async function signOutElsewhere(context: BrowserContext) {
   const other = await context.newPage();
   await other.goto("/");
   await other.getByRole("button", { name: "Account" }).click();
-  await other.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: "Sign out" }).click();
-  await other.getByRole("alertdialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click();
+  await other
+    .getByRole("menu", { name: "Account" })
+    .getByRole("menuitem", { name: "Sign out" })
+    .click();
+  await other
+    .getByRole("alertdialog", { name: "Sign out?" })
+    .getByRole("button", { name: "Sign out" })
+    .click();
   await expect(other.getByRole("button", { name: "Enter local workspace" })).toBeVisible();
   await other.close();
 }
@@ -33,7 +51,9 @@ async function signedInTab(context: BrowserContext, path = "/") {
 test.describe("on a phone", () => {
   test.use({ viewport: phone, isMobile: true, hasTouch: true });
 
-  test("Back from a chat shows home with that chat's row focused, and a second Back leaves the app", async ({ page }) => {
+  test("Back from a chat shows home with that chat's row focused, and a second Back leaves the app", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -45,7 +65,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a chat opened again after Back takes the same two steps, with no entries left over", async ({ page }) => {
+  test("a chat opened again after Back takes the same two steps, with no entries left over", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -61,7 +83,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("the on-screen Back leaves no entry behind for the system Back to trip on", async ({ page }) => {
+  test("the on-screen Back leaves no entry behind for the system Back to trip on", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -72,8 +96,16 @@ test.describe("on a phone", () => {
   });
 
   for (const [name, open, shown] of [
-    ["Today", (page: Page) => page.getByRole("button", { name: "Today" }), (page: Page) => page.getByRole("heading", { name: /Today/ }).first()],
-    ["Search", (page: Page) => page.getByRole("button", { name: "Search & saved" }), (page: Page) => page.getByRole("searchbox").first()],
+    [
+      "Today",
+      (page: Page) => page.getByRole("button", { name: "Today" }),
+      (page: Page) => page.getByRole("heading", { name: /Today/ }).first(),
+    ],
+    [
+      "Search",
+      (page: Page) => page.getByRole("button", { name: "Search & saved" }),
+      (page: Page) => page.getByRole("searchbox").first(),
+    ],
   ] as const) {
     test(`Back from ${name} shows home, and a second Back leaves the app`, async ({ page }) => {
       await page.goto("about:blank");
@@ -87,7 +119,9 @@ test.describe("on a phone", () => {
     });
   }
 
-  test("a link that names a chat lands on it, Back goes home, and a second Back leaves", async ({ context }) => {
+  test("a link that names a chat lands on it, Back goes home, and a second Back leaves", async ({
+    context,
+  }) => {
     const page = await signedInTab(context, "/?bot=ranch&message=seed-1");
     await expect(conversation(page).getByText("Morning. The north fence is fixed.")).toBeVisible();
     await page.goBack();
@@ -104,7 +138,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a notification tapped on the home list opens its chat in place, and Back goes home", async ({ context }) => {
+  test("a notification tapped on the home list opens its chat in place, and Back goes home", async ({
+    context,
+  }) => {
     const page = await signedInTab(context);
     await expect(assistants(page)).toBeVisible();
     await tapNotification(page, "/?bot=trail");
@@ -115,7 +151,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a notification tapped inside a chat switches chats without another entry", async ({ context }) => {
+  test("a notification tapped inside a chat switches chats without another entry", async ({
+    context,
+  }) => {
     const page = await signedInTab(context);
     await ranchRow(page).click();
     await expect(page.getByRole("textbox", { name: "Message Ranch Hand" })).toBeVisible();
@@ -129,7 +167,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("after a reload inside a chat, Back still shows home rather than the chat again", async ({ page }) => {
+  test("after a reload inside a chat, Back still shows home rather than the chat again", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -146,7 +186,10 @@ test.describe("on a phone", () => {
     await page.goto("about:blank");
     await signIn(page);
     await page.getByRole("button", { name: "Account" }).click();
-    await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Usage/ }).click();
+    await page
+      .getByRole("menu", { name: "Account" })
+      .getByRole("menuitem", { name: /Usage/ })
+      .click();
     await expect(page.getByRole("dialog", { name: /Usage/ })).toBeVisible();
     await page.goBack();
     await expect(page.getByRole("dialog", { name: /Usage/ })).toBeHidden();
@@ -154,7 +197,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("Back closes a sheet over a chat and stays in the chat, then the next Back goes home", async ({ page }) => {
+  test("Back closes a sheet over a chat and stays in the chat, then the next Back goes home", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -169,7 +214,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("Back on an edited sheet asks first and keeps it open until told to discard, then the next Back leaves", async ({ page }) => {
+  test("Back on an edited sheet asks first and keeps it open until told to discard, then the next Back leaves", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await page.getByRole("button", { name: /^New( assistant)?$/ }).click();
@@ -192,7 +239,10 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a sign-out in another tab while a chat is open leaves nothing for Back to land on, so one Back leaves the app", async ({ context, page }) => {
+  test("a sign-out in another tab while a chat is open leaves nothing for Back to land on, so one Back leaves the app", async ({
+    context,
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();
@@ -205,7 +255,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a group chat form with a name and an assistant asks before Back discards it", async ({ page }) => {
+  test("a group chat form with a name and an assistant asks before Back discards it", async ({
+    page,
+  }) => {
     // The e2e server hosts no group coordinator, so its catalog is the one thing scripted: at the network edge.
     await enableGroupCatalog();
     await page.goto("about:blank");
@@ -231,7 +283,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({ page }) => {
+  test("Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing", async ({
+    page,
+  }) => {
     await enableGroupCatalog();
     await page.goto("about:blank");
     await signIn(page);
@@ -265,7 +319,9 @@ test.describe("on a phone", () => {
     await leaves(page);
   });
 
-  test("a phone widened to two panes drops its entry, so Back leaves at once, and narrowed again, Back goes home", async ({ page }) => {
+  test("a phone widened to two panes drops its entry, so Back leaves at once, and narrowed again, Back goes home", async ({
+    page,
+  }) => {
     await page.goto("about:blank");
     await signIn(page);
     await ranchRow(page).click();

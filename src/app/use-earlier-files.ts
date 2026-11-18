@@ -18,15 +18,27 @@ const none: EarlierFiles["messages"] = [];
  * beginning. `wanted` false reads nothing. `retry` reads again after a failure, as reopening the
  * panel does. The result names the window it is for, so a stale answer never reaches another.
  */
-export function useEarlierFiles(botId: string, window: { sessionId?: string; messages: { id: string }[]; earlier?: number; earlierFiles?: number } | null | undefined,
-  wanted: boolean, retry = false) {
+export function useEarlierFiles(
+  botId: string,
+  window:
+    | { sessionId?: string; messages: { id: string }[]; earlier?: number; earlierFiles?: number }
+    | null
+    | undefined,
+  wanted: boolean,
+  retry = false,
+) {
   const needed = !!window && ((window.earlier ?? 0) > 0 || (window.earlierFiles ?? 0) > 0);
-  const key = needed && wanted ? `${botId}\n${window.sessionId ?? ""}\n${window.messages[0]?.id ?? ""}` : undefined;
+  const key =
+    needed && wanted
+      ? `${botId}\n${window.sessionId ?? ""}\n${window.messages[0]?.id ?? ""}`
+      : undefined;
   const [, changed] = useState(0);
   useEffect(() => {
-    const listener = () => changed(value => value + 1);
+    const listener = () => changed((value) => value + 1);
     listeners.add(listener);
-    return () => { listeners.delete(listener); };
+    return () => {
+      listeners.delete(listener);
+    };
   }, []);
   useEffect(() => {
     if (!key) return;
@@ -38,11 +50,25 @@ export function useEarlierFiles(botId: string, window: { sessionId?: string; mes
     while (cache.size > keep) cache.delete(cache.keys().next().value!);
     const before = window!.messages[0]?.id;
     request("GET /bots/:id/files", { params: { id: botId }, query: { before } })
-      .then(value => { entry.messages = value.messages; }, () => { entry.failed = true; })
-      .then(() => { for (const listener of listeners) listener(); })
+      .then(
+        (value) => {
+          entry.messages = value.messages;
+        },
+        () => {
+          entry.failed = true;
+        },
+      )
+      .then(() => {
+        for (const listener of listeners) listener();
+      })
       // A listener that throws is a bug; report it as the page would an uncaught error instead of losing it.
-      .catch(error => reportError(error));
+      .catch((error) => reportError(error));
   }, [key, retry]);
   const entry = key ? cache.get(key) : undefined;
-  return { needed, messages: needed ? entry?.messages : none, loading: !!key && !entry?.messages && !entry?.failed, failed: !!entry?.failed };
+  return {
+    needed,
+    messages: needed ? entry?.messages : none,
+    loading: !!key && !entry?.messages && !entry?.failed,
+    failed: !!entry?.failed,
+  };
 }

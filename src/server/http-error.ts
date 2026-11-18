@@ -16,7 +16,11 @@ export interface HttpErrorOptions {
 export type HttpError = Error & HttpErrorOptions & { statusCode: number };
 
 /** An error whose status and message the error handler sends as the response. */
-export function httpError(statusCode: number, message: string, options: HttpErrorOptions = {}): HttpError {
+export function httpError(
+  statusCode: number,
+  message: string,
+  options: HttpErrorOptions = {},
+): HttpError {
   return Object.assign(new Error(message), { statusCode, ...options });
 }
 
@@ -43,7 +47,8 @@ export function errorHandler(options: { production?: boolean } = {}) {
       const route = `${req.method} ${req.routeOptions.url ?? "unmatched"}`;
       const repeats = serverErrors.hit(`${route} ${status} ${err.message}`);
       if (repeats === 0) req.log.error({ error: safeError(err), route, status }, "Request failed");
-      else if (repeats !== undefined) req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
+      else if (repeats !== undefined)
+        req.log.error({ route, status, error: err.message, repeats }, "Request failure repeated");
     }
     // A stream can fail after a route set file headers; the error is always JSON.
     reply.removeHeader("Content-Disposition");

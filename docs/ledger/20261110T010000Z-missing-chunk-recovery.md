@@ -19,6 +19,7 @@ No Python, iOS, Hermes or deploy-tool code changed.
 
   It never calls `preventDefault`, so the import error still reaches the screen's error boundary
   and its Reload prompt.
+
 - `src/App.tsx`: the page check is no `pending` send, no `sending`, no upload held in memory
   for any chat (`holdingFiles` from `useDraft`), and a chat draft that is empty or equals its
   saved local copy.
@@ -37,26 +38,26 @@ No Python, iOS, Hermes or deploy-tool code changed.
 
 Each line was broken by hand, the focused tests run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| `location.reload()` removed | failed: 4 cases, including "reloads the tab once…" |
-| Window check removed | failed: "reloads the tab once…", "leaves the screen's Reload prompt…", "counts a reload time ahead of the clock as recent" |
-| Window boundary `<` changed to `<=` | failed: "leaves the screen's Reload prompt…" |
-| A future time not counted as recent | failed: "counts a reload time ahead of the clock as recent" |
-| Reload time not recorded | failed: "reloads the tab once…", "does not reload when it cannot remember that it did" |
-| Reload although the time could not be recorded | failed: "does not reload when it cannot remember that it did" |
-| Page check ignored | failed: draft, upload and send cases |
-| Stored sends ignored | failed: the chat-send and group-send cases |
-| A group draft counted as a send | failed: "with only a group draft…" |
-| Draft copy not compared | failed: "does not reload over a draft the device could not keep" |
-| Empty draft not exempt | survived at first; a case was added, then failed: "reloads with an empty draft even when the device keeps no copy of it" |
-| Uploads ignored | failed: "does not reload while a file is still uploading" |
-| In-memory pending send ignored | failed: "does not reload while a message send is on its way" |
-| Server: missing asset gets the shell | failed: "answers a bundle a release retired with an uncached 404…" |
-| Server: `/assets` prefix without the slash | failed: "serves the shell… for a route the client handles" |
-| Server: `no-store` removed | failed: the 404 case |
-| Server: 404 body sent as HTML | failed: the 404 case |
-| e2e: `location.reload()` removed, rebuilt | failed: "the tab reloads itself once…" at the load count, received 0 |
+| Mutation                                       | Result                                                                                                                     |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `location.reload()` removed                    | failed: 4 cases, including "reloads the tab once…"                                                                         |
+| Window check removed                           | failed: "reloads the tab once…", "leaves the screen's Reload prompt…", "counts a reload time ahead of the clock as recent" |
+| Window boundary `<` changed to `<=`            | failed: "leaves the screen's Reload prompt…"                                                                               |
+| A future time not counted as recent            | failed: "counts a reload time ahead of the clock as recent"                                                                |
+| Reload time not recorded                       | failed: "reloads the tab once…", "does not reload when it cannot remember that it did"                                     |
+| Reload although the time could not be recorded | failed: "does not reload when it cannot remember that it did"                                                              |
+| Page check ignored                             | failed: draft, upload and send cases                                                                                       |
+| Stored sends ignored                           | failed: the chat-send and group-send cases                                                                                 |
+| A group draft counted as a send                | failed: "with only a group draft…"                                                                                         |
+| Draft copy not compared                        | failed: "does not reload over a draft the device could not keep"                                                           |
+| Empty draft not exempt                         | survived at first; a case was added, then failed: "reloads with an empty draft even when the device keeps no copy of it"   |
+| Uploads ignored                                | failed: "does not reload while a file is still uploading"                                                                  |
+| In-memory pending send ignored                 | failed: "does not reload while a message send is on its way"                                                               |
+| Server: missing asset gets the shell           | failed: "answers a bundle a release retired with an uncached 404…"                                                         |
+| Server: `/assets` prefix without the slash     | failed: "serves the shell… for a route the client handles"                                                                 |
+| Server: `no-store` removed                     | failed: the 404 case                                                                                                       |
+| Server: 404 body sent as HTML                  | failed: the 404 case                                                                                                       |
+| e2e: `location.reload()` removed, rebuilt      | failed: "the tab reloads itself once…" at the load count, received 0                                                       |
 
 ## Deploy tooling, read only
 
@@ -97,7 +98,7 @@ Linux x64, Node 24.22.2, Playwright Chromium).
   `submissionPrefix` and `groupSendPrefix` in `src/app/storage.ts`, and `holdingFiles` in
   `src/app/use-draft.ts`; nothing else used them. Those three files match `origin/main` again.
 - Kept the server half: a missing `/assets/` path answers 404, `text/plain`, `Cache-Control:
-  no-store`. `tests/static-cache.test.ts` still covers it.
+no-store`. `tests/static-cache.test.ts` still covers it.
 - The screen's prompt read "Check your connection, then reload to try again", which is wrong for
   a deploy. It now reads "This screen could not load. The app may have been updated, or the
   connection dropped. Reload to try again." One sentence covers both causes, because a failed
@@ -128,8 +129,8 @@ the page had reloaded itself.
 
 ### Mutants
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                            | Result                                   |
+| ----------------------------------- | ---------------------------------------- |
 | Reload button does nothing, rebuilt | failed: the e2e case at the reload count |
 
 ### Checks

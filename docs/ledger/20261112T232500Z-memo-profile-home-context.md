@@ -8,12 +8,12 @@ Branch `t3/memo-profile-home-context` over `origin/main` at `faeca942`, on Nicol
 `measure-chat-open.mjs --rounds 3` right after the `faeca942` deployment restarted the gateway at 23:08:14 UTC, with
 the new `addon-cache` counts. The warm-up warmed 6 of 6 assistants in 14.4 s.
 
-| Assistant | Open 1 | Open 2 | Open 3 |
-| --- | --- | --- | --- |
-| patch | 4,242 ms, warm=1, reused 86 of 86 | 4,882 ms, reused 0 of 86 | 297 ms, decorated |
-| kimberly | 715 ms, warm=1, reused 4 of 4 | 170 ms, reused 0 of 4 | 128 ms, decorated |
-| wft-marketing | 735 ms, warm=1, reused 9 of 9 | 367 ms, reused 0 of 9 | 67 ms, shared |
-| lumen | 1,406 ms, warm=0, reused 0 of 3 | 190 ms, reused 0 of 3 | 137 ms, decorated |
+| Assistant     | Open 1                            | Open 2                   | Open 3            |
+| ------------- | --------------------------------- | ------------------------ | ----------------- |
+| patch         | 4,242 ms, warm=1, reused 86 of 86 | 4,882 ms, reused 0 of 86 | 297 ms, decorated |
+| kimberly      | 715 ms, warm=1, reused 4 of 4     | 170 ms, reused 0 of 4    | 128 ms, decorated |
+| wft-marketing | 735 ms, warm=1, reused 9 of 9     | 367 ms, reused 0 of 9    | 67 ms, shared     |
+| lumen         | 1,406 ms, warm=0, reused 0 of 3   | 190 ms, reused 0 of 3    | 137 ms, decorated |
 
 Every memo reported `emptied=0` and the budget peaked at 89 percent, so the budget did not evict anything; that guess
 was wrong. Instead every second open reused no piece at all. A resume projects with `profile_home=self.profile_home`,
@@ -33,11 +33,11 @@ home's path.
 `python3 .agents/tools/mutate-py.py --batch ... --baseline` over `src/hermes/extension.py`, running
 `hermes_projection_memo_test`; the baseline passed.
 
-| Mutation | Result |
-| --- | --- |
-| profile home compared by repr | failed: test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not (exit 1) |
+| Mutation                                  | Result                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| profile home compared by repr             | failed: test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not (exit 1) |
 | profile home compared without normalizing | failed: test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not (exit 1) |
-| every home is one context | survived |
+| every home is one context                 | survived                                                                                          |
 
 The survivor is equivalent: the context's `configs` part holds each home's path with its `config.yaml` stamp, so a
 different home is a different context with or without the argument.

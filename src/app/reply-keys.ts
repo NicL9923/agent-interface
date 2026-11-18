@@ -36,22 +36,42 @@ export const isLiveRow = (message: Message) => message.id.endsWith("-inflight");
  * 4. In every other case each row is keyed by its own identity and built again, as before rows were
  *    kept.
  */
-export function replyKeys(record: ReplyKeyRecord, rows: Message[]): { key: (message: Message) => string; record: ReplyKeyRecord } {
-  const ids = new Set(rows.map(message => message.id)), shown = new Set(record.shown);
+export function replyKeys(
+  record: ReplyKeyRecord,
+  rows: Message[],
+): { key: (message: Message) => string; record: ReplyKeyRecord } {
+  const ids = new Set(rows.map((message) => message.id)),
+    shown = new Set(record.shown);
   const handed = new Map([...record.handed].filter(([id]) => ids.has(id)));
-  const added = rows.filter(message => !shown.has(message.id));
-  const live = rows.find(isLiveRow), last = record.live;
+  const added = rows.filter((message) => !shown.has(message.id));
+  const live = rows.find(isLiveRow),
+    last = record.live;
   let lives = record.lives;
-  if (last && (added.some(message => message.role === "assistant" && !isLiveRow(message)) || !live?.text.startsWith(last.text))) {
+  if (
+    last &&
+    (added.some((message) => message.role === "assistant" && !isLiveRow(message)) ||
+      !live?.text.startsWith(last.text))
+  ) {
     const [only] = added;
-    if (added.length === 1 && only.role === "assistant" && !isLiveRow(only) && !only.interim && only.text.trim().startsWith(last.text.trim()))
+    if (
+      added.length === 1 &&
+      only.role === "assistant" &&
+      !isLiveRow(only) &&
+      !only.interim &&
+      only.text.trim().startsWith(last.text.trim())
+    )
       handed.set(only.id, last.key);
     // Handed on or gone, that key has shown its message.
     lives++;
   }
   const liveKey = `live:${lives}`;
   return {
-    key: message => message.interim ? message.id : isLiveRow(message) ? liveKey : handed.get(message.id) ?? message.id,
+    key: (message) =>
+      message.interim
+        ? message.id
+        : isLiveRow(message)
+          ? liveKey
+          : (handed.get(message.id) ?? message.id),
     record: { shown: [...ids], live: live && { key: liveKey, text: live.text }, handed, lives },
   };
 }

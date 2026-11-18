@@ -1,4 +1,16 @@
-export type UpgradePhase = "idle" | "checking" | "qualifying" | "ready" | "installing" | "verifying" | "succeeded" | "blocked" | "failed" | "rolled_back" | "recovering" | "cancelled";
+export type UpgradePhase =
+  | "idle"
+  | "checking"
+  | "qualifying"
+  | "ready"
+  | "installing"
+  | "verifying"
+  | "succeeded"
+  | "blocked"
+  | "failed"
+  | "rolled_back"
+  | "recovering"
+  | "cancelled";
 export interface UpgradeRevision {
   revision: string;
   version?: string;

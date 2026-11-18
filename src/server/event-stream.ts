@@ -37,10 +37,14 @@ export function eventStreamConnection(reply: FastifyReply) {
   markStream(reply.request);
   const response = reply.raw;
   let closed = response.destroyed || response.writableEnded;
-  const left = () => { closed = true; };
+  const left = () => {
+    closed = true;
+  };
   response.once("close", left);
   return {
-    get closed() { return closed; },
+    get closed() {
+      return closed;
+    },
     /** Ends a request whose client left during setup, sending nothing. */
     abandon() {
       response.off("close", left);
@@ -52,7 +56,10 @@ export function eventStreamConnection(reply: FastifyReply) {
      * that already left ends it at once. `teardown` runs once however this ends: when the stream
      * ends, or when reserving or opening throws, which rethrows, even if teardown itself threw.
      */
-    open(streams: Set<() => void>, options: { allowed: () => boolean; teardown: () => void; reserve?: () => void }): EventStream {
+    open(
+      streams: Set<() => void>,
+      options: { allowed: () => boolean; teardown: () => void; reserve?: () => void },
+    ): EventStream {
       response.off("close", left);
       let torn = false;
       const teardown = () => {
@@ -62,7 +69,12 @@ export function eventStreamConnection(reply: FastifyReply) {
       };
       try {
         options.reserve?.();
-        return openEventStream(reply, streams, { allowed: options.allowed, teardown, ping: pingFor(reply.request.query) }, closed);
+        return openEventStream(
+          reply,
+          streams,
+          { allowed: options.allowed, teardown, ping: pingFor(reply.request.query) },
+          closed,
+        );
       } catch (error) {
         teardown();
         throw error;
@@ -76,14 +88,22 @@ export function eventStreamConnection(reply: FastifyReply) {
  * and ends the stream instead once it fails. Ending runs `teardown` once, and `streams`
  * holds each open stream's end so shutdown can close them.
  */
-function openEventStream(reply: FastifyReply, streams: Set<() => void>,
-  options: { allowed: () => boolean; teardown: () => void; ping: ReturnType<typeof pingFor> }, closed: boolean): EventStream {
+function openEventStream(
+  reply: FastifyReply,
+  streams: Set<() => void>,
+  options: { allowed: () => boolean; teardown: () => void; ping: ReturnType<typeof pingFor> },
+  closed: boolean,
+): EventStream {
   reply.hijack();
   const response = reply.raw;
-  let ended = false, draining = false;
+  let ended = false,
+    draining = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const send = (text: string) => {
-    if (!options.allowed()) { end(); return false; }
+    if (!options.allowed()) {
+      end();
+      return false;
+    }
     if (ended) return false;
     response.write(text);
     return true;
@@ -93,7 +113,10 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
     if (!response.writableNeedDrain) return true;
     if (!draining) {
       draining = true;
-      response.once("drain", () => { draining = false; if (!ended) retry(); });
+      response.once("drain", () => {
+        draining = false;
+        if (!ended) retry();
+      });
     }
     return false;
   };
@@ -102,7 +125,11 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
     ended = true;
     clearInterval(heartbeat);
     streams.delete(end);
-    try { options.teardown(); } finally { response.end(); }
+    try {
+      options.teardown();
+    } finally {
+      response.end();
+    }
   }
   // The close event already fired for a client that left during setup.
   if (closed || response.destroyed) {
@@ -111,13 +138,13 @@ function openEventStream(reply: FastifyReply, streams: Set<() => void>,
   }
   // A hijacked reply writes its own headers, so the hooks' security headers are copied over.
   response.writeHead(200, {
-    ...reply.getHeaders() as Record<string, string | number | string[]>,
+    ...(reply.getHeaders() as Record<string, string | number | string[]>),
     "Content-Type": "text/event-stream; charset=utf-8",
     // Caddy's encode handler would hold notices in its compressor; it skips an encoded body.
     "Content-Encoding": "identity",
     "X-Accel-Buffering": "no",
     // An ended stream's connection is never reused, so shutdown need not wait for it.
-    "Connection": "close",
+    Connection: "close",
   });
   // Pings keep proxies from closing a quiet stream and let the client notice a dead one.
   heartbeat = setInterval(() => send(options.ping.text), options.ping.every);

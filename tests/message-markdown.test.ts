@@ -2,7 +2,15 @@
 import { act, createElement } from "react";
 import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_CHECKED_REPLY, MessageMarkdown, ReplyMarkdown, StreamingMarkdown, blocksAgree, sameBlock, streamingBlocks } from "../src/components/MessageMarkdown";
+import {
+  MAX_CHECKED_REPLY,
+  MessageMarkdown,
+  ReplyMarkdown,
+  StreamingMarkdown,
+  blocksAgree,
+  sameBlock,
+  streamingBlocks,
+} from "../src/components/MessageMarkdown";
 import { HOLD_LIMIT, streamingHoldBack } from "../src/components/streaming-hold-back";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 
@@ -28,21 +36,33 @@ async function copy() {
 
 describe("assistant Markdown", () => {
   it("opens web links but shows a file path on the Hermes computer as plain text", async () => {
-    await render("Saved to [notes.md](/home/nicolas/.hermes/profiles/testbot/notes.md). See [docs](https://example.test) or [the file](/api/files/abc).");
-    const links = [...container.querySelectorAll("a")].map(link => link.getAttribute("href"));
+    await render(
+      "Saved to [notes.md](/home/nicolas/.hermes/profiles/testbot/notes.md). See [docs](https://example.test) or [the file](/api/files/abc).",
+    );
+    const links = [...container.querySelectorAll("a")].map((link) => link.getAttribute("href"));
     expect(links).toEqual(["https://example.test", "/api/files/abc"]);
     expect(container.querySelector(".markdown-local-file")?.textContent).toBe("notes.md");
   });
 
   it("keeps links to this app's own destinations and protocol-relative web addresses", async () => {
-    await render("[Today](/?view=today), [Chat](/?bot=ranch), [docs](//example.test/docs) and [notes](~/notes.md).");
-    expect([...container.querySelectorAll("a")].map(link => link.getAttribute("href"))).toEqual(["/?view=today", "/?bot=ranch", "//example.test/docs"]);
+    await render(
+      "[Today](/?view=today), [Chat](/?bot=ranch), [docs](//example.test/docs) and [notes](~/notes.md).",
+    );
+    expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual([
+      "/?view=today",
+      "/?bot=ranch",
+      "//example.test/docs",
+    ]);
     expect(container.querySelector(".markdown-local-file")?.textContent).toBe("notes");
   });
 
   it("renders only closed explicit UI fences when the caller enables assistant UI", async () => {
     stubMatchMedia();
-    const payload = JSON.stringify({ version: 1, title: "Supply planner", html: "<button>Compare</button>" });
+    const payload = JSON.stringify({
+      version: 1,
+      title: "Supply planner",
+      html: "<button>Compare</button>",
+    });
     const fence = "```wildbots-html\n" + payload + "\n```";
     await render(fence);
     expect(container.querySelector("iframe")).toBeNull();
@@ -55,7 +75,8 @@ describe("assistant Markdown", () => {
     expect(frame.getAttribute("title")).toBe("Supply planner");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.src).toContain("/inline-ui");
-    const message = (data: unknown, source: MessageEventSource | null) => act(async () => window.dispatchEvent(new MessageEvent("message", { data, source })));
+    const message = (data: unknown, source: MessageEventSource | null) =>
+      act(async () => window.dispatchEvent(new MessageEvent("message", { data, source })));
     await message({ type: "wildbots-size", height: 900 }, window);
     expect(frame.style.height).toBe("240px");
     await message({ type: "wildbots-size", height: 99999 }, frame.contentWindow);
@@ -82,7 +103,10 @@ describe("assistant Markdown", () => {
     expect(container.querySelector("em")?.textContent).toBe("patience");
     expect(container.querySelectorAll("ol li")).toHaveLength(2);
     expect(container.querySelector("code")?.textContent).toBe("config");
-    expect([...container.querySelectorAll("button")].map(button => button.textContent)).toEqual(["Copy as Markdown", "Copy as CSV"]);
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Copy as Markdown",
+      "Copy as CSV",
+    ]);
     const link = container.querySelector("a")!;
     expect(link.getAttribute("href")).toBe("https://example.test/docs");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
@@ -111,7 +135,9 @@ describe("assistant Markdown", () => {
     await render(`\`\`\`typescript\n${code}\`\`\``);
     expect(container.querySelector("pre code")?.textContent).toBe(code);
     expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector("pre")?.getAttribute("aria-label")).toBe("typescript code block");
+    expect(container.querySelector("pre")?.getAttribute("aria-label")).toBe(
+      "typescript code block",
+    );
     await copy();
     expect(writeText).toHaveBeenCalledExactlyOnceWith(code);
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Code copied.");
@@ -125,7 +151,9 @@ describe("assistant Markdown", () => {
     const links = container.querySelectorAll("a");
     expect(links).toHaveLength(1);
     expect(links[0].textContent).toBe("Open image: Reference");
-    expect(links[0].getAttribute("href")).toBe("https://other.example/collect?private=conversation");
+    expect(links[0].getAttribute("href")).toBe(
+      "https://other.example/collect?private=conversation",
+    );
     expect(links[0].getAttribute("rel")).toBe("noopener noreferrer");
     expect(container.textContent).toContain("Unsafe");
     expect(container.textContent).toContain("Embedded");
@@ -162,7 +190,12 @@ describe("assistant Markdown", () => {
 
   it("prevents a second copy while the clipboard operation is pending", async () => {
     let finish!: () => void;
-    writeText.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    writeText.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
     await render("```\nhello\n```");
     await copy();
     const button = container.querySelector("button")!;
@@ -177,7 +210,10 @@ describe("assistant Markdown", () => {
 });
 
 describe("code highlighting and tables", () => {
-  const settle = () => act(async () => { await vi.dynamicImportSettled(); });
+  const settle = () =>
+    act(async () => {
+      await vi.dynamicImportSettled();
+    });
   it("colors a finished fence once its grammar loads, keeping the code text and Copy code", async () => {
     await render("```ts\nconst gate: number = 1; // north\n```");
     await settle();
@@ -198,7 +234,9 @@ describe("code highlighting and tables", () => {
   });
 
   it("leaves a fence still streaming in, and unknown languages, plain", async () => {
-    await act(async () => root.render(createElement(StreamingMarkdown, { text: "Here:\n\n```python\nprint('hay')" })));
+    await act(async () =>
+      root.render(createElement(StreamingMarkdown, { text: "Here:\n\n```python\nprint('hay')" })),
+    );
     await settle();
     expect(container.querySelector("pre code")?.textContent).toBe("print('hay')\n");
     expect(container.querySelector("pre code [class^=hljs-]")).toBeNull();
@@ -209,15 +247,22 @@ describe("code highlighting and tables", () => {
 
   it("copies a table as Markdown or CSV and says so", async () => {
     await render("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
-    const button = (text: string) => [...container.querySelectorAll("button")].find(item => item.textContent === text)!;
+    const button = (text: string) =>
+      [...container.querySelectorAll("button")].find((item) => item.textContent === text)!;
     await act(async () => button("Copy as CSV").click());
     expect(writeText).toHaveBeenLastCalledWith('Gate,Battery\r\n"Barn, west",48%');
-    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toBe("Table copied as CSV.");
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toBe(
+      "Table copied as CSV.",
+    );
     await act(async () => button("Copy as Markdown").click());
-    expect(writeText).toHaveBeenLastCalledWith("| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |");
+    expect(writeText).toHaveBeenLastCalledWith(
+      "| Gate | Battery |\n| --- | --- |\n| Barn, west | 48% |",
+    );
     writeText.mockRejectedValueOnce(new Error("denied"));
     await act(async () => button("Copy as CSV").click());
-    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toContain("copy it manually");
+    expect(container.querySelector(".markdown-table [role=status]")?.textContent).toContain(
+      "copy it manually",
+    );
   });
 });
 
@@ -229,12 +274,19 @@ describe("streaming Markdown", () => {
   };
 
   it("splits only at blank lines that start a new block outside code fences", () => {
-    expect(streamingBlocks("# Plan\n\nFirst part.\n\n```sh\necho one\n\necho two\n```\n\nDone")).toEqual(
-      ["# Plan", "First part.", "```sh\necho one\n\necho two\n```", "Done"]);
+    expect(
+      streamingBlocks("# Plan\n\nFirst part.\n\n```sh\necho one\n\necho two\n```\n\nDone"),
+    ).toEqual(["# Plan", "First part.", "```sh\necho one\n\necho two\n```", "Done"]);
     // An indented line continues the list item above it, so it stays with it.
-    expect(streamingBlocks("1. Feed\n\n   the horses\n\nNext")).toEqual(["1. Feed\n\n   the horses", "Next"]);
+    expect(streamingBlocks("1. Feed\n\n   the horses\n\nNext")).toEqual([
+      "1. Feed\n\n   the horses",
+      "Next",
+    ]);
     expect(streamingBlocks("Still typing\n\n")).toEqual(["Still typing\n\n"]);
-    expect(streamingBlocks("Open fence\n\n```\ncode\n\nmore")).toEqual(["Open fence", "```\ncode\n\nmore"]);
+    expect(streamingBlocks("Open fence\n\n```\ncode\n\nmore")).toEqual([
+      "Open fence",
+      "```\ncode\n\nmore",
+    ]);
   });
 
   it("parses the whole reply when a rule spans it", () => {
@@ -257,7 +309,10 @@ describe("streaming Markdown", () => {
   });
 
   it("keeps blocks for a footnote-shaped regex with no definition, and treats an inline ``` line as prose", () => {
-    expect(streamingBlocks("Match `/[^a-z]/` once.\n\nThen [^b] again.")).toEqual(["Match `/[^a-z]/` once.", "Then [^b] again."]);
+    expect(streamingBlocks("Match `/[^a-z]/` once.\n\nThen [^b] again.")).toEqual([
+      "Match `/[^a-z]/` once.",
+      "Then [^b] again.",
+    ]);
     expect(streamingBlocks("```js``` is inline.\n\n[1]: https://example.test")).toBeNull();
   });
 
@@ -270,7 +325,8 @@ describe("streaming Markdown", () => {
       "- [ ] Feed the horses\n\n- [x] Check the gate\n\nThat is all.",
       // Code that looks like a definition, comment or footnote keeps its blocks and renders the same.
       "Strip it with `/[^a-z]/g`[^1].\n\n```html\n<!-- note -->\n\n<script>\n[1]: https://example.test\n[^1]: Footnote\n```\n\nDone.",
-    ]) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
+    ])
+      expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
   });
 
   it("holds a half-written strong marker back until it closes, while the saved reply shows it as typed", async () => {
@@ -313,11 +369,12 @@ describe("streaming Markdown", () => {
     slowToRender,
     // The same shape, short enough for the hold-back to read and for React Markdown to render.
     "*a ".repeat(200) + "b_ ".repeat(200),
-  ])("renders a reviewed input live as its own prefix: %#", async text => {
+  ])("renders a reviewed input live as its own prefix: %#", async (text) => {
     const shown = shownPrefix(text);
     expect(text.startsWith(shown)).toBe(true);
     expect(text.length - shown.length).toBeLessThanOrEqual(HOLD_LIMIT);
-    if (text !== slowToRender) expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, shown));
+    if (text !== slowToRender)
+      expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, shown));
   });
 
   it("clears copy feedback when a growing code block changes, even mid-copy", async () => {
@@ -331,7 +388,12 @@ describe("streaming Markdown", () => {
     // A copy still pending when the code changes copied the older text, so it must not claim
     // success, nor end a newer copy's wait.
     const finish: Array<() => void> = [];
-    writeText.mockImplementation(() => new Promise<void>(resolve => { finish.push(resolve); }));
+    writeText.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish.push(resolve);
+        }),
+    );
     await copy();
     await renderAs(StreamingMarkdown, "```ts\nconst x = 1234;");
     expect(status()).toBe("");
@@ -353,13 +415,31 @@ describe("streaming Markdown", () => {
 
   // Each case is a fence or definition the per-line splitter cannot follow, so it must parse whole.
   it.each([
-    ["a fence opened behind a list marker hides a later footnote", "Note[^a]\n\nHere:\n\n- ```\n  code\n  ```\n\n[^a]: footnote"],
-    ["a list item's fence closes on a line that the tracker reads as an opener", "See [docs][a].\n\nSteps:\n\n- ```\n  code\n  ```\n  [a]: https://example.test\n  ```"],
-    ["a list item's fence ends at a line left of it", "See [docs][a].\n\nSteps:\n\n- Run:\n\n  ```\n[a]: https://example.test\n  ```"],
-    ["an HTML block holds a fence-shaped line", "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test"],
+    [
+      "a fence opened behind a list marker hides a later footnote",
+      "Note[^a]\n\nHere:\n\n- ```\n  code\n  ```\n\n[^a]: footnote",
+    ],
+    [
+      "a list item's fence closes on a line that the tracker reads as an opener",
+      "See [docs][a].\n\nSteps:\n\n- ```\n  code\n  ```\n  [a]: https://example.test\n  ```",
+    ],
+    [
+      "a list item's fence ends at a line left of it",
+      "See [docs][a].\n\nSteps:\n\n- Run:\n\n  ```\n[a]: https://example.test\n  ```",
+    ],
+    [
+      "an HTML block holds a fence-shaped line",
+      "See [docs][a].\n\n<div>\n```\n</div>\n\n[a]: https://example.test",
+    ],
     ["a definition label spans two lines", "See [docs][a b].\n\n[a\nb]: https://example.test"],
-    ["a definition label holds an escaped bracket", "See [docs][a\\]b].\n\n[a\\]b]: https://example.test"],
-    ["a list item's fence sits four spaces in and the item ends at a quote", "- Code:\n\n    ```\n    x\n\n> Next"],
+    [
+      "a definition label holds an escaped bracket",
+      "See [docs][a\\]b].\n\n[a\\]b]: https://example.test",
+    ],
+    [
+      "a list item's fence sits four spaces in and the item ends at a quote",
+      "- Code:\n\n    ```\n    x\n\n> Next",
+    ],
   ])("renders the same as the saved reply when %s", async (_case, text) => {
     expect(await renderAs(StreamingMarkdown, text)).toBe(await renderAs(MessageMarkdown, text));
     expect(streamingBlocks(text)).toBeNull();
@@ -368,16 +448,55 @@ describe("streaming Markdown", () => {
   // Seeded replies built from lines the splitter must follow: fences in and out of containers,
   // definitions, multi-line labels, HTML blocks and tables. Live and saved must render alike.
   it("renders seeded random replies the same live and saved", async () => {
-    const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "[a", "b]: https://example.test/b",
-      "- ```", "  ```", "```", "~~~", "   ```", "    ```", "\t```", "> ```", "  code", "code", "    indented", "> text", ">", "- item", "1. item",
-      "  - nested", "- [ ] task", "<div>", "</div>", "<!--", "-->", "| a | b |", "| - | - |", "Text **bold**", "Title", "===", "* * *", "", ""];
+    const lines = [
+      "See [docs][a].",
+      "Note[^a] here.",
+      "[a]: https://example.test",
+      "[^a]: foot",
+      "[a",
+      "b]: https://example.test/b",
+      "- ```",
+      "  ```",
+      "```",
+      "~~~",
+      "   ```",
+      "    ```",
+      "\t```",
+      "> ```",
+      "  code",
+      "code",
+      "    indented",
+      "> text",
+      ">",
+      "- item",
+      "1. item",
+      "  - nested",
+      "- [ ] task",
+      "<div>",
+      "</div>",
+      "<!--",
+      "-->",
+      "| a | b |",
+      "| - | - |",
+      "Text **bold**",
+      "Title",
+      "===",
+      "* * *",
+      "",
+      "",
+    ];
     let seed = 7;
-    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const pick = (count: number) =>
+      ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
     const diverged: string[] = [];
     for (let run = 0; run < 1500 && diverged.length < 3; run++) {
-      const body = Array.from({ length: 3 + pick(12) }, () => lines[pick(lines.length)] + (pick(3) ? "\n" : "\n\n")).join("");
+      const body = Array.from(
+        { length: 3 + pick(12) },
+        () => lines[pick(lines.length)] + (pick(3) ? "\n" : "\n\n"),
+      ).join("");
       const text = `See [docs][a] and [x][a b], note[^a].\n\nIntro.\n\n${body}`;
-      if (await renderAs(StreamingMarkdown, text) !== await renderAs(MessageMarkdown, text)) diverged.push(text);
+      if ((await renderAs(StreamingMarkdown, text)) !== (await renderAs(MessageMarkdown, text)))
+        diverged.push(text);
     }
     expect(diverged).toEqual([]);
   }, 60_000);
@@ -386,38 +505,130 @@ describe("streaming Markdown", () => {
   // back to a whole parse; a later broadening of the fallbacks that costs ordinary replies their
   // blocks fails here.
   it.each([
-    ["a tutorial with fenced code between paragraphs", [
-      "## Set up the worker", "", "Install the queue client first:", "", "```bash", "npm install bullmq ioredis", "```", "",
-      "Then create `worker.ts`:", "", "```ts", "import { Worker } from \"bullmq\";", "", "// One connection per process.",
-      "const connection = { host: \"localhost\", port: 6379 };", "", "export const worker = new Worker(\"email\", async job => {",
-      "  const { to, subject } = job.data;", "", "  await send(to, subject);", "}, { connection });", "```", "",
-      "A few notes:", "", "- `concurrency` defaults to **1**.", "- Failed jobs retry with `attempts` and `backoff`.", "",
-      "| Option | Default |", "| --- | --- |", "| `attempts` | 1 |", "| `backoff` | none |", "", "That is the whole worker.",
-    ]],
-    ["numbered steps with code in each item", [
-      "Here is how to rotate the key:", "", "1. Create the new key:", "", "   ```sh", "   az keyvault key create --name app-key", "",
-      "   az keyvault key show --name app-key", "   ```", "", "2. Update the app setting:", "", "   ```json", "   {", "     \"KeyName\": \"app-key\"",
-      "   }", "   ```", "", "   - Restart the app after saving.", "   - Watch the logs for `KeyNotFound`.", "",
-      "3. Delete the old key once traffic is clean.", "", "> **Note:** keep the old key for 24 hours in case you roll back.", "", "Done.",
-    ]],
-    ["a fix with a diff, Python and a Markdown sample", [
-      "The error comes from the decorator:", "", "> TypeError: wrapper() got an unexpected keyword argument 'retry'", "",
-      "Pass the keyword arguments through:", "", "```diff", "-def wrapper(*args):", "-    return fn(*args)", "+def wrapper(*args, **kwargs):",
-      "+    return fn(*args, **kwargs)", "```", "", "The full decorator:", "", "```python", "def logged(fn):", "    @wraps(fn)",
-      "    def wrapper(*args, **kwargs):", "        log.info(\"calling %s\", fn.__name__)", "", "        return fn(*args, **kwargs)", "",
-      "    return wrapper", "```", "", "If the docs use reference links, keep the definitions at the bottom:", "", "```md",
-      "See [the guide][g].", "", "[g]: https://example.test/guide", "<!-- end -->", "```", "", "That should clear it.",
-    ]],
+    [
+      "a tutorial with fenced code between paragraphs",
+      [
+        "## Set up the worker",
+        "",
+        "Install the queue client first:",
+        "",
+        "```bash",
+        "npm install bullmq ioredis",
+        "```",
+        "",
+        "Then create `worker.ts`:",
+        "",
+        "```ts",
+        'import { Worker } from "bullmq";',
+        "",
+        "// One connection per process.",
+        'const connection = { host: "localhost", port: 6379 };',
+        "",
+        'export const worker = new Worker("email", async job => {',
+        "  const { to, subject } = job.data;",
+        "",
+        "  await send(to, subject);",
+        "}, { connection });",
+        "```",
+        "",
+        "A few notes:",
+        "",
+        "- `concurrency` defaults to **1**.",
+        "- Failed jobs retry with `attempts` and `backoff`.",
+        "",
+        "| Option | Default |",
+        "| --- | --- |",
+        "| `attempts` | 1 |",
+        "| `backoff` | none |",
+        "",
+        "That is the whole worker.",
+      ],
+    ],
+    [
+      "numbered steps with code in each item",
+      [
+        "Here is how to rotate the key:",
+        "",
+        "1. Create the new key:",
+        "",
+        "   ```sh",
+        "   az keyvault key create --name app-key",
+        "",
+        "   az keyvault key show --name app-key",
+        "   ```",
+        "",
+        "2. Update the app setting:",
+        "",
+        "   ```json",
+        "   {",
+        '     "KeyName": "app-key"',
+        "   }",
+        "   ```",
+        "",
+        "   - Restart the app after saving.",
+        "   - Watch the logs for `KeyNotFound`.",
+        "",
+        "3. Delete the old key once traffic is clean.",
+        "",
+        "> **Note:** keep the old key for 24 hours in case you roll back.",
+        "",
+        "Done.",
+      ],
+    ],
+    [
+      "a fix with a diff, Python and a Markdown sample",
+      [
+        "The error comes from the decorator:",
+        "",
+        "> TypeError: wrapper() got an unexpected keyword argument 'retry'",
+        "",
+        "Pass the keyword arguments through:",
+        "",
+        "```diff",
+        "-def wrapper(*args):",
+        "-    return fn(*args)",
+        "+def wrapper(*args, **kwargs):",
+        "+    return fn(*args, **kwargs)",
+        "```",
+        "",
+        "The full decorator:",
+        "",
+        "```python",
+        "def logged(fn):",
+        "    @wraps(fn)",
+        "    def wrapper(*args, **kwargs):",
+        '        log.info("calling %s", fn.__name__)',
+        "",
+        "        return fn(*args, **kwargs)",
+        "",
+        "    return wrapper",
+        "```",
+        "",
+        "If the docs use reference links, keep the definitions at the bottom:",
+        "",
+        "```md",
+        "See [the guide][g].",
+        "",
+        "[g]: https://example.test/guide",
+        "<!-- end -->",
+        "```",
+        "",
+        "That should clear it.",
+      ],
+    ],
   ])("keeps blocks at every line of %s", (_reply, lines) => {
     const prefixes = lines.map((_line, index) => lines.slice(0, index + 1).join("\n"));
-    expect(prefixes.filter(prefix => streamingBlocks(prefix) === null)).toEqual([]);
+    expect(prefixes.filter((prefix) => streamingBlocks(prefix) === null)).toEqual([]);
   });
 
   it("keeps blocks for a fence in a list item whose lines stay indented", () => {
     const item = "1. Install:\n\n   ```sh\n   npm i\n\n   npm test\n   ```";
     expect(streamingBlocks(`${item}\n\nDone`)).toEqual([item, "Done"]);
     // With no list above it, a fence indented four spaces is indented code and splits as usual.
-    expect(streamingBlocks("Example:\n\n    ```\n    code\n\nDone")).toEqual(["Example:\n\n    ```\n    code", "Done"]);
+    expect(streamingBlocks("Example:\n\n    ```\n    code\n\nDone")).toEqual([
+      "Example:\n\n    ```\n    code",
+      "Done",
+    ]);
   });
 });
 
@@ -441,12 +652,24 @@ describe("a streamed reply once saved", () => {
   // CommonMark: a line of only spaces and tabs is blank, a no-break space is not, and a lone \r
   // ends a line as \r\n does.
   it.each([
-    ["a line holding only a no-break space, which is not blank", "First\n\u00a0\nSecond", ["First\n\u00a0\nSecond"]],
+    [
+      "a line holding only a no-break space, which is not blank",
+      "First\n\u00a0\nSecond",
+      ["First\n\u00a0\nSecond"],
+    ],
     ["a line of spaces and a tab, which is blank", "First\n \t\nSecond", ["First", "Second"]],
     ["bare carriage returns", "First\r\rSecond", ["First", "Second"]],
     ["carriage return and line feed pairs", "First\r\n\r\nSecond", ["First", "Second"]],
-    ["a definition after bare carriage returns", "See [docs][a].\n\nMore.\r\r[a]: https://example.test", null],
-    ["a fence closed by a line that ends in a no-break space", "```\ncode\n```\u00a0\n\nAfter", ["```\ncode\n```\u00a0\n\nAfter"]],
+    [
+      "a definition after bare carriage returns",
+      "See [docs][a].\n\nMore.\r\r[a]: https://example.test",
+      null,
+    ],
+    [
+      "a fence closed by a line that ends in a no-break space",
+      "```\ncode\n```\u00a0\n\nAfter",
+      ["```\ncode\n```\u00a0\n\nAfter"],
+    ],
   ])("splits as CommonMark reads %s", (_case, text, blocks) => {
     expect(streamingBlocks(text)).toEqual(blocks);
   });
@@ -488,30 +711,73 @@ describe("a streamed reply once saved", () => {
     "Match `/[^a-z]/` once.\n\nThen [^b] again.",
     "```js``` is inline.\n\n[1]: https://example.test",
     "Cards\n\n```agent-ui\n{}\n```",
-    ...["[1]: https://example.test", "[^1]: Footnote", "> [^1]: Footnote", "<!--\n\nhidden\n-->", "<script>\n\nlet x = 1;\n</script>"]
-      .flatMap(line => [`See [docs][1].\n\n${line}`, `Sample:\n\n\`\`\`\n${line}\n\`\`\`\n\nDone`, `Sample:\n\n~~~\n${line}`]),
+    ...[
+      "[1]: https://example.test",
+      "[^1]: Footnote",
+      "> [^1]: Footnote",
+      "<!--\n\nhidden\n-->",
+      "<script>\n\nlet x = 1;\n</script>",
+    ].flatMap((line) => [
+      `See [docs][1].\n\n${line}`,
+      `Sample:\n\n\`\`\`\n${line}\n\`\`\`\n\nDone`,
+      `Sample:\n\n~~~\n${line}`,
+    ]),
   ];
-  it.each(reported)("shows a reported input as it shows opened fresh: %#", async text => {
+  it.each(reported)("shows a reported input as it shows opened fresh: %#", async (text) => {
     expect(await streamedThenSaved(text)).toBe(await openedFresh(text));
   });
 
   it("shows the two inputs this round found in blocks as the whole parse does", async () => {
     for (const text of reported.slice(0, 2))
-      expect(await renderAs(createElement(StreamingMarkdown, { text, holdBack: false }))).toBe(await openedFresh(text));
+      expect(await renderAs(createElement(StreamingMarkdown, { text, holdBack: false }))).toBe(
+        await openedFresh(text),
+      );
   });
 
   // Seeded replies from lines that test blank lines, line endings, containers, fences and definitions.
   it("shows seeded random replies streamed and saved as they show opened fresh", async () => {
-    const lines = ["See [docs][a].", "Note[^a] here.", "[a]: https://example.test", "[^a]: foot", "- ```", "  ```", "```", "~~~", "    ```",
-      "> ```", "  code", "code", "    indented", "> text", "- item", "1. item", "  - nested", "<div>", "</div>", "| a | b |", "| - | - |",
-      "Text **bold**", "Title", "===", "\u00a0", " \t", "\t", "", ""];
+    const lines = [
+      "See [docs][a].",
+      "Note[^a] here.",
+      "[a]: https://example.test",
+      "[^a]: foot",
+      "- ```",
+      "  ```",
+      "```",
+      "~~~",
+      "    ```",
+      "> ```",
+      "  code",
+      "code",
+      "    indented",
+      "> text",
+      "- item",
+      "1. item",
+      "  - nested",
+      "<div>",
+      "</div>",
+      "| a | b |",
+      "| - | - |",
+      "Text **bold**",
+      "Title",
+      "===",
+      "\u00a0",
+      " \t",
+      "\t",
+      "",
+      "",
+    ];
     const endings = ["\n", "\r", "\r\n", "\n\n", "\r\r"];
     let seed = 23;
-    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const pick = (count: number) =>
+      ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
     const diverged: string[] = [];
     for (let run = 0; run < 400 && diverged.length < 3; run++) {
-      const text = Array.from({ length: 3 + pick(12) }, () => lines[pick(lines.length)] + endings[pick(endings.length)]).join("");
-      if (await streamedThenSaved(text) !== await openedFresh(text)) diverged.push(text);
+      const text = Array.from(
+        { length: 3 + pick(12) },
+        () => lines[pick(lines.length)] + endings[pick(endings.length)],
+      ).join("");
+      if ((await streamedThenSaved(text)) !== (await openedFresh(text))) diverged.push(text);
     }
     expect(diverged).toEqual([]);
   }, 60_000);
@@ -521,35 +787,55 @@ describe("a streamed reply once saved", () => {
   it.each([
     ["at the longest checked length keeps its nodes", MAX_CHECKED_REPLY, true],
     ["one character longer parses whole", MAX_CHECKED_REPLY + 1, false],
-  ])("a saved reply %s, and shows as it does opened fresh", async (_case, length, kept) => {
-    const paragraph = "The north gate is **latched** and the east gate is open.\n\n";
-    const body = paragraph.repeat(Math.floor((length - 20) / paragraph.length));
-    // Padded to exactly `length` characters.
-    const text = body + "Done".padEnd(length - body.length, ".");
-    await act(async () => root.render(createElement("div")));
-    await renderAs(createElement(ReplyMarkdown, { text, live: true }));
-    const first = container.querySelector("p");
-    const saved = await renderAs(createElement(ReplyMarkdown, { text, live: false }));
-    expect(container.querySelector("p") === first).toBe(kept);
-    expect(saved).toBe(await openedFresh(text));
-  }, 30_000);
+  ])(
+    "a saved reply %s, and shows as it does opened fresh",
+    async (_case, length, kept) => {
+      const paragraph = "The north gate is **latched** and the east gate is open.\n\n";
+      const body = paragraph.repeat(Math.floor((length - 20) / paragraph.length));
+      // Padded to exactly `length` characters.
+      const text = body + "Done".padEnd(length - body.length, ".");
+      await act(async () => root.render(createElement("div")));
+      await renderAs(createElement(ReplyMarkdown, { text, live: true }));
+      const first = container.querySelector("p");
+      const saved = await renderAs(createElement(ReplyMarkdown, { text, live: false }));
+      expect(container.querySelector("p") === first).toBe(kept);
+      expect(saved).toBe(await openedFresh(text));
+    },
+    30_000,
+  );
 
   it("finds where blocks and the whole parse disagree, so a saved reply parses whole there", () => {
     expect(blocksAgree("First\n\u00a0\nSecond", ["First", "Second"])).toBe(false);
-    expect(blocksAgree("See [docs][a].\n\nMore.\r\r[a]: https://example.test", ["See [docs][a].", "More.\r\r[a]: https://example.test"])).toBe(false);
+    expect(
+      blocksAgree("See [docs][a].\n\nMore.\r\r[a]: https://example.test", [
+        "See [docs][a].",
+        "More.\r\r[a]: https://example.test",
+      ]),
+    ).toBe(false);
     expect(blocksAgree("First\n\nSecond", ["First", "Second"])).toBe(true);
-    expect(blocksAgree("```\ncode\n\nmore\n```\n\nAfter", ["```\ncode\n\nmore\n```", "After"])).toBe(true);
+    expect(
+      blocksAgree("```\ncode\n\nmore\n```\n\nAfter", ["```\ncode\n\nmore\n```", "After"]),
+    ).toBe(true);
   });
 });
 
 describe("which blocks parse again", () => {
-  const block = { text: "The gate is latched.", botId: "home", messageId: "m2", userId: "one", unavailable: false, inlineUi: true };
-  const cards = "```agent-ui\n{\"cards\":[]}\n```";
+  const block = {
+    text: "The gate is latched.",
+    botId: "home",
+    messageId: "m2",
+    userId: "one",
+    unavailable: false,
+    inlineUi: true,
+  };
+  const cards = '```agent-ui\n{"cards":[]}\n```';
   it("keeps a block's parse when only the message ID changed, as when a live row is saved", () => {
     expect(sameBlock({ ...block, messageId: "s1-inflight" }, block)).toBe(true);
   });
   it("parses a block with reply cards again under a new ID, since its cards act on that message", () => {
-    expect(sameBlock({ ...block, text: cards, messageId: "s1-inflight" }, { ...block, text: cards })).toBe(false);
+    expect(
+      sameBlock({ ...block, text: cards, messageId: "s1-inflight" }, { ...block, text: cards }),
+    ).toBe(false);
   });
   it.each([
     ["text", { text: "The gate is open." }],

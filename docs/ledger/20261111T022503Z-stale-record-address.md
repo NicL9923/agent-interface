@@ -49,12 +49,12 @@ over five more seconds.
 Each protecting line broken by hand, the file restored, over `tests/account-epoch.test.ts`, `tests/account-transitions-ui.test.ts` and
 `tests/saved-roster-ui.test.ts`.
 
-| Mutation | Result |
-| --- | --- |
-| No address condition, as on `main` | failed: both unit refusal tests and both UI lag tests (4) |
-| `addressUser !== user` without the named guard | failed: the three "uses the answer" unit rows, the UI "record had not named" test and four saved-home tests (8) |
-| Any named address ends the generation, even for the same account | failed: 16 tests, and the UI files never finished, the generation restarting forever; I stopped the run |
-| Judged by `record?.user` instead of the address's account | failed: the sign-out unit row (1), so the sign-out row is what tells the two apart |
+| Mutation                                                         | Result                                                                                                          |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| No address condition, as on `main`                               | failed: both unit refusal tests and both UI lag tests (4)                                                       |
+| `addressUser !== user` without the named guard                   | failed: the three "uses the answer" unit rows, the UI "record had not named" test and four saved-home tests (8) |
+| Any named address ends the generation, even for the same account | failed: 16 tests, and the UI files never finished, the generation restarting forever; I stopped the run         |
+| Judged by `record?.user` instead of the address's account        | failed: the sign-out unit row (1), so the sign-out row is what tells the two apart                              |
 
 ## Checks
 

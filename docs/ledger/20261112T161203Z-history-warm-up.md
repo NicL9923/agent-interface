@@ -53,14 +53,14 @@ deleted afterward. The script built a Bridge with only the attributes these path
 mode ran in a fresh process, so the shell summary memo started empty, as after a restart. Numbers only; no content
 was printed. Two runs each:
 
-| Step | Today | Warmed |
-| --- | --- | --- |
-| Warm-up in the background (read, projection with pauses, records) | - | 8.7 s, 9.8 s |
-| First open: resume's display read | 1.24 s, 1.24 s | 1.18 s, 1.37 s |
-| First open: projection | 5.45 s, 5.75 s (whole, no memo) | 0.15 s, 0.18 s (86 of 86 pieces reused) |
-| First open: original rows and attribution | 0.76 s, 0.73 s | 0.29 s, 0.32 s |
-| First open, add-on work | 7.5 s, 7.7 s | 1.6 s, 1.9 s |
-| Second open: activation read and projection | 3.1 s, 2.9 s (empty memo) | 1.4 s, 1.5 s (86 of 86 reused) |
+| Step                                                              | Today                           | Warmed                                  |
+| ----------------------------------------------------------------- | ------------------------------- | --------------------------------------- |
+| Warm-up in the background (read, projection with pauses, records) | -                               | 8.7 s, 9.8 s                            |
+| First open: resume's display read                                 | 1.24 s, 1.24 s                  | 1.18 s, 1.37 s                          |
+| First open: projection                                            | 5.45 s, 5.75 s (whole, no memo) | 0.15 s, 0.18 s (86 of 86 pieces reused) |
+| First open: original rows and attribution                         | 0.76 s, 0.73 s                  | 0.29 s, 0.32 s                          |
+| First open, add-on work                                           | 7.5 s, 7.7 s                    | 1.6 s, 1.9 s                            |
+| Second open: activation read and projection                       | 3.1 s, 2.9 s (empty memo)       | 1.4 s, 1.5 s (86 of 86 reused)          |
 
 The resume's and activation's display reads returned equal rows (8,021). The warmed projection equalled the add-on's
 whole projection of the same rows. The memo kept 113.7 million characters, within the 192 million budget. Parsing the
@@ -81,50 +81,50 @@ of the file passed.
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_history_warmup_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| first open resumes without image URLs | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| first open resumes without the memo | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| resumed memo not kept for the session | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| warmed cache not adopted | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| memo keeps nothing when a pause stops it | failed: test_warming_keeps_within_the_room_other_memos_leave_and_stops_when_it_runs_out (exit 1) |
-| a pause never yields | failed: test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice (exit 1) |
-| a full budget never stops a pause | failed: test_warming_keeps_within_the_room_other_memos_leave_and_stops_when_it_runs_out (exit 1) |
-| a full budget counts as warmed | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| warming goes on past a full budget | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| warm-up keeps up to the whole budget | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| memo ignores the limit | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| a piece that did not fit leaves full unset | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| room counts the memo itself | failed: test_a_warm_up_that_stepped_aside_still_fits_what_it_kept_before (exit 1) |
-| no wait for live work before reading | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1) |
-| no check for a live chat before reading | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1) |
-| no check for a live chat under the lock | failed: test_an_open_finishing_while_the_warm_up_reads_leaves_it_nothing_to_project (exit 1) |
-| history never read again | failed: test_the_warm_up_waits_for_a_turn_and_reads_again_only_what_the_turn_changed (exit 1) |
-| history read on every try | failed: test_the_warm_up_waits_for_a_turn_and_reads_again_only_what_the_turn_changed (exit 1) |
-| tool records not warmed | failed: test_the_first_open_parses_no_tool_record_the_warm_up_parsed (exit 1) |
-| record steps never step aside | failed: test_record_parsing_steps_aside_too (exit 1) |
-| every stored session's records | failed: test_the_first_open_parses_no_tool_record_the_warm_up_parsed (exit 1) |
-| open not counted | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1) |
-| live work ignores opens | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1) |
-| live work ignores lanes | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1) |
-| live work ignores sends admitting | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1) |
-| live work ignores native sessions | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1) |
-| off switch ignored | failed: test_the_off_switch_starts_nothing_and_checks_nothing (exit 1) |
-| missing SessionDB not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| missing SessionDB reads not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| display read signature not checked | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| missing profile directories not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| missing compaction projection not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| missing redaction state not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| failure logs the exception's text | failed: test_a_failed_warm_up_logs_no_history (exit 1) |
-| oldest send first | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1) |
-| no limit on targets | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1) |
-| an invalid profile name stops the targets | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1) |
-| an empty store is read | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1) |
-| an archived chat is warmed | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1) |
-| the chat's root, not its tip | failed: AssertionError: not the display read an open makes (exit 1) |
-| the launch home named as a profile home | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| display read without compacted rows | failed: AssertionError: not the display read an open makes (exit 1) |
+| Mutation                                   | Result                                                                                                    |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| first open resumes without image URLs      | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                         |
+| first open resumes without the memo        | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                         |
+| resumed memo not kept for the session      | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                         |
+| warmed cache not adopted                   | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                         |
+| memo keeps nothing when a pause stops it   | failed: test_warming_keeps_within_the_room_other_memos_leave_and_stops_when_it_runs_out (exit 1)          |
+| a pause never yields                       | failed: test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice (exit 1)             |
+| a full budget never stops a pause          | failed: test_warming_keeps_within_the_room_other_memos_leave_and_stops_when_it_runs_out (exit 1)          |
+| a full budget counts as warmed             | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| warming goes on past a full budget         | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| warm-up keeps up to the whole budget       | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| memo ignores the limit                     | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| a piece that did not fit leaves full unset | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| room counts the memo itself                | failed: test_a_warm_up_that_stepped_aside_still_fits_what_it_kept_before (exit 1)                         |
+| no wait for live work before reading       | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1)              |
+| no check for a live chat before reading    | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1)              |
+| no check for a live chat under the lock    | failed: test_an_open_finishing_while_the_warm_up_reads_leaves_it_nothing_to_project (exit 1)              |
+| history never read again                   | failed: test_the_warm_up_waits_for_a_turn_and_reads_again_only_what_the_turn_changed (exit 1)             |
+| history read on every try                  | failed: test_the_warm_up_waits_for_a_turn_and_reads_again_only_what_the_turn_changed (exit 1)             |
+| tool records not warmed                    | failed: test_the_first_open_parses_no_tool_record_the_warm_up_parsed (exit 1)                             |
+| record steps never step aside              | failed: test_record_parsing_steps_aside_too (exit 1)                                                      |
+| every stored session's records             | failed: test_the_first_open_parses_no_tool_record_the_warm_up_parsed (exit 1)                             |
+| open not counted                           | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1)              |
+| live work ignores opens                    | failed: test_an_open_already_under_way_keeps_its_chat_and_the_warm_up_reads_nothing (exit 1)              |
+| live work ignores lanes                    | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1)                           |
+| live work ignores sends admitting          | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1)                           |
+| live work ignores native sessions          | failed: test_live_work_is_any_open_app_request_send_or_working_session (exit 1)                           |
+| off switch ignored                         | failed: test_the_off_switch_starts_nothing_and_checks_nothing (exit 1)                                    |
+| missing SessionDB not named                | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| missing SessionDB reads not named          | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| display read signature not checked         | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| missing profile directories not named      | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| missing compaction projection not named    | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| missing redaction state not named          | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| failure logs the exception's text          | failed: test_a_failed_warm_up_logs_no_history (exit 1)                                                    |
+| oldest send first                          | failed: test_the_most_recent_assistants_are_warmed_first_until_the_budget_is_full (exit 1)                |
+| no limit on targets                        | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1)      |
+| an invalid profile name stops the targets  | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1)      |
+| an empty store is read                     | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1)      |
+| an archived chat is warmed                 | failed: test_targets_are_the_assistants_sent_to_most_recently_with_a_canonical_chat_on_disk (exit 1)      |
+| the chat's root, not its tip               | failed: AssertionError: not the display read an open makes (exit 1)                                       |
+| the launch home named as a profile home    | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                         |
+| display read without compacted rows        | failed: AssertionError: not the display read an open makes (exit 1)                                       |
 
 A lint fix then restructured the turn and retry tests; their three mutants were run again and failed the same way.
 The 5 ms sleep between steps has no test: removing it changes only how often other threads run. Not mutated: a
@@ -166,23 +166,23 @@ The first open's image URLs were accepted by the orchestrating agent as a consis
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_history_warmup_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| a warm-up's charge ranks as an open's | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
-| a projection's charge never in the background | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
-| a stopped projection's charge never in the background | failed: test_a_warm_up_waiting_out_a_turn_still_empties_first (exit 1) |
-| the warm-up projects as an open | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
-| an emptied memo tells nobody | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
-| an emptied warm cache is kept | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1) |
-| a warm cache keeps itself alive | failed: test_a_warm_up_that_stepped_aside_still_fits_what_it_kept_before (exit 1) |
-| an earlier tip's warm-up is kept | failed: test_a_warm_up_of_an_earlier_tip_is_dropped_when_the_chat_goes_live (exit 1) |
-| a delivery waits for its lock uncounted | failed: test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice (exit 1) |
-| a pause only before pieces projected anew | failed: test_a_pause_comes_before_every_piece_reused_or_not (exit 1) |
-| tool rows parsed without stepping aside | failed: test_tool_row_parsing_steps_aside_too (exit 1) |
-| tool rows not warmed | failed: test_tool_row_parsing_steps_aside_too (exit 1) |
-| a store that opens only writable is not named | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
-| one assistant's failure stops the warm-up | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1) |
-| one store that cannot be read stops the targets | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1) |
+| Mutation                                              | Result                                                                                                    |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| a warm-up's charge ranks as an open's                 | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1)                                      |
+| a projection's charge never in the background         | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1)                                      |
+| a stopped projection's charge never in the background | failed: test_a_warm_up_waiting_out_a_turn_still_empties_first (exit 1)                                    |
+| the warm-up projects as an open                       | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1)                                      |
+| an emptied memo tells nobody                          | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1)                                      |
+| an emptied warm cache is kept                         | failed: test_a_warmed_cache_the_budget_empties_is_forgotten (exit 1)                                      |
+| a warm cache keeps itself alive                       | failed: test_a_warm_up_that_stepped_aside_still_fits_what_it_kept_before (exit 1)                         |
+| an earlier tip's warm-up is kept                      | failed: test_a_warm_up_of_an_earlier_tip_is_dropped_when_the_chat_goes_live (exit 1)                      |
+| a delivery waits for its lock uncounted               | failed: test_an_open_arriving_mid_warm_up_takes_over_and_no_piece_is_projected_twice (exit 1)             |
+| a pause only before pieces projected anew             | failed: test_a_pause_comes_before_every_piece_reused_or_not (exit 1)                                      |
+| tool rows parsed without stepping aside               | failed: test_tool_row_parsing_steps_aside_too (exit 1)                                                    |
+| tool rows not warmed                                  | failed: test_tool_row_parsing_steps_aside_too (exit 1)                                                    |
+| a store that opens only writable is not named         | failed: test_a_hermes_without_what_the_warm_up_reads_warms_nothing_and_says_what_is_missing_once (exit 1) |
+| one assistant's failure stops the warm-up             | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1)                              |
+| one store that cannot be read stops the targets       | failed: test_an_assistant_that_fails_is_skipped_and_logs_no_history (exit 1)                              |
 
 The stopped-charge mutant first survived; the new test holds the warm-up in a turn while another open charges. Its
 first version hung the mutant run, because a failed assertion left the turn running; it now ends the turn in
@@ -214,13 +214,13 @@ six pieces warmed, a stop at the second pause of the next pass, one piece left.
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_history_warmup_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| a stop keeps only the pieces it walked | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1) |
-| a stop keeps unreached pieces past the limit | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1) |
-| a dropped cache counts as warmed | failed: test_a_warm_up_whose_cache_another_open_drops_is_not_counted (exit 1) |
-| out of memory skips one assistant | failed: test_running_out_of_memory_stops_the_warm_up (exit 1) |
-| out of memory skips one store | failed: test_running_out_of_memory_stops_the_warm_up (exit 1) |
+| Mutation                                     | Result                                                                        |
+| -------------------------------------------- | ----------------------------------------------------------------------------- |
+| a stop keeps only the pieces it walked       | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1)  |
+| a stop keeps unreached pieces past the limit | failed: test_a_stop_partway_through_reused_pieces_keeps_every_piece (exit 1)  |
+| a dropped cache counts as warmed             | failed: test_a_warm_up_whose_cache_another_open_drops_is_not_counted (exit 1) |
+| out of memory skips one assistant            | failed: test_running_out_of_memory_stops_the_warm_up (exit 1)                 |
+| out of memory skips one store                | failed: test_running_out_of_memory_stops_the_warm_up (exit 1)                 |
 
 The limit mutant first survived; the test now also stops a pass whose limit shrank to two pieces.
 `test_a_warm_up_stepping_aside_on_a_grown_history_projects_only_what_is_new` covers the same stop through a whole
@@ -237,6 +237,6 @@ redaction change while it stood aside left the memo projected under the old cont
 warmed. Output stayed correct, since an adopting open empties a memo of another context, but that open paid full cost.
 The check now compares the context too, and the `ProjectionMemo` docstring says what a stopped pass keeps.
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                                | Result                                                                                |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | src/hermes/extension.py: ' or projected[3] != context:' | failed: test_a_redaction_change_while_the_warm_up_stood_aside_projects_again (exit 1) |

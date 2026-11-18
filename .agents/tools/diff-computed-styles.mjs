@@ -12,18 +12,43 @@ import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 
-const port = Number(process.env.E2E_PORT) || 4199, api = `http://127.0.0.1:${port}`;
+const port = Number(process.env.E2E_PORT) || 4199,
+  api = `http://127.0.0.1:${port}`;
 const devPort = Number(process.env.DEV_PORT) || 5199;
 const width = Number(process.env.WIDTH) || 900;
 const schemes = (process.env.SCHEMES || "light,dark").split(",");
 const motion = process.env.MOTION || "reduce";
-const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
-process.on("exit", () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch {} });
-for (let i = 0; ; i++) { try { if ((await fetch(`${api}/api/auth/config`)).ok) break; } catch {} if (i > 120) throw new Error("no server"); await sleep(250); }
+const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+  stdio: ["ignore", "ignore", "inherit"],
+  detached: true,
+  env: { ...process.env, E2E_PORT: String(port) },
+});
+process.on("exit", () => {
+  try {
+    if (server.pid) process.kill(-server.pid, "SIGTERM");
+  } catch {}
+});
+for (let i = 0; ; i++) {
+  try {
+    if ((await fetch(`${api}/api/auth/config`)).ok) break;
+  } catch {}
+  if (i > 120) throw new Error("no server");
+  await sleep(250);
+}
 const { createServer } = await import("vite");
 // The server refuses a write whose Origin is not its own, so the proxy presents the app server's origin.
-const configure = proxy => proxy.on("proxyReq", request => { if (request.getHeader("origin")) request.setHeader("origin", api); });
-const vite = await createServer({ logLevel: "silent", server: { port: devPort, strictPort: true, proxy: { "/api": { target: api, ws: true, configure }, "/inline-ui": api } } });
+const configure = (proxy) =>
+  proxy.on("proxyReq", (request) => {
+    if (request.getHeader("origin")) request.setHeader("origin", api);
+  });
+const vite = await createServer({
+  logLevel: "silent",
+  server: {
+    port: devPort,
+    strictPort: true,
+    proxy: { "/api": { target: api, ws: true, configure }, "/inline-ui": api },
+  },
+});
 await vite.listen();
 
 /** Every element under the body with the computed value of every property, keyed by its tag, classes and position. */
@@ -34,10 +59,17 @@ const snapshot = () => {
     const style = getComputedStyle(element);
     const values = {};
     // Custom properties are left out: the build's minifier writes their text differently, and what they feed is read here.
-    for (const property of style) if (!property.startsWith("--")) values[property] = style.getPropertyValue(property);
+    for (const property of style)
+      if (!property.startsWith("--")) values[property] = style.getPropertyValue(property);
     out[path] = values;
-    [...element.children].filter(child => !skip.has(child.tagName) && !child.tagName.startsWith("VITE-")).forEach((child, index) =>
-      walk(child, `${path} > ${child.tagName.toLowerCase()}${[...child.classList].map(name => `.${name}`).join("")}:${index}`));
+    [...element.children]
+      .filter((child) => !skip.has(child.tagName) && !child.tagName.startsWith("VITE-"))
+      .forEach((child, index) =>
+        walk(
+          child,
+          `${path} > ${child.tagName.toLowerCase()}${[...child.classList].map((name) => `.${name}`).join("")}:${index}`,
+        ),
+      );
   };
   walk(document.body, "body");
   return out;
@@ -47,44 +79,93 @@ const snapshot = () => {
 /** @type {[string, (page: import("playwright").Page) => Promise<void>][]} */
 const screens = [
   ["home", async () => {}],
-  ["bot menu", async page => { await page.getByRole("region", { name: "Your assistants" }).getByRole("button", { name: /Trail Cook/ }).click({ button: "right" }); await page.locator(".bot-menu").waitFor(); }],
-  ["account menu", async page => { await page.getByRole("button", { name: "Account" }).click(); await page.getByRole("menu", { name: "Account" }).waitFor(); }],
-  ["settings", async page => {
-    await page.getByRole("button", { name: "Account" }).click();
-    await page.getByRole("menu", { name: "Account" }).getByRole("menuitem", { name: /Settings/ }).click();
-    await page.locator(".settings-sheet[open]").waitFor();
-  }],
-  ["command palette", async page => {
-    // The app takes Command on Apple platforms and Control elsewhere, by the browser's platform as shortcuts.ts reads it.
-    const apple = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent));
-    await page.keyboard.press(apple ? "Meta+k" : "Control+k");
-    await page.locator(".command-palette[open]").waitFor();
-  }],
-  ["chat", async page => {
-    await page.getByRole("region", { name: "Your assistants" }).getByRole("button", { name: /Ranch Hand/ }).click();
-    await page.getByText("Morning. The north fence is fixed.").waitFor();
-    // The jump button shows only after scrolling up; a bare one carries the cascade's answer for its class.
-    await page.evaluate(() => { const button = document.createElement("button"); button.className = "jump-latest"; button.textContent = "Latest"; document.querySelector(".conversation-panel")?.appendChild(button); });
-  }],
+  [
+    "bot menu",
+    async (page) => {
+      await page
+        .getByRole("region", { name: "Your assistants" })
+        .getByRole("button", { name: /Trail Cook/ })
+        .click({ button: "right" });
+      await page.locator(".bot-menu").waitFor();
+    },
+  ],
+  [
+    "account menu",
+    async (page) => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page.getByRole("menu", { name: "Account" }).waitFor();
+    },
+  ],
+  [
+    "settings",
+    async (page) => {
+      await page.getByRole("button", { name: "Account" }).click();
+      await page
+        .getByRole("menu", { name: "Account" })
+        .getByRole("menuitem", { name: /Settings/ })
+        .click();
+      await page.locator(".settings-sheet[open]").waitFor();
+    },
+  ],
+  [
+    "command palette",
+    async (page) => {
+      // The app takes Command on Apple platforms and Control elsewhere, by the browser's platform as shortcuts.ts reads it.
+      const apple = await page.evaluate(() =>
+        /Mac|iPhone|iPad|iPod/i.test(
+          navigator.userAgentData?.platform || navigator.platform || navigator.userAgent,
+        ),
+      );
+      await page.keyboard.press(apple ? "Meta+k" : "Control+k");
+      await page.locator(".command-palette[open]").waitFor();
+    },
+  ],
+  [
+    "chat",
+    async (page) => {
+      await page
+        .getByRole("region", { name: "Your assistants" })
+        .getByRole("button", { name: /Ranch Hand/ })
+        .click();
+      await page.getByText("Morning. The north fence is fixed.").waitFor();
+      // The jump button shows only after scrolling up; a bare one carries the cascade's answer for its class.
+      await page.evaluate(() => {
+        const button = document.createElement("button");
+        button.className = "jump-latest";
+        button.textContent = "Latest";
+        document.querySelector(".conversation-panel")?.appendChild(button);
+      });
+    },
+  ],
 ];
 
 const browser = await chromium.launch();
 const differences = new Map();
 // The minifier writes a zero position as 0px, the dev server as 0%.
-const normal = (property, value) => property === "background-position" ? value.replace(/\b0px\b/g, "0%") : value;
+const normal = (property, value) =>
+  property === "background-position" ? value.replace(/\b0px\b/g, "0%") : value;
 const notes = [];
 const note = (line) => differences.set(line, (differences.get(line) ?? 0) + 1);
 // One line per screen, element and property however many elements share the selector, with how many do.
-const last = path => path.split(" > ").at(-1).replace(/:\d+$/, "");
+const last = (path) => path.split(" > ").at(-1).replace(/:\d+$/, "");
 for (const colorScheme of schemes) {
-  const read = async base => {
-    const context = await browser.newContext({ baseURL: base, serviceWorkers: "block", viewport: { width, height: 700 }, reducedMotion: motion, colorScheme });
+  const read = async (base) => {
+    const context = await browser.newContext({
+      baseURL: base,
+      serviceWorkers: "block",
+      viewport: { width, height: 700 },
+      reducedMotion: motion,
+      colorScheme,
+    });
     const page = await context.newPage();
     await page.goto("/");
     // A hovered control is still easing toward its hover color, and where it is differs by when it was read.
     await page.addStyleTag({ content: "*, *::before, *::after { transition: none !important; }" });
     await page.getByRole("button", { name: "Enter local workspace" }).click();
-    await page.getByRole("region", { name: "Your assistants" }).getByRole("button", { name: /Ranch Hand/ }).waitFor();
+    await page
+      .getByRole("region", { name: "Your assistants" })
+      .getByRole("button", { name: /Ranch Hand/ })
+      .waitFor();
     const found = {};
     for (const [name, reach] of screens) {
       await reach(page);
@@ -96,20 +177,33 @@ for (const colorScheme of schemes) {
     await context.close();
     return found;
   };
-  const built = await read(api), dev = await read(`http://127.0.0.1:${devPort}`);
+  const built = await read(api),
+    dev = await read(`http://127.0.0.1:${devPort}`);
   for (const [name] of screens) {
     for (const [path, values] of Object.entries(built[name])) {
       const other = dev[name][path];
-      if (!other) { notes.push(`${colorScheme}  ${name}  ${last(path)}  only in the build`); continue; }
-      for (const [property, value] of Object.entries(values)) if (normal(property, other[property]) !== normal(property, value)) note(`${colorScheme}  ${name}  ${last(path)}  ${property}  ${value} -> ${other[property]}`);
+      if (!other) {
+        notes.push(`${colorScheme}  ${name}  ${last(path)}  only in the build`);
+        continue;
+      }
+      for (const [property, value] of Object.entries(values))
+        if (normal(property, other[property]) !== normal(property, value))
+          note(
+            `${colorScheme}  ${name}  ${last(path)}  ${property}  ${value} -> ${other[property]}`,
+          );
     }
-    for (const path of Object.keys(dev[name])) if (!built[name][path]) notes.push(`${colorScheme}  ${name}  ${last(path)}  only in dev`);
+    for (const path of Object.keys(dev[name]))
+      if (!built[name][path]) notes.push(`${colorScheme}  ${name}  ${last(path)}  only in dev`);
   }
 }
 await browser.close();
 await vite.close();
-const lines = [...differences].map(([line, count]) => count > 1 ? `${line}  x${count}` : line);
+const lines = [...differences].map(([line, count]) => (count > 1 ? `${line}  x${count}` : line));
 // An element present in one and not the other is a different screen (a footnote that shows a release, say), not a cascade difference.
 if (notes.length) console.error(`not compared, ${new Set(notes).size} elements in one build only`);
-console.log(lines.length ? lines.join("\n") : `no differences (${schemes.join(", ")}, ${width}px, motion ${motion})`);
+console.log(
+  lines.length
+    ? lines.join("\n")
+    : `no differences (${schemes.join(", ")}, ${width}px, motion ${motion})`,
+);
 process.exit(lines.length ? 1 : 0);

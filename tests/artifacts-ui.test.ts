@@ -8,55 +8,122 @@ import type { Bot, Conversation, FileRef } from "../src/shared/types";
 import { mountRoot, typeInto } from "./ui-harness";
 
 const bot: Bot = { id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" };
-const file = (id: string, name: string, mime = "text/plain", url?: string): FileRef =>
-  ({ id, name, mime, url: url || `/api/files/${encodeURIComponent(id)}` });
+const file = (id: string, name: string, mime = "text/plain", url?: string): FileRef => ({
+  id,
+  name,
+  mime,
+  url: url || `/api/files/${encodeURIComponent(id)}`,
+});
 let container: HTMLDivElement;
 let root: Root;
 let conversation: Conversation;
 let fetchFile: AnyMock;
 
 beforeEach(() => {
-  fetchFile = vi.fn().mockImplementation(async () => new Response("Plain preview", { headers: { "Content-Type": "text/plain" } }));
+  fetchFile = vi
+    .fn()
+    .mockImplementation(
+      async () => new Response("Plain preview", { headers: { "Content-Type": "text/plain" } }),
+    );
   vi.stubGlobal("fetch", fetchFile);
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
-  conversation = { botId: "ranch", messages: [], files: [], approvals: [], activity: { state: "idle" } };
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.open = true;
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.open = false;
+    },
+  });
+  conversation = {
+    botId: "ranch",
+    messages: [],
+    files: [],
+    approvals: [],
+    activity: { state: "idle" },
+  };
   ({ container, root } = mountRoot());
 });
 async function render(value: Conversation | null = conversation, unavailable = false) {
-  await act(async () => root.render(createElement(ArtifactsButton, { bot, conversation: value, unavailable })));
+  await act(async () =>
+    root.render(createElement(ArtifactsButton, { bot, conversation: value, unavailable })),
+  );
 }
-async function open() { await act(async () => container.querySelector<HTMLButtonElement>(".artifacts-button")!.click()); }
+async function open() {
+  await act(async () => container.querySelector<HTMLButtonElement>(".artifacts-button")!.click());
+}
 async function select(name: string) {
-  const item = [...container.querySelectorAll<HTMLButtonElement>(".artifact-item")].find(item => item.querySelector("strong")?.textContent === name)!;
+  const item = [...container.querySelectorAll<HTMLButtonElement>(".artifact-item")].find(
+    (item) => item.querySelector("strong")?.textContent === name,
+  )!;
   await act(async () => item.click());
 }
 
 describe("conversation artifacts", () => {
   it("counts files of earlier, unloaded history and lists them when opened", async () => {
-    const old = file("old", "fence-survey.pdf", "application/pdf"), shared = file("shared", "brands.csv", "text/csv"), recent = file("recent", "gate.png", "image/png");
-    const window = { ...conversation, files: [recent], earlierFiles: 2,
-      messages: [{ id: "p9", role: "user" as const, text: "Again" }, { id: "a9", role: "assistant" as const, text: "Done", files: [recent] }] };
+    const old = file("old", "fence-survey.pdf", "application/pdf"),
+      shared = file("shared", "brands.csv", "text/csv"),
+      recent = file("recent", "gate.png", "image/png");
+    const window = {
+      ...conversation,
+      files: [recent],
+      earlierFiles: 2,
+      messages: [
+        { id: "p9", role: "user" as const, text: "Again" },
+        { id: "a9", role: "assistant" as const, text: "Done", files: [recent] },
+      ],
+    };
     let finish!: (response: Response) => void;
-    fetchFile.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+    fetchFile.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
     await render(window);
-    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe(
+      "Artifacts (3)",
+    );
     await open();
     expect(String(fetchFile.mock.calls[0][0])).toBe("/api/bots/ranch/files?before=p9");
     expect(container.textContent).toContain("Loading files from earlier in the conversation");
-    await act(async () => finish(Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }, { id: "p2", role: "user", files: [shared] }] })));
-    expect([...container.querySelectorAll(".artifact-item small")].map(item => item.textContent)).toEqual(["Generated", "Shared", "Generated"]);
-    expect([...container.querySelectorAll(".artifact-item strong")].map(item => item.textContent)).toEqual(["fence-survey.pdf", "brands.csv", "gate.png"]);
-    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    await act(async () =>
+      finish(
+        Response.json({
+          messages: [
+            { id: "a1", role: "assistant", files: [old] },
+            { id: "p2", role: "user", files: [shared] },
+          ],
+        }),
+      ),
+    );
+    expect(
+      [...container.querySelectorAll(".artifact-item small")].map((item) => item.textContent),
+    ).toEqual(["Generated", "Shared", "Generated"]);
+    expect(
+      [...container.querySelectorAll(".artifact-item strong")].map((item) => item.textContent),
+    ).toEqual(["fence-survey.pdf", "brands.csv", "gate.png"]);
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe(
+      "Artifacts (3)",
+    );
     expect(container.textContent).not.toContain("Loading files from earlier");
   });
 
   it("fetches earlier files once the conversation arrives, and again when history replaces its window", async () => {
-    const old = file("old", "fence-survey.pdf", "application/pdf"), other = file("other", "new-plan.pdf", "application/pdf");
-    const window = (sessionId: string, start: string) => ({ ...conversation, sessionId, earlierFiles: 1, files: [],
-      messages: [{ id: start, role: "user" as const, text: "Again" }] });
+    const old = file("old", "fence-survey.pdf", "application/pdf"),
+      other = file("other", "new-plan.pdf", "application/pdf");
+    const window = (sessionId: string, start: string) => ({
+      ...conversation,
+      sessionId,
+      earlierFiles: 1,
+      files: [],
+      messages: [{ id: start, role: "user" as const, text: "Again" }],
+    });
     const answers: ((response: Response) => void)[] = [];
-    fetchFile.mockImplementation(() => new Promise<Response>(resolve => answers.push(resolve)));
+    fetchFile.mockImplementation(() => new Promise<Response>((resolve) => answers.push(resolve)));
     await render(null);
     await open();
     expect(fetchFile).not.toHaveBeenCalled();
@@ -65,10 +132,16 @@ describe("conversation artifacts", () => {
     // Hermes replaced the history before the first answer came back.
     await render(window("two", "q4"));
     expect(String(fetchFile.mock.calls[1][0])).toBe("/api/bots/ranch/files?before=q4");
-    await act(async () => answers[0](Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }] })));
+    await act(async () =>
+      answers[0](Response.json({ messages: [{ id: "a1", role: "assistant", files: [old] }] })),
+    );
     expect(container.textContent).not.toContain("fence-survey.pdf");
-    await act(async () => answers[1](Response.json({ messages: [{ id: "b1", role: "assistant", files: [other] }] })));
-    expect([...container.querySelectorAll(".artifact-item strong")].map(item => item.textContent)).toEqual(["new-plan.pdf"]);
+    await act(async () =>
+      answers[1](Response.json({ messages: [{ id: "b1", role: "assistant", files: [other] }] })),
+    );
+    expect(
+      [...container.querySelectorAll(".artifact-item strong")].map((item) => item.textContent),
+    ).toEqual(["new-plan.pdf"]);
     // The same session with its window start gone also fetches again.
     await render(window("two", "r0"));
     expect(container.textContent).not.toContain("new-plan.pdf");
@@ -83,38 +156,69 @@ describe("conversation artifacts", () => {
   });
 
   it("deduplicates discovered/message files, reports their origin, and filters by filename and type", async () => {
-    const plan = file("plan", "grazing-plan.md", "text/markdown"), image = file("image", "pasture.png", "image/png"), shared = file("csv", "sensor-history.csv", "text/csv");
+    const plan = file("plan", "grazing-plan.md", "text/markdown"),
+      image = file("image", "pasture.png", "image/png"),
+      shared = file("csv", "sensor-history.csv", "text/csv");
     conversation.files = [plan, image, shared];
-    conversation.messages = [{ id: "output", role: "assistant", text: "Ready", files: [plan, image] },
-      { id: "input", role: "user", text: "Use this", files: [shared] }];
+    conversation.messages = [
+      { id: "output", role: "assistant", text: "Ready", files: [plan, image] },
+      { id: "input", role: "user", text: "Use this", files: [shared] },
+    ];
     await render();
-    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe("Artifacts (3)");
+    expect(container.querySelector(".artifacts-button")?.getAttribute("aria-label")).toBe(
+      "Artifacts (3)",
+    );
     await open();
     const items = container.querySelectorAll(".artifact-item");
     expect(items).toHaveLength(3);
     expect(items[0]?.textContent).toContain("Generated");
     expect(items[2]?.textContent).toContain("Shared");
     const type = container.querySelector<HTMLSelectElement>(".artifacts-toolbar select")!;
-    await act(async () => { type.value = "image"; type.dispatchEvent(new Event("change", { bubbles: true })); });
+    await act(async () => {
+      type.value = "image";
+      type.dispatchEvent(new Event("change", { bubbles: true }));
+    });
     expect(container.querySelectorAll(".artifact-item")).toHaveLength(1);
-    expect(container.querySelector(".artifact-detail img")?.getAttribute("src")).toBe("/api/files/image");
-    await typeInto(container.querySelector<HTMLInputElement>('input[type="search"]')!, "no-such-file");
+    expect(container.querySelector(".artifact-detail img")?.getAttribute("src")).toBe(
+      "/api/files/image",
+    );
+    await typeInto(
+      container.querySelector<HTMLInputElement>('input[type="search"]')!,
+      "no-such-file",
+    );
     expect(container.textContent).toContain("No matching files");
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Clear filters")!.click());
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Clear filters")!
+        .click(),
+    );
     expect(container.querySelectorAll(".artifact-item")).toHaveLength(3);
   });
 
   it("renders text as escaped content, links authenticated downloads, and cancels an obsolete request", async () => {
     conversation.files = [file("text", "notes.txt"), file("image", "pasture.png", "image/png")];
-    fetchFile.mockResolvedValueOnce(new Response('<img src="https://untrusted.test" onerror="alert(1)">'));
-    await render(); await open();
-    expect(container.querySelector("pre")?.textContent).toContain('<img src="https://untrusted.test"');
+    fetchFile.mockResolvedValueOnce(
+      new Response('<img src="https://untrusted.test" onerror="alert(1)">'),
+    );
+    await render();
+    await open();
+    expect(container.querySelector("pre")?.textContent).toContain(
+      '<img src="https://untrusted.test"',
+    );
     expect(container.querySelector(".artifact-preview img")).toBeNull();
-    expect(container.querySelector('a[download="notes.txt"]')?.getAttribute("href")).toBe("/api/files/text");
-    expect(fetchFile).toHaveBeenCalledWith("/api/files/text", expect.objectContaining({ credentials: "same-origin", redirect: "error" }));
+    expect(container.querySelector('a[download="notes.txt"]')?.getAttribute("href")).toBe(
+      "/api/files/text",
+    );
+    expect(fetchFile).toHaveBeenCalledWith(
+      "/api/files/text",
+      expect.objectContaining({ credentials: "same-origin", redirect: "error" }),
+    );
     await select("pasture.png");
     let signal!: AbortSignal;
-    fetchFile.mockImplementationOnce((_url: string, init: RequestInit) => { signal = init.signal as AbortSignal; return new Promise(() => {}); });
+    fetchFile.mockImplementationOnce((_url: string, init: RequestInit) => {
+      signal = init.signal as AbortSignal;
+      return new Promise(() => {});
+    });
     await select("notes.txt");
     expect(signal.aborted).toBe(false);
     await select("pasture.png");
@@ -127,23 +231,38 @@ describe("conversation artifacts", () => {
     let signal!: AbortSignal;
     fetchFile.mockImplementationOnce((_url: string, init: RequestInit) => {
       signal = init.signal as AbortSignal;
-      return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))),
+      );
     });
-    await render(); await open();
+    await render();
+    await open();
     expect(container.textContent).toContain("Loading preview…");
-    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
     expect(signal.aborted).toBe(true);
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("The preview took too long to load. Try again.");
-    await act(async () => Array.from(container.querySelectorAll("button")).find(item => item.textContent === "Retry preview")!.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "The preview took too long to load. Try again.",
+    );
+    await act(async () =>
+      Array.from(container.querySelectorAll("button"))
+        .find((item) => item.textContent === "Retry preview")!
+        .click(),
+    );
     expect(container.querySelector("pre")?.textContent).toBe("Plain preview");
     vi.useRealTimers();
   });
 
   it("keeps external files behind an explicit source link and rejects active URLs and documents", async () => {
-    conversation.files = [file("external", "external.png", "image/png", "https://files.example.test/photo.png"),
+    conversation.files = [
+      file("external", "external.png", "image/png", "https://files.example.test/photo.png"),
       file("script", "bad.txt", "text/plain", "javascript:alert(1)"),
-      file("svg", "drawing.svg", "image/svg+xml"), file("html", "page.html", "text/html")];
-    await render(); await open();
+      file("svg", "drawing.svg", "image/svg+xml"),
+      file("html", "page.html", "text/html"),
+    ];
+    await render();
+    await open();
     expect(fetchFile).not.toHaveBeenCalled();
     expect(container.querySelector(".artifact-preview img")).toBeNull();
     expect(container.querySelector(".artifact-actions a")?.textContent).toContain("Open source");
@@ -157,17 +276,25 @@ describe("conversation artifacts", () => {
   });
 
   it("requires an exact app file route before loading a preview", async () => {
-    conversation.files = [file("id", "wrong-id.png", "image/png", "/api/files/other"),
-      file("query", "query.txt", "text/plain", "/api/files/query?redirect=https://external.test")];
-    await render(); await open(); await select("query.txt");
+    conversation.files = [
+      file("id", "wrong-id.png", "image/png", "/api/files/other"),
+      file("query", "query.txt", "text/plain", "/api/files/query?redirect=https://external.test"),
+    ];
+    await render();
+    await open();
+    await select("query.txt");
     expect(fetchFile).not.toHaveBeenCalled();
     expect(container.querySelector(".artifact-preview img")).toBeNull();
   });
 
   it("provides playback controls for supported media and opens PDFs without embedding an active document", async () => {
-    conversation.files = [file("audio", "field-recording.mp3", "audio/mpeg"),
-      file("video", "pasture-survey.mp4", "video/mp4"), file("pdf", "plan.pdf", "application/pdf")];
-    await render(); await open();
+    conversation.files = [
+      file("audio", "field-recording.mp3", "audio/mpeg"),
+      file("video", "pasture-survey.mp4", "video/mp4"),
+      file("pdf", "plan.pdf", "application/pdf"),
+    ];
+    await render();
+    await open();
     expect(container.querySelector("audio")?.controls).toBe(true);
     expect(container.querySelector("audio")?.getAttribute("src")).toBe("/api/files/audio");
     await select("pasture-survey.mp4");
@@ -176,15 +303,25 @@ describe("conversation artifacts", () => {
     await select("plan.pdf");
     expect(container.textContent).toContain("Open this PDF in a new tab");
     expect(container.querySelector("iframe, object, embed")).toBeNull();
-    expect(container.querySelector('a[download="plan.pdf"]')?.getAttribute("href")).toBe("/api/files/pdf");
+    expect(container.querySelector('a[download="plan.pdf"]')?.getAttribute("href")).toBe(
+      "/api/files/pdf",
+    );
   });
 
   it("reports text download failures and retries only when asked", async () => {
     conversation.files = [file("missing", "notes.txt")];
     // A file ID the server no longer accepts is gone; any other failure may pass.
-    fetchFile.mockResolvedValueOnce(new Response("Missing", { status: 404 })).mockResolvedValueOnce(new Response("Failed", { status: 502 }));
-    const retry = () => act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Retry preview")!.click());
-    await render(); await open();
+    fetchFile
+      .mockResolvedValueOnce(new Response("Missing", { status: 404 }))
+      .mockResolvedValueOnce(new Response("Failed", { status: 502 }));
+    const retry = () =>
+      act(async () =>
+        [...container.querySelectorAll("button")]
+          .find((button) => button.textContent === "Retry preview")!
+          .click(),
+      );
+    await render();
+    await open();
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("no longer available");
     expect(fetchFile).toHaveBeenCalledTimes(1);
     await retry();
@@ -197,7 +334,8 @@ describe("conversation artifacts", () => {
   it("bounds text previews and retains the full-file download", async () => {
     conversation.files = [file("large", "large.txt")];
     fetchFile.mockResolvedValueOnce(new Response("a".repeat(256 * 1024 + 50)));
-    await render(); await open();
+    await render();
+    await open();
     expect(container.querySelector("pre")?.textContent?.length).toBe(256 * 1024);
     expect(container.textContent).toContain("Showing the first 256 KB");
     expect(container.querySelector('a[download="large.txt"]')).not.toBeNull();
@@ -207,11 +345,18 @@ describe("conversation artifacts", () => {
     conversation.files = [file("image", "pasture.png", "image/png")];
     await render();
     const trigger = container.querySelector<HTMLButtonElement>(".artifacts-button")!;
-    trigger.focus(); await open();
+    trigger.focus();
+    await open();
     const image = container.querySelector(".artifact-preview img")!;
     await act(async () => image.dispatchEvent(new Event("error")));
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("couldn’t load this preview");
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Retry preview")!.click());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "couldn’t load this preview",
+    );
+    await act(async () =>
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent === "Retry preview")!
+        .click(),
+    );
     expect(container.querySelector(".artifact-preview img")).not.toBe(image);
     await act(async () => container.querySelector("dialog")!.dispatchEvent(new Event("cancel")));
     expect(container.querySelector("dialog")).toBeNull();
@@ -219,14 +364,25 @@ describe("conversation artifacts", () => {
   });
 
   it("distinguishes empty, loading, unavailable, and another assistant’s stale conversation", async () => {
-    await render(); await open();
+    await render();
+    await open();
     expect(container.textContent).toContain("No artifacts yet");
     await render(null);
-    expect(container.textContent).toContain("Artifacts are unavailable while this conversation reloads.");
+    expect(container.textContent).toContain(
+      "Artifacts are unavailable while this conversation reloads.",
+    );
     await render(null, true);
-    expect(container.textContent).toContain("Files are unavailable until your assistant reconnects");
-    await render({ ...conversation, botId: "another", files: [file("private", "another-bot.txt")] });
+    expect(container.textContent).toContain(
+      "Files are unavailable until your assistant reconnects",
+    );
+    await render({
+      ...conversation,
+      botId: "another",
+      files: [file("private", "another-bot.txt")],
+    });
     expect(container.textContent).not.toContain("another-bot.txt");
-    expect(container.textContent).toContain("Artifacts are unavailable while this conversation reloads.");
+    expect(container.textContent).toContain(
+      "Artifacts are unavailable while this conversation reloads.",
+    );
   });
 });

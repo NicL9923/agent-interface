@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { reportStream, resetStreamHealth, streamUp, useStreamsDown } from "../src/app/stream-health";
+import {
+  reportStream,
+  resetStreamHealth,
+  streamUp,
+  useStreamsDown,
+} from "../src/app/stream-health";
 import { mountRoot } from "./ui-harness";
 
 // The connection notice shows once a stream has been down for 20 seconds without a break.
@@ -15,8 +20,13 @@ beforeEach(() => {
   resetStreamHealth();
   shown = [];
 });
-afterEach(() => { vi.useRealTimers(); });
-const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+afterEach(() => {
+  vi.useRealTimers();
+});
+const advance = (ms: number) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
 const report = (name: string, up: boolean | undefined) => act(async () => reportStream(name, up));
 
 describe("streams down", () => {

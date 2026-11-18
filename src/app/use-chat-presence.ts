@@ -7,24 +7,40 @@ const HEARTBEAT_MS = 15_000;
 export const IDLE_MS = 5 * 60_000;
 // Each tab reports separately, so closing one never ends another's reading. Plain-HTTP previews
 // lack randomUUID, and this module loads with the app shell.
-const client = crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const client =
+  crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 const inputs = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
 // One report at a time, so leaving one chat can never land after arriving in the next. A report made
 // for an account generation that has ended, including the "left" its unmounting sends, never goes:
 // the next account may be signed in by the time it would.
 let reports = Promise.resolve();
 function report(botId: string, state: "active" | "left" | "idle", generation: number) {
-  reports = reports.then(() => generation === accountGeneration()
-    ? request("PUT /bots/:id/presence", { params: { id: botId }, body: { client, state }, keepalive: true }) : undefined).then(() => {}, () => { /* Presence expires on its own when a report fails. */ });
+  reports = reports
+    .then(() =>
+      generation === accountGeneration()
+        ? request("PUT /bots/:id/presence", {
+            params: { id: botId },
+            body: { client, state },
+            keepalive: true,
+          })
+        : undefined,
+    )
+    .then(
+      () => {},
+      () => {
+        /* Presence expires on its own when a report fails. */
+      },
+    );
 }
 
 /** Closes this browser's notifications for a chat now on screen. Routine results open elsewhere. */
 async function closeNotifications(botId: string) {
   if (!("serviceWorker" in navigator)) return;
   const registration = await navigator.serviceWorker.getRegistration();
-  for (const notification of await registration?.getNotifications() ?? []) {
+  for (const notification of (await registration?.getNotifications()) ?? []) {
     const url = new URL(String(notification.data?.url ?? "/"), location.origin);
-    if (url.searchParams.get("bot") === botId && !url.searchParams.has("routine")) notification.close();
+    if (url.searchParams.get("bot") === botId && !url.searchParams.has("routine"))
+      notification.close();
   }
 }
 
@@ -36,14 +52,15 @@ export function useChatPresence(botId: string | undefined, userId: string | unde
   useEffect(() => {
     if (!botId || !userId) return;
     const generation = accountGeneration();
-    let reading = false, lastInput = Date.now();
+    let reading = false,
+      lastInput = Date.now();
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
     const update = () => {
       const now = attended() && Date.now() - lastInput < IDLE_MS;
       if (now) {
         if (!reading) void closeNotifications(botId).catch(() => {});
         report(botId, "active", generation);
-      // Leaving after reading marks the chat read until now. Walking away from it does not.
+        // Leaving after reading marks the chat read until now. Walking away from it does not.
       } else if (reading) report(botId, attended() ? "idle" : "left", generation);
       reading = now;
     };

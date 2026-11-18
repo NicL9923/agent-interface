@@ -14,13 +14,26 @@ const PAGE_TURNS = 20;
  * the first row. A cut inside a turn keeps the prompt before it, for its replies' origin. A window `before` a row
  * ends there and says so.
  */
-export function historyWindow(messages: Row[], sid: string, start?: string, turns = 0, before?: string): { rows: Row[]; cut?: { earlier: number; context: number; before?: string } } {
-  const visible = messages.filter(row => row.display_kind !== "hidden");
-  const identity = (index: number) => String(visible[index].app_request_id ?? visible[index].row_id ?? `${sid}-${index}`);
-  const position = (name?: string) => typeof name === "string" && name ? visible.findIndex((_, index) => identity(index) === name) : -1;
+export function historyWindow(
+  messages: Row[],
+  sid: string,
+  start?: string,
+  turns = 0,
+  before?: string,
+): { rows: Row[]; cut?: { earlier: number; context: number; before?: string } } {
+  const visible = messages.filter((row) => row.display_kind !== "hidden");
+  const identity = (index: number) =>
+    String(visible[index].app_request_id ?? visible[index].row_id ?? `${sid}-${index}`);
+  const position = (name?: string) =>
+    typeof name === "string" && name
+      ? visible.findIndex((_, index) => identity(index) === name)
+      : -1;
   const bound = position(before);
   let end = bound >= 0 ? bound : position(start);
-  if (end < 0) { end = visible.length; turns = Math.max(turns, PAGE_TURNS); }
+  if (end < 0) {
+    end = visible.length;
+    turns = Math.max(turns, PAGE_TURNS);
+  }
   let first = end;
   while (first > 0 && turns > 0) if (visible[--first].role === "user") turns--;
   if (first === 0 && bound < 0) return { rows: messages };
@@ -37,8 +50,14 @@ export function historyWindow(messages: Row[], sid: string, start?: string, turn
   }
   if (visible[first].role !== "user" && prompt !== undefined) kept.add(prompt);
   const last = bound >= 0 ? bound : visible.length;
-  const indexes = [...[...kept].sort((a, b) => a - b), ...Array.from({ length: last - first }, (_, offset) => first + offset)];
-  return { rows: indexes.map(index => ({ ...visible[index], app_index: index })), cut: { earlier: first, context: kept.size, ...(bound >= 0 ? { before } : {}) } };
+  const indexes = [
+    ...[...kept].sort((a, b) => a - b),
+    ...Array.from({ length: last - first }, (_, offset) => first + offset),
+  ];
+  return {
+    rows: indexes.map((index) => ({ ...visible[index], app_index: index })),
+    cut: { earlier: first, context: kept.size, ...(bound >= 0 ? { before } : {}) },
+  };
 }
 
 /**
@@ -66,35 +85,61 @@ export function fakeHermes() {
     /** Opens waiting for a test to release them while `holdOpens` is set. */
     held: [] as { params: Row; release: () => void }[],
     sockets: [] as FakeSocket[],
-    opens: () => hermes.calls.filter(call => call.method === "agent-interface.open"),
+    opens: () => hermes.calls.filter((call) => call.method === "agent-interface.open"),
     frame(type: string, payload: Row = {}) {
-      hermes.sockets.at(-1)!.receive({ method: "event", params: { session_id: sid, type, payload } });
+      hermes.sockets
+        .at(-1)!
+        .receive({ method: "event", params: { session_id: sid, type, payload } });
     },
     request(method: string, id: string, params: Row = {}) {
-      hermes.sockets.at(-1)!.receive({ jsonrpc: "2.0", id, method, params: { session_id: sid, ...params } });
+      hermes.sockets
+        .at(-1)!
+        .receive({ jsonrpc: "2.0", id, method, params: { session_id: sid, ...params } });
     },
-    drop() { hermes.sockets.at(-1)!.close(); },
+    drop() {
+      hermes.sockets.at(-1)!.close();
+    },
   };
   const answerOpen = (params: Row): Row => {
-    const window = params.window && !params.omit_messages ? historyWindow(hermes.history, sid, params.window.start, params.window.turns, params.window.before) : undefined;
+    const window =
+      params.window && !params.omit_messages
+        ? historyWindow(
+            hermes.history,
+            sid,
+            params.window.start,
+            params.window.turns,
+            params.window.before,
+          )
+        : undefined;
     return structuredClone({
-      session_id: sid, canonical_stored_session_id: "stored-one", info: { running: hermes.running },
-      ...(hermes.runId ? { app_run_id: hermes.runId } : {}), inflight: hermes.inflight, open_requests: hermes.openRequests,
+      session_id: sid,
+      canonical_stored_session_id: "stored-one",
+      info: { running: hermes.running },
+      ...(hermes.runId ? { app_run_id: hermes.runId } : {}),
+      inflight: hermes.inflight,
+      open_requests: hermes.openRequests,
       executor_epoch: "epoch-one",
       messages: params.omit_messages ? [] : window ? window.rows : hermes.history,
       ...(window?.cut ? { app_window: window.cut } : {}),
     });
   };
   class FakeSocket extends EventTarget {
-    static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
     readyState = FakeSocket.CONNECTING;
     constructor(readonly url: string | URL) {
       super();
       hermes.sockets.push(this);
-      queueMicrotask(() => { this.readyState = FakeSocket.OPEN; this.dispatchEvent(new Event("open")); });
+      queueMicrotask(() => {
+        this.readyState = FakeSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+      });
     }
     receive(frame: unknown) {
-      if (this.readyState === FakeSocket.OPEN) this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+      if (this.readyState === FakeSocket.OPEN)
+        this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
     }
     send(text: string) {
       if (this.readyState !== FakeSocket.OPEN) throw new Error("Cannot send on a closed socket.");
@@ -103,24 +148,64 @@ export function fakeHermes() {
       const reply = (result: unknown) => this.receive({ jsonrpc: "2.0", id: request.id, result });
       if (request.method === "client.capabilities") return queueMicrotask(() => reply({}));
       if (request.method === "agent-interface.capabilities")
-        return queueMicrotask(() => reply({ revision, durable_admission: true, durable_events: true, canonical_open: true, executor_epoch: "epoch-one" }));
+        return queueMicrotask(() =>
+          reply({
+            revision,
+            durable_admission: true,
+            durable_events: true,
+            canonical_open: true,
+            executor_epoch: "epoch-one",
+          }),
+        );
       if (request.method === "profiles.list")
-        return queueMicrotask(() => reply({ profiles: hermes.profiles.map(name => ({ name, ui_meta: { agent_interface: { name } } })) }));
+        return queueMicrotask(() =>
+          reply({
+            profiles: hermes.profiles.map((name) => ({
+              name,
+              ui_meta: { agent_interface: { name } },
+            })),
+          }),
+        );
       if (request.method === "agent-interface.open") {
-        if (!hermes.profiles.includes(request.params.profile)) return queueMicrotask(() => this.receive({ jsonrpc: "2.0", id: request.id, error: { code: 4040, message: "Unknown Hermes profile" } }));
+        if (!hermes.profiles.includes(request.params.profile))
+          return queueMicrotask(() =>
+            this.receive({
+              jsonrpc: "2.0",
+              id: request.id,
+              error: { code: 4040, message: "Unknown Hermes profile" },
+            }),
+          );
         const value = answerOpen(request.params);
-        if (hermes.holdOpens) { hermes.held.push({ params: request.params, release: () => reply(value) }); return; }
+        if (hermes.holdOpens) {
+          hermes.held.push({ params: request.params, release: () => reply(value) });
+          return;
+        }
         if (hermes.openDelay) {
           hermes.delayed++;
-          setTimeout(() => { hermes.delayed--; reply(value); }, hermes.openDelay);
+          setTimeout(() => {
+            hermes.delayed--;
+            reply(value);
+          }, hermes.openDelay);
           return;
         }
         return queueMicrotask(() => reply(value));
       }
       // Admits a send as a new task, with the run a test set, as the add-on answers once it accepted it.
       if (request.method === "agent-interface.submit")
-        return queueMicrotask(() => reply({ requestId: request.params.request_id, status: "accepted", runId: hermes.runId ?? request.params.request_id }));
-      queueMicrotask(() => this.receive({ jsonrpc: "2.0", id: request.id, error: { code: -32601, message: `Fake Hermes does not script ${request.method}.` } }));
+        return queueMicrotask(() =>
+          reply({
+            requestId: request.params.request_id,
+            status: "accepted",
+            runId: hermes.runId ?? request.params.request_id,
+          }),
+        );
+      queueMicrotask(() =>
+        this.receive({
+          jsonrpc: "2.0",
+          id: request.id,
+          error: { code: -32601, message: `Fake Hermes does not script ${request.method}.` },
+        }),
+      );
     }
     close() {
       if (this.readyState === FakeSocket.CLOSED) return;
@@ -132,10 +217,19 @@ export function fakeHermes() {
   vi.stubGlobal("WebSocket", FakeSocket);
   // Hermes's HTTP surface answers nothing this suite needs. The app's own listener stays reachable.
   vi.stubGlobal("fetch", (input: string | URL | Request, init?: RequestInit) =>
-    String(input instanceof Request ? input.url : input).startsWith(HERMES_URL) ? Promise.resolve(new Response("Not scripted", { status: 404 })) : realFetch(input, init));
+    String(input instanceof Request ? input.url : input).startsWith(HERMES_URL)
+      ? Promise.resolve(new Response("Not scripted", { status: 404 }))
+      : realFetch(input, init),
+  );
   return hermes;
 }
 export type FakeHermes = ReturnType<typeof fakeHermes>;
 
 /** A saved history row as the add-on returns it. */
-export const row = (id: string | number, role: string, text: string, extra: Row = {}): Row => ({ row_id: id, role, content: text, text, ...extra });
+export const row = (id: string | number, role: string, text: string, extra: Row = {}): Row => ({
+  row_id: id,
+  role,
+  content: text,
+  text,
+  ...extra,
+});

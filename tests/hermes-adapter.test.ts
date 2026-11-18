@@ -1,1346 +1,2971 @@
-import { automationOverviewFixture, automationTaskFixture, memoryFixture, runReceiptFixture, subscriptionFixture } from './helpers/runtime-fixtures.js';
-import type { ExperienceRequest } from '../src/shared/experience.js';
-import type { AutomationRequest } from '../src/shared/automation.js';
+import {
+  automationOverviewFixture,
+  automationTaskFixture,
+  memoryFixture,
+  runReceiptFixture,
+  subscriptionFixture,
+} from "./helpers/runtime-fixtures.js";
+import type { ExperienceRequest } from "../src/shared/experience.js";
+import type { AutomationRequest } from "../src/shared/automation.js";
 import { Store } from "../src/server/store.js";
-import { hermesMaintenanceSendMessage, IncompleteCreationError, nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
+import {
+  hermesMaintenanceSendMessage,
+  IncompleteCreationError,
+  nothingToStopMessage,
+  runChangedMessage,
+} from "../src/shared/errors.js";
 import { Roster, redactAgents } from "../src/server/bot-access.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createHmac, randomUUID } from 'node:crypto';
-import { compareVersions } from '../src/shared/inflight.js';
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { Readable } from 'node:stream';
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
-import { gzipSync } from 'node:zlib';
-import { createApp } from '../src/server/app.js';
-import { loadConfig } from '../src/server/config.js';
-import { createHermesRuntime, ROSTER_REUSE_MS } from '../src/server/hermes.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHmac, randomUUID } from "node:crypto";
+import { compareVersions } from "../src/shared/inflight.js";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
+import { gzipSync } from "node:zlib";
+import { createApp } from "../src/server/app.js";
+import { loadConfig } from "../src/server/config.js";
+import { createHermesRuntime, ROSTER_REUSE_MS } from "../src/server/hermes.js";
 import { testFiles } from "./helpers/file-signer.js";
-import { retryRequestId } from '../src/shared/retry-id.js';
-import { createHermesTransport } from '../src/server/hermes-transport.js';
-import { SendTimings } from '../src/server/send-timing.js';
-import type { ReadTiming, Runtime, Submission } from '../src/shared/types.js';
+import { retryRequestId } from "../src/shared/retry-id.js";
+import { createHermesTransport } from "../src/server/hermes-transport.js";
+import { SendTimings } from "../src/server/send-timing.js";
+import type { ReadTiming, Runtime, Submission } from "../src/shared/types.js";
 import { bodyText, urlText } from "./helpers/wire-text";
 
-const realFetch=globalThis.fetch;
+const realFetch = globalThis.fetch;
 // Isolated wire-contract regressions. Real Hermes execution evidence lives in the spike probes.
-const token='isolated-contract-token';
-const revision='b9cb268deffc97946ec11645aa622a7353dd0591';
-let reportedRevision:string;
-let snapshot:Record<string,any>;
-let calls:{method:string;params:Record<string,any>}[];
-let sockets:WireSocket[];
-let runtime:Runtime;
-let addonReady:boolean;
-let explicitCredentials:boolean;
-let canonicalSubmission:boolean;
-let incrementalDiscovery:boolean;
-let delegation:Record<string,unknown>;
-let heldDeliveries:unknown;
-let metadataConflict:boolean;
-let connectionFails:boolean;
-let imageReady:boolean;
-let rosterSession:Record<string,unknown>|undefined;
-let opening: 'open' | 'close' | 'hang';
+const token = "isolated-contract-token";
+const revision = "b9cb268deffc97946ec11645aa622a7353dd0591";
+let reportedRevision: string;
+let snapshot: Record<string, any>;
+let calls: { method: string; params: Record<string, any> }[];
+let sockets: WireSocket[];
+let runtime: Runtime;
+let addonReady: boolean;
+let explicitCredentials: boolean;
+let canonicalSubmission: boolean;
+let incrementalDiscovery: boolean;
+let delegation: Record<string, unknown>;
+let heldDeliveries: unknown;
+let metadataConflict: boolean;
+let connectionFails: boolean;
+let imageReady: boolean;
+let rosterSession: Record<string, unknown> | undefined;
+let opening: "open" | "close" | "hang";
 let deferredMethods: Set<string>;
-let rpcErrors: Map<string, {code:number; message:string}>;
-let beforeSend: ((request:Record<string,any>,socket:WireSocket)=>void) | undefined;
+let rpcErrors: Map<string, { code: number; message: string }>;
+let beforeSend: ((request: Record<string, any>, socket: WireSocket) => void) | undefined;
 // Hermes ed1afb0's `fast` key. `tier` is the live agent's service_tier. config.set stores the word and a
 // status read answers the live tier (`_set_fast`). config.get reports only Fast and Ultrafast and falls
 // back to the profile default when the session's tier is unset (`_cfg_get_fast`). Only Fast and
 // Ultrafast check the model.
-const hermesSpeed={tier:null as string|null,profileTier:null as string|null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined as string|undefined,echo:undefined as string|undefined};
-const speedWords:Record<string,string|null>={fast:'priority',ultrafast:'ultrafast',normal:null,auto:'auto'};
-function speedReply(request:Record<string,any>):{result?:unknown;error?:{code:number;message:string}}|undefined{
-  if(request.params?.key!=='fast')return undefined;
-  const word=request.method==='config.set'?String(request.params.value):'';
-  if(request.method==='config.get')return {result:{value:hermesSpeed.get??({priority:'fast',ultrafast:'ultrafast'} as Record<string,string>)[hermesSpeed.tier??hermesSpeed.profileTier??'']??'normal'}};
-  if(request.method!=='config.set')return undefined;
-  if(word==='status'){
-    if(!hermesSpeed.knowsStatus)return {error:{code:4002,message:'unknown fast mode: status'}};
-    return {result:{key:'fast',value:({priority:'fast'} as Record<string,string>)[hermesSpeed.tier??'']??hermesSpeed.tier??'normal'}};
+const hermesSpeed = {
+  tier: null as string | null,
+  profileTier: null as string | null,
+  fastModel: true,
+  knowsAuto: true,
+  knowsStatus: true,
+  get: undefined as string | undefined,
+  echo: undefined as string | undefined,
+};
+const speedWords: Record<string, string | null> = {
+  fast: "priority",
+  ultrafast: "ultrafast",
+  normal: null,
+  auto: "auto",
+};
+function speedReply(
+  request: Record<string, any>,
+): { result?: unknown; error?: { code: number; message: string } } | undefined {
+  if (request.params?.key !== "fast") return undefined;
+  const word = request.method === "config.set" ? String(request.params.value) : "";
+  if (request.method === "config.get")
+    return {
+      result: {
+        value:
+          hermesSpeed.get ??
+          ({ priority: "fast", ultrafast: "ultrafast" } as Record<string, string>)[
+            hermesSpeed.tier ?? hermesSpeed.profileTier ?? ""
+          ] ??
+          "normal",
+      },
+    };
+  if (request.method !== "config.set") return undefined;
+  if (word === "status") {
+    if (!hermesSpeed.knowsStatus)
+      return { error: { code: 4002, message: "unknown fast mode: status" } };
+    return {
+      result: {
+        key: "fast",
+        value:
+          ({ priority: "fast" } as Record<string, string>)[hermesSpeed.tier ?? ""] ??
+          hermesSpeed.tier ??
+          "normal",
+      },
+    };
   }
-  if(!(word in speedWords)||word==='auto'&&!hermesSpeed.knowsAuto)return {error:{code:4002,message:`unknown fast mode: ${word}`}};
-  if((word==='fast'||word==='ultrafast')&&!hermesSpeed.fastModel)return {error:{code:4002,message:`${word} mode is not available for this model`}};
-  hermesSpeed.tier=speedWords[word];
-  return {result:{key:'fast',value:hermesSpeed.echo??word}};
+  if (!(word in speedWords) || (word === "auto" && !hermesSpeed.knowsAuto))
+    return { error: { code: 4002, message: `unknown fast mode: ${word}` } };
+  if ((word === "fast" || word === "ultrafast") && !hermesSpeed.fastModel)
+    return { error: { code: 4002, message: `${word} mode is not available for this model` } };
+  hermesSpeed.tier = speedWords[word];
+  return { result: { key: "fast", value: hermesSpeed.echo ?? word } };
 }
 class WireSocket extends EventTarget {
-  static CONNECTING=0;
-  static OPEN=1;
-  static CLOSING=2;
-  static CLOSED=3;
-  readyState=WireSocket.CONNECTING;
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  readyState = WireSocket.CONNECTING;
   readonly url: URL;
-  constructor(_url:string|URL){super();this.url=new URL(_url);sockets.push(this);queueMicrotask(()=>{
-    if (opening === 'hang') return;
-    if (opening === 'close') {this.close(); return;}
-    if(connectionFails){this.dispatchEvent(new Event('error'));this.close();}
-    else {this.readyState=WireSocket.OPEN;this.dispatchEvent(new Event('open'));}
-  });}
-  receive(frame:unknown){this.dispatchEvent(new MessageEvent('message',{data:JSON.stringify(frame)}));}
-  send(text:string){
-    const request=JSON.parse(text);
-    beforeSend?.(request,this);
-    if (this.readyState !== WireSocket.OPEN) throw new Error('Cannot send on a closing socket.');
+  constructor(_url: string | URL) {
+    super();
+    this.url = new URL(_url);
+    sockets.push(this);
+    queueMicrotask(() => {
+      if (opening === "hang") return;
+      if (opening === "close") {
+        this.close();
+        return;
+      }
+      if (connectionFails) {
+        this.dispatchEvent(new Event("error"));
+        this.close();
+      } else {
+        this.readyState = WireSocket.OPEN;
+        this.dispatchEvent(new Event("open"));
+      }
+    });
+  }
+  receive(frame: unknown) {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(frame) }));
+  }
+  send(text: string) {
+    const request = JSON.parse(text);
+    beforeSend?.(request, this);
+    if (this.readyState !== WireSocket.OPEN) throw new Error("Cannot send on a closing socket.");
     calls.push(request);
     if (deferredMethods.has(request.method)) return;
     if (rpcErrors.has(request.method)) {
-      queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:rpcErrors.get(request.method)}));
+      queueMicrotask(() =>
+        this.receive({ jsonrpc: "2.0", id: request.id, error: rpcErrors.get(request.method) }),
+      );
       return;
     }
-    const speed=speedReply(request);
+    const speed = speedReply(request);
     if (speed?.error) {
-      queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,error:speed.error}));
+      queueMicrotask(() => this.receive({ jsonrpc: "2.0", id: request.id, error: speed.error }));
       return;
     }
-    let result:unknown=speed?.result??{};
-    if(request.method==='agent-interface.capabilities')result={revision:reportedRevision,durable_admission:true,durable_events:addonReady,canonical_open:addonReady,executor_epoch:'epoch-one',...(incrementalDiscovery?{incremental_discovery:true}:{}),...(canonicalSubmission?{canonical_submit:true}:{}),...(explicitCredentials?{explicit_credentials:true}:{}),...delegation};
-    if(request.method==='agent-interface.open')result=structuredClone(snapshot);
-    if(request.method==='file.attach')result={path:'/workspace/staged/portrait.png'};
-    if(request.method==='agent-interface.submit')result={requestId:request.params.request_id,status:'accepted',runId:'task-one',...(canonicalSubmission?{app_run_id:'task-one',admission:'canonical'}:{})};
-    if(request.method==='profiles.list')result={profiles:[{name:'shared',ui_meta:{agent_interface:{name:'Shared',unrelated:'preserve'}},ui_meta_revisions:{agent_interface:3},...(rosterSession?{canonical_session:rosterSession}:{})}]};
-    if(request.method==='profiles.describe')result={toolsets:[{name:'terminal',enabled:true}],skills:[],mcp_servers:[{name:'calendar',enabled:true},{name:'notes',enabled:false}]};
-    if(request.method==='profiles.configure')result=metadataConflict?{ok:false,applied:{ui_meta:false,ui_meta_conflicts:{agent_interface:{actual:4}}}}:{ok:true,applied:{ui_meta:true}};
-    if(request.method==='config.get'&&!speed)result={value:request.params.key==='reasoning'?'high':'normal'};
-    if(request.method==='image.generate')result={available:imageReady,success:false,error:'No image generation backend configured'};
-    if(request.method==='profiles.set_asset')result={ok:true};
-    if(request.method==='agent-interface.delegation')result={ok:true};
-    if(request.method==='agent-interface.routine_deliveries')result=heldDeliveries;
-    if(request.method==='agent-interface.discover')result={cursor:'2',events:[{id:'2',botId:'routine-bot',kind:'completed',title:'Routine result',occurredAt:'2026-10-14T12:00:00Z'}]};
-    queueMicrotask(()=>this.receive({jsonrpc:'2.0',id:request.id,result}));
+    let result: unknown = speed?.result ?? {};
+    if (request.method === "agent-interface.capabilities")
+      result = {
+        revision: reportedRevision,
+        durable_admission: true,
+        durable_events: addonReady,
+        canonical_open: addonReady,
+        executor_epoch: "epoch-one",
+        ...(incrementalDiscovery ? { incremental_discovery: true } : {}),
+        ...(canonicalSubmission ? { canonical_submit: true } : {}),
+        ...(explicitCredentials ? { explicit_credentials: true } : {}),
+        ...delegation,
+      };
+    if (request.method === "agent-interface.open") result = structuredClone(snapshot);
+    if (request.method === "file.attach") result = { path: "/workspace/staged/portrait.png" };
+    if (request.method === "agent-interface.submit")
+      result = {
+        requestId: request.params.request_id,
+        status: "accepted",
+        runId: "task-one",
+        ...(canonicalSubmission ? { app_run_id: "task-one", admission: "canonical" } : {}),
+      };
+    if (request.method === "profiles.list")
+      result = {
+        profiles: [
+          {
+            name: "shared",
+            ui_meta: { agent_interface: { name: "Shared", unrelated: "preserve" } },
+            ui_meta_revisions: { agent_interface: 3 },
+            ...(rosterSession ? { canonical_session: rosterSession } : {}),
+          },
+        ],
+      };
+    if (request.method === "profiles.describe")
+      result = {
+        toolsets: [{ name: "terminal", enabled: true }],
+        skills: [],
+        mcp_servers: [
+          { name: "calendar", enabled: true },
+          { name: "notes", enabled: false },
+        ],
+      };
+    if (request.method === "profiles.configure")
+      result = metadataConflict
+        ? {
+            ok: false,
+            applied: { ui_meta: false, ui_meta_conflicts: { agent_interface: { actual: 4 } } },
+          }
+        : { ok: true, applied: { ui_meta: true } };
+    if (request.method === "config.get" && !speed)
+      result = { value: request.params.key === "reasoning" ? "high" : "normal" };
+    if (request.method === "image.generate")
+      result = {
+        available: imageReady,
+        success: false,
+        error: "No image generation backend configured",
+      };
+    if (request.method === "profiles.set_asset") result = { ok: true };
+    if (request.method === "agent-interface.delegation") result = { ok: true };
+    if (request.method === "agent-interface.routine_deliveries") result = heldDeliveries;
+    if (request.method === "agent-interface.discover")
+      result = {
+        cursor: "2",
+        events: [
+          {
+            id: "2",
+            botId: "routine-bot",
+            kind: "completed",
+            title: "Routine result",
+            occurredAt: "2026-10-14T12:00:00Z",
+          },
+        ],
+      };
+    queueMicrotask(() => this.receive({ jsonrpc: "2.0", id: request.id, result }));
   }
-  close(){this.readyState=3;this.dispatchEvent(new Event('close'));}
+  close() {
+    this.readyState = 3;
+    this.dispatchEvent(new Event("close"));
+  }
 }
-beforeEach(()=>{
-  reportedRevision=revision;
-  snapshot={session_id:'live-one',canonical_stored_session_id:'stored-one',info:{running:false},messages:[]};calls=[];sockets=[];addonReady=true;explicitCredentials=true;canonicalSubmission=false;incrementalDiscovery=false;delegation={};metadataConflict=false;connectionFails=false;imageReady=false;rosterSession=undefined;opening='open';deferredMethods=new Set();rpcErrors=new Map();beforeSend=undefined;Object.assign(hermesSpeed,{tier:null,profileTier:null,fastModel:true,knowsAuto:true,knowsStatus:true,get:undefined,echo:undefined});
-  vi.stubGlobal('WebSocket',WireSocket);
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({profiles:[]})));
-  runtime=createHermesRuntime({ files: testFiles(token), url:'http://127.0.0.1:19119',token});
+beforeEach(() => {
+  reportedRevision = revision;
+  snapshot = {
+    session_id: "live-one",
+    canonical_stored_session_id: "stored-one",
+    info: { running: false },
+    messages: [],
+  };
+  calls = [];
+  sockets = [];
+  addonReady = true;
+  explicitCredentials = true;
+  canonicalSubmission = false;
+  incrementalDiscovery = false;
+  delegation = {};
+  metadataConflict = false;
+  connectionFails = false;
+  imageReady = false;
+  rosterSession = undefined;
+  opening = "open";
+  deferredMethods = new Set();
+  rpcErrors = new Map();
+  beforeSend = undefined;
+  Object.assign(hermesSpeed, {
+    tier: null,
+    profileTier: null,
+    fastModel: true,
+    knowsAuto: true,
+    knowsStatus: true,
+    get: undefined,
+    echo: undefined,
+  });
+  vi.stubGlobal("WebSocket", WireSocket);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ profiles: [] })),
+  );
+  runtime = createHermesRuntime({ files: testFiles(token), url: "http://127.0.0.1:19119", token });
 });
-afterEach(async()=>{await runtime.close();vi.useRealTimers();vi.unstubAllGlobals();});
+afterEach(async () => {
+  await runtime.close();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 // Hermes reports a change on the session's socket before a later read can differ; shared reads rely on it.
-const hermesChanged=()=>sockets.at(-1)!.receive({method:'event',params:{session_id:'live-one',type:'status.update',payload:{}}});
-const input=(attachments:Submission['attachments']=[]):Submission=>({requestId:'request-one',botId:'shared',senderId:'person-one',text:'',attachments});
+const hermesChanged = () =>
+  sockets.at(-1)!.receive({
+    method: "event",
+    params: { session_id: "live-one", type: "status.update", payload: {} },
+  });
+const input = (attachments: Submission["attachments"] = []): Submission => ({
+  requestId: "request-one",
+  botId: "shared",
+  senderId: "person-one",
+  text: "",
+  attachments,
+});
 
-describe('Hermes adapter trust and recovery boundary',()=>{
-  it('returns routine mutations before discovery and forces the next tick', async () => {
-    incrementalDiscovery=true;
-    deferredMethods.add('agent-interface.discover');
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
-    const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
-    await runtime.saveRoutine(routine,'job');
-    await runtime.setRoutineEnabled!('shared','job',true);
-    await runtime.deleteRoutine('job','shared');
+describe("Hermes adapter trust and recovery boundary", () => {
+  it("returns routine mutations before discovery and forces the next tick", async () => {
+    incrementalDiscovery = true;
+    deferredMethods.add("agent-interface.discover");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ id: "job", enabled: true })),
+    );
+    const routine = {
+      botId: "shared",
+      name: "Morning",
+      prompt: "Check",
+      schedule: "daily",
+      enabled: true,
+    };
+    await runtime.saveRoutine(routine, "job");
+    await runtime.setRoutineEnabled!("shared", "job", true);
+    await runtime.deleteRoutine("job", "shared");
     // Hermes allows one job ID in several profiles, so a deletion names the profile.
     const deleted = vi.mocked(fetch).mock.calls.at(-1)!;
-    expect([urlText(deleted[0]).replace(/^.*\/cron\//, ''), (deleted[1] as RequestInit).method]).toEqual(['jobs/job?profile=shared', 'DELETE']);
-    expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(0);
-    const tick=runtime.discoverEvents('7');
-    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
-    const call=calls.find(call=>call.method==='agent-interface.discover') as Record<string,any>;
-    expect(call.params).toEqual({cursor:'7',full:true});
-    sockets[0].receive({id:call.id,result:{cursor:'7',events:[]}});
+    expect([
+      urlText(deleted[0]).replace(/^.*\/cron\//, ""),
+      (deleted[1] as RequestInit).method,
+    ]).toEqual(["jobs/job?profile=shared", "DELETE"]);
+    expect(calls.filter((call) => call.method === "agent-interface.discover")).toHaveLength(0);
+    const tick = runtime.discoverEvents("7");
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "agent-interface.discover")).toHaveLength(1),
+    );
+    const call = calls.find((call) => call.method === "agent-interface.discover") as Record<
+      string,
+      any
+    >;
+    expect(call.params).toEqual({ cursor: "7", full: true });
+    sockets[0].receive({ id: call.id, result: { cursor: "7", events: [] } });
     await tick;
   });
-  it('retains a forced next tick when a routine changes during an outstanding scan', async () => {
-    incrementalDiscovery=true;
+  it("retains a forced next tick when a routine changes during an outstanding scan", async () => {
+    incrementalDiscovery = true;
     await runtime.status();
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({id:'job',enabled:true})));
-    const routine={botId:'shared',name:'Morning',prompt:'Check',schedule:'daily',enabled:true};
-    await runtime.saveRoutine(routine,'job');
-    deferredMethods.add('agent-interface.discover');
-    const first=runtime.discoverEvents('0');
-    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='agent-interface.discover')).toHaveLength(1));
-    await runtime.saveRoutine({...routine,prompt:'Changed'},'job');
-    const request=calls.find(call=>call.method==='agent-interface.discover') as Record<string,any>;
-    sockets[0].receive({id:request.id,result:{cursor:'0',events:[]}});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ id: "job", enabled: true })),
+    );
+    const routine = {
+      botId: "shared",
+      name: "Morning",
+      prompt: "Check",
+      schedule: "daily",
+      enabled: true,
+    };
+    await runtime.saveRoutine(routine, "job");
+    deferredMethods.add("agent-interface.discover");
+    const first = runtime.discoverEvents("0");
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "agent-interface.discover")).toHaveLength(1),
+    );
+    await runtime.saveRoutine({ ...routine, prompt: "Changed" }, "job");
+    const request = calls.find((call) => call.method === "agent-interface.discover") as Record<
+      string,
+      any
+    >;
+    sockets[0].receive({ id: request.id, result: { cursor: "0", events: [] } });
     await first;
-    deferredMethods.delete('agent-interface.discover');
-    await runtime.discoverEvents('1');
-    expect(calls.filter(call=>call.method==='agent-interface.discover').at(-1)?.params).toEqual({cursor:'1',full:true});
+    deferredMethods.delete("agent-interface.discover");
+    await runtime.discoverEvents("1");
+    expect(
+      calls.filter((call) => call.method === "agent-interface.discover").at(-1)?.params,
+    ).toEqual({ cursor: "1", full: true });
   });
-  it('sends each add-on the roster protocol it reports, and none to one without the gate', async () => {
-    const policies = {main:{member:'Mom',main:true,owned:true,personal:[],shared:[{id:'ranch',name:'Ranch'}]},
-      ranch:{member:'the household',main:false,owned:false,personal:[],shared:[]}};
-    const sent = () => calls.filter(call => call.method === 'agent-interface.delegation').map(call => call.params);
+  it("sends each add-on the roster protocol it reports, and none to one without the gate", async () => {
+    const policies = {
+      main: {
+        member: "Mom",
+        main: true,
+        owned: true,
+        personal: [],
+        shared: [{ id: "ranch", name: "Ranch" }],
+      },
+      ranch: { member: "the household", main: false, owned: false, personal: [], shared: [] },
+    };
+    const sent = () =>
+      calls
+        .filter((call) => call.method === "agent-interface.delegation")
+        .map((call) => call.params);
     // Nothing enforces a roster here, and the answer says so, so no assistant can be made main.
     expect(await runtime.delegationPolicy!(policies)).toBe(0);
     expect(sent()).toEqual([]);
     for (const [reported, expected, enforced] of [
       // The first protocol takes main assistants' rosters only, without the fields it predates.
-      [{delegation:true}, {policies:{main:{member:'Mom',personal:[],shared:[{id:'ranch',name:'Ranch'}]}}}, 1],
-      [{delegation:true, delegation_version:2}, {version:2, policies}, 2],
+      [
+        { delegation: true },
+        {
+          policies: {
+            main: { member: "Mom", personal: [], shared: [{ id: "ranch", name: "Ranch" }] },
+          },
+        },
+        1,
+      ],
+      [{ delegation: true, delegation_version: 2 }, { version: 2, policies }, 2],
     ] as const) {
-      delegation = reported; calls = [];
-      runtime = createHermesRuntime({ files: testFiles(token), url:'http://127.0.0.1:19119',token});
+      delegation = reported;
+      calls = [];
+      runtime = createHermesRuntime({
+        files: testFiles(token),
+        url: "http://127.0.0.1:19119",
+        token,
+      });
       await runtime.status();
       expect(await runtime.delegationPolicy!(policies)).toBe(enforced);
       expect(sent()).toEqual([expected]);
     }
   });
-  it('reads the routine deliveries Hermes holds for one profile, and refuses an answer without them', async () => {
-    const answer = (result: unknown) => { heldDeliveries = result; };
-    answer({pending: [{id: 'job-a', name: '[bot:shared] Digest'}, {}]});
-    expect(await runtime.routineDeliveries!('shared')).toEqual([{id: 'job-a', name: '[bot:shared] Digest'}, {id: '', name: ''}]);
-    expect(calls.find(call => call.method === 'agent-interface.routine_deliveries')?.params).toEqual({profile: 'shared'});
-    answer({ok: true});
-    await expect(runtime.routineDeliveries!('shared')).rejects.toThrow('did not list');
-    rpcErrors.set('agent-interface.routine_deliveries', {code: -32000, message: 'Routine deliveries could not be read'});
-    await expect(runtime.routineDeliveries!('shared')).rejects.toThrow();
+  it("reads the routine deliveries Hermes holds for one profile, and refuses an answer without them", async () => {
+    const answer = (result: unknown) => {
+      heldDeliveries = result;
+    };
+    answer({ pending: [{ id: "job-a", name: "[bot:shared] Digest" }, {}] });
+    expect(await runtime.routineDeliveries!("shared")).toEqual([
+      { id: "job-a", name: "[bot:shared] Digest" },
+      { id: "", name: "" },
+    ]);
+    expect(
+      calls.find((call) => call.method === "agent-interface.routine_deliveries")?.params,
+    ).toEqual({ profile: "shared" });
+    answer({ ok: true });
+    await expect(runtime.routineDeliveries!("shared")).rejects.toThrow("did not list");
+    rpcErrors.set("agent-interface.routine_deliveries", {
+      code: -32000,
+      message: "Routine deliveries could not be read",
+    });
+    await expect(runtime.routineDeliveries!("shared")).rejects.toThrow();
   });
-  it('marks a routine Hermes has claimed a run of as in flight, but not one with only a queued-delivery marker, which outlives its receipt', async () => {
+  it("marks a routine Hermes has claimed a run of as in flight, but not one with only a queued-delivery marker, which outlives its receipt", async () => {
     rosterSession = undefined;
-    const jobs = [{id: 'idle', name: 'Idle', schedule_display: '1h'}, {id: 'claimed', name: 'Claimed', schedule_display: '1h', fire_claim: {owner: 'x'}},
-      {id: 'held', name: 'Held', schedule_display: '1h', last_delivery_queued: {'bot-chat:ranch': {status: 'queued'}}}, {id: 'live', name: 'Live', schedule_display: '1h', live_execution: {id: 'e'}}];
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json(jobs)));
+    const jobs = [
+      { id: "idle", name: "Idle", schedule_display: "1h" },
+      { id: "claimed", name: "Claimed", schedule_display: "1h", fire_claim: { owner: "x" } },
+      {
+        id: "held",
+        name: "Held",
+        schedule_display: "1h",
+        last_delivery_queued: { "bot-chat:ranch": { status: "queued" } },
+      },
+      { id: "live", name: "Live", schedule_display: "1h", live_execution: { id: "e" } },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(jobs)),
+    );
     const routines = await runtime.routines();
-    expect(routines.map(row => [row.id, !!row.inFlight, !!row.running])).toEqual([['idle', false, false], ['claimed', true, false], ['held', false, false], ['live', false, true]]);
+    expect(routines.map((row) => [row.id, !!row.inFlight, !!row.running])).toEqual([
+      ["idle", false, false],
+      ["claimed", true, false],
+      ["held", false, false],
+      ["live", false, true],
+    ]);
   });
-  it('keeps older discovery add-ons free of new parameters', async () => {
-    await runtime.discoverEvents('1');
-    expect(calls.find(call=>call.method==='agent-interface.discover')?.params).toEqual({cursor:'1'});
+  it("keeps older discovery add-ons free of new parameters", async () => {
+    await runtime.discoverEvents("1");
+    expect(calls.find((call) => call.method === "agent-interface.discover")?.params).toEqual({
+      cursor: "1",
+    });
   });
-  it('falls back after an incomplete canonical receipt without replaying admission', async () => {
-    canonicalSubmission=true;
-    beforeSend=(request,socket)=>{if(request.method==='agent-interface.submit'){deferredMethods.add('agent-interface.submit');queueMicrotask(()=>socket.receive({id:request.id,result:{requestId:request.params.request_id,status:'accepted',runId:'run'}}));}};
-    expect(await runtime.submit({...input(),text:'Hello'})).toMatchObject({status:'accepted',runId:'run'});
-    expect(calls.filter(call=>call.method==='agent-interface.submit')).toHaveLength(1);
-    expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(1);
+  it("falls back after an incomplete canonical receipt without replaying admission", async () => {
+    canonicalSubmission = true;
+    beforeSend = (request, socket) => {
+      if (request.method === "agent-interface.submit") {
+        deferredMethods.add("agent-interface.submit");
+        queueMicrotask(() =>
+          socket.receive({
+            id: request.id,
+            result: { requestId: request.params.request_id, status: "accepted", runId: "run" },
+          }),
+        );
+      }
+    };
+    expect(await runtime.submit({ ...input(), text: "Hello" })).toMatchObject({
+      status: "accepted",
+      runId: "run",
+    });
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent-interface.open")).toHaveLength(1);
     expect(await runtime.canonicalSubmit!()).toBe(false);
   });
-  it('seeds a mid-turn native snapshot and retains its running tool activity', async () => {
-    snapshot.info={running:true};snapshot.app_run_id='run';snapshot.inflight={assistant:'Reply already streaming'};
-    snapshot.app_tool_calls=[{id:'tool',name:'terminal',status:'running'}];
-    beforeSend=(request,socket)=>{if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{text:'streaming'}}});};
-    await runtime.conversation('shared');
-    expect(runtime.inflight!('shared')).toMatchObject({message:{text:'Reply already streaming'},activity:{state:'working'},toolCalls:[{id:'tool'}]});
-  });
-  it('does not overwrite a tool start or restore a snapshot across a structural frame', async () => {
-    snapshot.info={running:true};snapshot.app_run_id='run';snapshot.app_tool_calls=[];
-    await runtime.conversation('shared');
-    hermesChanged();
-    beforeSend=(request,socket)=>{
-      if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'new',name:'terminal'}}});
+  it("seeds a mid-turn native snapshot and retains its running tool activity", async () => {
+    snapshot.info = { running: true };
+    snapshot.app_run_id = "run";
+    snapshot.inflight = { assistant: "Reply already streaming" };
+    snapshot.app_tool_calls = [{ id: "tool", name: "terminal", status: "running" }];
+    beforeSend = (request, socket) => {
+      if (request.method === "agent-interface.open")
+        socket.receive({
+          method: "event",
+          params: { session_id: "live-one", type: "message.delta", payload: { text: "streaming" } },
+        });
     };
-    await runtime.conversation('shared');
-    expect(runtime.inflight!('shared')!.toolCalls).toMatchObject([{id:'new',status:'running'}]);
-    beforeSend=(request,socket)=>{
-      if(request.method==='agent-interface.open')socket.receive({method:'event',params:{session_id:'live-one',type:'message.complete',payload:{status:'complete'}}});
+    await runtime.conversation("shared");
+    expect(runtime.inflight!("shared")).toMatchObject({
+      message: { text: "Reply already streaming" },
+      activity: { state: "working" },
+      toolCalls: [{ id: "tool" }],
+    });
+  });
+  it("does not overwrite a tool start or restore a snapshot across a structural frame", async () => {
+    snapshot.info = { running: true };
+    snapshot.app_run_id = "run";
+    snapshot.app_tool_calls = [];
+    await runtime.conversation("shared");
+    hermesChanged();
+    beforeSend = (request, socket) => {
+      if (request.method === "agent-interface.open")
+        socket.receive({
+          method: "event",
+          params: {
+            session_id: "live-one",
+            type: "tool.start",
+            payload: { tool_id: "new", name: "terminal" },
+          },
+        });
+    };
+    await runtime.conversation("shared");
+    expect(runtime.inflight!("shared")!.toolCalls).toMatchObject([
+      { id: "new", status: "running" },
+    ]);
+    beforeSend = (request, socket) => {
+      if (request.method === "agent-interface.open")
+        socket.receive({
+          method: "event",
+          params: {
+            session_id: "live-one",
+            type: "message.complete",
+            payload: { status: "complete" },
+          },
+        });
     };
     hermesChanged();
-    await runtime.conversation('shared');
-    expect(runtime.inflight!('shared')).toBeUndefined();
+    await runtime.conversation("shared");
+    expect(runtime.inflight!("shared")).toBeUndefined();
   });
-  it('hears native roster changes without refetching watched conversations', async () => {
-    await runtime.conversation('shared');
-    const roster=vi.fn(),chat=vi.fn();runtime.watchRoster!(roster);runtime.watch!('shared',chat);
-    sockets.at(-1)!.receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
-    expect(roster).toHaveBeenCalledOnce();expect(chat).not.toHaveBeenCalled();
+  it("hears native roster changes without refetching watched conversations", async () => {
+    await runtime.conversation("shared");
+    const roster = vi.fn(),
+      chat = vi.fn();
+    runtime.watchRoster!(roster);
+    runtime.watch!("shared", chat);
+    sockets.at(-1)!.receive({
+      method: "event",
+      params: { session_id: "", type: "sessions.changed", payload: {} },
+    });
+    expect(roster).toHaveBeenCalledOnce();
+    expect(chat).not.toHaveBeenCalled();
   });
-  it('does not join a roster read that began before a native change', async () => {
+  it("does not join a roster read that began before a native change", async () => {
     await runtime.status();
-    deferredMethods.add('profiles.list');
-    const first=runtime.listBots();
-    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='profiles.list')).toHaveLength(1));
-    sockets[0].receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
-    const second=runtime.listBots();
-    await vi.waitFor(()=>expect(calls.filter(call=>call.method==='profiles.list')).toHaveLength(2));
-    const requests=calls.filter(call=>call.method==='profiles.list') as Record<string,any>[];
-    sockets[0].receive({id:requests[1].id,result:{profiles:[{name:'new'}]}});
-    expect((await second)[0].id).toBe('new');
-    sockets[0].receive({id:requests[0].id,result:{profiles:[{name:'old'}]}});
+    deferredMethods.add("profiles.list");
+    const first = runtime.listBots();
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "profiles.list")).toHaveLength(1),
+    );
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "", type: "sessions.changed", payload: {} },
+    });
+    const second = runtime.listBots();
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "profiles.list")).toHaveLength(2),
+    );
+    const requests = calls.filter((call) => call.method === "profiles.list") as Record<
+      string,
+      any
+    >[];
+    sockets[0].receive({ id: requests[1].id, result: { profiles: [{ name: "new" }] } });
+    expect((await second)[0].id).toBe("new");
+    sockets[0].receive({ id: requests[0].id, result: { profiles: [{ name: "old" }] } });
     await first;
-    rpcErrors.set('profiles.list',{code:-1,message:'Offline'});
-    deferredMethods.delete('profiles.list');
-    expect((await runtime.listBots())[0].id).toBe('new');
+    rpcErrors.set("profiles.list", { code: -1, message: "Offline" });
+    deferredMethods.delete("profiles.list");
+    expect((await runtime.listBots())[0].id).toBe("new");
   });
-  it('reuses a settled roster read briefly, until Hermes reports a change', async () => {
-    vi.useFakeTimers({toFake:['Date']});
-    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+  it("reuses a settled roster read briefly, until Hermes reports a change", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const reads = () => calls.filter((call) => call.method === "profiles.list").length;
     await runtime.listBots();
-    const first=reads();
-    const reused=await runtime.listBots();
+    const first = reads();
+    const reused = await runtime.listBots();
     expect(reads()).toBe(first);
     // Each caller gets its own list, so one cannot change what another holds.
     reused.pop();
     expect(await runtime.listBots()).toHaveLength(1);
-    sockets[0].receive({method:'event',params:{session_id:'',type:'sessions.changed',payload:{}}});
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "", type: "sessions.changed", payload: {} },
+    });
     await runtime.listBots();
-    expect(reads()).toBe(first+1);
+    expect(reads()).toBe(first + 1);
     vi.advanceTimersByTime(ROSTER_REUSE_MS);
     await runtime.listBots();
-    expect(reads()).toBe(first+2);
+    expect(reads()).toBe(first + 2);
   });
-  it('reads the roster again after any profile write, without waiting for a Hermes change notice', async () => {
-    vi.useFakeTimers({toFake:['Date']});
-    const reads=()=>calls.filter(call=>call.method==='profiles.list').length;
+  it("reads the roster again after any profile write, without waiting for a Hermes change notice", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const reads = () => calls.filter((call) => call.method === "profiles.list").length;
     await runtime.listBots();
-    const before=reads();
-    await runtime.setAvatar!('shared',{mode:'mascot',family:'cactus',color:'#4a7',eyes:'round',accessory:'none'} as never);
+    const before = reads();
+    await runtime.setAvatar!("shared", {
+      mode: "mascot",
+      family: "cactus",
+      color: "#4a7",
+      eyes: "round",
+      accessory: "none",
+    } as never);
     await runtime.listBots();
     // setAvatar reads the roster once itself; the listing after it reads again instead of reusing.
-    expect(reads()).toBe(before+2);
-    metadataConflict=true;
+    expect(reads()).toBe(before + 2);
+    metadataConflict = true;
     await runtime.listBots();
-    await expect(runtime.setAvatar!('shared',{mode:'mascot',family:'bear',color:'#4a7',eyes:'round',accessory:'none'} as never)).rejects.toThrow('changed on another client');
-    const failed=reads();
+    await expect(
+      runtime.setAvatar!("shared", {
+        mode: "mascot",
+        family: "bear",
+        color: "#4a7",
+        eyes: "round",
+        accessory: "none",
+      } as never),
+    ).rejects.toThrow("changed on another client");
+    const failed = reads();
     await runtime.listBots();
-    expect(reads()).toBe(failed+1);
+    expect(reads()).toBe(failed + 1);
   });
-  it('reads every profile\'s routines at once and keeps roster order', async () => {
-    beforeSend=(request,socket)=>{
-      if(request.method!=='profiles.list')return;
-      deferredMethods.add('profiles.list');
-      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[{name:'first'},{name:'second'}]}}));
+  it("reads every profile's routines at once and keeps roster order", async () => {
+    beforeSend = (request, socket) => {
+      if (request.method !== "profiles.list") return;
+      deferredMethods.add("profiles.list");
+      queueMicrotask(() =>
+        socket.receive({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: { profiles: [{ name: "first" }, { name: "second" }] },
+        }),
+      );
     };
-    const pending=new Map<string,(jobs:unknown[])=>void>();
-    vi.stubGlobal('fetch',vi.fn((url:URL)=>new Promise<Response>(resolve=>{
-      pending.set(new URL(url).searchParams.get('profile')!,jobs=>resolve(Response.json(jobs)));
-    })));
-    const listed=runtime.routines();
-    await vi.waitFor(()=>expect([...pending.keys()]).toEqual(['first','second']));
-    const job=(id:string)=>({id,name:id,schedule_display:'daily',enabled:true});
-    pending.get('second')!([job('later')]);
-    pending.get('first')!([job('earlier')]);
-    expect((await listed).map(routine=>[routine.botId,routine.id])).toEqual([['first','earlier'],['second','later']]);
+    const pending = new Map<string, (jobs: unknown[]) => void>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (url: URL) =>
+          new Promise<Response>((resolve) => {
+            pending.set(new URL(url).searchParams.get("profile")!, (jobs) =>
+              resolve(Response.json(jobs)),
+            );
+          }),
+      ),
+    );
+    const listed = runtime.routines();
+    await vi.waitFor(() => expect([...pending.keys()]).toEqual(["first", "second"]));
+    const job = (id: string) => ({ id, name: id, schedule_display: "daily", enabled: true });
+    pending.get("second")!([job("later")]);
+    pending.get("first")!([job("earlier")]);
+    expect((await listed).map((routine) => [routine.botId, routine.id])).toEqual([
+      ["first", "earlier"],
+      ["second", "later"],
+    ]);
   });
-  it('admits through one canonical submit RPC and maps interruption rejection', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
-    expect((await runtime.submit({...input(),text:'Hello'})).status).toBe('accepted');
-    expect(calls.map(call=>call.method)).toEqual(['agent-interface.submit']);
-    expect(calls[0].params).not.toHaveProperty('session_id');
-    rpcErrors.set('agent-interface.submit',{code:4094,message:'Review interruption'});
-    await expect(runtime.submit({...input(),text:'Again'})).rejects.toMatchObject({statusCode:409,message:'Review the interrupted task before starting another message.'});
+  it("admits through one canonical submit RPC and maps interruption rejection", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
+    expect((await runtime.submit({ ...input(), text: "Hello" })).status).toBe("accepted");
+    expect(calls.map((call) => call.method)).toEqual(["agent-interface.submit"]);
+    expect(calls[0].params).not.toHaveProperty("session_id");
+    rpcErrors.set("agent-interface.submit", { code: 4094, message: "Review interruption" });
+    await expect(runtime.submit({ ...input(), text: "Again" })).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Review the interrupted task before starting another message.",
+    });
   });
-  it('asks the add-on for a voice turn only for a spoken request', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
-    await runtime.submit({...input(),text:'Spoken',voice:true});
-    await runtime.submit({...input(),requestId:'typed',text:'Typed'});
-    expect(calls.map(call=>call.params.voice_turn)).toEqual([true,undefined]);
+  it("asks the add-on for a voice turn only for a spoken request", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
+    await runtime.submit({ ...input(), text: "Spoken", voice: true });
+    await runtime.submit({ ...input(), requestId: "typed", text: "Typed" });
+    expect(calls.map((call) => call.params.voice_turn)).toEqual([true, undefined]);
   });
-  it('fences a retry to an idle assistant and reports a refusal without admission', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
-    expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('accepted');
-    expect(calls[0].params).not.toHaveProperty('require_idle');
-    calls=[];
-    expect((await runtime.submit({...input(),text:'Again',retryOf:'m1'})).status).toBe('accepted');
-    expect(calls[0].params).toMatchObject({require_idle:true,steer:false});
-    rpcErrors.set('agent-interface.submit',{code:4091,message:'Started another turn'});
-    expect(await runtime.submit({...input(),text:'Again',retryOf:'m1'})).toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
+  it("fences a retry to an idle assistant and reports a refusal without admission", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
+    expect((await runtime.submit({ ...input(), text: "Plain" })).status).toBe("accepted");
+    expect(calls[0].params).not.toHaveProperty("require_idle");
+    calls = [];
+    expect((await runtime.submit({ ...input(), text: "Again", retryOf: "m1" })).status).toBe(
+      "accepted",
+    );
+    expect(calls[0].params).toMatchObject({ require_idle: true, steer: false });
+    rpcErrors.set("agent-interface.submit", { code: 4091, message: "Started another turn" });
+    expect(await runtime.submit({ ...input(), text: "Again", retryOf: "m1" })).toMatchObject({
+      status: "rejected",
+      message: "Another reply started before this retry, so it was not sent.",
+    });
     // Any other send keeps its uncertain receipt, since admission may have happened.
-    expect((await runtime.submit({...input(),text:'Plain'})).status).toBe('uncertain');
+    expect((await runtime.submit({ ...input(), text: "Plain" })).status).toBe("uncertain");
   });
-  it('reports the errors the add-on answers before admitting a send as a message that was not sent', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
+  it("reports the errors the add-on answers before admitting a send as a message that was not sent", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
     // The add-on's own answers (src/hermes/extension.py). Each is answered before its receipt is written.
     const refused: [number, string, string][] = [
-      [409, 'Hermes is being upgraded. Your current work and drafts are preserved.', hermesMaintenanceSendMessage],
-      [5035, 'backend is retiring; reconnect to continue', 'Hermes did not accept this message: backend is retiring; reconnect to continue. Your draft is saved.'],
-      [-32602, "Open this profile's canonical conversation before admission", "Hermes did not accept this message: Open this profile's canonical conversation before admission. Your draft is saved."],
+      [
+        409,
+        "Hermes is being upgraded. Your current work and drafts are preserved.",
+        hermesMaintenanceSendMessage,
+      ],
+      [
+        5035,
+        "backend is retiring; reconnect to continue",
+        "Hermes did not accept this message: backend is retiring; reconnect to continue. Your draft is saved.",
+      ],
+      [
+        -32602,
+        "Open this profile's canonical conversation before admission",
+        "Hermes did not accept this message: Open this profile's canonical conversation before admission. Your draft is saved.",
+      ],
       // A trailing period is not doubled, and the add-on's text is capped by the transport.
-      [4093, 'Request ID already belongs to a different input.', 'Hermes did not accept this message: Request ID already belongs to a different input. Your draft is saved.'],
+      [
+        4093,
+        "Request ID already belongs to a different input.",
+        "Hermes did not accept this message: Request ID already belongs to a different input. Your draft is saved.",
+      ],
     ];
     for (const [code, message, expected] of refused) {
-      rpcErrors.set('agent-interface.submit', {code, message});
+      rpcErrors.set("agent-interface.submit", { code, message });
       // A steer is the same RPC, so it reads the same refusals.
-      for (const send of [() => runtime.submit({...input(), text: 'Hello'}), () => runtime.steer({...input(), text: 'Hello'})])
-        expect(await send(), String(code)).toEqual({requestId: 'request-one', status: 'rejected', message: expected});
+      for (const send of [
+        () => runtime.submit({ ...input(), text: "Hello" }),
+        () => runtime.steer({ ...input(), text: "Hello" }),
+      ])
+        expect(await send(), String(code)).toEqual({
+          requestId: "request-one",
+          status: "rejected",
+          message: expected,
+        });
     }
     // An answer with no message of its own still says nothing was sent.
-    rpcErrors.set('agent-interface.submit', {code: 5035} as {code: number; message: string});
-    expect(await runtime.submit({...input(), text: 'Hello'})).toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message. Your draft is saved.'});
+    rpcErrors.set("agent-interface.submit", { code: 5035 } as { code: number; message: string });
+    expect(await runtime.submit({ ...input(), text: "Hello" })).toEqual({
+      requestId: "request-one",
+      status: "rejected",
+      message: "Hermes did not accept this message. Your draft is saved.",
+    });
   });
-  it('keeps a retry refused for a passing reason uncertain, and rejects one refused for a permanent reason', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
+  it("keeps a retry refused for a passing reason uncertain, and rejects one refused for a permanent reason", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
     // A retry has one request ID for its failed turn, and a rejected receipt is final, so an upgrade or a retiring
     // backend must leave it uncertain for the reviewed resend. A refusal that no wait changes may stay rejected.
     for (const code of [409, 5035]) {
-      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes is being upgraded.'});
-      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
-        .toEqual({requestId: 'request-one', status: 'uncertain', message: `Hermes refused the request (code ${code}). Review before retrying.`});
+      rpcErrors.set("agent-interface.submit", { code, message: "Hermes is being upgraded." });
+      expect(
+        await runtime.submit({ ...input(), text: "Again", retryOf: "m1" }),
+        String(code),
+      ).toEqual({
+        requestId: "request-one",
+        status: "uncertain",
+        message: `Hermes refused the request (code ${code}). Review before retrying.`,
+      });
     }
     for (const code of [-32602, 4093]) {
-      rpcErrors.set('agent-interface.submit', {code, message: 'Not this request'});
-      expect(await runtime.submit({...input(), text: 'Again', retryOf: 'm1'}), String(code))
-        .toEqual({requestId: 'request-one', status: 'rejected', message: 'Hermes did not accept this message: Not this request. Your draft is saved.'});
+      rpcErrors.set("agent-interface.submit", { code, message: "Not this request" });
+      expect(
+        await runtime.submit({ ...input(), text: "Again", retryOf: "m1" }),
+        String(code),
+      ).toEqual({
+        requestId: "request-one",
+        status: "rejected",
+        message: "Hermes did not accept this message: Not this request. Your draft is saved.",
+      });
     }
   });
-  it('keeps reviewed sends and steers uncertain only for temporary fences', async () => {
-    canonicalSubmission=true;
+  it("keeps reviewed sends and steers uncertain only for temporary fences", async () => {
+    canonicalSubmission = true;
     for (const code of [409, 5035, -32602, 4093, 4091]) {
-      rpcErrors.set('agent-interface.submit', {code, message: 'Refused'});
+      rpcErrors.set("agent-interface.submit", { code, message: "Refused" });
       for (const send of [runtime.submit, runtime.steer]) {
-        const result=await send({...input(), text:'Hello', reviewedUncertain:true});
-        expect(result.status, String(code)).toBe(code===-32602 || code===4093 ? 'rejected' : 'uncertain');
-        expect(result.message).toContain(code===-32602 || code===4093 ? 'Hermes did not accept this message' : `code ${code}`);
+        const result = await send({ ...input(), text: "Hello", reviewedUncertain: true });
+        expect(result.status, String(code)).toBe(
+          code === -32602 || code === 4093 ? "rejected" : "uncertain",
+        );
+        expect(result.message).toContain(
+          code === -32602 || code === 4093 ? "Hermes did not accept this message" : `code ${code}`,
+        );
       }
     }
-    rpcErrors.set('agent-interface.submit', {code:4091, message:'Another turn started'});
-    expect(await runtime.submit({...input(), text:'Again', retryOf:'m1', reviewedUncertain:true}))
-      .toMatchObject({status:'rejected',message:'Another reply started before this retry, so it was not sent.'});
+    rpcErrors.set("agent-interface.submit", { code: 4091, message: "Another turn started" });
+    expect(
+      await runtime.submit({ ...input(), text: "Again", retryOf: "m1", reviewedUncertain: true }),
+    ).toMatchObject({
+      status: "rejected",
+      message: "Another reply started before this retry, so it was not sent.",
+    });
   });
-  it('sends a retry again once an upgrade that refused it ends', async () => {
-    canonicalSubmission=true;
-    snapshot.messages=[{row_id: 1, role: 'user', text: 'Order more feed', app_run_id: 'run-1'}];
-    snapshot.info={running:false,failed:true};
-    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+  it("sends a retry again once an upgrade that refused it ends", async () => {
+    canonicalSubmission = true;
+    snapshot.messages = [{ row_id: 1, role: "user", text: "Order more feed", app_run_id: "run-1" }];
+    snapshot.info = { running: false, failed: true };
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
     try {
-      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
-      const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
-      const read=await runtime.conversation('shared');
-      const retryOf=read.messages[0].id;
-      const requestId=await retryRequestId('shared',retryOf,read.activity.runId??'');
-      const retry=(reviewedUncertain=false)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers,
-        payload:{requestId,text:'Order more feed',attachments:[],retryOf,...(reviewedUncertain?{reviewedUncertain:true}:{})}});
-      const submits=()=>calls.filter(call=>call.method==='agent-interface.submit');
-      rpcErrors.set('agent-interface.submit',{code:409,message:'Hermes is being upgraded. Your current work and drafts are preserved.'});
-      const refused=await retry();
-      expect(refused.json()).toMatchObject({requestId,status:'uncertain'});
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/local",
+        headers: { origin: "http://127.0.0.1:3000" },
+        payload: { member: "one" },
+      });
+      const headers = {
+        origin: "http://127.0.0.1:3000",
+        cookie: `session=${login.cookies[0].value}`,
+        "x-csrf-token": login.json().csrfToken as string,
+      };
+      const read = await runtime.conversation("shared");
+      const retryOf = read.messages[0].id;
+      const requestId = await retryRequestId("shared", retryOf, read.activity.runId ?? "");
+      const retry = (reviewedUncertain = false) =>
+        app.inject({
+          method: "POST",
+          url: "/api/bots/shared/messages",
+          headers,
+          payload: {
+            requestId,
+            text: "Order more feed",
+            attachments: [],
+            retryOf,
+            ...(reviewedUncertain ? { reviewedUncertain: true } : {}),
+          },
+        });
+      const submits = () => calls.filter((call) => call.method === "agent-interface.submit");
+      rpcErrors.set("agent-interface.submit", {
+        code: 409,
+        message: "Hermes is being upgraded. Your current work and drafts are preserved.",
+      });
+      const refused = await retry();
+      expect(refused.json()).toMatchObject({ requestId, status: "uncertain" });
       // The same retry, not yet reviewed, only reports what the app recorded.
-      expect((await retry()).json().status).toBe('uncertain');
+      expect((await retry()).json().status).toBe("uncertain");
       expect(submits()).toHaveLength(1);
       // The update ends. Reviewing the retry sends it again, so Hermes is asked a second time.
-      rpcErrors.delete('agent-interface.submit');
-      const resent=await retry(true);
+      rpcErrors.delete("agent-interface.submit");
+      const resent = await retry(true);
       expect(resent.statusCode).toBe(200);
-      expect(resent.json()).toMatchObject({requestId,status:'accepted'});
+      expect(resent.json()).toMatchObject({ requestId, status: "accepted" });
       expect(submits()).toHaveLength(2);
-      expect(submits()[1].params).toMatchObject({request_id:requestId,require_idle:true});
-    } finally { await app.close(); }
+      expect(submits()[1].params).toMatchObject({ request_id: requestId, require_idle: true });
+    } finally {
+      await app.close();
+    }
   });
-  it('keeps a reviewed send uncertain when retirement fences it after a missing lookup', async () => {
-    canonicalSubmission=true;
-    const requestId=randomUUID();
-    let sends=0, admitted=false;
-    const unexpected: string[]=[];
-    vi.stubGlobal('fetch',vi.fn(async(url: URL, init?: RequestInit)=>{
-      if (String(url)==='http://127.0.0.1:19119/api/agent-interface/service/agent-interface/voice/status' && init?.method==='POST')
-        return Response.json({profiles:[]});
-      unexpected.push(`${init?.method} ${String(url)}`);
-      throw new Error(`Unexpected fetch ${url}`);
-    }));
-    let original: Record<string,any> | undefined;
-    beforeSend=(request,socket)=>{
-      if (!['client.capabilities','agent-interface.capabilities','profiles.list','image.generate','agent-interface.submit','agent-interface.receipt'].includes(request.method)) {
+  it("keeps a reviewed send uncertain when retirement fences it after a missing lookup", async () => {
+    canonicalSubmission = true;
+    const requestId = randomUUID();
+    let sends = 0,
+      admitted = false;
+    const unexpected: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (
+          String(url) ===
+            "http://127.0.0.1:19119/api/agent-interface/service/agent-interface/voice/status" &&
+          init?.method === "POST"
+        )
+          return Response.json({ profiles: [] });
+        unexpected.push(`${init?.method} ${String(url)}`);
+        throw new Error(`Unexpected fetch ${url}`);
+      }),
+    );
+    let original: Record<string, any> | undefined;
+    beforeSend = (request, socket) => {
+      if (
+        ![
+          "client.capabilities",
+          "agent-interface.capabilities",
+          "profiles.list",
+          "image.generate",
+          "agent-interface.submit",
+          "agent-interface.receipt",
+        ].includes(request.method)
+      ) {
         unexpected.push(request.method);
         throw new Error(`Unexpected RPC ${request.method}`);
       }
-      if (request.method==='agent-interface.submit') {
+      if (request.method === "agent-interface.submit") {
         deferredMethods.add(request.method);
         sends++;
-        if (sends===1) {
-          original=request.params;
+        if (sends === 1) {
+          original = request.params;
           // The connection loses its answer while the remote send remains queued.
-          setTimeout(()=>socket.close(),0);
+          setTimeout(() => socket.close(), 0);
         } else {
           expect(admitted).toBe(true);
           expect(request.params).toEqual(original);
-          queueMicrotask(()=>socket.receive({id:request.id,error:{code:5035,message:'backend is retiring; reconnect to continue'}}));
+          queueMicrotask(() =>
+            socket.receive({
+              id: request.id,
+              error: { code: 5035, message: "backend is retiring; reconnect to continue" },
+            }),
+          );
         }
       }
-      if (request.method==='agent-interface.receipt') {
+      if (request.method === "agent-interface.receipt") {
         deferredMethods.add(request.method);
-        expect(request.params).toEqual({request_id:requestId});
-        const result=admitted ? {receipt:{requestId,status:'accepted',runId:'task-one'}} : {receipt:null};
+        expect(request.params).toEqual({ request_id: requestId });
+        const result = admitted
+          ? { receipt: { requestId, status: "accepted", runId: "task-one" } }
+          : { receipt: null };
         // The original leaves the send lane and is admitted after this read, but its answer is lost.
-        admitted=true;
-        queueMicrotask(()=>socket.receive({id:request.id,result}));
+        admitted = true;
+        queueMicrotask(() => socket.receive({ id: request.id, result }));
       }
     };
-    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
     try {
-      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
-      const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
-      const payload={requestId,text:'Order feed',attachments:[]};
-      const send=(reviewedUncertain=false)=>app.inject({method:'POST',url:'/api/bots/shared/messages',headers,payload:{...payload,reviewedUncertain}});
-      expect((await send()).json()).toMatchObject({requestId,status:'uncertain'});
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/local",
+        headers: { origin: "http://127.0.0.1:3000" },
+        payload: { member: "one" },
+      });
+      const headers = {
+        origin: "http://127.0.0.1:3000",
+        cookie: `session=${login.cookies[0].value}`,
+        "x-csrf-token": login.json().csrfToken as string,
+      };
+      const payload = { requestId, text: "Order feed", attachments: [] };
+      const send = (reviewedUncertain = false) =>
+        app.inject({
+          method: "POST",
+          url: "/api/bots/shared/messages",
+          headers,
+          payload: { ...payload, reviewedUncertain },
+        });
+      expect((await send()).json()).toMatchObject({ requestId, status: "uncertain" });
       await runtime.reconnect!();
-      const reviewed=await send(true);
-      expect(reviewed.json()).toMatchObject({requestId,status:'uncertain',message:'Hermes refused the request (code 5035). Review before retrying.'});
-      const found=await app.inject({method:'GET',url:`/api/submissions/${requestId}`,headers});
-      expect(found.json()).toMatchObject({requestId,status:'accepted',runId:'task-one'});
-      expect((await send()).json()).toMatchObject({requestId,status:'accepted',runId:'task-one'});
+      const reviewed = await send(true);
+      expect(reviewed.json()).toMatchObject({
+        requestId,
+        status: "uncertain",
+        message: "Hermes refused the request (code 5035). Review before retrying.",
+      });
+      const found = await app.inject({
+        method: "GET",
+        url: `/api/submissions/${requestId}`,
+        headers,
+      });
+      expect(found.json()).toMatchObject({ requestId, status: "accepted", runId: "task-one" });
+      expect((await send()).json()).toMatchObject({
+        requestId,
+        status: "accepted",
+        runId: "task-one",
+      });
       expect(sends).toBe(2);
       expect(unexpected).toEqual([]);
-    } finally { await app.close(); }
+    } finally {
+      await app.close();
+    }
   });
-  it('keeps a send whose error may have followed admission uncertain, whatever Hermes says', async () => {
-    canonicalSubmission=true;
-    await runtime.status(); calls=[];
+  it("keeps a send whose error may have followed admission uncertain, whatever Hermes says", async () => {
+    canonicalSubmission = true;
+    await runtime.status();
+    calls = [];
     // A handler that raised after it may have written its receipt, and codes the add-on does not answer before it admits.
     for (const code of [-32000, -32603, 4090, 4091, 4010, 5000, 404]) {
-      rpcErrors.set('agent-interface.submit', {code, message: 'Hermes private detail'});
-      const receipt = await runtime.submit({...input(), text: 'Hello'});
-      expect(receipt, String(code)).toMatchObject({requestId: 'request-one', status: 'uncertain'});
-      expect(receipt.message, String(code)).not.toContain('private detail');
+      rpcErrors.set("agent-interface.submit", { code, message: "Hermes private detail" });
+      const receipt = await runtime.submit({ ...input(), text: "Hello" });
+      expect(receipt, String(code)).toMatchObject({
+        requestId: "request-one",
+        status: "uncertain",
+      });
+      expect(receipt.message, String(code)).not.toContain("private detail");
     }
-    rpcErrors.set('agent-interface.submit', {code: -32000, message: 'Hermes private detail'});
-    expect((await runtime.submit({...input(), text: 'Hello'})).message).toBe('Hermes refused the request (code -32000). Review before retrying.');
+    rpcErrors.set("agent-interface.submit", { code: -32000, message: "Hermes private detail" });
+    expect((await runtime.submit({ ...input(), text: "Hello" })).message).toBe(
+      "Hermes refused the request (code -32000). Review before retrying.",
+    );
   });
-  describe('stop', () => {
-    const interrupts = () => calls.filter(call => call.method === 'session.interrupt');
-    const refused = (code: string, message: string) => ({statusCode: 409, code, message});
-    beforeEach(async () => { await runtime.status(); calls = []; });
-    it('interrupts the session when the run the caller named is the one running', async () => {
-      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
-      await runtime.stop('shared', 'run-one');
-      expect(interrupts()).toEqual([{method: 'session.interrupt', params: {session_id: 'live-one', profile: 'shared'}, id: expect.any(Number), jsonrpc: '2.0'}]);
+  describe("stop", () => {
+    const interrupts = () => calls.filter((call) => call.method === "session.interrupt");
+    const refused = (code: string, message: string) => ({ statusCode: 409, code, message });
+    beforeEach(async () => {
+      await runtime.status();
+      calls = [];
     });
-    it('refuses, and never sends the interrupt, when nothing is running', async () => {
+    it("interrupts the session when the run the caller named is the one running", async () => {
+      snapshot.info = { running: true };
+      snapshot.app_run_id = "run-one";
+      await runtime.stop("shared", "run-one");
+      expect(interrupts()).toEqual([
+        {
+          method: "session.interrupt",
+          params: { session_id: "live-one", profile: "shared" },
+          id: expect.any(Number),
+          jsonrpc: "2.0",
+        },
+      ]);
+    });
+    it("refuses, and never sends the interrupt, when nothing is running", async () => {
       // Hermes's interrupt on an idle session still clears every member's queued messages and denies pending approvals.
-      for (const named of [undefined, 'run-one']) {
-        await expect(runtime.stop('shared', named), String(named)).rejects.toMatchObject(refused('nothing_to_stop', nothingToStopMessage));
+      for (const named of [undefined, "run-one"]) {
+        await expect(runtime.stop("shared", named), String(named)).rejects.toMatchObject(
+          refused("nothing_to_stop", nothingToStopMessage),
+        );
       }
       expect(interrupts()).toEqual([]);
     });
-    it('refuses, and never sends the interrupt, when the run the caller named is not the one running', async () => {
-      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
-      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+    it("refuses, and never sends the interrupt, when the run the caller named is not the one running", async () => {
+      snapshot.info = { running: true };
+      snapshot.app_run_id = "run-two";
+      await expect(runtime.stop("shared", "run-one")).rejects.toMatchObject(
+        refused("run_changed", runChangedMessage),
+      );
       // A turn Hermes runs with no app run, such as a Discord message, matches no run a client could have been shown.
       delete snapshot.app_run_id;
-      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject(refused('run_changed', runChangedMessage));
+      await expect(runtime.stop("shared", "run-one")).rejects.toMatchObject(
+        refused("run_changed", runChangedMessage),
+      );
       expect(interrupts()).toEqual([]);
     });
-    it('stops whatever is running for a caller that names no run, as the iOS app does', async () => {
-      snapshot.info = {running: true}; snapshot.app_run_id = 'run-two';
-      await runtime.stop('shared');
+    it("stops whatever is running for a caller that names no run, as the iOS app does", async () => {
+      snapshot.info = { running: true };
+      snapshot.app_run_id = "run-two";
+      await runtime.stop("shared");
       delete snapshot.app_run_id;
-      await runtime.stop('shared');
+      await runtime.stop("shared");
       expect(interrupts()).toHaveLength(2);
     });
-    it('counts a task Hermes is finishing, with its app run still open, as running', async () => {
-      snapshot.info = {running: false}; snapshot.app_run_id = 'run-one';
-      await runtime.stop('shared', 'run-one');
+    it("counts a task Hermes is finishing, with its app run still open, as running", async () => {
+      snapshot.info = { running: false };
+      snapshot.app_run_id = "run-one";
+      await runtime.stop("shared", "run-one");
       expect(interrupts()).toHaveLength(1);
     });
-    it('reads the session fresh for each Stop, so a refusal never lingers', async () => {
-      await expect(runtime.stop('shared', 'run-one')).rejects.toMatchObject({code: 'nothing_to_stop'});
-      snapshot.info = {running: true}; snapshot.app_run_id = 'run-one';
-      await runtime.stop('shared', 'run-one');
+    it("reads the session fresh for each Stop, so a refusal never lingers", async () => {
+      await expect(runtime.stop("shared", "run-one")).rejects.toMatchObject({
+        code: "nothing_to_stop",
+      });
+      snapshot.info = { running: true };
+      snapshot.app_run_id = "run-one";
+      await runtime.stop("shared", "run-one");
       expect(interrupts()).toHaveLength(1);
     });
   });
-  it('lets native answers prove staleness without a second open', async () => {
-    rpcErrors.delete('request.answer'); snapshot.open_requests=[{id:'stale',method:'approval'},{id:'question',method:'clarify'}]; await runtime.conversation('shared',{history:false}); calls=[];
-    beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
-    await expect(runtime.approve('shared','stale','approved','person')).rejects.toMatchObject({statusCode:409,code:'request_not_pending',message:'That approval expired before it was answered.'});
-    await expect(runtime.answerRequest('shared','question',{})).rejects.toMatchObject({statusCode:409,code:'request_not_pending',message:'That question expired before it was answered.'});
-    expect(calls.map(call=>call.method)).toEqual(['request.answer','request.answer']);
+  it("lets native answers prove staleness without a second open", async () => {
+    rpcErrors.delete("request.answer");
+    snapshot.open_requests = [
+      { id: "stale", method: "approval" },
+      { id: "question", method: "clarify" },
+    ];
+    await runtime.conversation("shared", { history: false });
+    calls = [];
+    beforeSend = (request, socket) => {
+      if (request.method === "request.answer") {
+        deferredMethods.add("request.answer");
+        queueMicrotask(() =>
+          socket.receive({ id: request.id, result: { status: "expired", resolved: false } }),
+        );
+      }
+    };
+    await expect(runtime.approve("shared", "stale", "approved", "person")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "request_not_pending",
+      message: "That approval expired before it was answered.",
+    });
+    await expect(runtime.answerRequest("shared", "question", {})).rejects.toMatchObject({
+      statusCode: 409,
+      code: "request_not_pending",
+      message: "That question expired before it was answered.",
+    });
+    expect(calls.map((call) => call.method)).toEqual(["request.answer", "request.answer"]);
   });
-  it('lists bots without loading profile descriptions and loads detail lazily', async () => {
-    await runtime.listBots(); await runtime.listBots();
-    expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(0);
-    expect(await runtime.botDetail!('shared')).toMatchObject({enabledTools:['terminal'],enabledMcpServers:['calendar'],availableMcpServers:['calendar','notes']});
-    expect(calls.filter(call=>call.method==='profiles.describe')).toHaveLength(1);
+  it("lists bots without loading profile descriptions and loads detail lazily", async () => {
+    await runtime.listBots();
+    await runtime.listBots();
+    expect(calls.filter((call) => call.method === "profiles.describe")).toHaveLength(0);
+    expect(await runtime.botDetail!("shared")).toMatchObject({
+      enabledTools: ["terminal"],
+      enabledMcpServers: ["calendar"],
+      availableMcpServers: ["calendar", "notes"],
+    });
+    expect(calls.filter((call) => call.method === "profiles.describe")).toHaveLength(1);
   });
-  it('streams only the unpersisted tail with the saved prompt origin and no open RPC', async () => {
-    snapshot.info={running:true}; snapshot.app_run_id='run';
-    snapshot.inflight={user:'[Cron delivery: morning] prompt',assistant:'Saved segment\nTail',reasoning:'Saved thought\nNext'};
-    snapshot.messages=[{role:'user',text:'[Cron delivery: morning] prompt'}, {role:'assistant',text:'Saved segment',reasoning:'Saved thought',app_run_id:'run'}];
-    await runtime.conversation('shared');
-    const opens=calls.filter(call=>call.method==='agent-interface.open').length;
-    sockets.at(-1)!.receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{delta:' grows'}}});
-    const value=runtime.inflight!('shared')!;
-    expect(value.message.text).toBe('Tail grows');
-    expect(value.message.reasoning).toBe('Next');
-    expect(value.message.origin?.kind).toBe('scheduled');
-    expect(calls.filter(call=>call.method==='agent-interface.open')).toHaveLength(opens);
+  it("streams only the unpersisted tail with the saved prompt origin and no open RPC", async () => {
+    snapshot.info = { running: true };
+    snapshot.app_run_id = "run";
+    snapshot.inflight = {
+      user: "[Cron delivery: morning] prompt",
+      assistant: "Saved segment\nTail",
+      reasoning: "Saved thought\nNext",
+    };
+    snapshot.messages = [
+      { role: "user", text: "[Cron delivery: morning] prompt" },
+      { role: "assistant", text: "Saved segment", reasoning: "Saved thought", app_run_id: "run" },
+    ];
+    await runtime.conversation("shared");
+    const opens = calls.filter((call) => call.method === "agent-interface.open").length;
+    sockets.at(-1)!.receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.delta", payload: { delta: " grows" } },
+    });
+    const value = runtime.inflight!("shared")!;
+    expect(value.message.text).toBe("Tail grows");
+    expect(value.message.reasoning).toBe("Next");
+    expect(value.message.origin?.kind).toBe("scheduled");
+    expect(calls.filter((call) => call.method === "agent-interface.open")).toHaveLength(opens);
   });
-  it('reports turn starts, text, reasoning and ends by session, and ignores other frames', async () => {
-    const frames: unknown[][] = [], changes = vi.fn();
-    const watcher = {frame: vi.fn((...call: unknown[]) => { frames.push(call); }), run: vi.fn(), disconnected: vi.fn()};
+  it("reports turn starts, text, reasoning and ends by session, and ignores other frames", async () => {
+    const frames: unknown[][] = [],
+      changes = vi.fn();
+    const watcher = {
+      frame: vi.fn((...call: unknown[]) => {
+        frames.push(call);
+      }),
+      run: vi.fn(),
+      disconnected: vi.fn(),
+    };
     const stop = runtime.watchTurns!(watcher);
-    runtime.watch!('shared', changes);
-    await runtime.conversation('shared');
-    const event=(type:string,session='live-one')=>sockets.at(-1)!.receive({method:'event',params:{session_id:session,type,payload:{text:'x'}}});
-    event('message.start'); event('reasoning.delta'); event('message.delta');
+    runtime.watch!("shared", changes);
+    await runtime.conversation("shared");
+    const event = (type: string, session = "live-one") =>
+      sockets.at(-1)!.receive({
+        method: "event",
+        params: { session_id: session, type, payload: { text: "x" } },
+      });
+    event("message.start");
+    event("reasoning.delta");
+    event("message.delta");
     // Other live frames are not turn events.
-    event('status.update'); event('thinking.delta'); event('tool.start');
-    event('message.complete');
+    event("status.update");
+    event("thinking.delta");
+    event("tool.start");
+    event("message.complete");
     // A frame names no run or assistant, so a session nobody opened here is reported by its own ID.
-    event('message.delta', 'elsewhere');
-    expect(frames).toEqual([['live-one','start'],['live-one','text'],['live-one','text'],['live-one','end'],['elsewhere','text']]);
+    event("message.delta", "elsewhere");
+    expect(frames).toEqual([
+      ["live-one", "start"],
+      ["live-one", "text"],
+      ["live-one", "text"],
+      ["live-one", "end"],
+      ["elsewhere", "text"],
+    ]);
     // A watcher that throws never stops frame processing.
-    watcher.frame.mockImplementation(() => { throw new Error('watcher failed'); });
+    watcher.frame.mockImplementation(() => {
+      throw new Error("watcher failed");
+    });
     changes.mockClear();
-    event('message.delta');
-    expect(changes).toHaveBeenCalledWith('inflight');
+    event("message.delta");
+    expect(changes).toHaveBeenCalledWith("inflight");
     stop();
-    event('message.delta');
+    event("message.delta");
     expect(watcher.frame).toHaveBeenCalledTimes(6);
   });
-  it('reports the run a fresh read finds open, and nothing from a read a turn started or ended during', async () => {
-    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn()};
+  it("reports the run a fresh read finds open, and nothing from a read a turn started or ended during", async () => {
+    const watcher = { frame: vi.fn(), run: vi.fn(), disconnected: vi.fn() };
     runtime.watchTurns!(watcher);
-    Object.assign(snapshot, {app_run_id: 'run-one', info: {running: true}});
-    await runtime.conversation('shared');
-    expect(watcher.run.mock.calls).toEqual([['live-one', 'shared', 'run-one', true]]);
+    Object.assign(snapshot, { app_run_id: "run-one", info: { running: true } });
+    await runtime.conversation("shared");
+    expect(watcher.run.mock.calls).toEqual([["live-one", "shared", "run-one", true]]);
     // A turn starts while Hermes is answering the read: the run it names may be the previous turn's.
-    deferredMethods.add('agent-interface.open');
-    snapshot.app_run_id = 'run-two';
-    const read = runtime.conversation('shared');
-    await vi.waitFor(() => expect(calls.filter(call => call.method === 'agent-interface.open')).toHaveLength(2));
+    deferredMethods.add("agent-interface.open");
+    snapshot.app_run_id = "run-two";
+    const read = runtime.conversation("shared");
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "agent-interface.open")).toHaveLength(2),
+    );
     const stale = calls.at(-1) as Record<string, any>;
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.start", payload: {} },
+    });
     deferredMethods.clear();
-    sockets[0].receive({jsonrpc: '2.0', id: stale.id, result: {...structuredClone(snapshot), app_run_id: 'run-one'}});
+    sockets[0].receive({
+      jsonrpc: "2.0",
+      id: stale.id,
+      result: { ...structuredClone(snapshot), app_run_id: "run-one" },
+    });
     await read;
     // The read is asked again and only the fresh answer reports.
-    expect(watcher.run.mock.calls.slice(1)).toEqual([['live-one', 'shared', 'run-two', true]]);
+    expect(watcher.run.mock.calls.slice(1)).toEqual([["live-one", "shared", "run-two", true]]);
     // A turn starts while the history of an older add-on's answer is still being read.
-    deferredMethods.add('session.history');
-    const {messages: _rows, ...withoutRows} = snapshot;
-    snapshot = {...withoutRows, app_run_id: 'run-three'};
+    deferredMethods.add("session.history");
+    const { messages: _rows, ...withoutRows } = snapshot;
+    snapshot = { ...withoutRows, app_run_id: "run-three" };
     hermesChanged();
-    const late = runtime.conversation('shared');
-    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe('session.history'));
+    const late = runtime.conversation("shared");
+    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe("session.history"));
     const history = calls.at(-1) as Record<string, any>;
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-    sockets[0].receive({jsonrpc: '2.0', id: history.id, result: {messages: []}});
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.start", payload: {} },
+    });
+    sockets[0].receive({ jsonrpc: "2.0", id: history.id, result: { messages: [] } });
     await late;
     expect(watcher.run.mock.calls.slice(2)).toEqual([]);
     deferredMethods.clear();
     snapshot.messages = [];
     // A read that finds no app run says so.
-    Object.assign(snapshot, {app_run_id: undefined, info: {running: false}});
+    Object.assign(snapshot, { app_run_id: undefined, info: { running: false } });
     hermesChanged();
-    await runtime.conversation('shared');
-    expect(watcher.run.mock.calls.at(-1)).toEqual(['live-one', 'shared', undefined, false]);
+    await runtime.conversation("shared");
+    expect(watcher.run.mock.calls.at(-1)).toEqual(["live-one", "shared", undefined, false]);
   });
-  it('tells turn watchers the socket dropped before it forgets the session owners', async () => {
-    const watcher = {frame: vi.fn(), run: vi.fn(), disconnected: vi.fn(() => runtime.inflight!('shared'))};
+  it("tells turn watchers the socket dropped before it forgets the session owners", async () => {
+    const watcher = {
+      frame: vi.fn(),
+      run: vi.fn(),
+      disconnected: vi.fn(() => runtime.inflight!("shared")),
+    };
     runtime.watchTurns!(watcher);
-    await runtime.conversation('shared');
+    await runtime.conversation("shared");
     sockets[0].close();
     expect(watcher.disconnected).toHaveBeenCalledTimes(1);
     // Called first, while the runtime still holds the session it is about to forget.
     expect(watcher.disconnected.mock.results[0].value).toBeDefined();
   });
-  it('preserves canonical run provenance without inventing attribution for unrelated rows', async () => {
-    snapshot.messages=[{row_id:1,role:'assistant',text:'Finished',app_run_id:'known-run'},{row_id:2,role:'assistant',text:'Native unattributed reply'}];
-    const conversation=await runtime.conversation('shared');
-    expect(conversation.messages[0].runId).toBe('known-run');
+  it("preserves canonical run provenance without inventing attribution for unrelated rows", async () => {
+    snapshot.messages = [
+      { row_id: 1, role: "assistant", text: "Finished", app_run_id: "known-run" },
+      { row_id: 2, role: "assistant", text: "Native unattributed reply" },
+    ];
+    const conversation = await runtime.conversation("shared");
+    expect(conversation.messages[0].runId).toBe("known-run");
     expect(conversation.messages[1].runId).toBeUndefined();
   });
 
-  it('exposes only locally owned native secure prompts with an exact executor/session owner', async () => {
-    snapshot.executor_epoch='epoch-one';
-    snapshot.open_requests=[
-      {id:'srq-local',method:'vault.save_login',app_local_secure:true,params:{origin:'https://site.invalid',site:'site.invalid'}},
-      {id:'srq-mirror',method:'vault.code',params:{site:'Mirrored worker'}},
-      {id:'srq-sudo',method:'sudo',app_local_secure:true,params:{command:'sudo'}},
+  it("exposes only locally owned native secure prompts with an exact executor/session owner", async () => {
+    snapshot.executor_epoch = "epoch-one";
+    snapshot.open_requests = [
+      {
+        id: "srq-local",
+        method: "vault.save_login",
+        app_local_secure: true,
+        params: { origin: "https://site.invalid", site: "site.invalid" },
+      },
+      { id: "srq-mirror", method: "vault.code", params: { site: "Mirrored worker" } },
+      { id: "srq-sudo", method: "sudo", app_local_secure: true, params: { command: "sudo" } },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.attention![0].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://site.invalid',site:'site.invalid'});
-    expect(result.attention![0].kind).toBe('secure');
-    expect(result.attention!.slice(1).map(request=>request.kind)).toEqual(['official','official']);
+    const result = await runtime.conversation("shared");
+    expect(result.attention![0].secure).toEqual({
+      epoch: "epoch-one",
+      sessionId: "live-one",
+      method: "vault.save_login",
+      origin: "https://site.invalid",
+      site: "site.invalid",
+    });
+    expect(result.attention![0].kind).toBe("secure");
+    expect(result.attention!.slice(1).map((request) => request.kind)).toEqual([
+      "official",
+      "official",
+    ]);
   });
 
-  it('shows a login asked for by address with its bounded assistant text and owner', async () => {
-    snapshot.executor_epoch='epoch-one';
-    snapshot.open_requests=[
-      {id:'srq-explicit',method:'vault.save_login',app_local_secure:true,params:{origin:'https://kvm.example.invalid',site:'kvm.example.invalid'},
-        app_credential:{label:'Comet KVM',purpose:'x'.repeat(400),profile:'patch',requesterId:'member-one'}},
-      {id:'srq-malformed',method:'vault.save_login',app_local_secure:true,params:{origin:'https://page.invalid',site:'page.invalid'},app_credential:{label:'',purpose:'Why',profile:'patch'}},
+  it("shows a login asked for by address with its bounded assistant text and owner", async () => {
+    snapshot.executor_epoch = "epoch-one";
+    snapshot.open_requests = [
+      {
+        id: "srq-explicit",
+        method: "vault.save_login",
+        app_local_secure: true,
+        params: { origin: "https://kvm.example.invalid", site: "kvm.example.invalid" },
+        app_credential: {
+          label: "Comet KVM",
+          purpose: "x".repeat(400),
+          profile: "patch",
+          requesterId: "member-one",
+        },
+      },
+      {
+        id: "srq-malformed",
+        method: "vault.save_login",
+        app_local_secure: true,
+        params: { origin: "https://page.invalid", site: "page.invalid" },
+        app_credential: { label: "", purpose: "Why", profile: "patch" },
+      },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.attention![0]).toMatchObject({title:'Hermes asks to save a login',secure:{origin:'https://kvm.example.invalid',
-      explicit:{label:'Comet KVM',purpose:'x'.repeat(300),profile:'patch',requestedBy:{id:'member-one'}}}});
-    expect(result.attention![1].secure).toEqual({epoch:'epoch-one',sessionId:'live-one',method:'vault.save_login',origin:'https://page.invalid',site:'page.invalid'});
+    const result = await runtime.conversation("shared");
+    expect(result.attention![0]).toMatchObject({
+      title: "Hermes asks to save a login",
+      secure: {
+        origin: "https://kvm.example.invalid",
+        explicit: {
+          label: "Comet KVM",
+          purpose: "x".repeat(300),
+          profile: "patch",
+          requestedBy: { id: "member-one" },
+        },
+      },
+    });
+    expect(result.attention![1].secure).toEqual({
+      epoch: "epoch-one",
+      sessionId: "live-one",
+      method: "vault.save_login",
+      origin: "https://page.invalid",
+      site: "page.invalid",
+    });
   });
 
-  it('shows an assistant\'s computer handoff only when this executor owns it, with its bounded text', async () => {
-    snapshot.executor_epoch='epoch-one';
-    snapshot.open_requests=[
-      {id:'srq-handoff',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'r'.repeat(250),what_to_do:'Enter the code.'}},
-      {id:'srq-mirrored',method:'agent_interface.computer_handoff',params:{reason:'Mirrored',what_to_do:'Nothing'}},
-      {id:'srq-malformed',method:'agent_interface.computer_handoff',app_local_secure:true,params:{reason:'No action'}},
+  it("shows an assistant's computer handoff only when this executor owns it, with its bounded text", async () => {
+    snapshot.executor_epoch = "epoch-one";
+    snapshot.open_requests = [
+      {
+        id: "srq-handoff",
+        method: "agent_interface.computer_handoff",
+        app_local_secure: true,
+        params: { reason: "r".repeat(250), what_to_do: "Enter the code." },
+      },
+      {
+        id: "srq-mirrored",
+        method: "agent_interface.computer_handoff",
+        params: { reason: "Mirrored", what_to_do: "Nothing" },
+      },
+      {
+        id: "srq-malformed",
+        method: "agent_interface.computer_handoff",
+        app_local_secure: true,
+        params: { reason: "No action" },
+      },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.attention![0]).toEqual({id:'srq-handoff',kind:'computer',title:'Take over the computer?',detail:'r'.repeat(200),secure:undefined,
-      questions:undefined,computer:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Enter the code.'}});
-    expect(result.attention!.slice(1).map(request=>[request.kind,request.computer])).toEqual([['official',undefined],['official',undefined]]);
-    expect(result.activity.state).toBe('blocked');
+    const result = await runtime.conversation("shared");
+    expect(result.attention![0]).toEqual({
+      id: "srq-handoff",
+      kind: "computer",
+      title: "Take over the computer?",
+      detail: "r".repeat(200),
+      secure: undefined,
+      questions: undefined,
+      computer: {
+        epoch: "epoch-one",
+        sessionId: "live-one",
+        reason: "r".repeat(200),
+        whatToDo: "Enter the code.",
+      },
+    });
+    expect(result.attention!.slice(1).map((request) => [request.kind, request.computer])).toEqual([
+      ["official", undefined],
+      ["official", undefined],
+    ]);
+    expect(result.activity.state).toBe("blocked");
   });
 
-  it('shows an assistant\'s terminal request only when this executor owns it and its command is one visible line', async () => {
-    snapshot.executor_epoch='epoch-one';
-    const asks=(id:string,params:Record<string,unknown>,owned=true)=>({id,method:'agent_interface.terminal_request',...(owned?{app_local_secure:true}:{}),params});
-    snapshot.open_requests=[
-      asks('srq-term',{reason:'r'.repeat(250),what_to_do:'Run it, then press Done.',command:'sudo systemctl restart hermes'}),
-      asks('srq-bare',{reason:'No command',what_to_do:'Look around.'}),
-      asks('srq-mirrored',{reason:'Mirrored',what_to_do:'Nothing'},false),
-      asks('srq-malformed',{reason:'No action'}),
-      asks('srq-newline',{reason:'Runs on paste',what_to_do:'Press Done.',command:'ls\nrm -rf ~'}),
-      asks('srq-hidden',{reason:'Disguised',what_to_do:'Press Done.',command:'ls\u202e'}),
-      asks('srq-long',{reason:'Too long',what_to_do:'Press Done.',command:'x'.repeat(501)}),
-      asks('srq-typed',{reason:'Not text',what_to_do:'Press Done.',command:7}),
+  it("shows an assistant's terminal request only when this executor owns it and its command is one visible line", async () => {
+    snapshot.executor_epoch = "epoch-one";
+    const asks = (id: string, params: Record<string, unknown>, owned = true) => ({
+      id,
+      method: "agent_interface.terminal_request",
+      ...(owned ? { app_local_secure: true } : {}),
+      params,
+    });
+    snapshot.open_requests = [
+      asks("srq-term", {
+        reason: "r".repeat(250),
+        what_to_do: "Run it, then press Done.",
+        command: "sudo systemctl restart hermes",
+      }),
+      asks("srq-bare", { reason: "No command", what_to_do: "Look around." }),
+      asks("srq-mirrored", { reason: "Mirrored", what_to_do: "Nothing" }, false),
+      asks("srq-malformed", { reason: "No action" }),
+      asks("srq-newline", {
+        reason: "Runs on paste",
+        what_to_do: "Press Done.",
+        command: "ls\nrm -rf ~",
+      }),
+      asks("srq-hidden", { reason: "Disguised", what_to_do: "Press Done.", command: "ls\u202e" }),
+      asks("srq-long", { reason: "Too long", what_to_do: "Press Done.", command: "x".repeat(501) }),
+      asks("srq-typed", { reason: "Not text", what_to_do: "Press Done.", command: 7 }),
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.attention![0]).toEqual({id:'srq-term',kind:'terminal',title:'Use the terminal?',detail:'r'.repeat(200),secure:undefined,
-      questions:undefined,terminal:{epoch:'epoch-one',sessionId:'live-one',reason:'r'.repeat(200),whatToDo:'Run it, then press Done.',command:'sudo systemctl restart hermes'}});
-    expect(result.attention![1].terminal).toEqual({epoch:'epoch-one',sessionId:'live-one',reason:'No command',whatToDo:'Look around.'});
+    const result = await runtime.conversation("shared");
+    expect(result.attention![0]).toEqual({
+      id: "srq-term",
+      kind: "terminal",
+      title: "Use the terminal?",
+      detail: "r".repeat(200),
+      secure: undefined,
+      questions: undefined,
+      terminal: {
+        epoch: "epoch-one",
+        sessionId: "live-one",
+        reason: "r".repeat(200),
+        whatToDo: "Run it, then press Done.",
+        command: "sudo systemctl restart hermes",
+      },
+    });
+    expect(result.attention![1].terminal).toEqual({
+      epoch: "epoch-one",
+      sessionId: "live-one",
+      reason: "No command",
+      whatToDo: "Look around.",
+    });
     // Anything that is not an owned, well-formed ask stays an official-client request with no terminal card.
-    expect(result.attention!.slice(2).map(request=>[request.kind,request.terminal])).toEqual(Array(6).fill(['official',undefined]));
-    expect(result.activity.state).toBe('blocked');
+    expect(result.attention!.slice(2).map((request) => [request.kind, request.terminal])).toEqual(
+      Array(6).fill(["official", undefined]),
+    );
+    expect(result.activity.state).toBe("blocked");
   });
 
-  it('shows an assistant\'s connection request only when this executor owns it and names a requestable connection', async () => {
-    snapshot.executor_epoch='epoch-one';
-    snapshot.open_requests=[
-      {id:'srq-conn',method:'agent_interface.connection_request',app_local_secure:true,params:{connection:'google_workspace',reason:'r'.repeat(250)}},
-      {id:'srq-mirrored',method:'agent_interface.connection_request',params:{connection:'github',reason:'Mirrored'}},
-      {id:'srq-apple',method:'agent_interface.connection_request',app_local_secure:true,params:{connection:'apple',reason:'Calendars'}},
+  it("shows an assistant's connection request only when this executor owns it and names a requestable connection", async () => {
+    snapshot.executor_epoch = "epoch-one";
+    snapshot.open_requests = [
+      {
+        id: "srq-conn",
+        method: "agent_interface.connection_request",
+        app_local_secure: true,
+        params: { connection: "google_workspace", reason: "r".repeat(250) },
+      },
+      {
+        id: "srq-mirrored",
+        method: "agent_interface.connection_request",
+        params: { connection: "github", reason: "Mirrored" },
+      },
+      {
+        id: "srq-apple",
+        method: "agent_interface.connection_request",
+        app_local_secure: true,
+        params: { connection: "apple", reason: "Calendars" },
+      },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.attention![0]).toEqual({id:'srq-conn',kind:'connection',title:'Set up a connection?',detail:'r'.repeat(200),secure:undefined,
-      questions:undefined,connection:{epoch:'epoch-one',sessionId:'live-one',connectionId:'google_workspace',reason:'r'.repeat(200)}});
-    expect(result.attention!.slice(1).map(request=>[request.kind,request.connection])).toEqual([['official',undefined],['official',undefined]]);
+    const result = await runtime.conversation("shared");
+    expect(result.attention![0]).toEqual({
+      id: "srq-conn",
+      kind: "connection",
+      title: "Set up a connection?",
+      detail: "r".repeat(200),
+      secure: undefined,
+      questions: undefined,
+      connection: {
+        epoch: "epoch-one",
+        sessionId: "live-one",
+        connectionId: "google_workspace",
+        reason: "r".repeat(200),
+      },
+    });
+    expect(result.attention!.slice(1).map((request) => [request.kind, request.connection])).toEqual(
+      [
+        ["official", undefined],
+        ["official", undefined],
+      ],
+    );
   });
 
-  it('transmits credentials privately once and never forwards native secret-bearing error text',async()=>{
-    const payload={operation:'answer' as const,profile:'shared',requestId:'srq-proof',actor:'member-one',answer:{epoch:'epoch-one',sessionId:'live-one',method:'vault.code' as const,value:'123456'}};
-    const fetcher=vi.fn(async(_url: URL | string, _init?: RequestInit)=>Response.json({error:'private synthetic canary'}, {status:409}));
-    vi.stubGlobal('fetch',fetcher);
+  it("transmits credentials privately once and never forwards native secret-bearing error text", async () => {
+    const payload = {
+      operation: "answer" as const,
+      profile: "shared",
+      requestId: "srq-proof",
+      actor: "member-one",
+      answer: {
+        epoch: "epoch-one",
+        sessionId: "live-one",
+        method: "vault.code" as const,
+        value: "123456",
+      },
+    };
+    const fetcher = vi.fn(async (_url: URL | string, _init?: RequestInit) =>
+      Response.json({ error: "private synthetic canary" }, { status: 409 }),
+    );
+    vi.stubGlobal("fetch", fetcher);
     await runtime.status();
-    await expect(runtime.vaultRequest!(payload)).rejects.toMatchObject({statusCode:409,message:expect.not.stringContaining('private synthetic canary')});
+    await expect(runtime.vaultRequest!(payload)).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.not.stringContaining("private synthetic canary"),
+    });
     expect(fetcher).toHaveBeenCalledOnce();
     expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual(payload);
-    expect(new URL(fetcher.mock.calls[0][0]).pathname).toBe('/api/agent-interface/service/agent-interface/credentials');
-    expect(new Headers(fetcher.mock.calls[0][1]!.headers).get('Authorization')).toBe('Bearer '+token);
+    expect(new URL(fetcher.mock.calls[0][0]).pathname).toBe(
+      "/api/agent-interface/service/agent-interface/credentials",
+    );
+    expect(new Headers(fetcher.mock.calls[0][1]!.headers).get("Authorization")).toBe(
+      "Bearer " + token,
+    );
   });
 
-  it('bridges profile-scoped native speech and caps the returned audio', async () => {
+  it("bridges profile-scoped native speech and caps the returned audio", async () => {
     const fetcher = vi.fn(async (url: URL | string, _init?: RequestInit) => {
       const path = new URL(url).pathname;
-      if (path.endsWith('/transcribe')) return Response.json({ok:true,transcript:'Pick up milk',provider:'fixture'});
-      if (path.endsWith('/speak')) return Response.json({ok:true,data_url:'data:audio/mpeg;base64,' + Buffer.from('audio').toString('base64'),provider:'fixture'});
-      return Response.json({profiles:[]});
+      if (path.endsWith("/transcribe"))
+        return Response.json({ ok: true, transcript: "Pick up milk", provider: "fixture" });
+      if (path.endsWith("/speak"))
+        return Response.json({
+          ok: true,
+          data_url: "data:audio/mpeg;base64," + Buffer.from("audio").toString("base64"),
+          provider: "fixture",
+        });
+      return Response.json({ profiles: [] });
     });
-    vi.stubGlobal('fetch', fetcher);
-    expect(await runtime.transcribeVoice!('shared', {mime:'audio/webm',data:Buffer.from('recording')})).toEqual({text:'Pick up milk',provider:'fixture'});
-    const transcriptCall = fetcher.mock.calls.find(call => new URL(call[0]).pathname.endsWith('/transcribe'))!;
-    expect(new URL(transcriptCall[0]).searchParams.get('profile')).toBe('shared');
-    expect(JSON.parse(transcriptCall[1]!.body as string)).toEqual({data_url:'data:audio/webm;base64,cmVjb3JkaW5n',mime_type:'audio/webm'});
-    expect(await runtime.synthesizeVoice!('shared','Hi')).toEqual({data:Buffer.from('audio'),mime:'audio/mpeg',provider:'fixture'});
-    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(0);
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({ok:true,data_url:'data:audio/mpeg;base64,'+Buffer.alloc(8*1024*1024+1).toString('base64')})));
-    await expect(runtime.synthesizeVoice!('shared','Hi')).rejects.toThrow('oversized');
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      await runtime.transcribeVoice!("shared", {
+        mime: "audio/webm",
+        data: Buffer.from("recording"),
+      }),
+    ).toEqual({ text: "Pick up milk", provider: "fixture" });
+    const transcriptCall = fetcher.mock.calls.find((call) =>
+      new URL(call[0]).pathname.endsWith("/transcribe"),
+    )!;
+    expect(new URL(transcriptCall[0]).searchParams.get("profile")).toBe("shared");
+    expect(JSON.parse(transcriptCall[1]!.body as string)).toEqual({
+      data_url: "data:audio/webm;base64,cmVjb3JkaW5n",
+      mime_type: "audio/webm",
+    });
+    expect(await runtime.synthesizeVoice!("shared", "Hi")).toEqual({
+      data: Buffer.from("audio"),
+      mime: "audio/mpeg",
+      provider: "fixture",
+    });
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(0);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ok: true,
+          data_url:
+            "data:audio/mpeg;base64," + Buffer.alloc(8 * 1024 * 1024 + 1).toString("base64"),
+        }),
+      ),
+    );
+    await expect(runtime.synthesizeVoice!("shared", "Hi")).rejects.toThrow("oversized");
   });
-  it('reports unavailable native voice without exposing provider errors', async () => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'private-provider-secret'}, {status:400})));
-    await expect(runtime.transcribeVoice!('shared',{mime:'audio/webm',data:Buffer.from('recording')})).rejects.toMatchObject({statusCode:409,message:'Voice is unavailable. Check the speech provider in the native Hermes dashboard.'});
+  it("reports unavailable native voice without exposing provider errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ error: "private-provider-secret" }, { status: 400 })),
+    );
+    await expect(
+      runtime.transcribeVoice!("shared", { mime: "audio/webm", data: Buffer.from("recording") }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Voice is unavailable. Check the speech provider in the native Hermes dashboard.",
+    });
   });
-  it('passes native experience conflicts through the finite adapter', async () => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'Hermes memory changed. Reload before saving.'},{status:409})));
-    await expect(runtime.experienceRequest!({operation:'memory',profile:'shared'})).rejects.toMatchObject({statusCode:409,message:'Hermes memory changed. Reload before saving.'});
+  it("passes native experience conflicts through the finite adapter", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ error: "Hermes memory changed. Reload before saving." }, { status: 409 }),
+      ),
+    );
+    await expect(
+      runtime.experienceRequest!({ operation: "memory", profile: "shared" }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Hermes memory changed. Reload before saving.",
+    });
   });
 
-  it('preserves deliberate shared-computer busy and recovery explanations without exposing other RPC errors', async () => {
-    rpcErrors.set('agent-interface.computer', {code: 409, message: 'Another person controls the household computer. They must hand it back first.'});
-    await expect(runtime.computerRequest!({action: 'take', actorId: 'one', actorName: 'One', viewerId: 'fixture-viewer'}))
-      .rejects.toMatchObject({statusCode: 409, message: 'Another person controls the household computer. They must hand it back first.'});
-    rpcErrors.set('profiles.describe', {code: 409, message: 'private host details'});
-    await expect(runtime.tools('shared')).rejects.not.toMatchObject({message: 'private host details'});
+  it("preserves deliberate shared-computer busy and recovery explanations without exposing other RPC errors", async () => {
+    rpcErrors.set("agent-interface.computer", {
+      code: 409,
+      message: "Another person controls the household computer. They must hand it back first.",
+    });
+    await expect(
+      runtime.computerRequest!({
+        action: "take",
+        actorId: "one",
+        actorName: "One",
+        viewerId: "fixture-viewer",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Another person controls the household computer. They must hand it back first.",
+    });
+    rpcErrors.set("profiles.describe", { code: 409, message: "private host details" });
+    await expect(runtime.tools("shared")).rejects.not.toMatchObject({
+      message: "private host details",
+    });
   });
-  it('reads the native account catalog under profile scope and preserves custom aliases and unavailable models', async () => {
+  it("reads the native account catalog under profile scope and preserves custom aliases and unavailable models", async () => {
     beforeSend = (request, socket) => {
-      if (request.method !== 'model.options') return;
-      queueMicrotask(() => socket.receive({jsonrpc:'2.0',id:request.id,result:{provider:'custom:house',model:'current',providers:[
-        {slug:'house',name:'House provider',aliases:['custom:house','house'],authenticated:true,models:['current','other','other',null],unavailable_models:['other'],api_url:'https://private.invalid',api_key:'never-expose'},
-        {slug:'lost',name:'Disconnected',authenticated:false,models:['saved'],warning:'Reconnect this account'},
-      ]}}));
+      if (request.method !== "model.options") return;
+      queueMicrotask(() =>
+        socket.receive({
+          jsonrpc: "2.0",
+          id: request.id,
+          result: {
+            provider: "custom:house",
+            model: "current",
+            providers: [
+              {
+                slug: "house",
+                name: "House provider",
+                aliases: ["custom:house", "house"],
+                authenticated: true,
+                models: ["current", "other", "other", null],
+                unavailable_models: ["other"],
+                api_url: "https://private.invalid",
+                api_key: "never-expose",
+              },
+              {
+                slug: "lost",
+                name: "Disconnected",
+                authenticated: false,
+                models: ["saved"],
+                warning: "Reconnect this account",
+              },
+            ],
+          },
+        }),
+      );
     };
-    const result = await runtime.modelOptions!('shared');
-    expect(calls.find(call => call.method === 'model.options')?.params).toEqual({profile:'shared',explicit_only:true});
-    expect(result).toEqual({provider:'custom:house',model:'current',providers:[
-      {id:'house',name:'House provider',aliases:['custom:house','house'],authenticated:true,models:[{id:'current',name:'current',available:true},{id:'other',name:'other',available:false}]},
-      {id:'lost',name:'Disconnected',aliases:[],authenticated:false,warning:'Reconnect this account',models:[{id:'saved',name:'saved',available:false}]},
-    ]});
+    const result = await runtime.modelOptions!("shared");
+    expect(calls.find((call) => call.method === "model.options")?.params).toEqual({
+      profile: "shared",
+      explicit_only: true,
+    });
+    expect(result).toEqual({
+      provider: "custom:house",
+      model: "current",
+      providers: [
+        {
+          id: "house",
+          name: "House provider",
+          aliases: ["custom:house", "house"],
+          authenticated: true,
+          models: [
+            { id: "current", name: "current", available: true },
+            { id: "other", name: "other", available: false },
+          ],
+        },
+        {
+          id: "lost",
+          name: "Disconnected",
+          aliases: [],
+          authenticated: false,
+          warning: "Reconnect this account",
+          models: [{ id: "saved", name: "saved", available: false }],
+        },
+      ],
+    });
   });
-  describe('model display names',()=>{
-    const roster=()=>{beforeSend=(request,socket)=>{
-      if(request.method!=='profiles.list')return;
-      queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{profiles:[
-        {name:'shared',model:'claude-opus-5-5',provider:'anthropic'},{name:'custom',model:'house-model-7',provider:'house'},{name:'bare',model:'gpt-6.1-terra'}]}}));
-    };};
-    it('fills each assistant\'s model name from the add-on in one batch, and formats what the cache lacks',async()=>{
-      const fetcher=vi.fn(async(_url:URL|string,init?:RequestInit)=>Response.json({names:(JSON.parse(init!.body as string).models as {provider:string;model:string}[])
-        .map(row=>({...row,name:row.provider==='anthropic'?'Claude Opus 5.5 (latest)':null}))}));
-      vi.stubGlobal('fetch',fetcher);roster();
-      const bots=await runtime.listBots();
-      expect(bots.map(row=>row.modelName)).toEqual(['Claude Opus 5.5 (latest)','house-model-7','GPT-6.1-Terra']);
+  describe("model display names", () => {
+    const roster = () => {
+      beforeSend = (request, socket) => {
+        if (request.method !== "profiles.list") return;
+        queueMicrotask(() =>
+          socket.receive({
+            jsonrpc: "2.0",
+            id: request.id,
+            result: {
+              profiles: [
+                { name: "shared", model: "claude-opus-5-5", provider: "anthropic" },
+                { name: "custom", model: "house-model-7", provider: "house" },
+                { name: "bare", model: "gpt-6.1-terra" },
+              ],
+            },
+          }),
+        );
+      };
+    };
+    it("fills each assistant's model name from the add-on in one batch, and formats what the cache lacks", async () => {
+      const fetcher = vi.fn(async (_url: URL | string, init?: RequestInit) =>
+        Response.json({
+          names: (
+            JSON.parse(init!.body as string).models as { provider: string; model: string }[]
+          ).map((row) => ({
+            ...row,
+            name: row.provider === "anthropic" ? "Claude Opus 5.5 (latest)" : null,
+          })),
+        }),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      roster();
+      const bots = await runtime.listBots();
+      expect(bots.map((row) => row.modelName)).toEqual([
+        "Claude Opus 5.5 (latest)",
+        "house-model-7",
+        "GPT-6.1-Terra",
+      ]);
       expect(fetcher).toHaveBeenCalledOnce();
-      expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({operation:'model_names',profile:'default',models:[{provider:'anthropic',model:'claude-opus-5-5'},{provider:'house',model:'house-model-7'}]});
+      expect(JSON.parse(fetcher.mock.calls[0][1]!.body as string)).toEqual({
+        operation: "model_names",
+        profile: "default",
+        models: [
+          { provider: "anthropic", model: "claude-opus-5-5" },
+          { provider: "house", model: "house-model-7" },
+        ],
+      });
       await runtime.listBots();
       expect(fetcher).toHaveBeenCalledOnce();
     });
-    it('formats the slug when the add-on is older, without failing the roster',async()=>{
-      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({error:'Unknown experience operation.'},{status:400})));roster();
-      expect((await runtime.listBots()).map(row=>row.modelName)).toEqual(['Claude Opus 5.5','house-model-7','GPT-6.1-Terra']);
+    it("formats the slug when the add-on is older, without failing the roster", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({ error: "Unknown experience operation." }, { status: 400 }),
+        ),
+      );
+      roster();
+      expect((await runtime.listBots()).map((row) => row.modelName)).toEqual([
+        "Claude Opus 5.5",
+        "house-model-7",
+        "GPT-6.1-Terra",
+      ]);
     });
-    it('names catalog models with the add-on\'s names',async()=>{
-      vi.stubGlobal('fetch',vi.fn(async()=>Response.json({names:[{provider:'anthropic',model:'claude-opus-5-5',name:'Claude Opus 5.5 (latest)'},{provider:'anthropic',model:'claude-sonnet-5-5',name:null}]})));
-      beforeSend=(request,socket)=>{if(request.method==='model.options')queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result:{provider:'anthropic',model:'claude-opus-5-5',
-        providers:[{slug:'anthropic',name:'Anthropic',authenticated:true,models:['claude-opus-5-5','claude-sonnet-5-5']}]}}));};
-      const result=await runtime.modelOptions!('shared');
-      expect(result.providers[0].models.map(model=>model.name)).toEqual(['Claude Opus 5.5 (latest)','Claude Sonnet 5.5']);
+    it("names catalog models with the add-on's names", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          Response.json({
+            names: [
+              { provider: "anthropic", model: "claude-opus-5-5", name: "Claude Opus 5.5 (latest)" },
+              { provider: "anthropic", model: "claude-sonnet-5-5", name: null },
+            ],
+          }),
+        ),
+      );
+      beforeSend = (request, socket) => {
+        if (request.method === "model.options")
+          queueMicrotask(() =>
+            socket.receive({
+              jsonrpc: "2.0",
+              id: request.id,
+              result: {
+                provider: "anthropic",
+                model: "claude-opus-5-5",
+                providers: [
+                  {
+                    slug: "anthropic",
+                    name: "Anthropic",
+                    authenticated: true,
+                    models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+                  },
+                ],
+              },
+            }),
+          );
+      };
+      const result = await runtime.modelOptions!("shared");
+      expect(result.providers[0].models.map((model) => model.name)).toEqual([
+        "Claude Opus 5.5 (latest)",
+        "Claude Sonnet 5.5",
+      ]);
     });
   });
-  it('exposes real streamed reasoning and keeps working while a tool is running', async () => {
+  it("exposes real streamed reasoning and keeps working while a tool is running", async () => {
     snapshot.info.running = true;
-    await runtime.conversation('shared');
-    const event = (type:string,payload:Record<string,unknown>) => sockets[0].receive({method:'event',params:{session_id:'live-one',type,payload}});
-    event('message.start', {});
-    event('reasoning.delta', {text:'Exposed provider explanation.'});
-    event('status.update', {text:'Compressing context'});
-    event('thinking.delta', {text:'(⌐■_■) ruminating...'});
-    const waiting = await runtime.conversation('shared');
+    await runtime.conversation("shared");
+    const event = (type: string, payload: Record<string, unknown>) =>
+      sockets[0].receive({ method: "event", params: { session_id: "live-one", type, payload } });
+    event("message.start", {});
+    event("reasoning.delta", { text: "Exposed provider explanation." });
+    event("status.update", { text: "Compressing context" });
+    event("thinking.delta", { text: "(⌐■_■) ruminating..." });
+    const waiting = await runtime.conversation("shared");
     // The spinner line never replaces a real status.
-    expect(waiting.activity.detail).toBe('Compressing context');
-    expect(waiting.messages.at(-1)?.reasoning).toBe('Exposed provider explanation.');
-    event('tool.start', {tool_id:'call-one',name:'terminal',args:{command:'printf synthetic'}});
-    event('message.delta', {text:'A streamed answer'});
-    const working = await runtime.conversation('shared');
-    expect(working.activity).toMatchObject({state:'working',detail:'Using terminal'});
-    expect(working.messages.at(-1)).toMatchObject({text:'A streamed answer',reasoning:'Exposed provider explanation.'});
-    expect(working.toolCalls).toMatchObject([{id:'call-one',name:'terminal',arguments:'{\n  "command": "printf synthetic"\n}',status:'running'}]);
-    event('tool.complete', {tool_id:'call-one',name:'terminal',result:{output:'synthetic',exit_code:1,error:'Command failed'}});
-    const finishedTool = await runtime.conversation('shared');
-    expect(finishedTool.activity.state).toBe('thinking');
-    expect(finishedTool.toolCalls).toMatchObject([{id:'call-one',status:'failed',error:'Command failed'}]);
+    expect(waiting.activity.detail).toBe("Compressing context");
+    expect(waiting.messages.at(-1)?.reasoning).toBe("Exposed provider explanation.");
+    event("tool.start", {
+      tool_id: "call-one",
+      name: "terminal",
+      args: { command: "printf synthetic" },
+    });
+    event("message.delta", { text: "A streamed answer" });
+    const working = await runtime.conversation("shared");
+    expect(working.activity).toMatchObject({ state: "working", detail: "Using terminal" });
+    expect(working.messages.at(-1)).toMatchObject({
+      text: "A streamed answer",
+      reasoning: "Exposed provider explanation.",
+    });
+    expect(working.toolCalls).toMatchObject([
+      {
+        id: "call-one",
+        name: "terminal",
+        arguments: '{\n  "command": "printf synthetic"\n}',
+        status: "running",
+      },
+    ]);
+    event("tool.complete", {
+      tool_id: "call-one",
+      name: "terminal",
+      result: { output: "synthetic", exit_code: 1, error: "Command failed" },
+    });
+    const finishedTool = await runtime.conversation("shared");
+    expect(finishedTool.activity.state).toBe("thinking");
+    expect(finishedTool.toolCalls).toMatchObject([
+      { id: "call-one", status: "failed", error: "Command failed" },
+    ]);
     expect(finishedTool.toolCalls![0].startedAt).toBeDefined();
     expect(finishedTool.toolCalls![0].completedAt).toBeDefined();
   });
-  it('recovers running tool details and reasoning from an authoritative cold snapshot', async () => {
+  it("recovers running tool details and reasoning from an authoritative cold snapshot", async () => {
     snapshot.info.running = true;
-    snapshot.app_tool_calls = [{id:'run:call',name:'web_search',arguments:'{"query":"synthetic"}',status:'running'}];
-    snapshot.inflight = {reasoning:'Exposed native reasoning without answer text'};
-    const cold = await runtime.conversation('shared');
-    expect(cold.activity).toMatchObject({state:'working',detail:'Using web_search'});
+    snapshot.app_tool_calls = [
+      { id: "run:call", name: "web_search", arguments: '{"query":"synthetic"}', status: "running" },
+    ];
+    snapshot.inflight = { reasoning: "Exposed native reasoning without answer text" };
+    const cold = await runtime.conversation("shared");
+    expect(cold.activity).toMatchObject({ state: "working", detail: "Using web_search" });
     expect(cold.toolCalls).toEqual(snapshot.app_tool_calls);
-    expect(cold.messages.at(-1)).toMatchObject({text:'',reasoning:snapshot.inflight.reasoning});
+    expect(cold.messages.at(-1)).toMatchObject({
+      text: "",
+      reasoning: snapshot.inflight.reasoning,
+    });
   });
-  it('does not replay persisted segments of the running turn in the live reply', async () => {
+  it("does not replay persisted segments of the running turn in the live reply", async () => {
     snapshot.info.running = true;
-    snapshot.app_run_id = 'current-run';
+    snapshot.app_run_id = "current-run";
     snapshot.messages = [
-      {role:'user',row_id:1,text:'Describe it',app_run_id:'earlier-run'},
-      {role:'assistant',row_id:2,text:'A brown dog.',app_run_id:'earlier-run'},
-      {role:'user',row_id:3,text:'Join the NAS',app_run_id:'current-run'},
-      {role:'assistant',row_id:4,text:'Checking the NAS first.',reasoning:'Plan A.\nPlan B.',app_run_id:'current-run'},
-      {role:'tool',row_id:5,name:'terminal',tool_call_id:'call-one',content:'ok',app_run_id:'current-run'},
+      { role: "user", row_id: 1, text: "Describe it", app_run_id: "earlier-run" },
+      { role: "assistant", row_id: 2, text: "A brown dog.", app_run_id: "earlier-run" },
+      { role: "user", row_id: 3, text: "Join the NAS", app_run_id: "current-run" },
+      {
+        role: "assistant",
+        row_id: 4,
+        text: "Checking the NAS first.",
+        reasoning: "Plan A.\nPlan B.",
+        app_run_id: "current-run",
+      },
+      {
+        role: "tool",
+        row_id: 5,
+        name: "terminal",
+        tool_call_id: "call-one",
+        content: "ok",
+        app_run_id: "current-run",
+      },
     ];
-    snapshot.inflight = {user:'Join the NAS',assistant:'Checking the NAS first.',reasoning:'Plan A.\n\nPlan B.',streaming:true};
-    const between = await runtime.conversation('shared');
-    expect(between.messages.map(message => message.id)).not.toContain('live-one-inflight');
+    snapshot.inflight = {
+      user: "Join the NAS",
+      assistant: "Checking the NAS first.",
+      reasoning: "Plan A.\n\nPlan B.",
+      streaming: true,
+    };
+    const between = await runtime.conversation("shared");
+    expect(between.messages.map((message) => message.id)).not.toContain("live-one-inflight");
     // Streamed reasoning separates summary parts differently from the stored row.
-    snapshot.inflight = {...snapshot.inflight,assistant:'Checking the NAS first.\n\n    tailscale up',reasoning:'Plan A.\n\nPlan B.Verify the status.'};
+    snapshot.inflight = {
+      ...snapshot.inflight,
+      assistant: "Checking the NAS first.\n\n    tailscale up",
+      reasoning: "Plan A.\n\nPlan B.Verify the status.",
+    };
     hermesChanged();
-    const streaming = await runtime.conversation('shared');
-    expect(streaming.messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'    tailscale up',reasoning:'Verify the status.'});
-    snapshot.inflight = {user:'Join the NAS',assistant:'A rewritten answer',streaming:true};
+    const streaming = await runtime.conversation("shared");
+    expect(streaming.messages.at(-1)).toMatchObject({
+      id: "live-one-inflight",
+      text: "    tailscale up",
+      reasoning: "Verify the status.",
+    });
+    snapshot.inflight = { user: "Join the NAS", assistant: "A rewritten answer", streaming: true };
     hermesChanged();
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'A rewritten answer'});
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      text: "A rewritten answer",
+    });
   });
-  it('matches emoji and ignores earlier turns of a queued follow-up run', async () => {
+  it("matches emoji and ignores earlier turns of a queued follow-up run", async () => {
     snapshot.info.running = true;
-    snapshot.app_run_id = 'queued-run';
+    snapshot.app_run_id = "queued-run";
     snapshot.messages = [
-      {role:'user',row_id:1,text:'Check it',app_run_id:'queued-run'},
-      {role:'assistant',row_id:2,text:'Same opening.',app_run_id:'queued-run'},
-      {role:'user',row_id:3,text:'And the barn?',app_run_id:'queued-run'},
+      { role: "user", row_id: 1, text: "Check it", app_run_id: "queued-run" },
+      { role: "assistant", row_id: 2, text: "Same opening.", app_run_id: "queued-run" },
+      { role: "user", row_id: 3, text: "And the barn?", app_run_id: "queued-run" },
     ];
-    snapshot.inflight = {user:'And the barn?',assistant:'Same opening. Barn is fine.',streaming:true};
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Same opening. Barn is fine.'});
-    snapshot.messages.push({role:'assistant',row_id:4,text:'Looking 🔍 now.',app_run_id:'queued-run'});
-    snapshot.inflight = {user:'And the barn?',assistant:'Looking 🔍 now. Found it.',streaming:true};
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Found it.'});
+    snapshot.inflight = {
+      user: "And the barn?",
+      assistant: "Same opening. Barn is fine.",
+      streaming: true,
+    };
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      text: "Same opening. Barn is fine.",
+    });
+    snapshot.messages.push({
+      role: "assistant",
+      row_id: 4,
+      text: "Looking 🔍 now.",
+      app_run_id: "queued-run",
+    });
+    snapshot.inflight = {
+      user: "And the barn?",
+      assistant: "Looking 🔍 now. Found it.",
+      streaming: true,
+    };
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      text: "Found it.",
+    });
   });
-  it('keeps live text intact until the running turn has a persisted boundary', async () => {
+  it("keeps live text intact until the running turn has a persisted boundary", async () => {
     snapshot.info.running = true;
-    snapshot.app_run_id = 'image-run';
+    snapshot.app_run_id = "image-run";
     snapshot.messages = [
-      {role:'user',row_id:1,text:'Describe it',app_run_id:'earlier-run'},
-      {role:'assistant',row_id:2,text:'A brown dog.',app_run_id:'earlier-run'},
+      { role: "user", row_id: 1, text: "Describe it", app_run_id: "earlier-run" },
+      { role: "assistant", row_id: 2, text: "A brown dog.", app_run_id: "earlier-run" },
     ];
-    snapshot.inflight = {user:'',assistant:'A brown dog. Sitting in grass.',streaming:true};
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'A brown dog. Sitting in grass.'});
+    snapshot.inflight = { user: "", assistant: "A brown dog. Sitting in grass.", streaming: true };
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      id: "live-one-inflight",
+      text: "A brown dog. Sitting in grass.",
+    });
   });
-  it('does not repeat a finished reply that the snapshot still holds after history saved it', async () => {
+  it("does not repeat a finished reply that the snapshot still holds after history saved it", async () => {
     snapshot.messages = [
-      {role:'user',row_id:1,text:'Plan the week',app_run_id:'done-run'},
-      {role:'assistant',row_id:2,text:'',app_run_id:'done-run'},
-      {role:'tool',row_id:3,name:'clarify',tool_call_id:'ask',content:'Tuesday',app_run_id:'done-run'},
-      {role:'assistant',row_id:4,text:'Here is the plan for Tuesday.',app_run_id:'done-run'},
+      { role: "user", row_id: 1, text: "Plan the week", app_run_id: "done-run" },
+      { role: "assistant", row_id: 2, text: "", app_run_id: "done-run" },
+      {
+        role: "tool",
+        row_id: 3,
+        name: "clarify",
+        tool_call_id: "ask",
+        content: "Tuesday",
+        app_run_id: "done-run",
+      },
+      {
+        role: "assistant",
+        row_id: 4,
+        text: "Here is the plan for Tuesday.",
+        app_run_id: "done-run",
+      },
     ];
-    snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday.',streaming:false};
-    expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
+    snapshot.inflight = {
+      user: "Plan the week",
+      assistant: "Here is the plan for Tuesday.",
+      streaming: false,
+    };
+    expect((await runtime.conversation("shared")).messages.map((message) => message.id)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+    ]);
     // Text the stopped turn never saved still appears, without its saved opening.
-    snapshot.inflight = {user:'Plan the week',assistant:'Here is the plan for Tuesday. Then Wednesday',streaming:false};
+    snapshot.inflight = {
+      user: "Plan the week",
+      assistant: "Here is the plan for Tuesday. Then Wednesday",
+      streaming: false,
+    };
     hermesChanged();
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id:'live-one-inflight',text:'Then Wednesday'});
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      id: "live-one-inflight",
+      text: "Then Wednesday",
+    });
     // Saved display text drops the file references the snapshot's prompt still carries.
-    snapshot.inflight = {user:'Plan the week\n@file:"/staging/menu.pdf"',assistant:'Here is the plan for Tuesday.',streaming:false};
+    snapshot.inflight = {
+      user: 'Plan the week\n@file:"/staging/menu.pdf"',
+      assistant: "Here is the plan for Tuesday.",
+      streaming: false,
+    };
     hermesChanged();
-    expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1','2','3','4']);
+    expect((await runtime.conversation("shared")).messages.map((message) => message.id)).toEqual([
+      "1",
+      "2",
+      "3",
+      "4",
+    ]);
     // A snapshot for a prompt history has not saved yet keeps its whole text.
-    snapshot.inflight = {user:'And next week?',assistant:'Here is the plan for Tuesday. Next week too.',streaming:false};
+    snapshot.inflight = {
+      user: "And next week?",
+      assistant: "Here is the plan for Tuesday. Next week too.",
+      streaming: false,
+    };
     hermesChanged();
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({text:'Here is the plan for Tuesday. Next week too.'});
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      text: "Here is the plan for Tuesday. Next week too.",
+    });
   });
-  it('settles missed streamed completion without adding stale reasoning to canonical history', async () => {
+  it("settles missed streamed completion without adding stale reasoning to canonical history", async () => {
     snapshot.info.running = true;
-    await runtime.conversation('shared');
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'reasoning.delta',payload:{text:'Partial live explanation'}}});
+    await runtime.conversation("shared");
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "live-one",
+        type: "reasoning.delta",
+        payload: { text: "Partial live explanation" },
+      },
+    });
     snapshot.info.running = false;
     snapshot.inflight = null;
-    snapshot.messages = [{role:'assistant',row_id:8,text:'The durable answer',reasoning:'The complete exposed explanation'}];
-    const settled = await runtime.conversation('shared');
+    snapshot.messages = [
+      {
+        role: "assistant",
+        row_id: 8,
+        text: "The durable answer",
+        reasoning: "The complete exposed explanation",
+      },
+    ];
+    const settled = await runtime.conversation("shared");
     expect(settled.messages).toHaveLength(1);
-    expect(settled.messages[0]).toMatchObject({text:'The durable answer',reasoning:'The complete exposed explanation'});
+    expect(settled.messages[0]).toMatchObject({
+      text: "The durable answer",
+      reasoning: "The complete exposed explanation",
+    });
   });
-  it('drops old streamed detail when another turn begins during a disconnected gap', async () => {
+  it("drops old streamed detail when another turn begins during a disconnected gap", async () => {
     snapshot.info.running = true;
-    snapshot.app_run_id = 'old-run';
-    await runtime.conversation('shared');
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'reasoning.delta',payload:{text:'Old run partial reasoning'}}});
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'old-tool',name:'terminal'}}});
+    snapshot.app_run_id = "old-run";
+    await runtime.conversation("shared");
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "live-one",
+        type: "reasoning.delta",
+        payload: { text: "Old run partial reasoning" },
+      },
+    });
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "live-one",
+        type: "tool.start",
+        payload: { tool_id: "old-tool", name: "terminal" },
+      },
+    });
     sockets[0].close();
-    snapshot.app_run_id = 'different-run';
-    snapshot.inflight = {assistant:'',streaming:true};
-    snapshot.messages = [{role:'assistant',row_id:8,text:'Completed prior answer',reasoning:'Completed prior reasoning'}];
+    snapshot.app_run_id = "different-run";
+    snapshot.inflight = { assistant: "", streaming: true };
+    snapshot.messages = [
+      {
+        role: "assistant",
+        row_id: 8,
+        text: "Completed prior answer",
+        reasoning: "Completed prior reasoning",
+      },
+    ];
     await runtime.reconnect!();
-    const current = await runtime.conversation('shared');
+    const current = await runtime.conversation("shared");
     expect(current.messages).toHaveLength(1);
-    expect(current.messages[0].reasoning).toBe('Completed prior reasoning');
+    expect(current.messages[0].reasoning).toBe("Completed prior reasoning");
     expect(current.toolCalls).toEqual([]);
-    expect(current.activity.state).toBe('thinking');
+    expect(current.activity.state).toBe("thinking");
   });
-  it('names the tools that tool search ran through its bridge', async () => {
-    const bridged = {calls:[{name:'browser_vault',arguments:{action:'list'}},{name:'mcp_calendar_list_events',arguments:{}},{name:'browser_vault',arguments:{action:'fill'}}]};
+  it("names the tools that tool search ran through its bridge", async () => {
+    const bridged = {
+      calls: [
+        { name: "browser_vault", arguments: { action: "list" } },
+        { name: "mcp_calendar_list_events", arguments: {} },
+        { name: "browser_vault", arguments: { action: "fill" } },
+      ],
+    };
     snapshot.info.running = true;
-    await runtime.conversation('shared');
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'bridge-live',name:'tool_call',args:bridged}}});
+    await runtime.conversation("shared");
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "live-one",
+        type: "tool.start",
+        payload: { tool_id: "bridge-live", name: "tool_call", args: bridged },
+      },
+    });
     hermesChanged();
-    const live = await runtime.conversation('shared');
-    expect(live.activity.detail).toBe('Using browser_vault, mcp_calendar_list_events');
-    expect(live.toolCalls).toMatchObject([{id:'bridge-live',name:'browser_vault, mcp_calendar_list_events'}]);
+    const live = await runtime.conversation("shared");
+    expect(live.activity.detail).toBe("Using browser_vault, mcp_calendar_list_events");
+    expect(live.toolCalls).toMatchObject([
+      { id: "bridge-live", name: "browser_vault, mcp_calendar_list_events" },
+    ]);
     // Every form Hermes's own bridge normalizer accepts, plus one it rejects.
-    const forms = {batch:bridged, text:{calls:JSON.stringify(bridged.calls)}, single:{calls:{name:'image_generate',arguments:'{"prompt":"barn"}'}},
-      legacy:{name:'session_search',arguments:{query:'gate'}}, broken:'not json'};
-    snapshot.app_tool_calls = Object.entries(forms).map(([id, value]) => ({id, name:'tool_call', arguments:typeof value === 'string' ? value : JSON.stringify(value), status:'running'}));
+    const forms = {
+      batch: bridged,
+      text: { calls: JSON.stringify(bridged.calls) },
+      single: { calls: { name: "image_generate", arguments: '{"prompt":"barn"}' } },
+      legacy: { name: "session_search", arguments: { query: "gate" } },
+      broken: "not json",
+    };
+    snapshot.app_tool_calls = Object.entries(forms).map(([id, value]) => ({
+      id,
+      name: "tool_call",
+      arguments: typeof value === "string" ? value : JSON.stringify(value),
+      status: "running",
+    }));
     hermesChanged();
-    const cold = (await runtime.conversation('shared')).toolCalls!;
-    expect(cold.map(call => call.name)).toEqual(['browser_vault, mcp_calendar_list_events','browser_vault, mcp_calendar_list_events','image_generate','session_search','tool_call']);
+    const cold = (await runtime.conversation("shared")).toolCalls!;
+    expect(cold.map((call) => call.name)).toEqual([
+      "browser_vault, mcp_calendar_list_events",
+      "browser_vault, mcp_calendar_list_events",
+      "image_generate",
+      "session_search",
+      "tool_call",
+    ]);
     // A single call is shown as itself, so its own arguments are what renderers read.
-    expect(JSON.parse(cold[2].arguments!)).toEqual({prompt:'barn'});
-    expect(JSON.parse(cold[3].arguments!)).toEqual({query:'gate'});
-    expect(cold[4].arguments).toBe('not json');
-    snapshot.info.running = false; delete snapshot.app_tool_calls;
-    snapshot.messages = [{role:'tool',row_id:9,name:'tool_call',tool_call_id:'bridge-saved',args:{calls:[{name:'message_agent',arguments:{target:'planner',message:'Check the weather.'}}]},content:'{"ok":true}'},
-      {role:'tool',row_id:10,name:'tool_call',tool_call_id:'bridge-receipt',args:bridged,
-        app_tool_call:{id:'run:bridge-receipt',name:'tool_call',arguments:JSON.stringify(bridged),status:'completed'}}];
+    expect(JSON.parse(cold[2].arguments!)).toEqual({ prompt: "barn" });
+    expect(JSON.parse(cold[3].arguments!)).toEqual({ query: "gate" });
+    expect(cold[4].arguments).toBe("not json");
+    snapshot.info.running = false;
+    delete snapshot.app_tool_calls;
+    snapshot.messages = [
+      {
+        role: "tool",
+        row_id: 9,
+        name: "tool_call",
+        tool_call_id: "bridge-saved",
+        args: {
+          calls: [
+            {
+              name: "message_agent",
+              arguments: { target: "planner", message: "Check the weather." },
+            },
+          ],
+        },
+        content: '{"ok":true}',
+      },
+      {
+        role: "tool",
+        row_id: 10,
+        name: "tool_call",
+        tool_call_id: "bridge-receipt",
+        args: bridged,
+        app_tool_call: {
+          id: "run:bridge-receipt",
+          name: "tool_call",
+          arguments: JSON.stringify(bridged),
+          status: "completed",
+        },
+      },
+    ];
     hermesChanged();
-    const saved = await runtime.conversation('shared');
-    expect(saved.messages.map(message => [message.toolName, message.toolCall?.name])).toEqual([
-      ['message_agent','message_agent'],['browser_vault, mcp_calendar_list_events','browser_vault, mcp_calendar_list_events']]);
+    const saved = await runtime.conversation("shared");
+    expect(saved.messages.map((message) => [message.toolName, message.toolCall?.name])).toEqual([
+      ["message_agent", "message_agent"],
+      ["browser_vault, mcp_calendar_list_events", "browser_vault, mcp_calendar_list_events"],
+    ]);
     // The agent exchange card reads its recipient and text from the unwrapped arguments.
-    expect(JSON.parse(saved.messages[0].toolCall!.arguments!)).toEqual({target:'planner',message:'Check the weather.'});
+    expect(JSON.parse(saved.messages[0].toolCall!.arguments!)).toEqual({
+      target: "planner",
+      message: "Check the weather.",
+    });
   });
-  it('preserves durable actual tool input/output and does not keep an idle bot working', async () => {
-    snapshot.messages = [{role:'tool',row_id:7,name:'terminal',tool_call_id:'call-one',args:{command:'synthetic'},
-      app_tool_result:{output:'completed',exit_code:0},app_tool_call:{id:'run-one:call-one',name:'terminal',arguments:'{"command":"synthetic"}',status:'completed',result:'actual result',startedAt:'2026-09-30T00:00:00Z',completedAt:'2026-09-30T00:00:01Z'}}];
-    await runtime.conversation('shared');
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{tool_id:'later-call',name:'terminal'}}});
-    const idle = await runtime.conversation('shared');
-    expect(idle.activity.state).toBe('idle');
+  it("preserves durable actual tool input/output and does not keep an idle bot working", async () => {
+    snapshot.messages = [
+      {
+        role: "tool",
+        row_id: 7,
+        name: "terminal",
+        tool_call_id: "call-one",
+        args: { command: "synthetic" },
+        app_tool_result: { output: "completed", exit_code: 0 },
+        app_tool_call: {
+          id: "run-one:call-one",
+          name: "terminal",
+          arguments: '{"command":"synthetic"}',
+          status: "completed",
+          result: "actual result",
+          startedAt: "2026-09-30T00:00:00Z",
+          completedAt: "2026-09-30T00:00:01Z",
+        },
+      },
+    ];
+    await runtime.conversation("shared");
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "live-one",
+        type: "tool.start",
+        payload: { tool_id: "later-call", name: "terminal" },
+      },
+    });
+    const idle = await runtime.conversation("shared");
+    expect(idle.activity.state).toBe("idle");
     expect(idle.toolCalls).toEqual([]);
     expect(idle.messages[0].toolCall).toEqual(snapshot.messages[0].app_tool_call);
-    expect(idle.messages[0].text).toContain('completed');
+    expect(idle.messages[0].text).toContain("completed");
   });
-  it('reports both qualified actual revisions and rejects unknown revisions', async () => {
-    for (const actual of [revision, 'd23cc6b06455b8551fb6f61d3cad040a0e82f5b6']) {
-      await runtime.close(); reportedRevision = actual;
-      runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
-      expect(await runtime.status()).toMatchObject({connected: true, version: actual});
+  it("reports both qualified actual revisions and rejects unknown revisions", async () => {
+    for (const actual of [revision, "d23cc6b06455b8551fb6f61d3cad040a0e82f5b6"]) {
+      await runtime.close();
+      reportedRevision = actual;
+      runtime = createHermesRuntime({
+        files: testFiles(token),
+        url: "http://127.0.0.1:19119",
+        token,
+      });
+      expect(await runtime.status()).toMatchObject({ connected: true, version: actual });
     }
-    await runtime.close(); reportedRevision = 'unknown-unqualified-revision';
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'incompatible'});
+    await runtime.close();
+    reportedRevision = "unknown-unqualified-revision";
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+    });
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "incompatible" });
   });
 
-  it('uses a fresh single-use ticket and private prefixed bearer HTTP routes in service mode', async () => {
+  it("uses a fresh single-use ticket and private prefixed bearer HTTP routes in service mode", async () => {
     await runtime.close();
-    const fetch = vi.fn(async (url: URL | string) => String(url).endsWith('/service-ticket')
-      ? Response.json({ticket: 't'.repeat(43)}) : Response.json({profiles: []}));
-    vi.stubGlobal('fetch', fetch);
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
-    expect(await runtime.status()).toMatchObject({connected: true});
-    expect(sockets[0].url.searchParams.get('ticket')).toBe('t'.repeat(43));
-    expect(sockets[0].url.searchParams.has('token')).toBe(false);
-    expect(fetch.mock.calls[0][0].toString()).toBe('http://127.0.0.1:19119/api/agent-interface/service-ticket');
+    const fetch = vi.fn(async (url: URL | string) =>
+      String(url).endsWith("/service-ticket")
+        ? Response.json({ ticket: "t".repeat(43) })
+        : Response.json({ profiles: [] }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+      authMode: "service",
+    });
+    expect(await runtime.status()).toMatchObject({ connected: true });
+    expect(sockets[0].url.searchParams.get("ticket")).toBe("t".repeat(43));
+    expect(sockets[0].url.searchParams.has("token")).toBe(false);
+    expect(fetch.mock.calls[0][0].toString()).toBe(
+      "http://127.0.0.1:19119/api/agent-interface/service-ticket",
+    );
     const request = (fetch.mock.calls as unknown as [URL, RequestInit][])[0][1];
-    expect(request).toMatchObject({method: 'POST', headers: {Authorization: `Bearer ${token}`}});
-    await runtime.deleteBot('shared');
-    const deletion = (fetch.mock.calls as unknown as [URL, RequestInit][]).find(([url]) => url.pathname.includes('/service/profiles/'))!;
-    expect(deletion[0].pathname).toBe('/api/agent-interface/service/profiles/shared');
-    expect(new Headers(deletion[1].headers).get('Authorization')).toBe(`Bearer ${token}`);
-    expect(new Headers(deletion[1].headers).has('X-Hermes-Session-Token')).toBe(false);
+    expect(request).toMatchObject({
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await runtime.deleteBot("shared");
+    const deletion = (fetch.mock.calls as unknown as [URL, RequestInit][]).find(([url]) =>
+      url.pathname.includes("/service/profiles/"),
+    )!;
+    expect(deletion[0].pathname).toBe("/api/agent-interface/service/profiles/shared");
+    expect(new Headers(deletion[1].headers).get("Authorization")).toBe(`Bearer ${token}`);
+    expect(new Headers(deletion[1].headers).has("X-Hermes-Session-Token")).toBe(false);
     sockets[0].close();
     await runtime.reconnect!();
-    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/service-ticket'))).toHaveLength(2);
+    expect(
+      fetch.mock.calls.filter(([url]) => String(url).endsWith("/service-ticket")),
+    ).toHaveLength(2);
   });
 
-  it('fails service authentication without opening a socket when ticket issuance rejects the credential', async () => {
-    await runtime.close(); vi.stubGlobal('fetch', vi.fn(async () => Response.json({error: 'Denied'}, {status: 401})));
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unauthorized'});
+  it("fails service authentication without opening a socket when ticket issuance rejects the credential", async () => {
+    await runtime.close();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ error: "Denied" }, { status: 401 })),
+    );
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+      authMode: "service",
+    });
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "unauthorized" });
     expect(sockets).toHaveLength(0);
   });
-  it('names the profile it created when configuration fails and Hermes refuses to remove it',async()=>{
-    rpcErrors.set('profiles.configure',{code:-1,message:'Disk full'});
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {status: 403})));
-    const failure = await runtime.saveBot({name:'Night Ledger',instructions:'',model:'Inherited',shared:false}).catch((error: unknown) => error);
+  it("names the profile it created when configuration fails and Hermes refuses to remove it", async () => {
+    rpcErrors.set("profiles.configure", { code: -1, message: "Disk full" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
+    const failure = await runtime
+      .saveBot({ name: "Night Ledger", instructions: "", model: "Inherited", shared: false })
+      .catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(IncompleteCreationError);
-    expect(failure).toMatchObject({createdBotId: 'night-ledger'});
+    expect(failure).toMatchObject({ createdBotId: "night-ledger" });
   });
-  it('creates a bot without installing a machine-wide shell alias',async()=>{
-    await runtime.saveBot({name:'Shared',instructions:'Local instructions',model:'Inherited',shared:true});
-    expect(calls.find(call=>call.method==='profiles.create')?.params).toMatchObject({name:'shared',no_alias:true});
+  it("creates a bot without installing a machine-wide shell alias", async () => {
+    await runtime.saveBot({
+      name: "Shared",
+      instructions: "Local instructions",
+      model: "Inherited",
+      shared: true,
+    });
+    expect(calls.find((call) => call.method === "profiles.create")?.params).toMatchObject({
+      name: "shared",
+      no_alias: true,
+    });
   });
 
-  it('never signs text paths or unverified tool JSON, and trusts only executor artifact descriptors',async()=>{
-    snapshot.messages=[
-      {row_id:1,role:'user',text:'@file:/etc/passwd',app_artifacts:[{path:'/etc/passwd'}]},
-      {row_id:2,role:'assistant',text:'MEDIA:/etc/passwd',reasoning_content:'Exposed native reasoning content'},
-      {row_id:3,role:'tool',text:'tool result',app_tool_result:{path:'/etc/passwd'}},
-      {row_id:4,role:'user',text:'upload',app_attachments:[{path:'/workspace/staged/note.txt',name:'note.txt',mime:'text/plain'}]},
-      {row_id:5,role:'assistant',text:'output',reasoning:'Primary exposed reasoning',reasoning_content:'Secondary exposed reasoning',app_artifacts:[{path:'/workspace/output/result.png',name:'result.png',mime:'image/png'}]},
-      {row_id:6,role:'assistant',text:'answer',reasoning:{unsupported:'structured value'},reasoning_content:'Fallback exposed reasoning'},
-      {row_id:7,role:'assistant',text:'answer',reasoning_content:{unsupported:'structured value'}},
+  it("never signs text paths or unverified tool JSON, and trusts only executor artifact descriptors", async () => {
+    snapshot.messages = [
+      {
+        row_id: 1,
+        role: "user",
+        text: "@file:/etc/passwd",
+        app_artifacts: [{ path: "/etc/passwd" }],
+      },
+      {
+        row_id: 2,
+        role: "assistant",
+        text: "MEDIA:/etc/passwd",
+        reasoning_content: "Exposed native reasoning content",
+      },
+      { row_id: 3, role: "tool", text: "tool result", app_tool_result: { path: "/etc/passwd" } },
+      {
+        row_id: 4,
+        role: "user",
+        text: "upload",
+        app_attachments: [
+          { path: "/workspace/staged/note.txt", name: "note.txt", mime: "text/plain" },
+        ],
+      },
+      {
+        row_id: 5,
+        role: "assistant",
+        text: "output",
+        reasoning: "Primary exposed reasoning",
+        reasoning_content: "Secondary exposed reasoning",
+        app_artifacts: [
+          { path: "/workspace/output/result.png", name: "result.png", mime: "image/png" },
+        ],
+      },
+      {
+        row_id: 6,
+        role: "assistant",
+        text: "answer",
+        reasoning: { unsupported: "structured value" },
+        reasoning_content: "Fallback exposed reasoning",
+      },
+      {
+        row_id: 7,
+        role: "assistant",
+        text: "answer",
+        reasoning_content: { unsupported: "structured value" },
+      },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.messages.slice(0,3).flatMap(row=>row.files??[])).toEqual([]);
-    expect(result.files.map(file=>file.name)).toEqual(['note.txt','result.png']);
-    expect(result.files.every(file=>file.url?.startsWith('/api/files/'))).toBe(true);
-    expect(result.messages.map(message=>message.reasoning)).toEqual([undefined,'Exposed native reasoning content',undefined,undefined,'Primary exposed reasoning','Fallback exposed reasoning',undefined]);
+    const result = await runtime.conversation("shared");
+    expect(result.messages.slice(0, 3).flatMap((row) => row.files ?? [])).toEqual([]);
+    expect(result.files.map((file) => file.name)).toEqual(["note.txt", "result.png"]);
+    expect(result.files.every((file) => file.url?.startsWith("/api/files/"))).toBe(true);
+    expect(result.messages.map((message) => message.reasoning)).toEqual([
+      undefined,
+      "Exposed native reasoning content",
+      undefined,
+      undefined,
+      "Primary exposed reasoning",
+      "Fallback exposed reasoning",
+      undefined,
+    ]);
   });
 
-  it('renders image-only display text without exposing its native path or stripping ordinary user text',async()=>{
-    snapshot.messages=[
-      {row_id:1,role:'user',text:'@image:/workspace/staged/photo.png',app_request_id:'image-request',app_display_text:'',app_attachments:[{path:'/workspace/staged/photo.png',name:'photo.png',mime:'image/png'}]},
-      {row_id:2,role:'user',text:'Please explain @image:/an/example/path'},
+  it("renders image-only display text without exposing its native path or stripping ordinary user text", async () => {
+    snapshot.messages = [
+      {
+        row_id: 1,
+        role: "user",
+        text: "@image:/workspace/staged/photo.png",
+        app_request_id: "image-request",
+        app_display_text: "",
+        app_attachments: [
+          { path: "/workspace/staged/photo.png", name: "photo.png", mime: "image/png" },
+        ],
+      },
+      { row_id: 2, role: "user", text: "Please explain @image:/an/example/path" },
     ];
-    const result=await runtime.conversation('shared');
-    expect(result.messages[0]).toMatchObject({id:'image-request',text:'',files:[{name:'photo.png',mime:'image/png'}]});
-    expect(result.messages[1]).toMatchObject({text:'Please explain @image:/an/example/path',files:[]});
+    const result = await runtime.conversation("shared");
+    expect(result.messages[0]).toMatchObject({
+      id: "image-request",
+      text: "",
+      files: [{ name: "photo.png", mime: "image/png" }],
+    });
+    expect(result.messages[1]).toMatchObject({
+      text: "Please explain @image:/an/example/path",
+      files: [],
+    });
   });
 
-  it('answers a forged or unscoped file identifier with 404 before fetching a path',async()=>{
-    const body=Buffer.from(JSON.stringify({path:'/etc/passwd',name:'passwd',mime:'text/plain',botId:'shared'})).toString('base64url');
-    const unscoped=`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
-    const forged=`v2.test.${body}.${createHmac('sha256','guessed-secret').update(`v2.test.${body}`).digest('base64url')}`;
-    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
+  it("answers a forged or unscoped file identifier with 404 before fetching a path", async () => {
+    const body = Buffer.from(
+      JSON.stringify({ path: "/etc/passwd", name: "passwd", mime: "text/plain", botId: "shared" }),
+    ).toString("base64url");
+    const unscoped = `${body}.${createHmac("sha256", token).update(body).digest("base64url")}`;
+    const forged = `v2.test.${body}.${createHmac("sha256", "guessed-secret").update(`v2.test.${body}`).digest("base64url")}`;
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
     try {
-      const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
-      const fetch=vi.fn(async(_url:unknown)=>Response.json({profiles:[]}));vi.stubGlobal('fetch',fetch);
-      for (const id of [unscoped,forged,'not-an-identifier']) {
-        const response=await app.inject({url:`/api/files/${encodeURIComponent(id)}`,headers:{cookie:`session=${login.cookies[0].value}`}});
-        expect([response.statusCode,response.json().error,response.json().code]).toEqual([404,'That file is no longer available.','file_not_found']);
+      const login = await app.inject({
+        method: "POST",
+        url: "/api/auth/local",
+        headers: { origin: "http://127.0.0.1:3000" },
+        payload: { member: "one" },
+      });
+      const fetch = vi.fn(async (_url: unknown) => Response.json({ profiles: [] }));
+      vi.stubGlobal("fetch", fetch);
+      for (const id of [unscoped, forged, "not-an-identifier"]) {
+        const response = await app.inject({
+          url: `/api/files/${encodeURIComponent(id)}`,
+          headers: { cookie: `session=${login.cookies[0].value}` },
+        });
+        expect([response.statusCode, response.json().error, response.json().code]).toEqual([
+          404,
+          "That file is no longer available.",
+          "file_not_found",
+        ]);
       }
-      expect(fetch.mock.calls.map(([url])=>String(url)).filter(url=>url.includes('/api/files/download'))).toEqual([]);
-    } finally { await app.close(); }
+      expect(
+        fetch.mock.calls
+          .map(([url]) => String(url))
+          .filter((url) => url.includes("/api/files/download")),
+      ).toEqual([]);
+    } finally {
+      await app.close();
+    }
   });
 
-  it('rejects invalid or cross-bot draft files before native admission', async () => {
-    const invalid = await runtime.submit(input([{id:'a.b',name:'old.png',mime:'image/png'}]));
-    expect(invalid.status).toBe('rejected');
-    expect(invalid.message).toContain('attach the file again');
-    const file = await runtime.upload('another-bot', {name:'photo.png',mime:'image/png',data:Buffer.from('image')});
-    expect((await runtime.submit(input([file]))).status).toBe('rejected');
-    expect(calls.some(call => call.method === 'agent-interface.submit')).toBe(false);
+  it("rejects invalid or cross-bot draft files before native admission", async () => {
+    const invalid = await runtime.submit(
+      input([{ id: "a.b", name: "old.png", mime: "image/png" }]),
+    );
+    expect(invalid.status).toBe("rejected");
+    expect(invalid.message).toContain("attach the file again");
+    const file = await runtime.upload("another-bot", {
+      name: "photo.png",
+      mime: "image/png",
+      data: Buffer.from("image"),
+    });
+    expect((await runtime.submit(input([file]))).status).toBe("rejected");
+    expect(calls.some((call) => call.method === "agent-interface.submit")).toBe(false);
   });
 
-  it('creates disabled routines atomically and resumes through the native lifecycle endpoint', async () => {
-    const requests: {url:string; method:string; body:Record<string,any>}[] = [];
-    let job = {id:'job-one',enabled:false,state:'paused'};
-    vi.stubGlobal('fetch', vi.fn(async (url:URL, init:RequestInit) => {
-      requests.push({url:String(url),method:init.method!,body:JSON.parse(bodyText(init.body || '{}'))});
-      if (String(url).includes('/resume?')) job = {...job,enabled:true,state:'scheduled'};
-      if (String(url).includes('/pause?')) job = {...job,enabled:false,state:'paused'};
-      return Response.json(job);
-    }));
-    const routine = {botId:'shared',name:'Morning',prompt:'A useful reminder',schedule:'1h',enabled:false};
+  it("creates disabled routines atomically and resumes through the native lifecycle endpoint", async () => {
+    const requests: { url: string; method: string; body: Record<string, any> }[] = [];
+    let job = { id: "job-one", enabled: false, state: "paused" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init: RequestInit) => {
+        requests.push({
+          url: String(url),
+          method: init.method!,
+          body: JSON.parse(bodyText(init.body || "{}")),
+        });
+        if (String(url).includes("/resume?")) job = { ...job, enabled: true, state: "scheduled" };
+        if (String(url).includes("/pause?")) job = { ...job, enabled: false, state: "paused" };
+        return Response.json(job);
+      }),
+    );
+    const routine = {
+      botId: "shared",
+      name: "Morning",
+      prompt: "A useful reminder",
+      schedule: "1h",
+      enabled: false,
+    };
     expect((await runtime.saveRoutine(routine)).enabled).toBe(false);
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({method:'POST',body:{paused:true,context_from:['self'],deliver:'bot-chat:shared'}});
-    expect(requests[0].url.endsWith('/api/cron/jobs?profile=shared')).toBe(true);
-    expect((await runtime.saveRoutine({...routine,enabled:true},'job-one')).enabled).toBe(true);
-    expect(requests[1].body.updates).not.toHaveProperty('paused');
-    expect(requests[2].url.endsWith('/api/cron/jobs/job-one/resume?profile=shared')).toBe(true);
-    expect((await runtime.saveRoutine(routine,'job-one')).enabled).toBe(false);
-    expect(requests[4].url.endsWith('/api/cron/jobs/job-one/pause?profile=shared')).toBe(true);
+    expect(requests[0]).toMatchObject({
+      method: "POST",
+      body: { paused: true, context_from: ["self"], deliver: "bot-chat:shared" },
+    });
+    expect(requests[0].url.endsWith("/api/cron/jobs?profile=shared")).toBe(true);
+    expect((await runtime.saveRoutine({ ...routine, enabled: true }, "job-one")).enabled).toBe(
+      true,
+    );
+    expect(requests[1].body.updates).not.toHaveProperty("paused");
+    expect(requests[2].url.endsWith("/api/cron/jobs/job-one/resume?profile=shared")).toBe(true);
+    expect((await runtime.saveRoutine(routine, "job-one")).enabled).toBe(false);
+    expect(requests[4].url.endsWith("/api/cron/jobs/job-one/pause?profile=shared")).toBe(true);
   });
 
-  it('round-trips advanced native routine fields and preserves omitted updates', async () => {
-    const native = {id:'abc123',name:'[bot:shared] Morning',prompt:'',schedule_display:'1h',enabled:true,
-      skills:['weather'],model:'chosen-model',provider:'chosen-provider',enabled_toolsets:[],
-      script:'reports/morning.py',no_agent:true,context_from:['self','def456'],
-      monitor_url:'https://example.invalid/check',reasoning_effort:'high',deliver:'bot-chat:shared'};
-    const requests: {method:string;body:Record<string,any>}[]=[];
-    vi.stubGlobal('fetch',vi.fn(async (_url:URL, init:RequestInit = {}) => {
-      requests.push({method:init.method ?? 'GET',body:JSON.parse(bodyText(init.body || '{}'))});
-      return Response.json(init.method ? native : [native]);
-    }));
+  it("round-trips advanced native routine fields and preserves omitted updates", async () => {
+    const native = {
+      id: "abc123",
+      name: "[bot:shared] Morning",
+      prompt: "",
+      schedule_display: "1h",
+      enabled: true,
+      skills: ["weather"],
+      model: "chosen-model",
+      provider: "chosen-provider",
+      enabled_toolsets: [],
+      script: "reports/morning.py",
+      no_agent: true,
+      context_from: ["self", "def456"],
+      monitor_url: "https://example.invalid/check",
+      reasoning_effort: "high",
+      deliver: "bot-chat:shared",
+    };
+    const requests: { method: string; body: Record<string, any> }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL, init: RequestInit = {}) => {
+        requests.push({
+          method: init.method ?? "GET",
+          body: JSON.parse(bodyText(init.body || "{}")),
+        });
+        return Response.json(init.method ? native : [native]);
+      }),
+    );
     const [routine] = await runtime.routines();
-    expect(routine).toMatchObject({skills:['weather'],model:'chosen-model',provider:'chosen-provider',
-      enabledToolsets:[],script:'reports/morning.py',noAgent:true,contextFrom:['self','def456']});
-    await runtime.saveRoutine({botId:'shared',name:'Renamed',prompt:'',schedule:'1h',enabled:true},routine.id);
-    expect(requests.at(-1)?.body.updates).toEqual({name:'[bot:shared] Renamed',prompt:'',schedule:'1h'});
-    await runtime.saveRoutine({botId:'shared',name:'New',prompt:'',schedule:'1h',enabled:true,
-      skills:['weather'],model:'chosen-model',provider:'chosen-provider',enabledToolsets:['file'],
-      script:'morning.py',noAgent:true,contextFrom:['self','def456']});
-    expect(requests.at(-1)?.body).toMatchObject({skills:['weather'],model:'chosen-model',provider:'chosen-provider',
-      enabled_toolsets:['file'],script:'morning.py',no_agent:true,context_from:['self','def456'],paused:false});
-    await runtime.saveRoutine({botId:'shared',name:'Clear',prompt:'Check',schedule:'1h',enabled:true,
-      skills:[],model:null,provider:null,enabledToolsets:null,script:null,noAgent:false,contextFrom:[]},routine.id);
-    expect(requests.at(-1)?.body.updates).toMatchObject({skills:[],model:null,provider:null,
-      enabled_toolsets:null,script:null,no_agent:false,context_from:[]});
+    expect(routine).toMatchObject({
+      skills: ["weather"],
+      model: "chosen-model",
+      provider: "chosen-provider",
+      enabledToolsets: [],
+      script: "reports/morning.py",
+      noAgent: true,
+      contextFrom: ["self", "def456"],
+    });
+    await runtime.saveRoutine(
+      { botId: "shared", name: "Renamed", prompt: "", schedule: "1h", enabled: true },
+      routine.id,
+    );
+    expect(requests.at(-1)?.body.updates).toEqual({
+      name: "[bot:shared] Renamed",
+      prompt: "",
+      schedule: "1h",
+    });
+    await runtime.saveRoutine({
+      botId: "shared",
+      name: "New",
+      prompt: "",
+      schedule: "1h",
+      enabled: true,
+      skills: ["weather"],
+      model: "chosen-model",
+      provider: "chosen-provider",
+      enabledToolsets: ["file"],
+      script: "morning.py",
+      noAgent: true,
+      contextFrom: ["self", "def456"],
+    });
+    expect(requests.at(-1)?.body).toMatchObject({
+      skills: ["weather"],
+      model: "chosen-model",
+      provider: "chosen-provider",
+      enabled_toolsets: ["file"],
+      script: "morning.py",
+      no_agent: true,
+      context_from: ["self", "def456"],
+      paused: false,
+    });
+    await runtime.saveRoutine(
+      {
+        botId: "shared",
+        name: "Clear",
+        prompt: "Check",
+        schedule: "1h",
+        enabled: true,
+        skills: [],
+        model: null,
+        provider: null,
+        enabledToolsets: null,
+        script: null,
+        noAgent: false,
+        contextFrom: [],
+      },
+      routine.id,
+    );
+    expect(requests.at(-1)?.body.updates).toMatchObject({
+      skills: [],
+      model: null,
+      provider: null,
+      enabled_toolsets: null,
+      script: null,
+      no_agent: false,
+      context_from: [],
+    });
   });
 
-  it('exposes native profile-script validation without retrying the mutation', async () => {
-    const fetch = vi.fn(async () => Response.json({detail:'script must be inside the profile scripts directory'}, {status:400}));
-    vi.stubGlobal('fetch',fetch);
-    await expect(runtime.saveRoutine({botId:'shared',name:'Script',prompt:'',schedule:'1h',enabled:false,
-      noAgent:true,script:'echo dangerous command'})).rejects.toMatchObject({statusCode:400,message:'script must be inside the profile scripts directory'});
+  it("exposes native profile-script validation without retrying the mutation", async () => {
+    const fetch = vi.fn(async () =>
+      Response.json(
+        { detail: "script must be inside the profile scripts directory" },
+        { status: 400 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      runtime.saveRoutine({
+        botId: "shared",
+        name: "Script",
+        prompt: "",
+        schedule: "1h",
+        enabled: false,
+        noAgent: true,
+        script: "echo dangerous command",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      message: "script must be inside the profile scripts directory",
+    });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('recovers disconnected transport state from an authoritative idle snapshot',async()=>{
-    await runtime.conversation('shared');
-    snapshot.info.running=true;
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'tool.start',payload:{name:'terminal'}}});
-    expect((await runtime.conversation('shared')).activity.state).toBe('working');
+  it("recovers disconnected transport state from an authoritative idle snapshot", async () => {
+    await runtime.conversation("shared");
+    snapshot.info.running = true;
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "tool.start", payload: { name: "terminal" } },
+    });
+    expect((await runtime.conversation("shared")).activity.state).toBe("working");
     sockets[0].close();
-    snapshot.info.running=false;
+    snapshot.info.running = false;
     await runtime.reconnect!();
-    expect((await runtime.conversation('shared')).activity.state).toBe('idle');
+    expect((await runtime.conversation("shared")).activity.state).toBe("idle");
     expect(sockets).toHaveLength(2);
   });
 
-  it('tells watchers when an opened conversation changes, and every watcher when the connection does',async()=>{
-    const changes:string[]=[];
-    const stopShared=runtime.watch!('shared',()=>changes.push('shared'));
-    runtime.watch!('routine-bot',()=>changes.push('routine-bot'));
-    await runtime.conversation('shared');
+  it("tells watchers when an opened conversation changes, and every watcher when the connection does", async () => {
+    const changes: string[] = [];
+    const stopShared = runtime.watch!("shared", () => changes.push("shared"));
+    runtime.watch!("routine-bot", () => changes.push("routine-bot"));
+    await runtime.conversation("shared");
     // The new verified connection may have missed frames; everyone reloads.
-    expect(changes).toEqual(['shared','routine-bot']);
-    changes.length=0;
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'message.delta',payload:{text:'Streaming'}}});
-    sockets[0].receive({jsonrpc:'2.0',id:'srq-one',method:'approval',params:{session_id:'live-one',description:'Native request'}});
+    expect(changes).toEqual(["shared", "routine-bot"]);
+    changes.length = 0;
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.delta", payload: { text: "Streaming" } },
+    });
+    sockets[0].receive({
+      jsonrpc: "2.0",
+      id: "srq-one",
+      method: "approval",
+      params: { session_id: "live-one", description: "Native request" },
+    });
     // A session this app never opened belongs to no watched conversation.
-    sockets[0].receive({method:'event',params:{session_id:'another-client',type:'message.delta',payload:{text:'Elsewhere'}}});
-    expect(changes).toEqual(['shared','shared']);
-    changes.length=0;
+    sockets[0].receive({
+      method: "event",
+      params: {
+        session_id: "another-client",
+        type: "message.delta",
+        payload: { text: "Elsewhere" },
+      },
+    });
+    expect(changes).toEqual(["shared", "shared"]);
+    changes.length = 0;
     // Routine deliveries settle outside the session's frames.
-    await runtime.discoverEvents('1');
-    expect(changes).toEqual(['routine-bot']);
-    changes.length=0;
+    await runtime.discoverEvents("1");
+    expect(changes).toEqual(["routine-bot"]);
+    changes.length = 0;
     stopShared();
     sockets[0].close();
-    expect(changes).toEqual(['routine-bot']);
-    changes.length=0;
+    expect(changes).toEqual(["routine-bot"]);
+    changes.length = 0;
     // Failed attempts during an outage carried no frames, so nobody reloads for them.
-    connectionFails=true;
-    await expect(runtime.reconnect!()).resolves.toMatchObject({connected:false});
+    connectionFails = true;
+    await expect(runtime.reconnect!()).resolves.toMatchObject({ connected: false });
     expect(sockets.length).toBeGreaterThan(1);
     expect(changes).toEqual([]);
   });
 
-  it('does not resume or create canonical work when the durable add-on contract is absent',async()=>{
-    addonReady=false;
-    await expect(runtime.conversation('shared')).rejects.toThrow('verified durable Hermes add-on');
-    expect(calls.some(call=>['session.resume','session.create','agent-interface.open'].includes(call.method))).toBe(false);
+  it("does not resume or create canonical work when the durable add-on contract is absent", async () => {
+    addonReady = false;
+    await expect(runtime.conversation("shared")).rejects.toThrow("verified durable Hermes add-on");
+    expect(
+      calls.some((call) =>
+        ["session.resume", "session.create", "agent-interface.open"].includes(call.method),
+      ),
+    ).toBe(false);
     expect((await runtime.capabilities()).chat.supported).toBe(false);
   });
 
-  it('rediscovers capabilities after an initially disconnected gateway recovers',async()=>{
-    connectionFails=true;
+  it("rediscovers capabilities after an initially disconnected gateway recovers", async () => {
+    connectionFails = true;
     expect((await runtime.capabilities()).chat.supported).toBe(false);
-    connectionFails=false;
+    connectionFails = false;
     expect((await runtime.reconnect!()).connected).toBe(true);
     expect((await runtime.capabilities()).chat.supported).toBe(true);
   });
 
-  it.each(['approval','clarify'])('removes resolved %s cards when a fresh native snapshot omits empty open requests',async(method)=>{
-    await runtime.conversation('shared');
-    const request={id:'srq-one',method,params:{session_id:'live-one',description:'Native request'}};
-    sockets[0].receive(request);snapshot.open_requests=[request];snapshot.info.running=true;
-    hermesChanged();
-    const waiting=await runtime.conversation('shared');
-    expect(method==='approval'?waiting.approvals:waiting.attention).toHaveLength(1);
-    delete snapshot.open_requests;snapshot.info.running=false;
-    hermesChanged();
-    const settled=await runtime.conversation('shared');
-    expect(settled.approvals).toEqual([]);expect(settled.attention).toEqual([]);expect(settled.activity.state).toBe('idle');
+  it.each(["approval", "clarify"])(
+    "removes resolved %s cards when a fresh native snapshot omits empty open requests",
+    async (method) => {
+      await runtime.conversation("shared");
+      const request = {
+        id: "srq-one",
+        method,
+        params: { session_id: "live-one", description: "Native request" },
+      };
+      sockets[0].receive(request);
+      snapshot.open_requests = [request];
+      snapshot.info.running = true;
+      hermesChanged();
+      const waiting = await runtime.conversation("shared");
+      expect(method === "approval" ? waiting.approvals : waiting.attention).toHaveLength(1);
+      delete snapshot.open_requests;
+      snapshot.info.running = false;
+      hermesChanged();
+      const settled = await runtime.conversation("shared");
+      expect(settled.approvals).toEqual([]);
+      expect(settled.attention).toEqual([]);
+      expect(settled.activity.state).toBe("idle");
+    },
+  );
+
+  it("projects durable interrupted task identity over a cold idle snapshot", async () => {
+    snapshot.app_interruption = { requestId: "admission-one", runId: "task-one" };
+    const result = await runtime.conversation("shared");
+    expect(result.sessionId).toBe("stored-one");
+    expect(result.activity).toEqual({ state: "interrupted", runId: "task-one" });
   });
 
-  it('projects durable interrupted task identity over a cold idle snapshot',async()=>{
-    snapshot.app_interruption={requestId:'admission-one',runId:'task-one'};
-    const result=await runtime.conversation('shared');
-    expect(result.sessionId).toBe('stored-one');
-    expect(result.activity).toEqual({state:'interrupted',runId:'task-one'});
+  it("keeps a turn-completed task active until its durable root actually settles", async () => {
+    await runtime.conversation("shared");
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.complete", payload: { status: "complete" } },
+    });
+    snapshot.app_run_id = "task-one";
+    hermesChanged();
+    expect((await runtime.conversation("shared")).activity).toEqual({
+      state: "thinking",
+      runId: "task-one",
+    });
+    delete snapshot.app_run_id;
+    snapshot.app_task_state = "done";
+    hermesChanged();
+    expect((await runtime.conversation("shared")).activity.state).toBe("done");
   });
 
-  it('keeps a turn-completed task active until its durable root actually settles',async()=>{
-    await runtime.conversation('shared');
-    sockets[0].receive({method:'event',params:{session_id:'live-one',type:'message.complete',payload:{status:'complete'}}});
-    snapshot.app_run_id='task-one';
-    hermesChanged();
-    expect((await runtime.conversation('shared')).activity).toEqual({state:'thinking',runId:'task-one'});
-    delete snapshot.app_run_id;snapshot.app_task_state='done';
-    hermesChanged();
-    expect((await runtime.conversation('shared')).activity.state).toBe('done');
-  });
-
-  it('forwards an image-only prompt and explicit reviewed interruption without inventing text',async()=>{
-    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
-    expect((await runtime.submit({...input([file]),reviewedInterruption:true})).status).toBe('accepted');
-    const submission=calls.find(call=>call.method==='agent-interface.submit')!;
-    expect(submission.params.text).toBe('');
+  it("forwards an image-only prompt and explicit reviewed interruption without inventing text", async () => {
+    const file = await runtime.upload("shared", {
+      name: "portrait.png",
+      mime: "image/png",
+      data: Buffer.from("test image"),
+    });
+    expect((await runtime.submit({ ...input([file]), reviewedInterruption: true })).status).toBe(
+      "accepted",
+    );
+    const submission = calls.find((call) => call.method === "agent-interface.submit")!;
+    expect(submission.params.text).toBe("");
     expect(submission.params.reviewed_interruption).toBe(true);
-    expect(submission.params.attachments[0]).toMatchObject({path:'/workspace/staged/portrait.png',mime:'image/png',kind:'upload'});
+    expect(submission.params.attachments[0]).toMatchObject({
+      path: "/workspace/staged/portrait.png",
+      mime: "image/png",
+      kind: "upload",
+    });
   });
 
-  it('definitely rejects a busy image instead of silently dropping it, even with altered client MIME',async()=>{
-    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
-    snapshot.info.running=true;
-    const result=await runtime.steer({...input([{...file,mime:'text/plain'}]),text:'Use this image'});
-    expect(result.status).toBe('rejected');
-    expect(result.message).toContain('Keep this draft');
-    expect(calls.some(call=>call.method==='agent-interface.submit')).toBe(false);
+  it("definitely rejects a busy image instead of silently dropping it, even with altered client MIME", async () => {
+    const file = await runtime.upload("shared", {
+      name: "portrait.png",
+      mime: "image/png",
+      data: Buffer.from("test image"),
+    });
+    snapshot.info.running = true;
+    const result = await runtime.steer({
+      ...input([{ ...file, mime: "text/plain" }]),
+      text: "Use this image",
+    });
+    expect(result.status).toBe("rejected");
+    expect(result.message).toContain("Keep this draft");
+    expect(calls.some((call) => call.method === "agent-interface.submit")).toBe(false);
   });
 
-  it('copies a registered portrait to the native profile asset and preserves unrelated metadata',async()=>{
-    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new Uint8Array([137,80,78,71]))));
-    await runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!});
-    expect(calls.find(call=>call.method==='profiles.set_asset')?.params).toMatchObject({name:'shared',asset:'avatar',data:'data:image/png;base64,iVBORw=='});
-    const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
-    expect(metadata?.ui_meta.agent_interface.unrelated).toBe('preserve');
+  it("copies a registered portrait to the native profile asset and preserves unrelated metadata", async () => {
+    const file = await runtime.upload("shared", {
+      name: "portrait.png",
+      mime: "image/png",
+      data: Buffer.from("test image"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]))),
+    );
+    await runtime.setAvatar!("shared", { mode: "portrait", origin: "uploaded", src: file.url! });
+    expect(calls.find((call) => call.method === "profiles.set_asset")?.params).toMatchObject({
+      name: "shared",
+      asset: "avatar",
+      data: "data:image/png;base64,iVBORw==",
+    });
+    const metadata = calls.find((call) => call.method === "profiles.configure")?.params;
+    expect(metadata?.ui_meta.agent_interface.unrelated).toBe("preserve");
     expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
   });
 
-  it('refuses an oversized file from its declared length before reading it',async()=>{
-    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
-    const pull=vi.fn(),cancel=vi.fn();
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream({pull,cancel},{highWaterMark:0}),{headers:{'Content-Length':String(11)}})));
-    await expect(runtime.download(file.id,10)).rejects.toMatchObject({statusCode:502,code:'file_too_large',message:expect.stringContaining('archive.zip is larger than 10 B')});
-    expect([pull.mock.calls.length,cancel.mock.calls.length]).toEqual([0,1]);
+  it("refuses an oversized file from its declared length before reading it", async () => {
+    const file = await runtime.upload("shared", {
+      name: "archive.zip",
+      mime: "application/zip",
+      data: Buffer.from("zip"),
+    });
+    const pull = vi.fn(),
+      cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+            headers: { "Content-Length": String(11) },
+          }),
+      ),
+    );
+    await expect(runtime.download(file.id, 10)).rejects.toMatchObject({
+      statusCode: 502,
+      code: "file_too_large",
+      message: expect.stringContaining("archive.zip is larger than 10 B"),
+    });
+    expect([pull.mock.calls.length, cancel.mock.calls.length]).toEqual([0, 1]);
   });
 
-  it('stops streaming a file without a declared length once it passes the cap',async()=>{
-    const file=await runtime.upload('shared',{name:'archive.zip',mime:'application/zip',data:Buffer.from('zip')});
-    let sent=0;
-    const body=new ReadableStream<Uint8Array>({pull(controller){sent++;controller.enqueue(new Uint8Array(4));}});
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(body)));
-    const download=await runtime.download(file.id,10);
-    const received:Uint8Array[]=[];
-    await expect((async()=>{for await(const chunk of download.body)received.push(chunk);})()).rejects.toMatchObject({code:'file_too_large'});
-    expect(received.reduce((size,chunk)=>size+chunk.byteLength,0)).toBe(8);
+  it("stops streaming a file without a declared length once it passes the cap", async () => {
+    const file = await runtime.upload("shared", {
+      name: "archive.zip",
+      mime: "application/zip",
+      data: Buffer.from("zip"),
+    });
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent++;
+        controller.enqueue(new Uint8Array(4));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body)),
+    );
+    const download = await runtime.download(file.id, 10);
+    const received: Uint8Array[] = [];
+    await expect(
+      (async () => {
+        for await (const chunk of download.body) received.push(chunk);
+      })(),
+    ).rejects.toMatchObject({ code: "file_too_large" });
+    expect(received.reduce((size, chunk) => size + chunk.byteLength, 0)).toBe(8);
     expect(sent).toBeLessThan(6);
   });
 
-  it('counts decoded bytes and drops the encoded length of a compressed file',async()=>{
-    const file=await runtime.upload('shared',{name:'notes.txt',mime:'text/plain',data:Buffer.from('notes')});
-    const decoded=Buffer.alloc(1100,'a'),encoded=gzipSync(decoded);
-    const server=createServer((_req,res)=>{res.writeHead(200,{'Content-Encoding':'gzip','Content-Length':encoded.length});res.end(encoded);});
-    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
-    const port=(server.address() as AddressInfo).port;
-    vi.stubGlobal('fetch',(url:URL,init:RequestInit)=>realFetch(new URL(url.pathname+url.search,`http://127.0.0.1:${port}`),init));
-    try{
-      const whole=await runtime.download(file.id,2000);
+  it("counts decoded bytes and drops the encoded length of a compressed file", async () => {
+    const file = await runtime.upload("shared", {
+      name: "notes.txt",
+      mime: "text/plain",
+      data: Buffer.from("notes"),
+    });
+    const decoded = Buffer.alloc(1100, "a"),
+      encoded = gzipSync(decoded);
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Encoding": "gzip", "Content-Length": encoded.length });
+      res.end(encoded);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    vi.stubGlobal("fetch", (url: URL, init: RequestInit) =>
+      realFetch(new URL(url.pathname + url.search, `http://127.0.0.1:${port}`), init),
+    );
+    try {
+      const whole = await runtime.download(file.id, 2000);
       expect(whole.size).toBeUndefined();
       expect(Buffer.from(await new Response(whole.body).arrayBuffer())).toEqual(decoded);
-      const capped=await runtime.download(file.id,1000);
-      await expect(new Response(capped.body).arrayBuffer()).rejects.toMatchObject({code:'file_too_large'});
-    }finally{server.close();}
+      const capped = await runtime.download(file.id, 1000);
+      await expect(new Response(capped.body).arrayBuffer()).rejects.toMatchObject({
+        code: "file_too_large",
+      });
+    } finally {
+      server.close();
+    }
   });
 
-  it('cancels a stalled Hermes read as soon as the person disconnects',async()=>{
-    const file=await runtime.upload('shared',{name:'notes.txt',mime:'text/plain',data:Buffer.from('notes')});
-    const cancel=vi.fn();
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream({pull:()=>new Promise(()=>{}),cancel}))));
-    const stream=Readable.fromWeb((await runtime.download(file.id,1000)).body as NodeReadableStream<Uint8Array>);
+  it("cancels a stalled Hermes read as soon as the person disconnects", async () => {
+    const file = await runtime.upload("shared", {
+      name: "notes.txt",
+      mime: "text/plain",
+      data: Buffer.from("notes"),
+    });
+    const cancel = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () => new Response(new ReadableStream({ pull: () => new Promise(() => {}), cancel })),
+      ),
+    );
+    const stream = Readable.fromWeb(
+      (await runtime.download(file.id, 1000)).body as NodeReadableStream<Uint8Array>,
+    );
     stream.resume();
-    await new Promise(resolve=>setTimeout(resolve,10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
     stream.destroy();
-    await vi.waitFor(()=>expect(cancel).toHaveBeenCalled());
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it('refuses an oversized portrait before buffering it',async()=>{
-    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new ReadableStream(),{headers:{'Content-Length':'2000001'}})));
-    await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('Hermes portraits must be 2 MB or smaller.');
-    expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
-  });
-
-  it('saves the Talk voice beside the avatar, preserving other metadata and refusing a stale revision',async()=>{
-    await runtime.setVoice!('shared','cedar');
-    const metadata=calls.find(call=>call.method==='profiles.configure')?.params;
-    expect(metadata?.ui_meta.agent_interface).toEqual({name:'Shared',unrelated:'preserve',voice:'cedar'});
-    expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
-    metadataConflict=true;
-    await expect(runtime.setVoice!('shared','ash')).rejects.toMatchObject({statusCode:409});
-  });
-
-  it('reads live voice from the add-on over the service path and mints only a matching session',async()=>{
-    const fetcher=vi.fn(async(url: URL | string, _init?: RequestInit)=>{
-      const path=new URL(url).pathname;
-      if(path.endsWith('/voice/status'))return Response.json({available:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
-      if(path.endsWith('/voice/client-secret'))return Response.json({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
-      return Response.json({profiles:[]});
+  it("refuses an oversized portrait before buffering it", async () => {
+    const file = await runtime.upload("shared", {
+      name: "portrait.png",
+      mime: "image/png",
+      data: Buffer.from("test image"),
     });
-    vi.stubGlobal('fetch',fetcher);
-    expect((await runtime.capabilities()).liveVoice).toEqual({supported:false,reason:'The WildBots voice plugin is not linked into Hermes.'});
-    const status=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/status'))!;
-    expect(new URL(status[0]).pathname).toBe('/api/agent-interface/service/agent-interface/voice/status');
-    // Hermes's dashboard answers every unmatched GET under /api/ itself, ahead of the add-on.
-    expect(status[1]!.method).toBe('POST');
-    expect(new Headers(status[1]!.headers).get('Authorization')).toBe('Bearer '+token);
-    const input={voice:'marin' as const,instructions:'Speak for Shared.',tools:[]};
-    expect(await runtime.realtimeSession!(input)).toEqual({clientSecret:'ek_fixture',expiresAt:1790000000,model:'gpt-realtime-2.1',voice:'marin'});
-    const minted=fetcher.mock.calls.find(call=>new URL(call[0]).pathname.endsWith('/voice/client-secret'))!;
-    expect(JSON.parse(minted[1]!.body as string)).toEqual({model:'gpt-realtime-2.1',...input});
-    await expect(runtime.realtimeSession!({...input,voice:'ash'})).rejects.toMatchObject({statusCode:502});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(new ReadableStream(), { headers: { "Content-Length": "2000001" } }),
+      ),
+    );
+    await expect(
+      runtime.setAvatar!("shared", { mode: "portrait", origin: "uploaded", src: file.url! }),
+    ).rejects.toThrow("Hermes portraits must be 2 MB or smaller.");
+    expect(calls.some((call) => call.method === "profiles.set_asset")).toBe(false);
   });
 
-  describe('live voice status off the request path', () => {
+  it("saves the Talk voice beside the avatar, preserving other metadata and refusing a stale revision", async () => {
+    await runtime.setVoice!("shared", "cedar");
+    const metadata = calls.find((call) => call.method === "profiles.configure")?.params;
+    expect(metadata?.ui_meta.agent_interface).toEqual({
+      name: "Shared",
+      unrelated: "preserve",
+      voice: "cedar",
+    });
+    expect(metadata?.ui_meta_expected_revisions.agent_interface).toBe(3);
+    metadataConflict = true;
+    await expect(runtime.setVoice!("shared", "ash")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("reads live voice from the add-on over the service path and mints only a matching session", async () => {
+    const fetcher = vi.fn(async (url: URL | string, _init?: RequestInit) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/voice/status"))
+        return Response.json({
+          available: false,
+          reason: "The WildBots voice plugin is not linked into Hermes.",
+        });
+      if (path.endsWith("/voice/client-secret"))
+        return Response.json({
+          clientSecret: "ek_fixture",
+          expiresAt: 1790000000,
+          model: "gpt-realtime-2.1",
+          voice: "marin",
+        });
+      return Response.json({ profiles: [] });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    expect((await runtime.capabilities()).liveVoice).toEqual({
+      supported: false,
+      reason: "The WildBots voice plugin is not linked into Hermes.",
+    });
+    const status = fetcher.mock.calls.find((call) =>
+      new URL(call[0]).pathname.endsWith("/voice/status"),
+    )!;
+    expect(new URL(status[0]).pathname).toBe(
+      "/api/agent-interface/service/agent-interface/voice/status",
+    );
+    // Hermes's dashboard answers every unmatched GET under /api/ itself, ahead of the add-on.
+    expect(status[1]!.method).toBe("POST");
+    expect(new Headers(status[1]!.headers).get("Authorization")).toBe("Bearer " + token);
+    const input = { voice: "marin" as const, instructions: "Speak for Shared.", tools: [] };
+    expect(await runtime.realtimeSession!(input)).toEqual({
+      clientSecret: "ek_fixture",
+      expiresAt: 1790000000,
+      model: "gpt-realtime-2.1",
+      voice: "marin",
+    });
+    const minted = fetcher.mock.calls.find((call) =>
+      new URL(call[0]).pathname.endsWith("/voice/client-secret"),
+    )!;
+    expect(JSON.parse(minted[1]!.body as string)).toEqual({ model: "gpt-realtime-2.1", ...input });
+    await expect(runtime.realtimeSession!({ ...input, voice: "ash" })).rejects.toMatchObject({
+      statusCode: 502,
+    });
+  });
+
+  describe("live voice status off the request path", () => {
     let answers: ((answer: Response | Error) => void)[];
     let statusReads: number;
     beforeEach(() => {
-      answers = []; statusReads = 0;
-      vi.stubGlobal('fetch', vi.fn((url: URL | string) => {
-        if (!new URL(url).pathname.endsWith('/voice/status')) return Promise.resolve(Response.json({profiles: []}));
-        statusReads++;
-        return new Promise<Response>((resolve, reject) => answers.push(answer => answer instanceof Error ? reject(answer) : resolve(answer)));
-      }));
+      answers = [];
+      statusReads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: URL | string) => {
+          if (!new URL(url).pathname.endsWith("/voice/status"))
+            return Promise.resolve(Response.json({ profiles: [] }));
+          statusReads++;
+          return new Promise<Response>((resolve, reject) =>
+            answers.push((answer) => (answer instanceof Error ? reject(answer) : resolve(answer))),
+          );
+        }),
+      );
       // Only the clock is virtual: the fake socket and these waits run on real timers.
-      vi.useFakeTimers({toFake: ['Date']});
+      vi.useFakeTimers({ toFake: ["Date"] });
     });
-    const status = (available: boolean) => Response.json({available, reason: available ? 'Ready.' : 'The voice plugin is disabled.'});
-    const stillWaiting = Symbol('still waiting');
+    const status = (available: boolean) =>
+      Response.json({ available, reason: available ? "Ready." : "The voice plugin is disabled." });
+    const stillWaiting = Symbol("still waiting");
     /** What the read resolved to, or stillWaiting when it is still waiting after a real 50 ms. */
-    const soon = <T,>(read: Promise<T>) => Promise.race([read, new Promise<typeof stillWaiting>(resolve => setTimeout(() => resolve(stillWaiting), 50))]);
+    const soon = <T>(read: Promise<T>) =>
+      Promise.race([
+        read,
+        new Promise<typeof stillWaiting>((resolve) => setTimeout(() => resolve(stillWaiting), 50)),
+      ]);
     async function known(available: boolean) {
       const first = runtime.capabilities();
       await vi.waitFor(() => expect(answers).toHaveLength(1));
@@ -1350,36 +2975,48 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       expect((await first).liveVoice.supported).toBe(available);
     }
 
-    it('answers at once with the known value while a stale one refreshes in the background', async () => {
+    it("answers at once with the known value while a stale one refreshes in the background", async () => {
       await known(true);
       vi.setSystemTime(Date.now() + 30_000);
-      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(await soon(runtime.capabilities())).toMatchObject({ liveVoice: { supported: true } });
       expect(statusReads).toBe(2);
       // A second read during the refresh joins it instead of starting another.
-      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(await soon(runtime.capabilities())).toMatchObject({ liveVoice: { supported: true } });
       expect(statusReads).toBe(2);
       answers[1](status(false));
-      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'The voice plugin is disabled.'}));
+      await vi.waitFor(async () =>
+        expect((await runtime.capabilities()).liveVoice).toEqual({
+          supported: false,
+          reason: "The voice plugin is disabled.",
+        }),
+      );
       expect(statusReads).toBe(2);
     });
 
-    it('reports a failed background refresh as unavailable instead of keeping the old value', async () => {
+    it("reports a failed background refresh as unavailable instead of keeping the old value", async () => {
       await known(true);
       vi.setSystemTime(Date.now() + 30_000);
-      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
-      answers[1](new TypeError('fetch failed'));
-      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice).toEqual({supported: false, reason: 'Hermes could not report live voice.'}));
+      expect(await soon(runtime.capabilities())).toMatchObject({ liveVoice: { supported: true } });
+      answers[1](new TypeError("fetch failed"));
+      await vi.waitFor(async () =>
+        expect((await runtime.capabilities()).liveVoice).toEqual({
+          supported: false,
+          reason: "Hermes could not report live voice.",
+        }),
+      );
       // The next refresh that succeeds restores it.
       vi.setSystemTime(Date.now() + 30_000);
-      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: false}});
+      expect(await soon(runtime.capabilities())).toMatchObject({ liveVoice: { supported: false } });
       answers[2](status(true));
-      await vi.waitFor(async () => expect((await runtime.capabilities()).liveVoice.supported).toBe(true));
+      await vi.waitFor(async () =>
+        expect((await runtime.capabilities()).liveVoice.supported).toBe(true),
+      );
     });
 
-    it('drops the value on disconnect and ignores a refresh that started before it', async () => {
+    it("drops the value on disconnect and ignores a refresh that started before it", async () => {
       await known(true);
       vi.setSystemTime(Date.now() + 30_000);
-      expect(await soon(runtime.capabilities())).toMatchObject({liveVoice: {supported: true}});
+      expect(await soon(runtime.capabilities())).toMatchObject({ liveVoice: { supported: true } });
       sockets[0].close();
       await runtime.reconnect!();
       const after = runtime.capabilities();
@@ -1389,276 +3026,396 @@ describe('Hermes adapter trust and recovery boundary',()=>{
       expect((await after).liveVoice.supported).toBe(false);
       // The old connection's refresh answers last. It must not replace the new connection's value.
       answers[1](status(true));
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
       expect((await runtime.capabilities()).liveVoice.supported).toBe(false);
       expect(statusReads).toBe(3);
     });
   });
 
-  it('passes on the add-on\'s plain voice errors and names an add-on that predates live voice',async()=>{
-    let answer=Response.json({error:'Sign in to ChatGPT in Hermes to use live voice.'},{status:409});
-    vi.stubGlobal('fetch',vi.fn(async()=>answer));
-    const input={voice:'marin' as const,instructions:'Speak.',tools:[]};
-    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:409,message:'Sign in to ChatGPT in Hermes to use live voice.'});
-    answer=Response.json({error:'Service operation not available'},{status:404});
-    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({statusCode:503,message:expect.stringContaining('predates live voice')});
+  it("passes on the add-on's plain voice errors and names an add-on that predates live voice", async () => {
+    let answer = Response.json(
+      { error: "Sign in to ChatGPT in Hermes to use live voice." },
+      { status: 409 },
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => answer),
+    );
+    const input = { voice: "marin" as const, instructions: "Speak.", tools: [] };
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Sign in to ChatGPT in Hermes to use live voice.",
+    });
+    answer = Response.json({ error: "Service operation not available" }, { status: 404 });
+    await expect(runtime.realtimeSession!(input)).rejects.toMatchObject({
+      statusCode: 503,
+      message: expect.stringContaining("predates live voice"),
+    });
   });
 
-  it('does not overwrite a native portrait after metadata CAS rejects a stale save',async()=>{
-    const file=await runtime.upload('shared',{name:'portrait.png',mime:'image/png',data:Buffer.from('test image')});
-    vi.stubGlobal('fetch',vi.fn(async()=>new Response(new Uint8Array([137,80,78,71]))));metadataConflict=true;
-    await expect(runtime.setAvatar!('shared',{mode:'portrait',origin:'uploaded',src:file.url!})).rejects.toThrow('changed on another client');
-    expect(calls.some(call=>call.method==='profiles.set_asset')).toBe(false);
+  it("does not overwrite a native portrait after metadata CAS rejects a stale save", async () => {
+    const file = await runtime.upload("shared", {
+      name: "portrait.png",
+      mime: "image/png",
+      data: Buffer.from("test image"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([137, 80, 78, 71]))),
+    );
+    metadataConflict = true;
+    await expect(
+      runtime.setAvatar!("shared", { mode: "portrait", origin: "uploaded", src: file.url! }),
+    ).rejects.toThrow("changed on another client");
+    expect(calls.some((call) => call.method === "profiles.set_asset")).toBe(false);
   });
 
-  it('does not generate a paid portrait without the verified add-on even when an image provider is ready', async () => {
-    addonReady=false; imageReady=true;
+  it("does not generate a paid portrait without the verified add-on even when an image provider is ready", async () => {
+    addonReady = false;
+    imageReady = true;
     expect((await runtime.capabilities()).portraitGeneration.supported).toBe(false);
-    await expect(runtime.generatePortrait('shared','Portrait')).rejects.toThrow('verified durable Hermes add-on');
-    expect(calls.some(call => call.method === 'image.generate' && !call.params.probe)).toBe(false);
+    await expect(runtime.generatePortrait("shared", "Portrait")).rejects.toThrow(
+      "verified durable Hermes add-on",
+    );
+    expect(calls.some((call) => call.method === "image.generate" && !call.params.probe)).toBe(
+      false,
+    );
   });
 
-  it('keeps generation unavailable without a provider and uses native square aspect syntax',async()=>{
+  it("keeps generation unavailable without a provider and uses native square aspect syntax", async () => {
     expect((await runtime.capabilities()).portraitGeneration.supported).toBe(false);
-    await expect(runtime.generatePortrait('shared','A friendly portrait')).rejects.toMatchObject({statusCode:409,message:'No image generation backend configured.'});
-    expect(calls.find(call=>call.method==='image.generate'&&!call.params.probe)?.params).toMatchObject({aspect_ratio:'square',max_bytes:2_000_000});
+    await expect(runtime.generatePortrait("shared", "A friendly portrait")).rejects.toMatchObject({
+      statusCode: 409,
+      message: "No image generation backend configured.",
+    });
+    expect(
+      calls.find((call) => call.method === "image.generate" && !call.params.probe)?.params,
+    ).toMatchObject({ aspect_ratio: "square", max_bytes: 2_000_000 });
   });
 });
 
-describe('Hermes transport liveness and diagnostics', () => {
+describe("Hermes transport liveness and diagnostics", () => {
   it.each([
-    'wss://example.com', 'http://example.com', 'http://127.0.0.1/api',
-    'http://127.0.0.1/hidden/..', 'https://example.com?token=secret',
-    'https://example.com?', 'https://example.com#',
-    'https://user:secret@example.com', 'not a URL',
-  ])('rejects unsafe or malformed configured origins without making a request: %s', async url => {
-    runtime = createHermesRuntime({ files: testFiles(), url, token});
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'invalid_config'});
-    expect(JSON.stringify(await runtime.status())).not.toContain('secret');
+    "wss://example.com",
+    "http://example.com",
+    "http://127.0.0.1/api",
+    "http://127.0.0.1/hidden/..",
+    "https://example.com?token=secret",
+    "https://example.com?",
+    "https://example.com#",
+    "https://user:secret@example.com",
+    "not a URL",
+  ])("rejects unsafe or malformed configured origins without making a request: %s", async (url) => {
+    runtime = createHermesRuntime({ files: testFiles(), url, token });
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "invalid_config" });
+    expect(JSON.stringify(await runtime.status())).not.toContain("secret");
     expect(sockets).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('distinguishes missing settings from a partial configuration', async () => {
+  it("distinguishes missing settings from a partial configuration", async () => {
     runtime = createHermesRuntime({ files: testFiles() });
-    expect(await runtime.status()).toMatchObject({code: 'not_configured', connected: false});
-    runtime = createHermesRuntime({ files: testFiles(), url: 'https://hermes.example.com'});
-    expect(await runtime.status()).toMatchObject({code: 'invalid_config', connected: false});
+    expect(await runtime.status()).toMatchObject({ code: "not_configured", connected: false });
+    runtime = createHermesRuntime({ files: testFiles(), url: "https://hermes.example.com" });
+    expect(await runtime.status()).toMatchObject({ code: "invalid_config", connected: false });
   });
 
-  it('reports a usable contract and sanitized address after coalesced concurrent connection reads', async () => {
+  it("reports a usable contract and sanitized address after coalesced concurrent connection reads", async () => {
     const [status, caps, bots] = await Promise.all([
-      runtime.status(), runtime.capabilities(), runtime.listBots(),
-      runtime.capabilities(), runtime.listBots(),
+      runtime.status(),
+      runtime.capabilities(),
+      runtime.listBots(),
+      runtime.capabilities(),
+      runtime.listBots(),
     ]);
-    expect(status).toMatchObject({connected: true, code: 'ready', version: revision, address: 'http://127.0.0.1:19119'});
+    expect(status).toMatchObject({
+      connected: true,
+      code: "ready",
+      version: revision,
+      address: "http://127.0.0.1:19119",
+    });
     expect(status.lastConnectedAt).toBeDefined();
     expect(caps.chat.supported).toBe(true);
     expect(bots).toHaveLength(1);
     expect(sockets).toHaveLength(1);
-    expect(calls.filter(call => call.method === 'agent-interface.capabilities')).toHaveLength(1);
-    expect(calls.filter(call => call.method === 'image.generate')).toHaveLength(1);
-    expect(calls.filter(call => call.method === 'profiles.list')).toHaveLength(1);
-    expect(calls.every(call => call.method !== 'image.generate' || call.params.probe === true)).toBe(true);
+    expect(calls.filter((call) => call.method === "agent-interface.capabilities")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "image.generate")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "profiles.list")).toHaveLength(1);
+    expect(
+      calls.every((call) => call.method !== "image.generate" || call.params.probe === true),
+    ).toBe(true);
   });
 
-  it('settles close-before-open and diagnoses invalid credentials with an authenticated read', async () => {
-    opening = 'close';
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {status: 401})));
+  it("settles close-before-open and diagnoses invalid credentials with an authenticated read", async () => {
+    opening = "close";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
     const status = await runtime.status();
-    expect(status).toMatchObject({connected: false, code: 'unauthorized'});
+    expect(status).toMatchObject({ connected: false, code: "unauthorized" });
     expect(JSON.stringify(status)).not.toContain(token);
-    expect(fetch).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({
-      headers: {'X-Hermes-Session-Token': token}, redirect: 'error',
-    }));
-    expect(urlText(vi.mocked(fetch).mock.calls[0]![0])).toBe('http://127.0.0.1:19119/api/profiles');
+    expect(fetch).toHaveBeenCalledWith(
+      expect.any(URL),
+      expect.objectContaining({
+        headers: { "X-Hermes-Session-Token": token },
+        redirect: "error",
+      }),
+    );
+    expect(urlText(vi.mocked(fetch).mock.calls[0]![0])).toBe("http://127.0.0.1:19119/api/profiles");
     expect(calls).toEqual([]);
   });
 
-  it('uses the native authenticated read to diagnose an opaque websocket upgrade error', async () => {
+  it("uses the native authenticated read to diagnose an opaque websocket upgrade error", async () => {
     connectionFails = true;
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, {status: 403})));
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unauthorized'});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 403 })),
+    );
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "unauthorized" });
   });
 
-  it('distinguishes a missing durable add-on from an incompatible contract without trusting native error text', async () => {
-    rpcErrors.set('agent-interface.capabilities', {code: -32601, message: `Missing: ${token} https://user:secret@host/`});
+  it("distinguishes a missing durable add-on from an incompatible contract without trusting native error text", async () => {
+    rpcErrors.set("agent-interface.capabilities", {
+      code: -32601,
+      message: `Missing: ${token} https://user:secret@host/`,
+    });
     const missing = await runtime.status();
-    expect(missing).toMatchObject({connected: false, code: 'addon_missing'});
+    expect(missing).toMatchObject({ connected: false, code: "addon_missing" });
     expect(JSON.stringify(missing)).not.toContain(token);
-    expect(JSON.stringify(missing)).not.toContain('secret');
+    expect(JSON.stringify(missing)).not.toContain("secret");
     rpcErrors.clear();
     addonReady = false;
-    expect(await runtime.reconnect!()).toMatchObject({connected: false, code: 'incompatible'});
-    expect(calls.some(call => ['agent-interface.open', 'agent-interface.submit', 'image.generate'].includes(call.method))).toBe(false);
+    expect(await runtime.reconnect!()).toMatchObject({ connected: false, code: "incompatible" });
+    expect(
+      calls.some((call) =>
+        ["agent-interface.open", "agent-interface.submit", "image.generate"].includes(call.method),
+      ),
+    ).toBe(false);
   });
 
-  it('bounds an opening socket and a stalled add-on handshake', async () => {
+  it("bounds an opening socket and a stalled add-on handshake", async () => {
     vi.useFakeTimers();
-    opening = 'hang';
+    opening = "hang";
     const openingStatus = runtime.status();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(await openingStatus).toMatchObject({connected: false, code: 'unreachable'});
+    expect(await openingStatus).toMatchObject({ connected: false, code: "unreachable" });
     expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
-    opening = 'open';
-    deferredMethods.add('agent-interface.capabilities');
+    opening = "open";
+    deferredMethods.add("agent-interface.capabilities");
     const handshakeStatus = runtime.reconnect!();
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(await handshakeStatus).toMatchObject({connected: false, code: 'unreachable'});
+    expect(await handshakeStatus).toMatchObject({ connected: false, code: "unreachable" });
     expect(sockets[1].readyState).toBe(WireSocket.CLOSED);
   });
 
-  it('rejects a handshake waiting on its socket as soon as the runtime is closed', async () => {
-    opening = 'hang';
+  it("rejects a handshake waiting on its socket as soon as the runtime is closed", async () => {
+    opening = "hang";
     const status = runtime.status();
     await vi.waitFor(() => expect(sockets).toHaveLength(1));
     await runtime.close();
-    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(await status).toMatchObject({ connected: false, code: "closed" });
     expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
-    expect(await runtime.reconnect!()).toMatchObject({connected: false, code: 'closed'});
+    expect(await runtime.reconnect!()).toMatchObject({ connected: false, code: "closed" });
     expect(sockets).toHaveLength(1);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('never opens a socket for a connection attempt that was still starting when the runtime closed', async () => {
+  it("never opens a socket for a connection attempt that was still starting when the runtime closed", async () => {
     const status = runtime.status();
     await runtime.close();
-    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(await status).toMatchObject({ connected: false, code: "closed" });
     expect(sockets).toHaveLength(0);
   });
 
-  it('aborts a pending service ticket request when the runtime is closed', async () => {
+  it("aborts a pending service ticket request when the runtime is closed", async () => {
     await runtime.close();
     let aborted = false;
-    vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
-      init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
-    })));
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token, authMode: 'service'});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: unknown, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new Error("aborted"));
+            });
+          }),
+      ),
+    );
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+      authMode: "service",
+    });
     const status = runtime.status();
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     await runtime.close();
-    expect(await status).toMatchObject({connected: false, code: 'closed'});
+    expect(await status).toMatchObject({ connected: false, code: "closed" });
     expect(aborted).toBe(true);
     expect(sockets).toHaveLength(0);
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('backs off repeated failed polls and automatically recovers after the retry deadline', async () => {
+  it("backs off repeated failed polls and automatically recovers after the retry deadline", async () => {
     vi.useFakeTimers();
     connectionFails = true;
     const failed = await runtime.status();
-    expect(failed).toMatchObject({connected: false, code: 'unreachable'});
+    expect(failed).toMatchObject({ connected: false, code: "unreachable" });
     expect(Date.parse(failed.retryAt!) - Date.now()).toBe(1_000);
-    await Promise.all([runtime.status(), runtime.status(), runtime.capabilities(), runtime.listBots()]);
+    await Promise.all([
+      runtime.status(),
+      runtime.status(),
+      runtime.capabilities(),
+      runtime.listBots(),
+    ]);
     expect(sockets).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(await runtime.status()).toMatchObject({connected: false});
+    expect(await runtime.status()).toMatchObject({ connected: false });
     expect(sockets).toHaveLength(2);
     expect(Date.parse((await runtime.status()).retryAt!) - Date.now()).toBe(2_000);
     connectionFails = false;
     await vi.advanceTimersByTimeAsync(2_000);
-    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+    expect(await runtime.status()).toMatchObject({ connected: true, code: "ready" });
     expect((await runtime.status()).retryAt).toBeUndefined();
     expect(sockets).toHaveLength(3);
   });
 
-  it('lists the canonical chat preview and its last activity for the home screen', async () => {
-    rosterSession = {resolved_id:'stored-one',preview:'  Tailscale is\n up on the NAS. ',last_active:1791400000.5};
-    expect((await runtime.listBots())[0].lastMessage).toEqual({text:'Tailscale is up on the NAS.',at:new Date(1791400000500).toISOString()});
+  it("lists the canonical chat preview and its last activity for the home screen", async () => {
+    rosterSession = {
+      resolved_id: "stored-one",
+      preview: "  Tailscale is\n up on the NAS. ",
+      last_active: 1791400000.5,
+    };
+    expect((await runtime.listBots())[0].lastMessage).toEqual({
+      text: "Tailscale is up on the NAS.",
+      at: new Date(1791400000500).toISOString(),
+    });
   });
-  it('keeps the successful bot roster visible and disconnected during an outage', async () => {
+  it("keeps the successful bot roster visible and disconnected during an outage", async () => {
     const before = await runtime.listBots();
     sockets[0].close();
     const offline = await runtime.listBots();
-    expect(offline).toEqual(before.map(bot => ({...bot, activity: 'disconnected'})));
+    expect(offline).toEqual(before.map((bot) => ({ ...bot, activity: "disconnected" })));
     expect(sockets).toHaveLength(1);
     await runtime.reconnect!();
-    expect((await runtime.listBots())[0].activity).toBe('idle');
+    expect((await runtime.listBots())[0].activity).toBe("idle");
   });
 
-  it('ignores old socket close, error, response, and activity events after replacement', async () => {
-    await runtime.conversation('shared');
+  it("ignores old socket close, error, response, and activity events after replacement", async () => {
+    await runtime.conversation("shared");
     const old = sockets[0];
     old.close();
     await runtime.reconnect!();
-    await runtime.conversation('shared');
-    deferredMethods.add('profiles.describe');
+    await runtime.conversation("shared");
+    deferredMethods.add("profiles.describe");
     let settled = false;
-    const tools = runtime.tools('shared').then(result => {settled = true; return result;});
-    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe('profiles.describe'));
-    const id = (calls.at(-1)! as Record<string,any>).id;
-    old.receive({id, result: {toolsets: []}});
-    old.receive({method: 'event', params: {session_id: 'live-one', type: 'tool.start', payload: {name: 'stale'}}});
+    const tools = runtime.tools("shared").then((result) => {
+      settled = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(calls.at(-1)?.method).toBe("profiles.describe"));
+    const id = (calls.at(-1)! as Record<string, any>).id;
+    old.receive({ id, result: { toolsets: [] } });
+    old.receive({
+      method: "event",
+      params: { session_id: "live-one", type: "tool.start", payload: { name: "stale" } },
+    });
     old.close();
-    old.dispatchEvent(new Event('error'));
+    old.dispatchEvent(new Event("error"));
     await Promise.resolve();
     expect(settled).toBe(false);
-    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
-    sockets[1].receive({id, result: {toolsets: [{name: 'terminal', enabled: true}]}});
+    expect(await runtime.status()).toMatchObject({ connected: true, code: "ready" });
+    sockets[1].receive({ id, result: { toolsets: [{ name: "terminal", enabled: true }] } });
     expect(await tools).toHaveLength(1);
     snapshot.info.running = true;
-    sockets[1].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-    expect((await runtime.conversation('shared')).activity.state).toBe('thinking');
+    sockets[1].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.start", payload: {} },
+    });
+    expect((await runtime.conversation("shared")).activity.state).toBe("thinking");
     expect(sockets).toHaveLength(2);
   });
 
-  it('does not send a mutation if the socket begins closing between readiness and send', async () => {
+  it("does not send a mutation if the socket begins closing between readiness and send", async () => {
     beforeSend = (request, socket) => {
-      if (request.method === 'agent-interface.submit') socket.readyState = WireSocket.CLOSING;
+      if (request.method === "agent-interface.submit") socket.readyState = WireSocket.CLOSING;
     };
     const result = await runtime.submit(input());
-    expect(result.status).toBe('uncertain');
-    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(0);
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
+    expect(result.status).toBe("uncertain");
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(0);
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "unreachable" });
   });
 
-  it('bounds read requests, drops the transport for an unanswered mutation, and never replays it', async () => {
+  it("bounds read requests, drops the transport for an unanswered mutation, and never replays it", async () => {
     vi.useFakeTimers();
-    deferredMethods.add('agent-interface.submit');
+    deferredMethods.add("agent-interface.submit");
     const submitted = runtime.submit(input());
     await vi.advanceTimersByTimeAsync(0);
-    deferredMethods.add('profiles.describe');
-    const read = runtime.tools('shared');
-    const rejected = expect(read).rejects.toThrow('Hermes profiles.describe timed out. Try again.');
+    deferredMethods.add("profiles.describe");
+    const read = runtime.tools("shared");
+    const rejected = expect(read).rejects.toThrow("Hermes profiles.describe timed out. Try again.");
     await vi.advanceTimersByTimeAsync(10_000);
     await rejected;
     expect(sockets[0].readyState).toBe(WireSocket.OPEN);
     await vi.advanceTimersByTimeAsync(35_000);
-    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain', message: expect.stringContaining('agent-interface.submit timed out')});
+    expect(await submitted).toMatchObject({
+      requestId: "request-one",
+      status: "uncertain",
+      message: expect.stringContaining("agent-interface.submit timed out"),
+    });
     expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
     await runtime.reconnect!();
-    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(1);
   });
 
-  describe('request timeouts on the shared socket', () => {
-    const transportHooks = () => ({frame: vi.fn(), disconnected: vi.fn(), connected: vi.fn(), watching: () => false});
+  describe("request timeouts on the shared socket", () => {
+    const transportHooks = () => ({
+      frame: vi.fn(),
+      disconnected: vi.fn(),
+      connected: vi.fn(),
+      watching: () => false,
+    });
     async function connected(given = transportHooks()) {
       vi.useFakeTimers();
-      const transport = createHermesTransport({url:'http://127.0.0.1:19119', token}, given);
+      const transport = createHermesTransport({ url: "http://127.0.0.1:19119", token }, given);
       const ready = transport.connect();
       await vi.advanceTimersByTimeAsync(0);
       await ready;
-      return {transport, hooks: given};
+      return { transport, hooks: given };
     }
 
-    it('fails a slow read alone, keeps the socket for other requests, and drops its late answer', async () => {
-      const {transport, hooks} = await connected();
-      deferredMethods.add('profiles.describe');
-      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+    it("fails a slow read alone, keeps the socket for other requests, and drops its late answer", async () => {
+      const { transport, hooks } = await connected();
+      deferredMethods.add("profiles.describe");
+      const read = transport.rpc("profiles.describe", { name: "shared" }).catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(await read).toMatchObject({code: 'unreachable', message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await read).toMatchObject({
+        code: "unreachable",
+        message: "Hermes profiles.describe timed out. Try again.",
+      });
       expect(hooks.disconnected).not.toHaveBeenCalled();
-      expect(await transport.rpc('profiles.list')).toMatchObject({profiles: [{name: 'shared'}]});
+      expect(await transport.rpc("profiles.list")).toMatchObject({
+        profiles: [{ name: "shared" }],
+      });
       expect(transport.connection?.ws).toBe(sockets[0]);
       // Hermes answers the timed-out read after all. Nothing is waiting for it and it is not a session frame.
-      const late = calls.find(call => call.method === 'profiles.describe')! as Record<string, any>;
-      expect(() => sockets[0].receive({jsonrpc: '2.0', id: late.id, result: {toolsets: []}})).not.toThrow();
+      const late = calls.find((call) => call.method === "profiles.describe")! as Record<
+        string,
+        any
+      >;
+      expect(() =>
+        sockets[0].receive({ jsonrpc: "2.0", id: late.id, result: { toolsets: [] } }),
+      ).not.toThrow();
       expect(hooks.frame).not.toHaveBeenCalled();
       expect(hooks.disconnected).not.toHaveBeenCalled();
       // A new read of the same method is sent afresh, not answered by the stale shared one.
       deferredMethods.clear();
-      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
-      expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
+      expect(await transport.rpc("profiles.describe", { name: "shared" })).toMatchObject({
+        toolsets: [{ name: "terminal" }],
+      });
+      expect(calls.filter((call) => call.method === "profiles.describe")).toHaveLength(2);
       transport.close();
     });
 
@@ -1666,30 +3423,41 @@ describe('Hermes transport liveness and diagnostics', () => {
     // timeout has to ask for the liveness probe itself, or a socket that answers nothing stays verified.
     const tokens = async (socket: WireSocket, ms: number) => {
       for (let elapsed = 0; elapsed < ms; elapsed += 1_000) {
-        if (socket.readyState === WireSocket.OPEN) socket.receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'x'}}});
+        if (socket.readyState === WireSocket.OPEN)
+          socket.receive({
+            method: "event",
+            params: { session_id: "live-one", type: "message.delta", payload: { text: "x" } },
+          });
         await vi.advanceTimersByTimeAsync(1_000);
       }
     };
-    const probes = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+    const probes = () =>
+      calls.filter((call) => call.method === "agent-interface.capabilities").length;
 
-    it('probes at once when a read times out under steady events and drops the socket if the probe goes unanswered', async () => {
-      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+    it("probes at once when a read times out under steady events and drops the socket if the probe goes unanswered", async () => {
+      const { transport, hooks } = await connected({ ...transportHooks(), watching: () => true });
       const handshake = probes();
-      deferredMethods.add('profiles.describe');
-      deferredMethods.add('agent-interface.capabilities');
+      deferredMethods.add("profiles.describe");
+      deferredMethods.add("agent-interface.capabilities");
       // A shared capabilities read is in flight when the probe starts. The probe must not join it.
-      const shared = transport.rpc('agent-interface.capabilities').catch(error => error);
-      const first = transport.rpc('profiles.describe', {name: 'one'}).catch(error => error);
+      const shared = transport.rpc("agent-interface.capabilities").catch((error) => error);
+      const first = transport.rpc("profiles.describe", { name: "one" }).catch((error) => error);
       await tokens(sockets[0], 1_000);
-      const second = transport.rpc('profiles.describe', {name: 'two'}).catch(error => error);
+      const second = transport.rpc("profiles.describe", { name: "two" }).catch((error) => error);
       await tokens(sockets[0], 9_000);
-      expect(await first).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
-      expect(await shared).toMatchObject({message: 'Hermes agent-interface.capabilities timed out. Try again.'});
+      expect(await first).toMatchObject({
+        message: "Hermes profiles.describe timed out. Try again.",
+      });
+      expect(await shared).toMatchObject({
+        message: "Hermes agent-interface.capabilities timed out. Try again.",
+      });
       // Two reads timed out at ten seconds. One probe went out for both, apart from the shared read.
       expect(probes()).toBe(handshake + 2);
       expect(sockets[0].readyState).toBe(WireSocket.OPEN);
       await tokens(sockets[0], 1_000);
-      expect(await second).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await second).toMatchObject({
+        message: "Hermes profiles.describe timed out. Try again.",
+      });
       expect(probes()).toBe(handshake + 2);
       // The bound: the unanswered probe drops the socket ten seconds after the first read timed out.
       await tokens(sockets[0], 8_000);
@@ -1697,645 +3465,1157 @@ describe('Hermes transport liveness and diagnostics', () => {
       await tokens(sockets[0], 1_000);
       expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
       expect(hooks.disconnected).toHaveBeenCalledWith(true);
-      expect(await transport.status()).toMatchObject({connected: false, detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      expect(await transport.status()).toMatchObject({
+        connected: false,
+        detail: expect.stringContaining("agent-interface.capabilities timed out"),
+      });
       transport.close();
     });
 
-    it('keeps the socket when the probe after a read timeout is answered, and later reads work', async () => {
-      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
+    it("keeps the socket when the probe after a read timeout is answered, and later reads work", async () => {
+      const { transport, hooks } = await connected({ ...transportHooks(), watching: () => true });
       const handshake = probes();
-      deferredMethods.add('profiles.describe');
-      const read = transport.rpc('profiles.describe', {name: 'shared'}).catch(error => error);
+      deferredMethods.add("profiles.describe");
+      const read = transport.rpc("profiles.describe", { name: "shared" }).catch((error) => error);
       await tokens(sockets[0], 10_000);
-      expect(await read).toMatchObject({message: 'Hermes profiles.describe timed out. Try again.'});
+      expect(await read).toMatchObject({
+        message: "Hermes profiles.describe timed out. Try again.",
+      });
       expect(probes()).toBe(handshake + 1);
       await tokens(sockets[0], 30_000);
       expect(hooks.disconnected).not.toHaveBeenCalled();
       expect(sockets[0].readyState).toBe(WireSocket.OPEN);
       deferredMethods.clear();
-      expect(await transport.rpc('profiles.describe', {name: 'shared'})).toMatchObject({toolsets: [{name: 'terminal'}]});
+      expect(await transport.rpc("profiles.describe", { name: "shared" })).toMatchObject({
+        toolsets: [{ name: "terminal" }],
+      });
       expect(transport.connection?.ws).toBe(sockets[0]);
       transport.close();
     });
 
-    it('drops the socket when the heartbeat liveness probe times out', async () => {
-      const {transport, hooks} = await connected({...transportHooks(), watching: () => true});
-      deferredMethods.add('agent-interface.capabilities');
+    it("drops the socket when the heartbeat liveness probe times out", async () => {
+      const { transport, hooks } = await connected({ ...transportHooks(), watching: () => true });
+      deferredMethods.add("agent-interface.capabilities");
       // The heartbeat probes a socket quiet for ten seconds, then gives the probe ten more.
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(calls.filter(call => call.method === 'agent-interface.capabilities')).toHaveLength(2);
+      expect(calls.filter((call) => call.method === "agent-interface.capabilities")).toHaveLength(
+        2,
+      );
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hooks.disconnected).toHaveBeenCalledWith(true);
       expect(sockets[0].readyState).toBe(WireSocket.CLOSED);
-      expect(await transport.status()).toMatchObject({connected: false, code: 'unreachable', detail: expect.stringContaining('agent-interface.capabilities timed out')});
+      expect(await transport.status()).toMatchObject({
+        connected: false,
+        code: "unreachable",
+        detail: expect.stringContaining("agent-interface.capabilities timed out"),
+      });
       transport.close();
     });
 
-    it('drops the socket for an unanswered mutation and removes its listeners', async () => {
-      const {transport, hooks} = await connected();
+    it("drops the socket for an unanswered mutation and removes its listeners", async () => {
+      const { transport, hooks } = await connected();
       const old = sockets[0];
-      const remove = vi.spyOn(old, 'removeEventListener');
-      deferredMethods.add('agent-interface.submit');
-      const mutation = transport.rpc('agent-interface.submit').catch(error => error);
+      const remove = vi.spyOn(old, "removeEventListener");
+      deferredMethods.add("agent-interface.submit");
+      const mutation = transport.rpc("agent-interface.submit").catch((error) => error);
       await vi.advanceTimersByTimeAsync(10_000);
       expect(hooks.disconnected).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(35_000);
-      expect((await mutation).message).toBe('Hermes agent-interface.submit timed out. Do not replay an uncertain submission.');
+      expect((await mutation).message).toBe(
+        "Hermes agent-interface.submit timed out. Do not replay an uncertain submission.",
+      );
       expect(hooks.disconnected).toHaveBeenCalledWith(true);
-      expect(remove.mock.calls.map(call => call[0]).sort()).toEqual(['close', 'error', 'message', 'open']);
+      expect(remove.mock.calls.map((call) => call[0]).sort()).toEqual([
+        "close",
+        "error",
+        "message",
+        "open",
+      ]);
       await transport.reconnect();
-      old.dispatchEvent(new Event('error'));
+      old.dispatchEvent(new Event("error"));
       expect(transport.connection?.ws).toBe(sockets[1]);
       transport.close();
     });
   });
 
-  it('settles concurrent pending calls on disconnect and does not resend a closed submission', async () => {
+  it("settles concurrent pending calls on disconnect and does not resend a closed submission", async () => {
     await runtime.status();
-    deferredMethods.add('agent-interface.submit');
-    deferredMethods.add('profiles.describe');
+    deferredMethods.add("agent-interface.submit");
+    deferredMethods.add("profiles.describe");
     const submitted = runtime.submit(input());
-    const read = runtime.tools('shared');
-    const rejected = expect(read).rejects.toThrow('closed');
+    const read = runtime.tools("shared");
+    const rejected = expect(read).rejects.toThrow("closed");
     await vi.waitFor(() => {
-      expect(calls.some(call => call.method === 'agent-interface.submit')).toBe(true);
-      expect(calls.some(call => call.method === 'profiles.describe')).toBe(true);
+      expect(calls.some((call) => call.method === "agent-interface.submit")).toBe(true);
+      expect(calls.some((call) => call.method === "profiles.describe")).toBe(true);
     });
     await runtime.close();
     await rejected;
-    expect(await submitted).toMatchObject({requestId: 'request-one', status: 'uncertain'});
-    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
+    expect(await submitted).toMatchObject({ requestId: "request-one", status: "uncertain" });
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(1);
   });
 
-  it('coalesces overlapping identical configuration reads without caching later edits', async () => {
+  it("coalesces overlapping identical configuration reads without caching later edits", async () => {
     await runtime.status();
-    deferredMethods.add('profiles.describe');
-    const tools = runtime.tools('shared');
-    const skills = runtime.skills('shared');
-    await vi.waitFor(() => expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(1));
-    const id = (calls.at(-1)! as Record<string,any>).id;
-    sockets[0].receive({id, result: {toolsets: [{name: 'terminal', enabled: true}], skills: [{name: 'local', enabled: false}]}});
+    deferredMethods.add("profiles.describe");
+    const tools = runtime.tools("shared");
+    const skills = runtime.skills("shared");
+    await vi.waitFor(() =>
+      expect(calls.filter((call) => call.method === "profiles.describe")).toHaveLength(1),
+    );
+    const id = (calls.at(-1)! as Record<string, any>).id;
+    sockets[0].receive({
+      id,
+      result: {
+        toolsets: [{ name: "terminal", enabled: true }],
+        skills: [{ name: "local", enabled: false }],
+      },
+    });
     expect(await tools).toHaveLength(1);
-    expect(await skills).toMatchObject([{id: 'local', enabled: false}]);
+    expect(await skills).toMatchObject([{ id: "local", enabled: false }]);
     deferredMethods.clear();
-    await runtime.skills('shared');
-    expect(calls.filter(call => call.method === 'profiles.describe')).toHaveLength(2);
+    await runtime.skills("shared");
+    expect(calls.filter((call) => call.method === "profiles.describe")).toHaveLength(2);
   });
 
-  it('keeps the connection when the image probe times out and asks again on the next read', async () => {
+  it("keeps the connection when the image probe times out and asks again on the next read", async () => {
     vi.useFakeTimers();
     await runtime.status();
-    deferredMethods.add('image.generate');
+    deferredMethods.add("image.generate");
     const capabilities = runtime.capabilities();
     await vi.advanceTimersByTimeAsync(10_000);
     const value = await capabilities;
     expect(value.chat.supported).toBe(true);
-    expect(value.imageGeneration).toMatchObject({supported: false});
-    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+    expect(value.imageGeneration).toMatchObject({ supported: false });
+    expect(await runtime.status()).toMatchObject({ connected: true, code: "ready" });
     deferredMethods.clear();
     imageReady = true;
     expect((await runtime.capabilities()).imageGeneration.supported).toBe(true);
-    expect(calls.filter(call => call.method === 'image.generate')).toMatchObject([{params: {probe: true}}, {params: {probe: true}}]);
+    expect(calls.filter((call) => call.method === "image.generate")).toMatchObject([
+      { params: { probe: true } },
+      { params: { probe: true } },
+    ]);
   });
 
-  it('disables every capability if the image probe loses the verified connection', async () => {
+  it("disables every capability if the image probe loses the verified connection", async () => {
     await runtime.status();
-    deferredMethods.add('image.generate');
+    deferredMethods.add("image.generate");
     const capabilities = runtime.capabilities();
-    await vi.waitFor(() => expect(calls.some(call => call.method === 'image.generate')).toBe(true));
+    await vi.waitFor(() =>
+      expect(calls.some((call) => call.method === "image.generate")).toBe(true),
+    );
     sockets[0].close();
-    expect(Object.values(await capabilities).every(value => !value.supported)).toBe(true);
+    expect(Object.values(await capabilities).every((value) => !value.supported)).toBe(true);
   });
 
-  it('verifies liveness after socket silence and keeps a healthy manual reconnect read-only', async () => {
+  it("verifies liveness after socket silence and keeps a healthy manual reconnect read-only", async () => {
     vi.useFakeTimers();
     await runtime.status();
-    deferredMethods.add('agent-interface.submit');
+    deferredMethods.add("agent-interface.submit");
     const submitted = runtime.submit(input());
     await vi.advanceTimersByTimeAsync(0);
     const refreshed = await Promise.all([runtime.reconnect!(), runtime.reconnect!()]);
-    expect(refreshed).toMatchObject([{connected: true, code: 'ready'}, {connected: true, code: 'ready'}]);
+    expect(refreshed).toMatchObject([
+      { connected: true, code: "ready" },
+      { connected: true, code: "ready" },
+    ]);
     expect(sockets).toHaveLength(1);
-    expect(calls.filter(call => call.method === 'agent-interface.capabilities')).toHaveLength(2);
-    const request = calls.find(call => call.method === 'agent-interface.submit')! as Record<string,any>;
-    sockets[0].receive({id: request.id, result: {requestId: 'request-one', status: 'accepted', runId: 'run-one'}});
-    expect(await submitted).toMatchObject({status: 'accepted'});
+    expect(calls.filter((call) => call.method === "agent-interface.capabilities")).toHaveLength(2);
+    const request = calls.find((call) => call.method === "agent-interface.submit")! as Record<
+      string,
+      any
+    >;
+    sockets[0].receive({
+      id: request.id,
+      result: { requestId: "request-one", status: "accepted", runId: "run-one" },
+    });
+    expect(await submitted).toMatchObject({ status: "accepted" });
     await vi.advanceTimersByTimeAsync(15_000);
     // The background heartbeat finds a silent socket dead, so no request has to wait on it.
-    deferredMethods.add('agent-interface.capabilities');
+    deferredMethods.add("agent-interface.capabilities");
     await vi.advanceTimersByTimeAsync(15_000);
-    expect(await runtime.status()).toMatchObject({connected: false, code: 'unreachable'});
-    expect(calls.filter(call => call.method === 'agent-interface.submit')).toHaveLength(1);
+    expect(await runtime.status()).toMatchObject({ connected: false, code: "unreachable" });
+    expect(calls.filter((call) => call.method === "agent-interface.submit")).toHaveLength(1);
   });
 });
 
-it('gates hosted groups by the native driver and sends exact duplicate-safe group payloads',async()=>{
-  let driver=false;
-  deferredMethods=new Set(['groups.capabilities','groups.list','groups.send']);
-  beforeSend=(request,socket)=>{
-    if(!request.method.startsWith('groups.'))return;
-    const result=request.method==='groups.capabilities'?{protocol_version:2,driver,methods:['groups.list','groups.state','groups.log','groups.create','groups.send','groups.stop','groups.approve']}
-      :request.method==='groups.list'?{rooms:[],next_offset:null}:{accepted:true};
-    queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result}));
+it("gates hosted groups by the native driver and sends exact duplicate-safe group payloads", async () => {
+  let driver = false;
+  deferredMethods = new Set(["groups.capabilities", "groups.list", "groups.send"]);
+  beforeSend = (request, socket) => {
+    if (!request.method.startsWith("groups.")) return;
+    const result =
+      request.method === "groups.capabilities"
+        ? {
+            protocol_version: 2,
+            driver,
+            methods: [
+              "groups.list",
+              "groups.state",
+              "groups.log",
+              "groups.create",
+              "groups.send",
+              "groups.stop",
+              "groups.approve",
+            ],
+          }
+        : request.method === "groups.list"
+          ? { rooms: [], next_offset: null }
+          : { accepted: true };
+    queueMicrotask(() => socket.receive({ jsonrpc: "2.0", id: request.id, result }));
   };
-  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({supported:true,canSend:false});
-  const input={operation:'send' as const,roomId:'room',requestId:'request-one',threadId:'thread-one',text:'Discuss the gate repair'};
-  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({statusCode:409});
-  expect(calls.some(call=>call.method==='groups.send')).toBe(false);
-  driver=true;
-  await runtime.groupRequest!(input);await runtime.groupRequest!(input);
-  const sends=calls.filter(call=>call.method==='groups.send');
-  expect(sends[0].params).toEqual({room_id:'room',event_id:'request-one',payload:{text:input.text,thread_id:input.threadId}});
+  expect(await runtime.groupRequest!({ operation: "list" })).toMatchObject({
+    supported: true,
+    canSend: false,
+  });
+  const input = {
+    operation: "send" as const,
+    roomId: "room",
+    requestId: "request-one",
+    threadId: "thread-one",
+    text: "Discuss the gate repair",
+  };
+  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({ statusCode: 409 });
+  expect(calls.some((call) => call.method === "groups.send")).toBe(false);
+  driver = true;
+  await runtime.groupRequest!(input);
+  await runtime.groupRequest!(input);
+  const sends = calls.filter((call) => call.method === "groups.send");
+  expect(sends[0].params).toEqual({
+    room_id: "room",
+    event_id: "request-one",
+    payload: { text: input.text, thread_id: input.threadId },
+  });
   expect(sends[1].params).toEqual(sends[0].params);
 });
-it('saves room settings without the coordinator, only where Hermes offers them, and always names the routing',async()=>{
-  let methods=['groups.list','groups.state','groups.log'];
-  deferredMethods=new Set(['groups.capabilities','groups.list','groups.context']);
-  beforeSend=(request,socket)=>{
-    if(!request.method.startsWith('groups.'))return;
-    const result=request.method==='groups.capabilities'?{protocol_version:2,driver:false,methods}
-      :request.method==='groups.list'?{rooms:[],next_offset:null}
-      :{context:{purpose:'Plan',notes:'Gate',routing:'everyone',lead_member_id:''},event:{event_id:'context:abc'}};
-    queueMicrotask(()=>socket.receive({jsonrpc:'2.0',id:request.id,result}));
+it("saves room settings without the coordinator, only where Hermes offers them, and always names the routing", async () => {
+  let methods = ["groups.list", "groups.state", "groups.log"];
+  deferredMethods = new Set(["groups.capabilities", "groups.list", "groups.context"]);
+  beforeSend = (request, socket) => {
+    if (!request.method.startsWith("groups.")) return;
+    const result =
+      request.method === "groups.capabilities"
+        ? { protocol_version: 2, driver: false, methods }
+        : request.method === "groups.list"
+          ? { rooms: [], next_offset: null }
+          : {
+              context: { purpose: "Plan", notes: "Gate", routing: "everyone", lead_member_id: "" },
+              event: { event_id: "context:abc" },
+            };
+    queueMicrotask(() => socket.receive({ jsonrpc: "2.0", id: request.id, result }));
   };
-  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({supported:true,settings:false,routineDelivery:false});
-  const input={operation:'context' as const,roomId:'room',requestId:'context:abc',purpose:'Plan',notes:'Gate',routing:'everyone' as const,leadMemberId:''};
-  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({statusCode:409});
-  expect(calls.some(call=>call.method==='groups.context')).toBe(false);
-  methods=[...methods,'groups.context'];
-  expect(await runtime.groupRequest!({operation:'list'})).toMatchObject({settings:true,routineDelivery:true});
+  expect(await runtime.groupRequest!({ operation: "list" })).toMatchObject({
+    supported: true,
+    settings: false,
+    routineDelivery: false,
+  });
+  const input = {
+    operation: "context" as const,
+    roomId: "room",
+    requestId: "context:abc",
+    purpose: "Plan",
+    notes: "Gate",
+    routing: "everyone" as const,
+    leadMemberId: "",
+  };
+  await expect(runtime.groupRequest!(input)).rejects.toMatchObject({ statusCode: 409 });
+  expect(calls.some((call) => call.method === "groups.context")).toBe(false);
+  methods = [...methods, "groups.context"];
+  expect(await runtime.groupRequest!({ operation: "list" })).toMatchObject({
+    settings: true,
+    routineDelivery: true,
+  });
   // The coordinator is still off: settings are a log write, not a turn.
   await runtime.groupRequest!(input);
-  expect(calls.find(call=>call.method==='groups.context')?.params).toEqual({room_id:'room',event_id:'context:abc',purpose:'Plan',notes:'Gate',routing:'everyone',lead_member_id:''});
+  expect(calls.find((call) => call.method === "groups.context")?.params).toEqual({
+    room_id: "room",
+    event_id: "context:abc",
+    purpose: "Plan",
+    notes: "Gate",
+    routing: "everyone",
+    lead_member_id: "",
+  });
 });
-it('posts routine results in chosen group chats and rewrites only the room targets',async()=>{
-  const native={id:'job-one',name:'[bot:shared] Morning',prompt:'Check',schedule_display:'1h',enabled:true,
-    deliver:'bot-chat:shared,room:old,room:kept@other,telegram:123'};
-  const requests:{url:string;method:string;body:Record<string,any>}[]=[];
-  let listed: boolean | 'unreadable'=true;
-  vi.stubGlobal('fetch',vi.fn(async(url:URL,init:RequestInit={})=>{
-    const method=init.method ?? 'GET';
-    requests.push({url:String(url),method,body:JSON.parse(bodyText(init.body || '{}'))});
-    // The service route admits only the profile's job list for reads, never a single job.
-    if(method==='GET')expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
-    return Response.json(method==='GET'?(listed==='unreadable'?{error:'busy'}:listed?[native]:[]):native);
-  }));
-  const [routine]=await runtime.routines();
-  expect(routine.roomIds).toEqual(['old']);
+it("posts routine results in chosen group chats and rewrites only the room targets", async () => {
+  const native = {
+    id: "job-one",
+    name: "[bot:shared] Morning",
+    prompt: "Check",
+    schedule_display: "1h",
+    enabled: true,
+    deliver: "bot-chat:shared,room:old,room:kept@other,telegram:123",
+  };
+  const requests: { url: string; method: string; body: Record<string, any> }[] = [];
+  let listed: boolean | "unreadable" = true;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: URL, init: RequestInit = {}) => {
+      const method = init.method ?? "GET";
+      requests.push({ url: String(url), method, body: JSON.parse(bodyText(init.body || "{}")) });
+      // The service route admits only the profile's job list for reads, never a single job.
+      if (method === "GET") expect(new URL(String(url)).pathname).toMatch(/\/cron\/jobs$/);
+      return Response.json(
+        method === "GET"
+          ? listed === "unreadable"
+            ? { error: "busy" }
+            : listed
+              ? [native]
+              : []
+          : native,
+      );
+    }),
+  );
+  const [routine] = await runtime.routines();
+  expect(routine.roomIds).toEqual(["old"]);
   // The delivery fields stay as Hermes has them, for the server's checks.
-  expect(routine.delivery).toEqual({deliver: native.deliver, failure_deliver: undefined, origin: undefined});
-  const base={botId:'shared',name:'Morning',prompt:'Check',schedule:'1h',enabled:true};
-  await runtime.saveRoutine({...base,roomIds:['new']},'job-one');
-  expect(requests.at(-1)).toMatchObject({method:'PUT',body:{updates:{deliver:'bot-chat:shared,room:kept@other,telegram:123,room:new'}}});
+  expect(routine.delivery).toEqual({
+    deliver: native.deliver,
+    failure_deliver: undefined,
+    origin: undefined,
+  });
+  const base = { botId: "shared", name: "Morning", prompt: "Check", schedule: "1h", enabled: true };
+  await runtime.saveRoutine({ ...base, roomIds: ["new"] }, "job-one");
+  expect(requests.at(-1)).toMatchObject({
+    method: "PUT",
+    body: { updates: { deliver: "bot-chat:shared,room:kept@other,telegram:123,room:new" } },
+  });
   // Without rooms in the save, `deliver` is neither read nor written.
-  const before=requests.length;
-  await runtime.saveRoutine(base,'job-one');
-  expect(requests.slice(before).map(request=>request.method)).toEqual(['PUT']);
-  expect(requests.at(-1)?.body.updates).not.toHaveProperty('deliver');
-  await runtime.saveRoutine({...base,roomIds:['dinner']});
-  expect(requests.at(-1)).toMatchObject({method:'POST',body:{deliver:'bot-chat:shared,room:dinner'}});
+  const before = requests.length;
+  await runtime.saveRoutine(base, "job-one");
+  expect(requests.slice(before).map((request) => request.method)).toEqual(["PUT"]);
+  expect(requests.at(-1)?.body.updates).not.toHaveProperty("deliver");
+  await runtime.saveRoutine({ ...base, roomIds: ["dinner"] });
+  expect(requests.at(-1)).toMatchObject({
+    method: "POST",
+    body: { deliver: "bot-chat:shared,room:dinner" },
+  });
   // A routine Hermes cannot return is never rewritten from a guess.
-  listed=false;
-  const count=requests.length;
+  listed = false;
+  const count = requests.length;
   // A routine missing from the list is gone, which the person can act on; a list Hermes could not give is its failure.
-  await expect(runtime.saveRoutine({...base,roomIds:[]},'job-one')).rejects.toMatchObject({statusCode:404,message:'This routine no longer exists in Hermes. Reload to see its routines.'});
-  listed='unreadable';
-  const unreadable=runtime.saveRoutine({...base,roomIds:[]},'job-one');
-  await expect(unreadable).rejects.toThrow('Hermes did not return the routine');
-  await expect(unreadable).rejects.not.toHaveProperty('statusCode');
-  expect(requests.slice(count).map(request=>request.method)).toEqual(['GET','GET']);
+  await expect(runtime.saveRoutine({ ...base, roomIds: [] }, "job-one")).rejects.toMatchObject({
+    statusCode: 404,
+    message: "This routine no longer exists in Hermes. Reload to see its routines.",
+  });
+  listed = "unreadable";
+  const unreadable = runtime.saveRoutine({ ...base, roomIds: [] }, "job-one");
+  await expect(unreadable).rejects.toThrow("Hermes did not return the routine");
+  await expect(unreadable).rejects.not.toHaveProperty("statusCode");
+  expect(requests.slice(count).map((request) => request.method)).toEqual(["GET", "GET"]);
 });
-it('routes routine history and output through the private scoped native experience reader',async()=>{
-  const fetcher=vi.fn(async()=>Response.json([]));vi.stubGlobal('fetch',fetcher);
-  await runtime.routineResults!('shared','morning');
+it("routes routine history and output through the private scoped native experience reader", async () => {
+  const fetcher = vi.fn(async () => Response.json([]));
+  vi.stubGlobal("fetch", fetcher);
+  await runtime.routineResults!("shared", "morning");
   expect(fetcher).toHaveBeenCalledOnce();
-  const [url,init]=fetcher.mock.calls[0] as unknown as [URL,RequestInit];
-  expect(url.pathname).toBe('/api/agent-interface/service/agent-interface/experience');
-  expect(new Headers(init.headers).get('Authorization')).toBe('Bearer '+token);
-  expect(JSON.parse(init.body as string)).toEqual({operation:'routine_results',profile:'shared',routineId:'morning'});
+  const [url, init] = fetcher.mock.calls[0] as unknown as [URL, RequestInit];
+  expect(url.pathname).toBe("/api/agent-interface/service/agent-interface/experience");
+  expect(new Headers(init.headers).get("Authorization")).toBe("Bearer " + token);
+  expect(JSON.parse(init.body as string)).toEqual({
+    operation: "routine_results",
+    profile: "shared",
+    routineId: "morning",
+  });
 });
 
-it('scopes reasoning and service tier controls to the canonical assistant session', async () => {
-  expect(await runtime.inferenceSettings!('shared', {reasoning:'ultra',speed:'fast'})).toEqual({reasoning:'high',speed:'fast'});
-  expect(calls.filter(call=>call.method==='config.set').map(call=>call.params)).toEqual([
-    {profile:'shared',session_id:'live-one',key:'reasoning',value:'ultra'},
-    {profile:'shared',session_id:'live-one',key:'fast',value:'fast'},
+it("scopes reasoning and service tier controls to the canonical assistant session", async () => {
+  expect(await runtime.inferenceSettings!("shared", { reasoning: "ultra", speed: "fast" })).toEqual(
+    { reasoning: "high", speed: "fast" },
+  );
+  expect(calls.filter((call) => call.method === "config.set").map((call) => call.params)).toEqual([
+    { profile: "shared", session_id: "live-one", key: "reasoning", value: "ultra" },
+    { profile: "shared", session_id: "live-one", key: "fast", value: "fast" },
     // The read-back asks the same session for its live tier.
-    {profile:'shared',session_id:'live-one',key:'fast',value:'status'},
+    { profile: "shared", session_id: "live-one", key: "fast", value: "status" },
   ]);
-  rpcErrors.set('config.set', {code:4002,message:'Fast mode is unavailable'});
-  await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toThrow();
+  rpcErrors.set("config.set", { code: 4002, message: "Fast mode is unavailable" });
+  await expect(runtime.inferenceSettings!("shared", { speed: "ultrafast" })).rejects.toThrow();
 });
 
-describe('Auto speed', () => {
+describe("Auto speed", () => {
   // Every speed write changes the live session at once, so the writes are the behavior.
-  const writes=()=>calls.filter(call=>call.method==='config.set'&&call.params.key==='fast'&&call.params.value!=='status').map(call=>call.params.value);
-  it('saves Auto with one write and reads it back although config.get reports it as normal', async () => {
-    expect(await runtime.inferenceSettings!('shared',{speed:'auto'})).toEqual({reasoning:'high',speed:'auto'});
-    expect(writes()).toEqual(['auto']);
-    expect(hermesSpeed.tier).toBe('auto');
-    expect(await runtime.inferenceSettings!('shared')).toEqual({reasoning:'high',speed:'auto'});
+  const writes = () =>
+    calls
+      .filter(
+        (call) =>
+          call.method === "config.set" &&
+          call.params.key === "fast" &&
+          call.params.value !== "status",
+      )
+      .map((call) => call.params.value);
+  it("saves Auto with one write and reads it back although config.get reports it as normal", async () => {
+    expect(await runtime.inferenceSettings!("shared", { speed: "auto" })).toEqual({
+      reasoning: "high",
+      speed: "auto",
+    });
+    expect(writes()).toEqual(["auto"]);
+    expect(hermesSpeed.tier).toBe("auto");
+    expect(await runtime.inferenceSettings!("shared")).toEqual({
+      reasoning: "high",
+      speed: "auto",
+    });
   });
 
-  it('never probes Fast, even on a model without fast mode, where Hermes runs Auto at normal speed', async () => {
-    hermesSpeed.tier='ultrafast'; hermesSpeed.fastModel=false;
-    expect((await runtime.inferenceSettings!('shared',{speed:'auto'})).speed).toBe('auto');
-    expect(writes()).toEqual(['auto']);
+  it("never probes Fast, even on a model without fast mode, where Hermes runs Auto at normal speed", async () => {
+    hermesSpeed.tier = "ultrafast";
+    hermesSpeed.fastModel = false;
+    expect((await runtime.inferenceSettings!("shared", { speed: "auto" })).speed).toBe("auto");
+    expect(writes()).toEqual(["auto"]);
   });
 
-  it('refuses Auto on a Hermes that predates it and leaves the earlier speed alone', async () => {
-    hermesSpeed.tier='priority'; hermesSpeed.knowsAuto=false;
-    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'This Hermes version does not have Auto speed. Update Hermes to use it.'});
-    expect(writes()).toEqual(['auto']);
-    expect(hermesSpeed.tier).toBe('priority');
+  it("refuses Auto on a Hermes that predates it and leaves the earlier speed alone", async () => {
+    hermesSpeed.tier = "priority";
+    hermesSpeed.knowsAuto = false;
+    await expect(runtime.inferenceSettings!("shared", { speed: "auto" })).rejects.toMatchObject({
+      statusCode: 409,
+      message: "This Hermes version does not have Auto speed. Update Hermes to use it.",
+    });
+    expect(writes()).toEqual(["auto"]);
+    expect(hermesSpeed.tier).toBe("priority");
   });
 
-  it('refuses when Hermes answers Auto with another word, without writing a speed nobody picked', async () => {
-    hermesSpeed.echo='normal';
-    await expect(runtime.inferenceSettings!('shared',{speed:'auto'})).rejects.toMatchObject({statusCode:409,message:'Hermes did not confirm Auto speed. Update Hermes to use it.'});
-    expect(writes()).toEqual(['auto']);
+  it("refuses when Hermes answers Auto with another word, without writing a speed nobody picked", async () => {
+    hermesSpeed.echo = "normal";
+    await expect(runtime.inferenceSettings!("shared", { speed: "auto" })).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Hermes did not confirm Auto speed. Update Hermes to use it.",
+    });
+    expect(writes()).toEqual(["auto"]);
   });
 
-  it('names the unsupported speed when Fast or Ultrafast is refused', async () => {
-    hermesSpeed.fastModel=false;
-    await expect(runtime.inferenceSettings!('shared',{speed:'ultrafast'})).rejects.toMatchObject({statusCode:409,message:'Ultrafast speed is not available for this model.'});
+  it("names the unsupported speed when Fast or Ultrafast is refused", async () => {
+    hermesSpeed.fastModel = false;
+    await expect(
+      runtime.inferenceSettings!("shared", { speed: "ultrafast" }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      message: "Ultrafast speed is not available for this model.",
+    });
   });
 
-  it('reads a session pinned to Normal as normal when the profile default is Fast', async () => {
-    hermesSpeed.profileTier='priority';
-    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
+  it("reads a session pinned to Normal as normal when the profile default is Fast", async () => {
+    hermesSpeed.profileTier = "priority";
+    expect((await runtime.inferenceSettings!("shared")).speed).toBe("normal");
   });
 
-  it('refuses a speed word the app cannot show, from status or from an older Hermes, instead of guessing', async () => {
-    hermesSpeed.tier='warp';
-    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
-    hermesSpeed.tier=null; hermesSpeed.knowsStatus=false; hermesSpeed.get='warp';
-    await expect(runtime.inferenceSettings!('shared')).rejects.toThrow('Hermes returned unreadable inference settings.');
+  it("refuses a speed word the app cannot show, from status or from an older Hermes, instead of guessing", async () => {
+    hermesSpeed.tier = "warp";
+    await expect(runtime.inferenceSettings!("shared")).rejects.toThrow(
+      "Hermes returned unreadable inference settings.",
+    );
+    hermesSpeed.tier = null;
+    hermesSpeed.knowsStatus = false;
+    hermesSpeed.get = "warp";
+    await expect(runtime.inferenceSettings!("shared")).rejects.toThrow(
+      "Hermes returned unreadable inference settings.",
+    );
   });
 
-  it('passes on a failed status read instead of falling back to the lossy config.get', async () => {
-    hermesSpeed.tier='auto';
-    rpcErrors.set('config.set', {code:5005,message:'session busy'});
-    await expect(runtime.inferenceSettings!('shared')).rejects.toMatchObject({rpcCode:5005});
+  it("passes on a failed status read instead of falling back to the lossy config.get", async () => {
+    hermesSpeed.tier = "auto";
+    rpcErrors.set("config.set", { code: 5005, message: "session busy" });
+    await expect(runtime.inferenceSettings!("shared")).rejects.toMatchObject({ rpcCode: 5005 });
   });
 
-  it('reads Cold as normal, and a Hermes without status through config.get', async () => {
-    hermesSpeed.tier='cold';
-    expect((await runtime.inferenceSettings!('shared')).speed).toBe('normal');
-    hermesSpeed.tier='priority'; hermesSpeed.knowsStatus=false;
-    expect((await runtime.inferenceSettings!('shared')).speed).toBe('fast');
+  it("reads Cold as normal, and a Hermes without status through config.get", async () => {
+    hermesSpeed.tier = "cold";
+    expect((await runtime.inferenceSettings!("shared")).speed).toBe("normal");
+    hermesSpeed.tier = "priority";
+    hermesSpeed.knowsStatus = false;
+    expect((await runtime.inferenceSettings!("shared")).speed).toBe("fast");
   });
 });
 
-it('preserves native event provenance and inherits scheduled replies without changing roles', async () => {
+it("preserves native event provenance and inherits scheduled replies without changing roles", async () => {
   snapshot.messages = [
-    {role:'user',row_id:1,text:'Native scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity',title:'Bunny care'}}},
-    {role:'assistant',row_id:2,text:'Hay and water.'},
-    {role:'user',row_id:3,text:'Desktop question'},
-    {role:'assistant',row_id:4,text:'Answer'},
-    {role:'user',row_id:5,text:'Diagnostic input',display_metadata:{notification_category:'diagnostic'}},
-    {role:'assistant',row_id:6,text:'Internal output'},
-    {role:'user',row_id:7,text:'Subagent result',display_kind:'async_delegation_complete',display_metadata:{display_text:'Subagent Task Completed: Review'}},
-    {role:'assistant',row_id:8,text:'Review found one issue.'},
+    {
+      role: "user",
+      row_id: 1,
+      text: "Native scheduled input",
+      display_metadata: {
+        origin: { kind: "scheduled", visibility: "activity", title: "Bunny care" },
+      },
+    },
+    { role: "assistant", row_id: 2, text: "Hay and water." },
+    { role: "user", row_id: 3, text: "Desktop question" },
+    { role: "assistant", row_id: 4, text: "Answer" },
+    {
+      role: "user",
+      row_id: 5,
+      text: "Diagnostic input",
+      display_metadata: { notification_category: "diagnostic" },
+    },
+    { role: "assistant", row_id: 6, text: "Internal output" },
+    {
+      role: "user",
+      row_id: 7,
+      text: "Subagent result",
+      display_kind: "async_delegation_complete",
+      display_metadata: { display_text: "Subagent Task Completed: Review" },
+    },
+    { role: "assistant", row_id: 8, text: "Review found one issue." },
   ];
-  const rows=(await runtime.conversation('shared')).messages;
-  expect(rows.map(row=>row.role)).toEqual(snapshot.messages.map((row:any)=>row.role));
-  expect(rows.map(row=>row.origin?.visibility)).toEqual(['activity','conversation',undefined,undefined,'activity','activity','activity','conversation']);
-  expect(rows[1].origin).toMatchObject({kind:'scheduled',title:'Bunny care'});
-  expect(rows[6].origin?.kind).toBe('subagent');
+  const rows = (await runtime.conversation("shared")).messages;
+  expect(rows.map((row) => row.role)).toEqual(snapshot.messages.map((row: any) => row.role));
+  expect(rows.map((row) => row.origin?.visibility)).toEqual([
+    "activity",
+    "conversation",
+    undefined,
+    undefined,
+    "activity",
+    "activity",
+    "activity",
+    "conversation",
+  ]);
+  expect(rows[1].origin).toMatchObject({ kind: "scheduled", title: "Bunny care" });
+  expect(rows[6].origin?.kind).toBe("subagent");
 });
 
-it('carries preceding prompt provenance into a history page that starts with a reply',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',sessionId:'stored',offset:0,hasMore:false,messages:[{id:'a',role:'assistant',text:'The reminder is ready.'}],app_tool_result:'internal wire value',app_prior_prompt:{role:'user',text:'Scheduled input',display_metadata:{origin:{kind:'scheduled',visibility:'activity'}}}})));
-  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:100});
-  expect(page.messages[0].origin).toEqual({kind:'scheduled',visibility:'conversation'});
-  expect(page).not.toHaveProperty('app_prior_prompt');
-  expect(page.messages[0]).not.toHaveProperty('display_metadata');
+it("carries preceding prompt provenance into a history page that starts with a reply", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        botId: "shared",
+        sessionId: "stored",
+        offset: 0,
+        hasMore: false,
+        messages: [{ id: "a", role: "assistant", text: "The reminder is ready." }],
+        app_tool_result: "internal wire value",
+        app_prior_prompt: {
+          role: "user",
+          text: "Scheduled input",
+          display_metadata: { origin: { kind: "scheduled", visibility: "activity" } },
+        },
+      }),
+    ),
+  );
+  const page = await runtime.experienceRequest!({
+    operation: "history",
+    profile: "shared",
+    sessionId: "stored",
+    offset: 100,
+  });
+  expect(page.messages[0].origin).toEqual({ kind: "scheduled", visibility: "conversation" });
+  expect(page).not.toHaveProperty("app_prior_prompt");
+  expect(page.messages[0]).not.toHaveProperty("display_metadata");
 });
 
-it('does not give a newer inflight human reply the previous bot prompt origin',async()=>{
-  snapshot.info={running:true};
-  snapshot.messages=[{role:'user',row_id:1,text:'Message from 🤖 Planner (@planner): Internal question'},{role:'assistant',row_id:2,text:'Reply to Planner'}];
-  snapshot.inflight={user:'A new Desktop question',assistant:'A new human answer'};
-  const rows=(await runtime.conversation('shared')).messages;
-  expect(rows[1].origin?.visibility).toBe('activity');
-  expect(rows.at(-1)?.origin).toEqual({kind:'human',visibility:'conversation'});
+it("does not give a newer inflight human reply the previous bot prompt origin", async () => {
+  snapshot.info = { running: true };
+  snapshot.messages = [
+    { role: "user", row_id: 1, text: "Message from 🤖 Planner (@planner): Internal question" },
+    { role: "assistant", row_id: 2, text: "Reply to Planner" },
+  ];
+  snapshot.inflight = { user: "A new Desktop question", assistant: "A new human answer" };
+  const rows = (await runtime.conversation("shared")).messages;
+  expect(rows[1].origin?.visibility).toBe("activity");
+  expect(rows.at(-1)?.origin).toEqual({ kind: "human", visibility: "conversation" });
 });
 
-it('allowlists history fields before redacting a private bot handoff and its inherited reply',async()=>{
-  const privateId='private-bot',canary='private-canary';
-  vi.stubGlobal('fetch',vi.fn(async()=>Response.json({botId:'shared',sessionId:'stored',offset:0,hasMore:false,messages:[
-    {id:'prompt',role:'user',text:canary,display_metadata:{origin:{kind:'agent',visibility:'activity',handle:privateId,name:'Private bot'}},content:canary,labels:{secret:canary}},
-    {id:'reply',role:'assistant',text:canary,reasoning_content:canary,codex_message_items:[canary]},
-    {id:'tool',role:'tool',name:'message_agent',text:canary,args:{target:privateId,message:canary},context:canary,app_tool_result:canary,content:canary},
-  ]})));
-  const page=await runtime.experienceRequest!({operation:'history',profile:'shared',sessionId:'stored',offset:0});
+it("allowlists history fields before redacting a private bot handoff and its inherited reply", async () => {
+  const privateId = "private-bot",
+    canary = "private-canary";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        botId: "shared",
+        sessionId: "stored",
+        offset: 0,
+        hasMore: false,
+        messages: [
+          {
+            id: "prompt",
+            role: "user",
+            text: canary,
+            display_metadata: {
+              origin: {
+                kind: "agent",
+                visibility: "activity",
+                handle: privateId,
+                name: "Private bot",
+              },
+            },
+            content: canary,
+            labels: { secret: canary },
+          },
+          {
+            id: "reply",
+            role: "assistant",
+            text: canary,
+            reasoning_content: canary,
+            codex_message_items: [canary],
+          },
+          {
+            id: "tool",
+            role: "tool",
+            name: "message_agent",
+            text: canary,
+            args: { target: privateId, message: canary },
+            context: canary,
+            app_tool_result: canary,
+            content: canary,
+          },
+        ],
+      }),
+    ),
+  );
+  const page = await runtime.experienceRequest!({
+    operation: "history",
+    profile: "shared",
+    sessionId: "stored",
+    offset: 0,
+  });
   expect(page.messages[1].origin?.handle).toBe(privateId);
-  const store=new Store(':memory:');
+  const store = new Store(":memory:");
   try {
-    store.savePresentation(privateId,{shared:false,ownerId:'other'});
-    const redact=await redactAgents(store,new Roster(runtime,store),'reader');
-    const publicRows=page.messages.map(redact.message);
+    store.savePresentation(privateId, { shared: false, ownerId: "other" });
+    const redact = await redactAgents(store, new Roster(runtime, store), "reader");
+    const publicRows = page.messages.map(redact.message);
     expect(JSON.stringify(publicRows)).not.toContain(canary);
     expect(JSON.stringify(publicRows)).not.toContain(privateId);
-    expect(publicRows[0].origin).toEqual({kind:'agent',visibility:'activity'});
-  } finally {store.close();}
+    expect(publicRows[0].origin).toEqual({ kind: "agent", visibility: "activity" });
+  } finally {
+    store.close();
+  }
 });
 
-describe('Hermes conversation and roster read costs', () => {
-  const opens = () => calls.filter(call => call.method === 'agent-interface.open');
-  it('keeps a turn that started while an older idle open answer was on its way', async () => {
+describe("Hermes conversation and roster read costs", () => {
+  const opens = () => calls.filter((call) => call.method === "agent-interface.open");
+  it("keeps a turn that started while an older idle open answer was on its way", async () => {
     await runtime.status();
-    await runtime.conversation('shared');
-    deferredMethods.add('agent-interface.open');
+    await runtime.conversation("shared");
+    deferredMethods.add("agent-interface.open");
     hermesChanged();
-    const stale = runtime.conversation('shared');
+    const stale = runtime.conversation("shared");
     await vi.waitFor(() => expect(opens()).toHaveLength(2));
     const request = opens().at(-1) as Record<string, any>;
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'Hel'}}});
-    deferredMethods.delete('agent-interface.open');
-    snapshot.info = {running: true};
-    sockets[0].receive({jsonrpc: '2.0', id: request.id, result: {...structuredClone(snapshot), info: {running: false}}});
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.start", payload: {} },
+    });
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.delta", payload: { text: "Hel" } },
+    });
+    deferredMethods.delete("agent-interface.open");
+    snapshot.info = { running: true };
+    sockets[0].receive({
+      jsonrpc: "2.0",
+      id: request.id,
+      result: { ...structuredClone(snapshot), info: { running: false } },
+    });
     await stale;
-    expect((await runtime.conversation('shared')).messages.at(-1)).toMatchObject({id: 'live-one-inflight', text: 'Hel'});
+    expect((await runtime.conversation("shared")).messages.at(-1)).toMatchObject({
+      id: "live-one-inflight",
+      text: "Hel",
+    });
   });
   const heldOpen = async (count: number) => {
     await vi.waitFor(() => expect(opens()).toHaveLength(count));
     return opens().at(-1) as Record<string, any>;
   };
-  const answer = (request: Record<string, any>, result: Record<string, any>) => sockets[0].receive({jsonrpc: '2.0', id: request.id, result});
-  const frame = (type: string, payload: Record<string, unknown> = {}) => sockets[0].receive({method: 'event', params: {session_id: 'live-one', type, payload}});
-  it('never seeds a new turn with an older active answer, and asks again', async () => {
+  const answer = (request: Record<string, any>, result: Record<string, any>) =>
+    sockets[0].receive({ jsonrpc: "2.0", id: request.id, result });
+  const frame = (type: string, payload: Record<string, unknown> = {}) =>
+    sockets[0].receive({ method: "event", params: { session_id: "live-one", type, payload } });
+  it("never seeds a new turn with an older active answer, and asks again", async () => {
     await runtime.status();
-    await runtime.conversation('shared');
-    deferredMethods.add('agent-interface.open');
+    await runtime.conversation("shared");
+    deferredMethods.add("agent-interface.open");
     hermesChanged();
-    const read = runtime.conversation('shared');
+    const read = runtime.conversation("shared");
     const held = await heldOpen(2);
-    frame('message.complete', {status: 'complete'});
-    frame('message.start');
-    deferredMethods.delete('agent-interface.open');
-    Object.assign(snapshot, {info: {running: true}, app_run_id: 'NEW-RUN'});
-    answer(held, {...structuredClone(snapshot), app_run_id: 'OLD-RUN', inflight: {assistant: 'OLD REPLY', reasoning: 'OLD REASONING'}});
+    frame("message.complete", { status: "complete" });
+    frame("message.start");
+    deferredMethods.delete("agent-interface.open");
+    Object.assign(snapshot, { info: { running: true }, app_run_id: "NEW-RUN" });
+    answer(held, {
+      ...structuredClone(snapshot),
+      app_run_id: "OLD-RUN",
+      inflight: { assistant: "OLD REPLY", reasoning: "OLD REASONING" },
+    });
     const shown = await read;
     expect(opens()).toHaveLength(3);
-    expect(shown.activity.runId).toBe('NEW-RUN');
+    expect(shown.activity.runId).toBe("NEW-RUN");
     expect(JSON.stringify(shown)).not.toMatch(/OLD/);
-    frame('message.delta', {text: 'New'});
-    const fresh = await runtime.conversation('shared');
+    frame("message.delta", { text: "New" });
+    const fresh = await runtime.conversation("shared");
     expect(JSON.stringify(fresh)).not.toMatch(/OLD/);
-    expect(fresh.messages.at(-1)).toMatchObject({id: 'live-one-inflight', text: 'New'});
+    expect(fresh.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: "New" });
   });
-  it('asks again when an approval is cancelled while an open answer is on its way', async () => {
+  it("asks again when an approval is cancelled while an open answer is on its way", async () => {
     await runtime.status();
-    await runtime.conversation('shared');
-    deferredMethods.add('agent-interface.open');
-    const read = runtime.conversation('shared', {history: false});
+    await runtime.conversation("shared");
+    deferredMethods.add("agent-interface.open");
+    const read = runtime.conversation("shared", { history: false });
     const held = await heldOpen(2);
-    frame('request.cancel', {id: 'ask'});
-    deferredMethods.delete('agent-interface.open');
-    answer(held, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
+    frame("request.cancel", { id: "ask" });
+    deferredMethods.delete("agent-interface.open");
+    answer(held, {
+      ...structuredClone(snapshot),
+      open_requests: [{ id: "ask", method: "approval" }],
+    });
     expect((await read).approvals).toEqual([]);
-    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toMatchObject({statusCode: 409, code: 'request_not_pending'});
+    await expect(runtime.approve("shared", "ask", "approved", "person")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "request_not_pending",
+    });
   });
-  it('lets a later open answer stand when an earlier one arrives after it', async () => {
+  it("lets a later open answer stand when an earlier one arrives after it", async () => {
     await runtime.status();
-    await runtime.conversation('shared');
-    deferredMethods.add('agent-interface.open');
-    const first = runtime.conversation('shared', {history: false});
+    await runtime.conversation("shared");
+    deferredMethods.add("agent-interface.open");
+    const first = runtime.conversation("shared", { history: false });
     const older = await heldOpen(2);
-    const second = runtime.conversation('shared', {history: false});
+    const second = runtime.conversation("shared", { history: false });
     const newer = await heldOpen(3);
     answer(newer, structuredClone(snapshot));
     expect((await second).approvals).toEqual([]);
-    deferredMethods.delete('agent-interface.open');
-    answer(older, {...structuredClone(snapshot), open_requests: [{id: 'ask', method: 'approval'}]});
+    deferredMethods.delete("agent-interface.open");
+    answer(older, {
+      ...structuredClone(snapshot),
+      open_requests: [{ id: "ask", method: "approval" }],
+    });
     expect((await first).approvals).toEqual([]);
     expect(opens()).toHaveLength(4);
-    await expect(runtime.approve('shared', 'ask', 'approved', 'person')).rejects.toMatchObject({statusCode: 409, code: 'request_not_pending'});
+    await expect(runtime.approve("shared", "ask", "approved", "person")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "request_not_pending",
+    });
   });
-  it('reports the add-on round trip and phases for timing, never in the conversation', async () => {
+  it("reports the add-on round trip and phases for timing, never in the conversation", async () => {
     await runtime.status();
-    snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}];
-    snapshot.app_timing = {wait: 1.5, activate: 20, total: 25, 'bad;name': 3, decorate: 'slow'};
-    snapshot.app_cache = {decorated: 0, pieces: 12, reused: 11, emptied: 0, fill: -1, 'x"y': 1};
-    const first: ReadTiming = {}, second: ReadTiming = {};
-    const [read, joined] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}, timing: first}), runtime.conversation('shared', {window: {turns: 20}, timing: second})]);
-    expect(first).toEqual({shared: false, hermes: expect.any(Number), addon: {wait: 1.5, activate: 20, total: 25}, caches: {decorated: 0, pieces: 12, reused: 11, emptied: 0}});
+    snapshot.messages = [{ row_id: 1, role: "user", text: "Hi" }];
+    snapshot.app_timing = { wait: 1.5, activate: 20, total: 25, "bad;name": 3, decorate: "slow" };
+    snapshot.app_cache = { decorated: 0, pieces: 12, reused: 11, emptied: 0, fill: -1, 'x"y': 1 };
+    const first: ReadTiming = {},
+      second: ReadTiming = {};
+    const [read, joined] = await Promise.all([
+      runtime.conversation("shared", { window: { turns: 20 }, timing: first }),
+      runtime.conversation("shared", { window: { turns: 20 }, timing: second }),
+    ]);
+    expect(first).toEqual({
+      shared: false,
+      hermes: expect.any(Number),
+      addon: { wait: 1.5, activate: 20, total: 25 },
+      caches: { decorated: 0, pieces: 12, reused: 11, emptied: 0 },
+    });
     // The second reader joined the first read, so it reports no Hermes time of its own.
-    expect(second).toEqual({shared: true});
+    expect(second).toEqual({ shared: true });
     expect(joined).toEqual(read);
     expect(JSON.stringify(read)).not.toMatch(/timing|activate|reused/);
     delete snapshot.app_timing;
     delete snapshot.app_cache;
     hermesChanged();
     const older: ReadTiming = {};
-    await runtime.conversation('shared', {window: {turns: 20}, timing: older});
-    expect(older).toEqual({shared: false, hermes: expect.any(Number)});
+    await runtime.conversation("shared", { window: { turns: 20 }, timing: older });
+    expect(older).toEqual({ shared: false, hermes: expect.any(Number) });
   });
-  it('reads write-check state without history and asks Hermes to cut a window', async () => {
+  it("reads write-check state without history and asks Hermes to cut a window", async () => {
     await runtime.submit(input());
-    await runtime.conversation('shared', {history: false});
-    expect(opens().map(call => call.params)).toEqual([{profile: 'shared', omit_messages: true}, {profile: 'shared', omit_messages: true}]);
-    await runtime.conversation('shared', {window: {start: 'abc', turns: 20}});
-    await runtime.conversation('shared');
-    expect(opens().slice(2).map(call => call.params)).toEqual([{profile: 'shared', window: {start: 'abc', turns: 20}}, {profile: 'shared'}]);
+    await runtime.conversation("shared", { history: false });
+    expect(opens().map((call) => call.params)).toEqual([
+      { profile: "shared", omit_messages: true },
+      { profile: "shared", omit_messages: true },
+    ]);
+    await runtime.conversation("shared", { window: { start: "abc", turns: 20 } });
+    await runtime.conversation("shared");
+    expect(
+      opens()
+        .slice(2)
+        .map((call) => call.params),
+    ).toEqual([{ profile: "shared", window: { start: "abc", turns: 20 } }, { profile: "shared" }]);
   });
 
-  it('splits a cut window from its earlier context and keeps positional IDs', async () => {
-    snapshot.app_window = {earlier: 40, context: 2};
+  it("splits a cut window from its earlier context and keeps positional IDs", async () => {
+    snapshot.app_window = { earlier: 40, context: 2 };
     snapshot.messages = [
-      {role: 'user', text: 'Make a chart', app_index: 6},
-      {role: 'assistant', text: 'Chart', app_index: 7, app_artifacts: [{path: '/out/chart.png', name: 'chart.png'}]},
-      {role: 'user', text: 'Latest prompt', app_index: 40},
-      {role: 'assistant', text: 'Latest reply', app_index: 41},
+      { role: "user", text: "Make a chart", app_index: 6 },
+      {
+        role: "assistant",
+        text: "Chart",
+        app_index: 7,
+        app_artifacts: [{ path: "/out/chart.png", name: "chart.png" }],
+      },
+      { role: "user", text: "Latest prompt", app_index: 40 },
+      { role: "assistant", text: "Latest reply", app_index: 41 },
     ];
-    const result = await runtime.conversation('shared', {window: {turns: 20}});
-    expect(result.messages.map(message => message.id)).toEqual(['live-one-40', 'live-one-41']);
+    const result = await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(result.messages.map((message) => message.id)).toEqual(["live-one-40", "live-one-41"]);
     expect(result.window!.earlier).toBe(40);
-    expect(result.window!.context.map(message => message.id)).toEqual(['live-one-6', 'live-one-7']);
-    expect(result.files.map(file => file.name)).toEqual(['chart.png']);
+    expect(result.window!.context.map((message) => message.id)).toEqual([
+      "live-one-6",
+      "live-one-7",
+    ]);
+    expect(result.files.map((file) => file.name)).toEqual(["chart.png"]);
     delete snapshot.app_window;
     hermesChanged();
-    expect((await runtime.conversation('shared', {window: {turns: 20}})).window).toBeUndefined();
+    expect(
+      (await runtime.conversation("shared", { window: { turns: 20 } })).window,
+    ).toBeUndefined();
   });
-  it('gives a window cut inside a turn the origin of the prompt Hermes kept before it', async () => {
+  it("gives a window cut inside a turn the origin of the prompt Hermes kept before it", async () => {
     // A turn read names a routine turn's first reply; the add-on keeps its scheduled prompt as context.
-    snapshot.app_window = {earlier: 41, context: 1};
+    snapshot.app_window = { earlier: 41, context: 1 };
     snapshot.messages = [
-      {role: 'user', text: '[Cron delivery: Feed check]', app_index: 40},
-      {role: 'assistant', text: 'Feed is low in the north barn.', app_index: 41},
-      {role: 'assistant', text: 'Ordered more.', app_index: 42},
+      { role: "user", text: "[Cron delivery: Feed check]", app_index: 40 },
+      { role: "assistant", text: "Feed is low in the north barn.", app_index: 41 },
+      { role: "assistant", text: "Ordered more.", app_index: 42 },
     ];
-    const result = await runtime.conversation('shared', {window: {start: 'live-one-41'}});
-    expect(result.messages.map(message => [message.id, message.origin?.kind])).toEqual([['live-one-41', 'scheduled'], ['live-one-42', 'scheduled']]);
-    expect(result.window!.context.map(message => message.id)).toEqual(['live-one-40']);
+    const result = await runtime.conversation("shared", { window: { start: "live-one-41" } });
+    expect(result.messages.map((message) => [message.id, message.origin?.kind])).toEqual([
+      ["live-one-41", "scheduled"],
+      ["live-one-42", "scheduled"],
+    ]);
+    expect(result.window!.context.map((message) => message.id)).toEqual(["live-one-40"]);
   });
 
-  describe('progress lines', () => {
-    const turn = (rows: Record<string, any>[]) => { snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}, ...rows]; };
-    it('shows each display_commentary line as an interim assistant message ahead of its row', async () => {
-      turn([
-        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', timestamp: 1_700_000_000, display_commentary: ['I will check the forecast first.', 'Then the radar.']},
-        {row_id: 3, role: 'tool', name: 'web_search', app_run_id: 'run-1', content: '{}'},
-        {row_id: 4, role: 'assistant', text: 'Sunny, 75.', app_run_id: 'run-1'},
-      ]);
-      const {messages} = await runtime.conversation('shared');
-      expect(messages.map(message => [message.id, message.role, message.text, message.interim])).toEqual([
-        ['1', 'user', 'Weather?', undefined],
-        ['2-progress-0', 'assistant', 'I will check the forecast first.', true],
-        ['2-progress-1', 'assistant', 'Then the radar.', true],
-        ['2', 'assistant', '', undefined],
-        ['3', 'tool', '{}', undefined],
-        ['4', 'assistant', 'Sunny, 75.', undefined],
-      ]);
-      expect(messages[1]).toMatchObject({runId: 'run-1', createdAt: new Date(1_700_000_000_000).toISOString()});
-    });
-    it('shows nothing when the profile turned commentary off, even with the raw provider items present', async () => {
-      // Hermes sends an empty projection for a disabled profile. The raw items must never be read here.
-      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: [],
-        codex_message_items: [{type: 'message', role: 'assistant', phase: 'commentary', content: [{type: 'output_text', text: 'I will check Search Console.'}]}]}]);
-      expect(JSON.stringify((await runtime.conversation('shared')).messages)).not.toContain('Search Console');
-      // An older Hermes without the projection says nothing either.
-      turn([{row_id: 2, role: 'assistant', text: '', codex_message_items: [{type: 'message', phase: 'commentary', content: [{type: 'output_text', text: 'Raw text.'}]}]}]);
-      expect((await runtime.conversation('shared')).messages.filter(message => message.interim)).toEqual([]);
-    });
-    it.each([
-      ['not a list', 'I will check.'],
-      ['an object', {text: 'I will check.'}],
-      ['null', null],
-      ['a number', 7],
-    ])('ignores a display_commentary that is %s', async (_name, value) => {
-      turn([{row_id: 2, role: 'assistant', text: 'Answer', display_commentary: value}]);
-      expect((await runtime.conversation('shared')).messages.map(message => message.id)).toEqual(['1', '2']);
-    });
-    it('keeps every usable line whole: strings with words, none the answer already says, nothing cut or merged', async () => {
-      turn([{row_id: 2, role: 'assistant', text: 'Sunny, 75.', display_commentary: [
-        42, null, {text: 'x'}, '', '   ', ' Checking. ', 'Checking.', 'Sunny, 75.', 'z'.repeat(5000)]}]);
-      const lines = (await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text);
-      // A line shown cut, or left out, would come back from the stream as its own unmarked reply.
-      expect(lines).toEqual(['Checking.', 'Checking.', 'z'.repeat(5000)]);
-      const many = Array.from({length: 40}, (_, index) => `Step ${index}`);
-      turn([{row_id: 2, role: 'assistant', text: '', display_commentary: many}]);
-      expect((await runtime.conversation('shared')).messages.filter(message => message.interim).map(message => message.text)).toEqual(many);
-    });
-    it('never turns a user or tool row into a progress line', async () => {
-      turn([{row_id: 2, role: 'user', text: 'Hi again', display_commentary: ['injected']}, {row_id: 3, role: 'tool', name: 'x', content: '{}', display_commentary: ['injected']}]);
-      expect((await runtime.conversation('shared')).messages.some(message => message.interim)).toBe(false);
-    });
-    it('uses Hermes display copies of the reply and reasoning, which leave out flattened progress lines', async () => {
-      turn([{row_id: 2, role: 'assistant', text: 'I will check.\n\nSunny.', display_content: 'Sunny.', reasoning: 'I will check.\nPrivate thoughts', display_reasoning: 'Private thoughts', display_commentary: ['I will check.']}]);
-      const reply = (await runtime.conversation('shared')).messages.find(message => message.id === '2')!;
-      expect(reply).toMatchObject({text: 'Sunny.', reasoning: 'Private thoughts'});
-    });
-    it('cuts a window by Hermes rows, not by the messages those rows became', async () => {
-      snapshot.app_window = {earlier: 10, context: 2};
+  describe("progress lines", () => {
+    const turn = (rows: Record<string, any>[]) => {
       snapshot.messages = [
-        {role: 'user', text: 'Old prompt', app_index: 3},
-        {role: 'assistant', text: 'Old answer', app_index: 4, display_commentary: ['Looking.', 'Still looking.']},
-        {role: 'user', text: 'Latest prompt', app_index: 10},
-        {role: 'assistant', text: 'Latest answer', app_index: 11, display_commentary: ['Checking.']},
+        { row_id: 1, role: "user", text: "Weather?", app_run_id: "run-1" },
+        ...rows,
       ];
-      const result = await runtime.conversation('shared', {window: {turns: 20}});
-      expect(result.window!.context.map(message => message.id)).toEqual(['live-one-3', 'live-one-4-progress-0', 'live-one-4-progress-1', 'live-one-4']);
-      expect(result.messages.map(message => message.id)).toEqual(['live-one-10', 'live-one-11-progress-0', 'live-one-11']);
+    };
+    it("shows each display_commentary line as an interim assistant message ahead of its row", async () => {
+      turn([
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "",
+          app_run_id: "run-1",
+          timestamp: 1_700_000_000,
+          display_commentary: ["I will check the forecast first.", "Then the radar."],
+        },
+        { row_id: 3, role: "tool", name: "web_search", app_run_id: "run-1", content: "{}" },
+        { row_id: 4, role: "assistant", text: "Sunny, 75.", app_run_id: "run-1" },
+      ]);
+      const { messages } = await runtime.conversation("shared");
+      expect(
+        messages.map((message) => [message.id, message.role, message.text, message.interim]),
+      ).toEqual([
+        ["1", "user", "Weather?", undefined],
+        ["2-progress-0", "assistant", "I will check the forecast first.", true],
+        ["2-progress-1", "assistant", "Then the radar.", true],
+        ["2", "assistant", "", undefined],
+        ["3", "tool", "{}", undefined],
+        ["4", "assistant", "Sunny, 75.", undefined],
+      ]);
+      expect(messages[1]).toMatchObject({
+        runId: "run-1",
+        createdAt: new Date(1_700_000_000_000).toISOString(),
+      });
     });
-    it('tells watchers about a progress line as a structural change, so clients read again at once', async () => {
-      await runtime.status();
-      await runtime.conversation('shared');
-      const kinds: unknown[] = [];
-      runtime.watch!('shared', kind => kinds.push(kind));
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I'}}});
-      expect(kinds).toEqual(['inflight']);
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check.', already_streamed: true}}});
-      // A delta event reports "inflight"; a structural one reports nothing.
-      expect(kinds).toEqual(['inflight', undefined]);
-      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?'}, {row_id: 2, role: 'assistant', text: '', display_commentary: ['I will check.']}];
-      expect((await runtime.conversation('shared')).messages.map(message => message.text)).toEqual(['Weather?', 'I will check.', '']);
+    it("shows nothing when the profile turned commentary off, even with the raw provider items present", async () => {
+      // Hermes sends an empty projection for a disabled profile. The raw items must never be read here.
+      turn([
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "",
+          display_commentary: [],
+          codex_message_items: [
+            {
+              type: "message",
+              role: "assistant",
+              phase: "commentary",
+              content: [{ type: "output_text", text: "I will check Search Console." }],
+            },
+          ],
+        },
+      ]);
+      expect(JSON.stringify((await runtime.conversation("shared")).messages)).not.toContain(
+        "Search Console",
+      );
+      // An older Hermes without the projection says nothing either.
+      turn([
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "",
+          codex_message_items: [
+            {
+              type: "message",
+              phase: "commentary",
+              content: [{ type: "output_text", text: "Raw text." }],
+            },
+          ],
+        },
+      ]);
+      expect(
+        (await runtime.conversation("shared")).messages.filter((message) => message.interim),
+      ).toEqual([]);
     });
     it.each([
-      ['a very long line', `I will check ${'the forecast and the radar '.repeat(80)}first.`],
-      ['two repeated lines', 'I will check the forecast.\n\nI will check the forecast.'],
-    ])('leaves no tail behind when a streamed progress line is saved, even for %s', async (_name, streamed) => {
-      await runtime.status();
-      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
-      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
-      await runtime.conversation('shared');
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: streamed}}});
-      const lines = streamed.includes('\n\n') ? streamed.split('\n\n') : [streamed];
-      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
-        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: lines}];
-      const shown = (await runtime.conversation('shared')).messages;
-      expect(shown.filter(message => message.interim).map(message => message.text)).toEqual(lines);
-      // Nothing of the stream is left to read as the reply.
-      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+      ["not a list", "I will check."],
+      ["an object", { text: "I will check." }],
+      ["null", null],
+      ["a number", 7],
+    ])("ignores a display_commentary that is %s", async (_name, value) => {
+      turn([{ row_id: 2, role: "assistant", text: "Answer", display_commentary: value }]);
+      expect((await runtime.conversation("shared")).messages.map((message) => message.id)).toEqual([
+        "1",
+        "2",
+      ]);
     });
-    it('does not repeat a streamed progress line once its saved row arrives', async () => {
+    it("keeps every usable line whole: strings with words, none the answer already says, nothing cut or merged", async () => {
+      turn([
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "Sunny, 75.",
+          display_commentary: [
+            42,
+            null,
+            { text: "x" },
+            "",
+            "   ",
+            " Checking. ",
+            "Checking.",
+            "Sunny, 75.",
+            "z".repeat(5000),
+          ],
+        },
+      ]);
+      const lines = (await runtime.conversation("shared")).messages
+        .filter((message) => message.interim)
+        .map((message) => message.text);
+      // A line shown cut, or left out, would come back from the stream as its own unmarked reply.
+      expect(lines).toEqual(["Checking.", "Checking.", "z".repeat(5000)]);
+      const many = Array.from({ length: 40 }, (_, index) => `Step ${index}`);
+      turn([{ row_id: 2, role: "assistant", text: "", display_commentary: many }]);
+      expect(
+        (await runtime.conversation("shared")).messages
+          .filter((message) => message.interim)
+          .map((message) => message.text),
+      ).toEqual(many);
+    });
+    it("never turns a user or tool row into a progress line", async () => {
+      turn([
+        { row_id: 2, role: "user", text: "Hi again", display_commentary: ["injected"] },
+        { row_id: 3, role: "tool", name: "x", content: "{}", display_commentary: ["injected"] },
+      ]);
+      expect(
+        (await runtime.conversation("shared")).messages.some((message) => message.interim),
+      ).toBe(false);
+    });
+    it("uses Hermes display copies of the reply and reasoning, which leave out flattened progress lines", async () => {
+      turn([
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "I will check.\n\nSunny.",
+          display_content: "Sunny.",
+          reasoning: "I will check.\nPrivate thoughts",
+          display_reasoning: "Private thoughts",
+          display_commentary: ["I will check."],
+        },
+      ]);
+      const reply = (await runtime.conversation("shared")).messages.find(
+        (message) => message.id === "2",
+      )!;
+      expect(reply).toMatchObject({ text: "Sunny.", reasoning: "Private thoughts" });
+    });
+    it("cuts a window by Hermes rows, not by the messages those rows became", async () => {
+      snapshot.app_window = { earlier: 10, context: 2 };
+      snapshot.messages = [
+        { role: "user", text: "Old prompt", app_index: 3 },
+        {
+          role: "assistant",
+          text: "Old answer",
+          app_index: 4,
+          display_commentary: ["Looking.", "Still looking."],
+        },
+        { role: "user", text: "Latest prompt", app_index: 10 },
+        {
+          role: "assistant",
+          text: "Latest answer",
+          app_index: 11,
+          display_commentary: ["Checking."],
+        },
+      ];
+      const result = await runtime.conversation("shared", { window: { turns: 20 } });
+      expect(result.window!.context.map((message) => message.id)).toEqual([
+        "live-one-3",
+        "live-one-4-progress-0",
+        "live-one-4-progress-1",
+        "live-one-4",
+      ]);
+      expect(result.messages.map((message) => message.id)).toEqual([
+        "live-one-10",
+        "live-one-11-progress-0",
+        "live-one-11",
+      ]);
+    });
+    it("tells watchers about a progress line as a structural change, so clients read again at once", async () => {
       await runtime.status();
-      snapshot.info.running = true; snapshot.app_run_id = 'run-1';
-      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'}];
-      await runtime.conversation('shared');
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.delta', payload: {text: 'I will check the forecast.'}}});
-      sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.interim', payload: {text: 'I will check the forecast.', already_streamed: true}}});
-      snapshot.messages = [{row_id: 1, role: 'user', text: 'Weather?', app_run_id: 'run-1'},
-        {row_id: 2, role: 'assistant', text: '', app_run_id: 'run-1', display_commentary: ['I will check the forecast.']}];
-      const shown = (await runtime.conversation('shared')).messages;
-      expect(shown.filter(message => message.text.includes('forecast'))).toHaveLength(1);
-      expect(shown.some(message => message.id.endsWith('-inflight'))).toBe(false);
+      await runtime.conversation("shared");
+      const kinds: unknown[] = [];
+      runtime.watch!("shared", (kind) => kinds.push(kind));
+      sockets[0].receive({
+        method: "event",
+        params: { session_id: "live-one", type: "message.delta", payload: { text: "I" } },
+      });
+      expect(kinds).toEqual(["inflight"]);
+      sockets[0].receive({
+        method: "event",
+        params: {
+          session_id: "live-one",
+          type: "message.interim",
+          payload: { text: "I will check.", already_streamed: true },
+        },
+      });
+      // A delta event reports "inflight"; a structural one reports nothing.
+      expect(kinds).toEqual(["inflight", undefined]);
+      snapshot.messages = [
+        { row_id: 1, role: "user", text: "Weather?" },
+        { row_id: 2, role: "assistant", text: "", display_commentary: ["I will check."] },
+      ];
+      expect(
+        (await runtime.conversation("shared")).messages.map((message) => message.text),
+      ).toEqual(["Weather?", "I will check.", ""]);
+    });
+    it.each([
+      ["a very long line", `I will check ${"the forecast and the radar ".repeat(80)}first.`],
+      ["two repeated lines", "I will check the forecast.\n\nI will check the forecast."],
+    ])(
+      "leaves no tail behind when a streamed progress line is saved, even for %s",
+      async (_name, streamed) => {
+        await runtime.status();
+        snapshot.info.running = true;
+        snapshot.app_run_id = "run-1";
+        snapshot.messages = [{ row_id: 1, role: "user", text: "Weather?", app_run_id: "run-1" }];
+        await runtime.conversation("shared");
+        sockets[0].receive({
+          method: "event",
+          params: { session_id: "live-one", type: "message.start", payload: {} },
+        });
+        sockets[0].receive({
+          method: "event",
+          params: { session_id: "live-one", type: "message.delta", payload: { text: streamed } },
+        });
+        const lines = streamed.includes("\n\n") ? streamed.split("\n\n") : [streamed];
+        snapshot.messages = [
+          { row_id: 1, role: "user", text: "Weather?", app_run_id: "run-1" },
+          {
+            row_id: 2,
+            role: "assistant",
+            text: "",
+            app_run_id: "run-1",
+            display_commentary: lines,
+          },
+        ];
+        const shown = (await runtime.conversation("shared")).messages;
+        expect(shown.filter((message) => message.interim).map((message) => message.text)).toEqual(
+          lines,
+        );
+        // Nothing of the stream is left to read as the reply.
+        expect(shown.some((message) => message.id.endsWith("-inflight"))).toBe(false);
+      },
+    );
+    it("does not repeat a streamed progress line once its saved row arrives", async () => {
+      await runtime.status();
+      snapshot.info.running = true;
+      snapshot.app_run_id = "run-1";
+      snapshot.messages = [{ row_id: 1, role: "user", text: "Weather?", app_run_id: "run-1" }];
+      await runtime.conversation("shared");
+      sockets[0].receive({
+        method: "event",
+        params: { session_id: "live-one", type: "message.start", payload: {} },
+      });
+      sockets[0].receive({
+        method: "event",
+        params: {
+          session_id: "live-one",
+          type: "message.delta",
+          payload: { text: "I will check the forecast." },
+        },
+      });
+      sockets[0].receive({
+        method: "event",
+        params: {
+          session_id: "live-one",
+          type: "message.interim",
+          payload: { text: "I will check the forecast.", already_streamed: true },
+        },
+      });
+      snapshot.messages = [
+        { row_id: 1, role: "user", text: "Weather?", app_run_id: "run-1" },
+        {
+          row_id: 2,
+          role: "assistant",
+          text: "",
+          app_run_id: "run-1",
+          display_commentary: ["I will check the forecast."],
+        },
+      ];
+      const shown = (await runtime.conversation("shared")).messages;
+      expect(shown.filter((message) => message.text.includes("forecast"))).toHaveLength(1);
+      expect(shown.some((message) => message.id.endsWith("-inflight"))).toBe(false);
     });
   });
 
-  it('shares one read among viewers until Hermes or this app changes the conversation', async () => {
+  it("shares one read among viewers until Hermes or this app changes the conversation", async () => {
     vi.useFakeTimers();
     // A new connection is itself a change, so start from a connected server.
     await runtime.status();
-    snapshot.messages = [{row_id: 1, role: 'user', text: 'Hi'}, {row_id: 2, role: 'assistant', text: 'Hello'}];
-    const [first, second] = await Promise.all([runtime.conversation('shared', {window: {turns: 20}}), runtime.conversation('shared', {window: {turns: 20}})]);
+    snapshot.messages = [
+      { row_id: 1, role: "user", text: "Hi" },
+      { row_id: 2, role: "assistant", text: "Hello" },
+    ];
+    const [first, second] = await Promise.all([
+      runtime.conversation("shared", { window: { turns: 20 } }),
+      runtime.conversation("shared", { window: { turns: 20 } }),
+    ]);
     expect(first).not.toBe(second);
     expect(first.messages).toBe(second.messages);
     // A reader's next poll names its window's first message: the same read.
-    await runtime.conversation('shared', {window: {start: '1'}});
+    await runtime.conversation("shared", { window: { start: "1" } });
     expect(opens()).toHaveLength(1);
     hermesChanged();
-    await runtime.conversation('shared', {window: {turns: 20}});
+    await runtime.conversation("shared", { window: { turns: 20 } });
     expect(opens()).toHaveLength(2);
-    snapshot.info = {running: true};
-    await runtime.stop('shared');
-    await runtime.conversation('shared', {window: {turns: 20}});
-    expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(3);
+    snapshot.info = { running: true };
+    await runtime.stop("shared");
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(opens().filter((call) => !call.params.omit_messages)).toHaveLength(3);
     await vi.advanceTimersByTimeAsync(3_000);
-    await runtime.conversation('shared', {window: {turns: 20}});
-    expect(opens().filter(call => !call.params.omit_messages)).toHaveLength(4);
-    await Promise.all([runtime.conversation('shared', {history: false}), runtime.conversation('shared', {history: false})]);
-    expect(opens().filter(call => call.params.omit_messages)).toHaveLength(3);
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    expect(opens().filter((call) => !call.params.omit_messages)).toHaveLength(4);
+    await Promise.all([
+      runtime.conversation("shared", { history: false }),
+      runtime.conversation("shared", { history: false }),
+    ]);
+    expect(opens().filter((call) => call.params.omit_messages)).toHaveLength(3);
   });
 
-  it('reuses profile descriptions across detail reads until ten seconds passes or this app edits them', async () => {
+  it("reuses profile descriptions across detail reads until ten seconds passes or this app edits them", async () => {
     vi.useFakeTimers();
-    const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
-    await runtime.botDetail!('shared'); await runtime.botDetail!('shared');
+    const describes = () => calls.filter((call) => call.method === "profiles.describe").length;
+    await runtime.botDetail!("shared");
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(1);
-    await runtime.skills('shared');
+    await runtime.skills("shared");
     expect(describes()).toBe(2);
-    await runtime.botDetail!('shared');
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(2);
-    await runtime.setSkills('shared', []);
-    await runtime.botDetail!('shared');
+    await runtime.setSkills("shared", []);
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(4);
     await vi.advanceTimersByTimeAsync(60_000);
-    await runtime.botDetail!('shared');
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(5);
   });
 
-  it('checks a quiet socket in the background and reconnects open chats without a request', async () => {
+  it("checks a quiet socket in the background and reconnects open chats without a request", async () => {
     vi.useFakeTimers();
     const changes = vi.fn();
     await runtime.status();
-    runtime.watch!('shared', changes);
-    const checks = () => calls.filter(call => call.method === 'agent-interface.capabilities').length;
+    runtime.watch!("shared", changes);
+    const checks = () =>
+      calls.filter((call) => call.method === "agent-interface.capabilities").length;
     await vi.advanceTimersByTimeAsync(10_000);
     expect(checks()).toBe(2);
     sockets[0].close();
@@ -2343,536 +4623,1296 @@ describe('Hermes conversation and roster read costs', () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sockets).toHaveLength(2);
     expect(changes).toHaveBeenCalledTimes(2);
-    expect(await runtime.status()).toMatchObject({connected: true, code: 'ready'});
+    expect(await runtime.status()).toMatchObject({ connected: true, code: "ready" });
   });
 
-  it('sends the contract check behind the client announcement in one round trip', async () => {
-    deferredMethods.add('client.capabilities');
+  it("sends the contract check behind the client announcement in one round trip", async () => {
+    deferredMethods.add("client.capabilities");
     const status = runtime.status();
-    await vi.waitFor(() => expect(calls.map(call => call.method)).toEqual(['client.capabilities', 'agent-interface.capabilities']));
-    sockets[0].receive({jsonrpc: '2.0', id: calls[0].params && (calls[0] as Record<string, any>).id, result: {}});
-    expect(await status).toMatchObject({connected: true, code: 'ready'});
+    await vi.waitFor(() =>
+      expect(calls.map((call) => call.method)).toEqual([
+        "client.capabilities",
+        "agent-interface.capabilities",
+      ]),
+    );
+    sockets[0].receive({
+      jsonrpc: "2.0",
+      id: calls[0].params && (calls[0] as Record<string, any>).id,
+      result: {},
+    });
+    expect(await status).toMatchObject({ connected: true, code: "ready" });
   });
 });
 
-describe('Review regressions for shared reads and credential negotiation', () => {
-  const describes = () => calls.filter(call => call.method === 'profiles.describe') as Record<string, any>[];
-  it('reads a profile again after an edit instead of joining a roster read that started before it', async () => {
+describe("Review regressions for shared reads and credential negotiation", () => {
+  const describes = () =>
+    calls.filter((call) => call.method === "profiles.describe") as Record<string, any>[];
+  it("reads a profile again after an edit instead of joining a roster read that started before it", async () => {
     await runtime.status();
-    deferredMethods.add('profiles.describe');
-    const roster = runtime.botDetail!('shared');
+    deferredMethods.add("profiles.describe");
+    const roster = runtime.botDetail!("shared");
     await vi.waitFor(() => expect(describes()).toHaveLength(1));
-    const skills = runtime.skills('shared');
+    const skills = runtime.skills("shared");
     await vi.waitFor(() => expect(describes()).toHaveLength(2));
-    for (const call of describes()) sockets[0].receive({jsonrpc: '2.0', id: call.id, result: {toolsets: [], skills: [{name: 'fresh', enabled: true}], mcp_servers: []}});
+    for (const call of describes())
+      sockets[0].receive({
+        jsonrpc: "2.0",
+        id: call.id,
+        result: { toolsets: [], skills: [{ name: "fresh", enabled: true }], mcp_servers: [] },
+      });
     await roster;
-    expect((await skills).map(skill => skill.id)).toEqual(['fresh']);
+    expect((await skills).map((skill) => skill.id)).toEqual(["fresh"]);
   });
 
-  it('reports changes from frames that arrive before a first open names its session', async () => {
+  it("reports changes from frames that arrive before a first open names its session", async () => {
     await runtime.status();
     const notices = vi.fn();
-    runtime.watch!('shared', notices);
-    deferredMethods.add('agent-interface.open');
-    const read = runtime.conversation('shared', {window: {turns: 20}});
-    await vi.waitFor(() => expect(calls.some(call => call.method === 'agent-interface.open')).toBe(true));
-    sockets[0].receive({jsonrpc: '2.0', id: 'srq-early', method: 'vault.save_login', params: {session_id: 'live-one', origin: 'https://kvm.example.test', site: 'kvm.example.test'}});
+    runtime.watch!("shared", notices);
+    deferredMethods.add("agent-interface.open");
+    const read = runtime.conversation("shared", { window: { turns: 20 } });
+    await vi.waitFor(() =>
+      expect(calls.some((call) => call.method === "agent-interface.open")).toBe(true),
+    );
+    sockets[0].receive({
+      jsonrpc: "2.0",
+      id: "srq-early",
+      method: "vault.save_login",
+      params: {
+        session_id: "live-one",
+        origin: "https://kvm.example.test",
+        site: "kvm.example.test",
+      },
+    });
     expect(notices).toHaveBeenCalledOnce();
-    const open = calls.find(call => call.method === 'agent-interface.open') as Record<string, any>;
+    const open = calls.find((call) => call.method === "agent-interface.open") as Record<
+      string,
+      any
+    >;
     // The frame supersedes this answer, so the read asks again.
-    deferredMethods.delete('agent-interface.open');
-    sockets[0].receive({jsonrpc: '2.0', id: open.id, result: structuredClone(snapshot)});
+    deferredMethods.delete("agent-interface.open");
+    sockets[0].receive({ jsonrpc: "2.0", id: open.id, result: structuredClone(snapshot) });
     await read;
-    snapshot.open_requests = [{id: 'srq-early', method: 'vault.save_login', app_local_secure: true, params: {origin: 'https://kvm.example.test', site: 'kvm.example.test'}}];
-    snapshot.executor_epoch = 'epoch-one';
-    expect((await runtime.conversation('shared', {window: {turns: 20}})).attention).toHaveLength(1);
+    snapshot.open_requests = [
+      {
+        id: "srq-early",
+        method: "vault.save_login",
+        app_local_secure: true,
+        params: { origin: "https://kvm.example.test", site: "kvm.example.test" },
+      },
+    ];
+    snapshot.executor_epoch = "epoch-one";
+    expect(
+      (await runtime.conversation("shared", { window: { turns: 20 } })).attention,
+    ).toHaveLength(1);
   });
 
-  it('sends the member only to an add-on that binds address-only logins to one', async () => {
-    const answer = {operation: 'answer' as const, profile: 'shared', requestId: 'srq', actor: 'member-one',
-      answer: {epoch: 'epoch-one', sessionId: 'live-one', method: 'vault.code' as const, value: '123456'}};
+  it("sends the member only to an add-on that binds address-only logins to one", async () => {
+    const answer = {
+      operation: "answer" as const,
+      profile: "shared",
+      requestId: "srq",
+      actor: "member-one",
+      answer: {
+        epoch: "epoch-one",
+        sessionId: "live-one",
+        method: "vault.code" as const,
+        value: "123456",
+      },
+    };
     const bodies: Record<string, unknown>[] = [];
-    vi.stubGlobal('fetch', vi.fn(async (_url: URL | string, init?: RequestInit) => { bodies.push(JSON.parse(init!.body as string)); return Response.json({status: 'ok'}); }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | string, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string));
+        return Response.json({ status: "ok" });
+      }),
+    );
     explicitCredentials = false;
     await runtime.status();
     await runtime.vaultRequest!(answer);
-    expect(bodies.at(-1)).not.toHaveProperty('actor');
+    expect(bodies.at(-1)).not.toHaveProperty("actor");
     await runtime.close();
     explicitCredentials = true;
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+    });
     await runtime.status();
     await runtime.vaultRequest!(answer);
-    expect(bodies.at(-1)).toMatchObject({actor: 'member-one'});
+    expect(bodies.at(-1)).toMatchObject({ actor: "member-one" });
   });
 });
 
-describe('Review round two regressions', () => {
-  it('keeps routine validation reasons without exposing absolute host paths', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ detail: 'script does not exist: /home/nicolas/.hermes/profiles/shared/scripts/morning.py' }, { status: 422 })));
+describe("Review round two regressions", () => {
+  it("keeps routine validation reasons without exposing absolute host paths", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            detail:
+              "script does not exist: /home/nicolas/.hermes/profiles/shared/scripts/morning.py",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
     await runtime.status();
-    await expect(runtime.saveRoutine({ botId: 'shared', name: 'Morning', prompt: 'Report', schedule: '1h', enabled: false, script: 'morning.py' }))
-      .rejects.toThrow('script does not exist: [server path]');
+    await expect(
+      runtime.saveRoutine({
+        botId: "shared",
+        name: "Morning",
+        prompt: "Report",
+        schedule: "1h",
+        enabled: false,
+        script: "morning.py",
+      }),
+    ).rejects.toThrow("script does not exist: [server path]");
   });
-  it('reads descriptions again after a connection changes a profile', async () => {
+  it("reads descriptions again after a connection changes a profile", async () => {
     await runtime.status();
-    const describes = () => calls.filter(call => call.method === 'profiles.describe').length;
-    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ok: true})));
-    await runtime.botDetail!('shared');
-    await runtime.integrationRequest!({operation: 'list', profile: 'shared'});
-    await runtime.botDetail!('shared');
+    const describes = () => calls.filter((call) => call.method === "profiles.describe").length;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ ok: true })),
+    );
+    await runtime.botDetail!("shared");
+    await runtime.integrationRequest!({ operation: "list", profile: "shared" });
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(1);
-    await runtime.integrationRequest!({operation: 'add_mcp', profile: 'shared'});
-    await runtime.botDetail!('shared');
+    await runtime.integrationRequest!({ operation: "add_mcp", profile: "shared" });
+    await runtime.botDetail!("shared");
     expect(describes()).toBe(2);
   });
 
-  it('never shares a running read and asks clients to read again after a turn completes', async () => {
+  it("never shares a running read and asks clients to read again after a turn completes", async () => {
     vi.useFakeTimers();
     await runtime.status();
     const notices = vi.fn();
-    runtime.watch!('shared', notices);
-    snapshot.info.running = true; snapshot.app_run_id = 'task-one';
-    await runtime.conversation('shared', {window: {turns: 20}});
-    sockets[0].receive({method: 'event', params: {session_id: 'live-one', type: 'message.complete', payload: {status: 'complete'}}});
+    runtime.watch!("shared", notices);
+    snapshot.info.running = true;
+    snapshot.app_run_id = "task-one";
+    await runtime.conversation("shared", { window: { turns: 20 } });
+    sockets[0].receive({
+      method: "event",
+      params: { session_id: "live-one", type: "message.complete", payload: { status: "complete" } },
+    });
     notices.mockClear();
-    expect((await runtime.conversation('shared', {window: {turns: 20}})).activity.state).toBe('thinking');
+    expect((await runtime.conversation("shared", { window: { turns: 20 } })).activity.state).toBe(
+      "thinking",
+    );
     // Hermes retires the task receipt after its final frame, without another frame.
-    snapshot.info.running = false; delete snapshot.app_run_id; snapshot.app_task_state = 'done';
-    expect((await runtime.conversation('shared', {window: {turns: 20}})).activity.state).toBe('done');
+    snapshot.info.running = false;
+    delete snapshot.app_run_id;
+    snapshot.app_task_state = "done";
+    expect((await runtime.conversation("shared", { window: { turns: 20 } })).activity.state).toBe(
+      "done",
+    );
     expect(notices).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(notices).toHaveBeenCalledOnce();
   });
 });
 
-
-describe('owned Hermes operation response decoding', () => {
-  const profile = 'shared';
+describe("owned Hermes operation response decoding", () => {
+  const profile = "shared";
   const receipt = runReceiptFixture({ botId: profile });
   const memory = memoryFixture({ botId: profile, profile });
-  const preview = { botId: profile, schedule: '0 7 * * *', timezone: 'UTC', nextRuns: ['2026-10-24T07:00:00Z'], kind: 'cron' };
-  const history = { botId: profile, sessionId: 'stored', messages: [], offset: 0, hasMore: false };
-  const usage = { botId: profile, days: 30, sessions: 1, inputTokens: 3, outputTokens: 2, actualCost: null, estimatedCost: 0.01, partial: true, notice: 'Recorded usage' };
+  const preview = {
+    botId: profile,
+    schedule: "0 7 * * *",
+    timezone: "UTC",
+    nextRuns: ["2026-10-24T07:00:00Z"],
+    kind: "cron",
+  };
+  const history = { botId: profile, sessionId: "stored", messages: [], offset: 0, hasMore: false };
+  const usage = {
+    botId: profile,
+    days: 30,
+    sessions: 1,
+    inputTokens: 3,
+    outputTokens: 2,
+    actualCost: null,
+    estimatedCost: 0.01,
+    partial: true,
+    notice: "Recorded usage",
+  };
   const experienceCases: { input: ExperienceRequest; result: unknown }[] = [
-    { input: {operation:'search',profile,query:'fence'}, result:[{botId:profile,botName:'Shared',sessionId:'stored',title:'Fence',snippet:'Fixed'}] },
-    { input: {operation:'history',profile,sessionId:'stored',offset:0}, result:history },
-    { input: {operation:'usage',profile,days:30}, result:usage },
-    { input: {operation:'routine_results',profile,routineId:'routine'}, result:[{id:'run',title:'Fence',previewOnly:false}] },
-    { input: {operation:'routine_output',profile,routineId:'routine',resultId:'run'}, result:{messages:[{id:'reply',role:'assistant',text:'Fixed'}],previewOnly:false} },
-    { input: {operation:'memory',profile}, result:memory },
-    { input: {operation:'save_memory',profile,target:'memory',revision:'a'.repeat(64),entries:[]}, result:memory },
-    { input: {operation:'delete_memory',profile,target:'user',revision:'a'.repeat(64),entryId:'entry'}, result:memory },
-    { input: {operation:'preview',profile,schedule:'0 7 * * *'}, result:preview },
-    { input: {operation:'run',profile,routineId:'routine',requestId:'request',senderId:'person'}, result:receipt },
-    { input: {operation:'run_receipt',profile,routineId:'routine',requestId:'request',senderId:'person'}, result:receipt },
+    {
+      input: { operation: "search", profile, query: "fence" },
+      result: [
+        {
+          botId: profile,
+          botName: "Shared",
+          sessionId: "stored",
+          title: "Fence",
+          snippet: "Fixed",
+        },
+      ],
+    },
+    { input: { operation: "history", profile, sessionId: "stored", offset: 0 }, result: history },
+    { input: { operation: "usage", profile, days: 30 }, result: usage },
+    {
+      input: { operation: "routine_results", profile, routineId: "routine" },
+      result: [{ id: "run", title: "Fence", previewOnly: false }],
+    },
+    {
+      input: { operation: "routine_output", profile, routineId: "routine", resultId: "run" },
+      result: { messages: [{ id: "reply", role: "assistant", text: "Fixed" }], previewOnly: false },
+    },
+    { input: { operation: "memory", profile }, result: memory },
+    {
+      input: {
+        operation: "save_memory",
+        profile,
+        target: "memory",
+        revision: "a".repeat(64),
+        entries: [],
+      },
+      result: memory,
+    },
+    {
+      input: {
+        operation: "delete_memory",
+        profile,
+        target: "user",
+        revision: "a".repeat(64),
+        entryId: "entry",
+      },
+      result: memory,
+    },
+    { input: { operation: "preview", profile, schedule: "0 7 * * *" }, result: preview },
+    {
+      input: {
+        operation: "run",
+        profile,
+        routineId: "routine",
+        requestId: "request",
+        senderId: "person",
+      },
+      result: receipt,
+    },
+    {
+      input: {
+        operation: "run_receipt",
+        profile,
+        routineId: "routine",
+        requestId: "request",
+        senderId: "person",
+      },
+      result: receipt,
+    },
   ];
-  it.each(experienceCases)('decodes the experience $input.operation result', async ({input,result}) => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json(result)));
-    expect(await runtime.experienceRequest!(input)).toEqual(result);
-  });
-  const overview = automationOverviewFixture({botId:profile});
+  it.each(experienceCases)(
+    "decodes the experience $input.operation result",
+    async ({ input, result }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(result)),
+      );
+      expect(await runtime.experienceRequest!(input)).toEqual(result);
+    },
+  );
+  const overview = automationOverviewFixture({ botId: profile });
   const task = automationTaskFixture();
   const subscription = subscriptionFixture();
   const automationCases: { input: AutomationRequest; result: unknown }[] = [
-    {input:{operation:'overview',profile},result:overview},
-    {input:{operation:'goal_set',profile,title:'Repair',maxTurns:10},result:overview},
-    {input:{operation:'goal_pause',profile},result:overview},
-    {input:{operation:'goal_clear',profile},result:overview},
-    {input:{operation:'goal_resume',profile,requestId:'request',senderId:'person'},result:overview},
-    {input:{operation:'task_create',profile,task:{title:'Repair',requestId:'request'}},result:task},
-    {input:{operation:'task_get',profile,taskId:'task'},result:task},
-    {input:{operation:'task_update',profile,taskId:'task',title:'Repair'},result:task},
-    {input:{operation:'task_action',profile,taskId:'task',action:'start'},result:task},
-    {input:{operation:'task_dependency',profile,taskId:'task',dependencyId:'parent',remove:false},result:task},
-    {input:{operation:'trigger_create',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'}},result:{subscription,secret:'minted-secret'}},
-    {input:{operation:'trigger_update',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'},revision:'a'},result:{subscription}},
-    {input:{operation:'trigger_toggle',profile,triggerId:'event',enabled:true,revision:'a'},result:{subscription}},
-    {input:{operation:'trigger_delete',profile,triggerId:'event',revision:'a'},result:{ok:true}},
-    {input:{operation:'skill_content',profile,name:'fence'},result:{name:'fence',content:'Skill content',truncated:false}},
-    {input:{operation:'skill_diff',profile,pendingId:'deadbeef'},result:{id:'deadbeef',diff:'Skill diff',revision:'a',truncated:false}},
-    {input:{operation:'skill_decide',profile,pendingId:'deadbeef',decision:'approve',revision:'a'},result:{ok:true}},
-    {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:true}},
-    {input:{operation:'skill_lock',profile,name:'ranch/fence',locked:true},result:{ok:true,name:'ranch/fence',locked:true}},
+    { input: { operation: "overview", profile }, result: overview },
+    { input: { operation: "goal_set", profile, title: "Repair", maxTurns: 10 }, result: overview },
+    { input: { operation: "goal_pause", profile }, result: overview },
+    { input: { operation: "goal_clear", profile }, result: overview },
+    {
+      input: { operation: "goal_resume", profile, requestId: "request", senderId: "person" },
+      result: overview,
+    },
+    {
+      input: { operation: "task_create", profile, task: { title: "Repair", requestId: "request" } },
+      result: task,
+    },
+    { input: { operation: "task_get", profile, taskId: "task" }, result: task },
+    { input: { operation: "task_update", profile, taskId: "task", title: "Repair" }, result: task },
+    { input: { operation: "task_action", profile, taskId: "task", action: "start" }, result: task },
+    {
+      input: {
+        operation: "task_dependency",
+        profile,
+        taskId: "task",
+        dependencyId: "parent",
+        remove: false,
+      },
+      result: task,
+    },
+    {
+      input: {
+        operation: "trigger_create",
+        profile,
+        trigger: {
+          id: "event",
+          description: "Fence",
+          events: ["issue.created"],
+          routineId: "routine",
+        },
+      },
+      result: { subscription, secret: "minted-secret" },
+    },
+    {
+      input: {
+        operation: "trigger_update",
+        profile,
+        trigger: {
+          id: "event",
+          description: "Fence",
+          events: ["issue.created"],
+          routineId: "routine",
+        },
+        revision: "a",
+      },
+      result: { subscription },
+    },
+    {
+      input: {
+        operation: "trigger_toggle",
+        profile,
+        triggerId: "event",
+        enabled: true,
+        revision: "a",
+      },
+      result: { subscription },
+    },
+    {
+      input: { operation: "trigger_delete", profile, triggerId: "event", revision: "a" },
+      result: { ok: true },
+    },
+    {
+      input: { operation: "skill_content", profile, name: "fence" },
+      result: { name: "fence", content: "Skill content", truncated: false },
+    },
+    {
+      input: { operation: "skill_diff", profile, pendingId: "deadbeef" },
+      result: { id: "deadbeef", diff: "Skill diff", revision: "a", truncated: false },
+    },
+    {
+      input: {
+        operation: "skill_decide",
+        profile,
+        pendingId: "deadbeef",
+        decision: "approve",
+        revision: "a",
+      },
+      result: { ok: true },
+    },
+    { input: { operation: "skill_policy", profile, approvalRequired: true }, result: { ok: true } },
+    {
+      input: { operation: "skill_lock", profile, name: "ranch/fence", locked: true },
+      result: { ok: true, name: "ranch/fence", locked: true },
+    },
   ];
-  it.each(automationCases)('decodes the automation $input.operation result', async ({input,result}) => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json(result)));
-    expect(await runtime.automationRequest!(input)).toEqual(result);
-  });
+  it.each(automationCases)(
+    "decodes the automation $input.operation result",
+    async ({ input, result }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json(result)),
+      );
+      expect(await runtime.automationRequest!(input)).toEqual(result);
+    },
+  );
   it.each([
-    {input:{operation:'search',profile,query:'fence'},result:[{botId:profile,botName:'Shared',sessionId:42,title:'Fence',snippet:'Fixed'}]},
-    {input:{operation:'memory',profile},result:preview},
-    {input:{operation:'usage',profile,days:30},result:[]},
-    {input:{operation:'history',profile,sessionId:'stored',offset:0},result:{...history,messages:[{id:'row',role:'unexpected',text:'private-canary'}]}},
-    {input:{operation:'routine_results',profile,routineId:'routine'},result:[{id:'run',title:'Fence',previewOnly:'false'}]},
-    {input:{operation:'run_receipt',profile,routineId:'routine',requestId:'request',senderId:'person'},result:null},
+    {
+      input: { operation: "search", profile, query: "fence" },
+      result: [
+        { botId: profile, botName: "Shared", sessionId: 42, title: "Fence", snippet: "Fixed" },
+      ],
+    },
+    { input: { operation: "memory", profile }, result: preview },
+    { input: { operation: "usage", profile, days: 30 }, result: [] },
+    {
+      input: { operation: "history", profile, sessionId: "stored", offset: 0 },
+      result: { ...history, messages: [{ id: "row", role: "unexpected", text: "private-canary" }] },
+    },
+    {
+      input: { operation: "routine_results", profile, routineId: "routine" },
+      result: [{ id: "run", title: "Fence", previewOnly: "false" }],
+    },
+    {
+      input: {
+        operation: "run_receipt",
+        profile,
+        routineId: "routine",
+        requestId: "request",
+        senderId: "person",
+      },
+      result: null,
+    },
     // An account key must be the add-on's digest: a raw credential in its place is refused, never relayed.
-    {input:{operation:'accounts',profile},result:{accounts:[{key:'sk-or-v1-private-canary',provider:'openrouter',role:'main'}]}},
-    {input:{operation:'account_usage',profile,key:'a'.repeat(32)},result:{key:'a'.repeat(32),provider:'openrouter',plan:null,title:'Account limits',fetchedAt:'2026-11-08T12:00:00Z',
-      windows:[{label:'Week',usedPercent:150,resetsAt:null,detail:null,scope:'account'}],details:[],unavailableReason:null,bankedResets:0,identity:null}},
-    {input:{operation:'account_reset',profile,key:'a'.repeat(32),requestId:'request-0001',force:false},result:{status:'queued',message:'Later',availableCount:0,windowsReset:0}},
-  ] satisfies {input:ExperienceRequest;result:unknown}[])('rejects malformed or wrong-operation experience $input.operation data', async ({input,result}) => {
-    const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
-    await expect(runtime.experienceRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid experience response for ${input.operation}.`});
-    expect(fetcher).toHaveBeenCalledOnce();
-  });
+    {
+      input: { operation: "accounts", profile },
+      result: {
+        accounts: [{ key: "sk-or-v1-private-canary", provider: "openrouter", role: "main" }],
+      },
+    },
+    {
+      input: { operation: "account_usage", profile, key: "a".repeat(32) },
+      result: {
+        key: "a".repeat(32),
+        provider: "openrouter",
+        plan: null,
+        title: "Account limits",
+        fetchedAt: "2026-11-08T12:00:00Z",
+        windows: [
+          { label: "Week", usedPercent: 150, resetsAt: null, detail: null, scope: "account" },
+        ],
+        details: [],
+        unavailableReason: null,
+        bankedResets: 0,
+        identity: null,
+      },
+    },
+    {
+      input: {
+        operation: "account_reset",
+        profile,
+        key: "a".repeat(32),
+        requestId: "request-0001",
+        force: false,
+      },
+      result: { status: "queued", message: "Later", availableCount: 0, windowsReset: 0 },
+    },
+  ] satisfies { input: ExperienceRequest; result: unknown }[])(
+    "rejects malformed or wrong-operation experience $input.operation data",
+    async ({ input, result }) => {
+      const fetcher = vi.fn(async () => Response.json(result));
+      vi.stubGlobal("fetch", fetcher);
+      await expect(runtime.experienceRequest!(input)).rejects.toMatchObject({
+        statusCode: 502,
+        message: `Hermes returned an invalid experience response for ${input.operation}.`,
+      });
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
   it.each([
-    {input:{operation:'task_get',profile,taskId:'task'},result:{...task,id:42}},
-    {input:{operation:'overview',profile},result:{ok:true}},
-    {input:{operation:'task_get',profile,taskId:'task'},result:overview},
-    {input:{operation:'goal_pause',profile},result:{...overview,tasks:{supported:true,items:[{id:'invalid'}]}}},
-    {input:{operation:'trigger_create',profile,trigger:{id:'event',description:'Fence',events:['issue.created'],routineId:'routine'}},result:{subscription}},
-    {input:{operation:'skill_policy',profile,approvalRequired:true},result:{ok:false,secret:'private-canary'}},
-    {input:{operation:'skill_lock',profile,name:'fence',locked:true},result:{ok:true,name:'fence',locked:'yes'}},
-  ] satisfies {input:AutomationRequest;result:unknown}[])('rejects malformed or wrong-operation automation $input.operation data', async ({input,result}) => {
-    const fetcher=vi.fn(async()=>Response.json(result)); vi.stubGlobal('fetch',fetcher);
-    await expect(runtime.automationRequest!(input)).rejects.toMatchObject({statusCode:502,message:`Hermes returned an invalid automation response for ${input.operation}.`});
-    expect(fetcher).toHaveBeenCalledOnce();
-  });
-  it('normalizes native nullable routine result metadata', async () => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json([{id:'run',title:'Fence',startedAt:null,preview:null,previewOnly:true}])));
-    expect(await runtime.routineResults!('shared','routine')).toEqual([{id:'run',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true}]);
-  });
-  it('normalizes each run status and keeps an unnamed or newer status unknown', async () => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json([
-      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,error:null,preview:null,previewOnly:false},
-      {id:'bad',title:'Fence',startedAt:null,preview:null,previewOnly:true,status:'failed',error:'Certificate expired',finishedAt:null,deliveryFailed:false},
-      {id:'new',title:'Fence',previewOnly:true,status:'queued_for_review'},
-    ])));
-    expect(await runtime.routineResults!('shared','routine')).toEqual([
-      {id:'ok',title:'Fence',startedAt:'2026-10-02T07:00:00+00:00',finishedAt:'2026-10-02T07:01:00+00:00',status:'succeeded',deliveryFailed:true,preview:undefined,previewOnly:false},
-      {id:'bad',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'failed',error:'Certificate expired'},
-      {id:'new',title:'Fence',startedAt:undefined,preview:undefined,previewOnly:true,status:'unknown'},
+    { input: { operation: "task_get", profile, taskId: "task" }, result: { ...task, id: 42 } },
+    { input: { operation: "overview", profile }, result: { ok: true } },
+    { input: { operation: "task_get", profile, taskId: "task" }, result: overview },
+    {
+      input: { operation: "goal_pause", profile },
+      result: { ...overview, tasks: { supported: true, items: [{ id: "invalid" }] } },
+    },
+    {
+      input: {
+        operation: "trigger_create",
+        profile,
+        trigger: {
+          id: "event",
+          description: "Fence",
+          events: ["issue.created"],
+          routineId: "routine",
+        },
+      },
+      result: { subscription },
+    },
+    {
+      input: { operation: "skill_policy", profile, approvalRequired: true },
+      result: { ok: false, secret: "private-canary" },
+    },
+    {
+      input: { operation: "skill_lock", profile, name: "fence", locked: true },
+      result: { ok: true, name: "fence", locked: "yes" },
+    },
+  ] satisfies { input: AutomationRequest; result: unknown }[])(
+    "rejects malformed or wrong-operation automation $input.operation data",
+    async ({ input, result }) => {
+      const fetcher = vi.fn(async () => Response.json(result));
+      vi.stubGlobal("fetch", fetcher);
+      await expect(runtime.automationRequest!(input)).rejects.toMatchObject({
+        statusCode: 502,
+        message: `Hermes returned an invalid automation response for ${input.operation}.`,
+      });
+      expect(fetcher).toHaveBeenCalledOnce();
+    },
+  );
+  it("normalizes native nullable routine result metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json([
+          { id: "run", title: "Fence", startedAt: null, preview: null, previewOnly: true },
+        ]),
+      ),
+    );
+    expect(await runtime.routineResults!("shared", "routine")).toEqual([
+      { id: "run", title: "Fence", startedAt: undefined, preview: undefined, previewOnly: true },
     ]);
   });
-  it('registers only attested history files and removes native metadata', async () => {
-    vi.stubGlobal('fetch',vi.fn(async()=>Response.json({...history,messages:[{id:'tool',role:'tool',text:'Generated',app_artifacts:[{path:'/workspace/fence.txt',name:'fence.txt',mime:'text/plain'}],content:'private-canary'}]})));
-    const page=await runtime.experienceRequest!({operation:'history',profile,sessionId:'stored',offset:0});
+  it("normalizes each run status and keeps an unnamed or newer status unknown", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json([
+          {
+            id: "ok",
+            title: "Fence",
+            startedAt: "2026-10-02T07:00:00+00:00",
+            finishedAt: "2026-10-02T07:01:00+00:00",
+            status: "succeeded",
+            deliveryFailed: true,
+            error: null,
+            preview: null,
+            previewOnly: false,
+          },
+          {
+            id: "bad",
+            title: "Fence",
+            startedAt: null,
+            preview: null,
+            previewOnly: true,
+            status: "failed",
+            error: "Certificate expired",
+            finishedAt: null,
+            deliveryFailed: false,
+          },
+          { id: "new", title: "Fence", previewOnly: true, status: "queued_for_review" },
+        ]),
+      ),
+    );
+    expect(await runtime.routineResults!("shared", "routine")).toEqual([
+      {
+        id: "ok",
+        title: "Fence",
+        startedAt: "2026-10-02T07:00:00+00:00",
+        finishedAt: "2026-10-02T07:01:00+00:00",
+        status: "succeeded",
+        deliveryFailed: true,
+        preview: undefined,
+        previewOnly: false,
+      },
+      {
+        id: "bad",
+        title: "Fence",
+        startedAt: undefined,
+        preview: undefined,
+        previewOnly: true,
+        status: "failed",
+        error: "Certificate expired",
+      },
+      {
+        id: "new",
+        title: "Fence",
+        startedAt: undefined,
+        preview: undefined,
+        previewOnly: true,
+        status: "unknown",
+      },
+    ]);
+  });
+  it("registers only attested history files and removes native metadata", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ...history,
+          messages: [
+            {
+              id: "tool",
+              role: "tool",
+              text: "Generated",
+              app_artifacts: [
+                { path: "/workspace/fence.txt", name: "fence.txt", mime: "text/plain" },
+              ],
+              content: "private-canary",
+            },
+          ],
+        }),
+      ),
+    );
+    const page = await runtime.experienceRequest!({
+      operation: "history",
+      profile,
+      sessionId: "stored",
+      offset: 0,
+    });
     expect(page.messages[0].files).toHaveLength(1);
     expect(runtime.fileBotId!(page.messages[0].files![0].id)).toBe(profile);
-    expect(JSON.stringify(page)).not.toContain('private-canary');
+    expect(JSON.stringify(page)).not.toContain("private-canary");
   });
 });
 
-it('does not expose native contents when an owned response is not JSON', async () => {
-  vi.stubGlobal('fetch',vi.fn(async()=>new Response('private-canary invalid JSON')));
-  await expect(runtime.automationRequest!({operation:'overview',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid automation response for overview.'});
-  await expect(runtime.experienceRequest!({operation:'memory',profile:'shared'})).rejects.toMatchObject({statusCode:502,message:'Hermes returned an invalid experience response for memory.'});
+it("does not expose native contents when an owned response is not JSON", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("private-canary invalid JSON")),
+  );
+  await expect(
+    runtime.automationRequest!({ operation: "overview", profile: "shared" }),
+  ).rejects.toMatchObject({
+    statusCode: 502,
+    message: "Hermes returned an invalid automation response for overview.",
+  });
+  await expect(
+    runtime.experienceRequest!({ operation: "memory", profile: "shared" }),
+  ).rejects.toMatchObject({
+    statusCode: 502,
+    message: "Hermes returned an invalid experience response for memory.",
+  });
 });
 
-describe('approval scopes, question shapes and the steering decision on the wire', () => {
+describe("approval scopes, question shapes and the steering decision on the wire", () => {
   const capabilities = (extra: Record<string, unknown>) => {
-    deferredMethods.add('agent-interface.capabilities');
+    deferredMethods.add("agent-interface.capabilities");
     beforeSend = (request, socket) => {
-      if (request.method === 'agent-interface.capabilities')
-        queueMicrotask(() => socket.receive({id: request.id, result: {revision, durable_admission: true, durable_events: true, canonical_open: true, executor_epoch: 'epoch-one', ...extra}}));
+      if (request.method === "agent-interface.capabilities")
+        queueMicrotask(() =>
+          socket.receive({
+            id: request.id,
+            result: {
+              revision,
+              durable_admission: true,
+              durable_events: true,
+              canonical_open: true,
+              executor_epoch: "epoch-one",
+              ...extra,
+            },
+          }),
+        );
     };
   };
-  it('keeps the choices and patterns Hermes offered, and an older Hermes offers none', async () => {
+  it("keeps the choices and patterns Hermes offered, and an older Hermes offers none", async () => {
     snapshot.open_requests = [
-      {id: 'scoped', method: 'approval', params: {description: 'recursive delete', command: 'rm -rf build', choices: ['once', 'session', 'always', 'deny'], pattern_keys: ['recursive delete', 'recursive delete', '']}},
+      {
+        id: "scoped",
+        method: "approval",
+        params: {
+          description: "recursive delete",
+          command: "rm -rf build",
+          choices: ["once", "session", "always", "deny"],
+          pattern_keys: ["recursive delete", "recursive delete", ""],
+        },
+      },
       // A guardian-denied command offers one operation only; an unknown future choice is dropped.
-      {id: 'guarded', method: 'approval', params: {description: 'wipe', choices: ['once', 'later', 'deny'], smart_denied: true}},
-      {id: 'older', method: 'approval', params: {description: 'older Hermes'}},
-      {id: 'unknown', method: 'approval', params: {description: 'nothing known', choices: ['later']}},
+      {
+        id: "guarded",
+        method: "approval",
+        params: { description: "wipe", choices: ["once", "later", "deny"], smart_denied: true },
+      },
+      { id: "older", method: "approval", params: { description: "older Hermes" } },
+      {
+        id: "unknown",
+        method: "approval",
+        params: { description: "nothing known", choices: ["later"] },
+      },
     ];
     // An add-on that can't remove always-allowed commands never offers Always allow.
-    const older = await runtime.conversation('shared', {history: false});
-    expect(older.approvals.map(({id, choices}) => ({id, choices}))).toEqual([
-      {id: 'scoped', choices: ['once', 'session', 'deny']}, {id: 'guarded', choices: ['once', 'deny']},
-      {id: 'older', choices: undefined}, {id: 'unknown', choices: undefined}]);
+    const older = await runtime.conversation("shared", { history: false });
+    expect(older.approvals.map(({ id, choices }) => ({ id, choices }))).toEqual([
+      { id: "scoped", choices: ["once", "session", "deny"] },
+      { id: "guarded", choices: ["once", "deny"] },
+      { id: "older", choices: undefined },
+      { id: "unknown", choices: undefined },
+    ]);
     await runtime.close();
-    capabilities({approval_settings: true});
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
-    const {approvals} = await runtime.conversation('shared', {history: false});
-    expect(approvals.map(({id, choices, patterns, command}) => ({id, choices, patterns, command}))).toEqual([
-      {id: 'scoped', choices: ['once', 'session', 'always', 'deny'], patterns: ['recursive delete'], command: 'rm -rf build'},
-      {id: 'guarded', choices: ['once', 'deny'], patterns: undefined, command: undefined},
-      {id: 'older', choices: undefined, patterns: undefined, command: undefined},
-      {id: 'unknown', choices: undefined, patterns: undefined, command: undefined},
+    capabilities({ approval_settings: true });
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+    });
+    const { approvals } = await runtime.conversation("shared", { history: false });
+    expect(
+      approvals.map(({ id, choices, patterns, command }) => ({ id, choices, patterns, command })),
+    ).toEqual([
+      {
+        id: "scoped",
+        choices: ["once", "session", "always", "deny"],
+        patterns: ["recursive delete"],
+        command: "rm -rf build",
+      },
+      { id: "guarded", choices: ["once", "deny"], patterns: undefined, command: undefined },
+      { id: "older", choices: undefined, patterns: undefined, command: undefined },
+      { id: "unknown", choices: undefined, patterns: undefined, command: undefined },
     ]);
   });
-  it('answers an approval with its scope, once by default and deny for a decline', async () => {
-    snapshot.open_requests = [{id: 'scoped', method: 'approval', params: {choices: ['once', 'session', 'always', 'deny']}}];
-    await runtime.approve('shared', 'scoped', 'approved', 'person-one', 'always');
-    await runtime.approve('shared', 'scoped', 'approved', 'person-one');
-    await runtime.approve('shared', 'scoped', 'denied', 'person-one', 'session');
-    expect(calls.filter(call => call.method === 'request.answer').map(call => call.params.result.choice)).toEqual(['always', 'once', 'deny']);
+  it("answers an approval with its scope, once by default and deny for a decline", async () => {
+    snapshot.open_requests = [
+      {
+        id: "scoped",
+        method: "approval",
+        params: { choices: ["once", "session", "always", "deny"] },
+      },
+    ];
+    await runtime.approve("shared", "scoped", "approved", "person-one", "always");
+    await runtime.approve("shared", "scoped", "approved", "person-one");
+    await runtime.approve("shared", "scoped", "denied", "person-one", "session");
+    expect(
+      calls
+        .filter((call) => call.method === "request.answer")
+        .map((call) => call.params.result.choice),
+    ).toEqual(["always", "once", "deny"]);
   });
-  it('keeps native multi-select and marks exactly one recommended option', async () => {
-    snapshot.open_requests = [{id: 'ask', method: 'clarify', params: {questions: [
-      {qid: 'q0', question: 'Chores?', choices: ['Feed (Recommended)', 'Water'], multi_select: true},
-      {qid: 'q1', question: 'Pasture?', choices: ['North', 'South (recommended)']},
-      {qid: 'q2', question: 'Two marked?', choices: ['A (Recommended)', 'B (Recommended)']},
-      {qid: 'q3', question: 'Only a label?', choices: ['(Recommended)', 'Other']},
-      {qid: 'q4', question: 'Free text', multi_select: true},
-    ]}}];
-    const {attention} = await runtime.conversation('shared', {history: false});
+  it("keeps native multi-select and marks exactly one recommended option", async () => {
+    snapshot.open_requests = [
+      {
+        id: "ask",
+        method: "clarify",
+        params: {
+          questions: [
+            {
+              qid: "q0",
+              question: "Chores?",
+              choices: ["Feed (Recommended)", "Water"],
+              multi_select: true,
+            },
+            { qid: "q1", question: "Pasture?", choices: ["North", "South (recommended)"] },
+            { qid: "q2", question: "Two marked?", choices: ["A (Recommended)", "B (Recommended)"] },
+            { qid: "q3", question: "Only a label?", choices: ["(Recommended)", "Other"] },
+            { qid: "q4", question: "Free text", multi_select: true },
+          ],
+        },
+      },
+    ];
+    const { attention } = await runtime.conversation("shared", { history: false });
     expect(attention![0].questions).toEqual([
-      {id: 'q0', prompt: 'Chores?', options: ['Feed (Recommended)', 'Water'], multiple: true, recommended: 0},
-      {id: 'q1', prompt: 'Pasture?', options: ['North', 'South (recommended)'], recommended: 1},
-      {id: 'q2', prompt: 'Two marked?', options: ['A (Recommended)', 'B (Recommended)']},
-      {id: 'q3', prompt: 'Only a label?', options: ['(Recommended)', 'Other']},
-      {id: 'q4', prompt: 'Free text', options: undefined},
+      {
+        id: "q0",
+        prompt: "Chores?",
+        options: ["Feed (Recommended)", "Water"],
+        multiple: true,
+        recommended: 0,
+      },
+      { id: "q1", prompt: "Pasture?", options: ["North", "South (recommended)"], recommended: 1 },
+      { id: "q2", prompt: "Two marked?", options: ["A (Recommended)", "B (Recommended)"] },
+      { id: "q3", prompt: "Only a label?", options: ["(Recommended)", "Other"] },
+      { id: "q4", prompt: "Free text", options: undefined },
     ]);
   });
-  it('carries the steering decision through admission, receipt lookup and history, and an older add-on reports none', async () => {
+  it("carries the steering decision through admission, receipt lookup and history, and an older add-on reports none", async () => {
     beforeSend = (request, socket) => {
-      if (request.method === 'agent-interface.submit') {
-        deferredMethods.add('agent-interface.submit');
-        const steering = request.params.text === 'Older' ? undefined : request.params.steer === true;
-        const status = request.params.text === 'Refused' ? 'rejected' : 'accepted';
-        queueMicrotask(() => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', ...(steering === undefined ? {} : {steering})}}));
+      if (request.method === "agent-interface.submit") {
+        deferredMethods.add("agent-interface.submit");
+        const steering =
+          request.params.text === "Older" ? undefined : request.params.steer === true;
+        const status = request.params.text === "Refused" ? "rejected" : "accepted";
+        queueMicrotask(() =>
+          socket.receive({
+            id: request.id,
+            result: {
+              requestId: request.params.request_id,
+              status,
+              runId: "task-one",
+              ...(steering === undefined ? {} : { steering }),
+            },
+          }),
+        );
       }
-      if (request.method === 'agent-interface.receipt') {
-        deferredMethods.add('agent-interface.receipt');
-        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: 'r', status: 'accepted', runId: 'task-one', steering: true}}}));
+      if (request.method === "agent-interface.receipt") {
+        deferredMethods.add("agent-interface.receipt");
+        queueMicrotask(() =>
+          socket.receive({
+            id: request.id,
+            result: {
+              receipt: { requestId: "r", status: "accepted", runId: "task-one", steering: true },
+            },
+          }),
+        );
       }
     };
-    expect((await runtime.steer({...input(), text: 'Turn left'})).steered).toBe(true);
-    expect((await runtime.submit({...input(), requestId: 'two', text: 'Start'})).steered).toBe(false);
-    expect(await runtime.submit({...input(), requestId: 'three', text: 'Older'})).not.toHaveProperty('steered');
-    expect(await runtime.steer({...input(), requestId: 'four', text: 'Refused'})).not.toHaveProperty('steered');
-    expect((await runtime.lookupSubmission('r'))?.steered).toBe(true);
+    expect((await runtime.steer({ ...input(), text: "Turn left" })).steered).toBe(true);
+    expect((await runtime.submit({ ...input(), requestId: "two", text: "Start" })).steered).toBe(
+      false,
+    );
+    expect(
+      await runtime.submit({ ...input(), requestId: "three", text: "Older" }),
+    ).not.toHaveProperty("steered");
+    expect(
+      await runtime.steer({ ...input(), requestId: "four", text: "Refused" }),
+    ).not.toHaveProperty("steered");
+    expect((await runtime.lookupSubmission("r"))?.steered).toBe(true);
     snapshot.messages = [
-      {role: 'user', row_id: 1, text: 'Start', app_request_id: 'two'},
-      {role: 'user', row_id: 2, text: 'Turn left', app_request_id: 'one', app_steering: true},
-      {role: 'assistant', row_id: 3, text: 'Turning', app_steering: true},
+      { role: "user", row_id: 1, text: "Start", app_request_id: "two" },
+      { role: "user", row_id: 2, text: "Turn left", app_request_id: "one", app_steering: true },
+      { role: "assistant", row_id: 3, text: "Turning", app_steering: true },
     ];
-    const {messages} = await runtime.conversation('shared');
-    expect(messages.map(message => message.steered)).toEqual([undefined, true, undefined]);
+    const { messages } = await runtime.conversation("shared");
+    expect(messages.map((message) => message.steered)).toEqual([undefined, true, undefined]);
   });
   // The add-on saves a started turn as `started`, so an answer without a turn is never taken for one: it may be an answer an
   // older add-on saved, or one it never answered.
-  it('carries what Hermes did with a new task\'s turn, and reads a missing one as unknown, never started', async () => {
+  it("carries what Hermes did with a new task's turn, and reads a missing one as unknown, never started", async () => {
     const answers: Record<string, Record<string, unknown>> = {
-      started: {turn: 'started'}, silent: {}, queued: {turn: 'queued'}, joined: {turn: 'joined'}, none: {turn: 'none', message: 'Hermes ended its voice chat.'},
-      unknown: {turn: 'unknown'}, future: {turn: 'deferred'}, empty: {turn: ''}, null: {turn: null}, number: {turn: 3},
-      steered: {steering: true, turn: 'queued'}, refused: {status: 'rejected', turn: 'queued'}, uncertain: {status: 'uncertain'},
+      started: { turn: "started" },
+      silent: {},
+      queued: { turn: "queued" },
+      joined: { turn: "joined" },
+      none: { turn: "none", message: "Hermes ended its voice chat." },
+      unknown: { turn: "unknown" },
+      future: { turn: "deferred" },
+      empty: { turn: "" },
+      null: { turn: null },
+      number: { turn: 3 },
+      steered: { steering: true, turn: "queued" },
+      refused: { status: "rejected", turn: "queued" },
+      uncertain: { status: "uncertain" },
     };
     const answering = (request: Record<string, any>, socket: WireSocket) => {
-      if (request.method !== 'agent-interface.submit') return;
-      deferredMethods.add('agent-interface.submit');
-      const {status = 'accepted', ...rest} = answers[request.params.text];
-      queueMicrotask(() => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', steering: false, ...rest}}));
+      if (request.method !== "agent-interface.submit") return;
+      deferredMethods.add("agent-interface.submit");
+      const { status = "accepted", ...rest } = answers[request.params.text];
+      queueMicrotask(() =>
+        socket.receive({
+          id: request.id,
+          result: {
+            requestId: request.params.request_id,
+            status,
+            runId: "task-one",
+            steering: false,
+            ...rest,
+          },
+        }),
+      );
     };
-    const turns = async () => Object.fromEntries(await Promise.all(Object.keys(answers).map(async (text, index) =>
-      [text, (await runtime.submit({...input(), requestId: `turn-${index}`, text})).turn])));
+    const turns = async () =>
+      Object.fromEntries(
+        await Promise.all(
+          Object.keys(answers).map(async (text, index) => [
+            text,
+            (await runtime.submit({ ...input(), requestId: `turn-${index}`, text })).turn,
+          ]),
+        ),
+      );
     beforeSend = answering;
     // Only an explicit turn says what Hermes did, whatever capabilities the add-on reports.
-    expect(await turns()).toEqual({started: 'started', silent: undefined, queued: 'queued', joined: 'joined', none: 'none', unknown: 'unknown',
-      future: 'unknown', empty: 'unknown', null: 'unknown', number: 'unknown', steered: undefined, refused: undefined, uncertain: undefined});
+    expect(await turns()).toEqual({
+      started: "started",
+      silent: undefined,
+      queued: "queued",
+      joined: "joined",
+      none: "none",
+      unknown: "unknown",
+      future: "unknown",
+      empty: "unknown",
+      null: "unknown",
+      number: "unknown",
+      steered: undefined,
+      refused: undefined,
+      uncertain: undefined,
+    });
     // The typed stop's own words reach the client.
-    expect((await runtime.submit({...input(), requestId: 'stop', text: 'none'})).message).toBe('Hermes ended its voice chat.');
+    expect((await runtime.submit({ ...input(), requestId: "stop", text: "none" })).message).toBe(
+      "Hermes ended its voice chat.",
+    );
     // A lookup carries the turn the add-on saved with the answer, and nothing else the answer stamped.
-    deferredMethods.add('agent-interface.receipt');
-    const saved: Record<string, Record<string, unknown>> = {r: {turn: 'none'}, s: {turn: 'started'}, old: {}, steer: {steering: true, turn: 'queued'}, odd: {turn: 'deferred'}, refused: {status: 'rejected', turn: 'queued'}};
+    deferredMethods.add("agent-interface.receipt");
+    const saved: Record<string, Record<string, unknown>> = {
+      r: { turn: "none" },
+      s: { turn: "started" },
+      old: {},
+      steer: { steering: true, turn: "queued" },
+      odd: { turn: "deferred" },
+      refused: { status: "rejected", turn: "queued" },
+    };
     beforeSend = (request, socket) => {
-      if (request.method === 'agent-interface.receipt') {
-        const {status = 'accepted', steering = false, ...rest} = saved[request.params.request_id];
-        queueMicrotask(() => socket.receive({id: request.id, result: {receipt: {requestId: request.params.request_id, status, runId: 'task-one', steering, ...rest}}}));
+      if (request.method === "agent-interface.receipt") {
+        const { status = "accepted", steering = false, ...rest } = saved[request.params.request_id];
+        queueMicrotask(() =>
+          socket.receive({
+            id: request.id,
+            result: {
+              receipt: {
+                requestId: request.params.request_id,
+                status,
+                runId: "task-one",
+                steering,
+                ...rest,
+              },
+            },
+          }),
+        );
       }
     };
-    const looked = Object.fromEntries(await Promise.all(Object.keys(saved).map(async id => [id, await runtime.lookupSubmission(id)])));
-    expect(looked.r).toMatchObject({status: 'accepted', steered: false, turn: 'none'});
-    expect(looked.s).toMatchObject({status: 'accepted', turn: 'started'});
-    expect(looked.old).not.toHaveProperty('turn');
-    expect(looked.steer).not.toHaveProperty('turn');
-    expect(looked.odd).toMatchObject({turn: 'unknown'});
-    expect(looked.refused).not.toHaveProperty('turn');
+    const looked = Object.fromEntries(
+      await Promise.all(
+        Object.keys(saved).map(async (id) => [id, await runtime.lookupSubmission(id)]),
+      ),
+    );
+    expect(looked.r).toMatchObject({ status: "accepted", steered: false, turn: "none" });
+    expect(looked.s).toMatchObject({ status: "accepted", turn: "started" });
+    expect(looked.old).not.toHaveProperty("turn");
+    expect(looked.steer).not.toHaveProperty("turn");
+    expect(looked.odd).toMatchObject({ turn: "unknown" });
+    expect(looked.refused).not.toHaveProperty("turn");
     // Only an admission answer is stamped with the version it arrived at.
-    expect(looked.s).not.toHaveProperty('admittedVersion');
+    expect(looked.s).not.toHaveProperty("admittedVersion");
   });
 
   // A read asked at a newer structural version than the answer's arrival was asked after Hermes finished admitting.
-  it('stamps an accepted answer with the structural version it arrived at, not the one it was asked at', async () => {
+  it("stamps an accepted answer with the structural version it arrived at, not the one it was asked at", async () => {
     let answer: (() => void) | undefined;
     beforeSend = (request, socket) => {
-      if (request.method !== 'agent-interface.submit') return;
-      deferredMethods.add('agent-interface.submit');
-      const status = request.params.text === 'Refused' ? 'rejected' : 'accepted';
-      answer = () => socket.receive({id: request.id, result: {requestId: request.params.request_id, status, runId: 'task-one', steering: false}});
+      if (request.method !== "agent-interface.submit") return;
+      deferredMethods.add("agent-interface.submit");
+      const status = request.params.text === "Refused" ? "rejected" : "accepted";
+      answer = () =>
+        socket.receive({
+          id: request.id,
+          result: {
+            requestId: request.params.request_id,
+            status,
+            runId: "task-one",
+            steering: false,
+          },
+        });
     };
     // A turn's start is a structural change; a streamed token or status line is not.
-    const started = () => sockets.at(-1)!.receive({method: 'event', params: {session_id: 'live-one', type: 'message.start', payload: {}}});
-    await runtime.conversation('shared', {history: false});
-    const sending = runtime.submit({...input(), text: 'Start'});
+    const started = () =>
+      sockets.at(-1)!.receive({
+        method: "event",
+        params: { session_id: "live-one", type: "message.start", payload: {} },
+      });
+    await runtime.conversation("shared", { history: false });
+    const sending = runtime.submit({ ...input(), text: "Start" });
     await vi.waitFor(() => expect(answer).toBeDefined());
-    const during = (await runtime.conversation('shared', {history: false})).version;
+    const during = (await runtime.conversation("shared", { history: false })).version;
     // Hermes reports a change while it admits, so a read asked before it is older than the answer.
     started();
     answer!();
-    const {admittedVersion} = await sending;
+    const { admittedVersion } = await sending;
     expect(compareVersions(during, admittedVersion)).toBeLessThan(0);
     // A read at the same version may have been asked before the answer, so it is not after it; one after a change is.
-    expect(compareVersions((await runtime.conversation('shared', {history: false})).version, admittedVersion)).toBe(0);
+    expect(
+      compareVersions(
+        (await runtime.conversation("shared", { history: false })).version,
+        admittedVersion,
+      ),
+    ).toBe(0);
     started();
-    expect(compareVersions((await runtime.conversation('shared', {history: false})).version, admittedVersion)).toBeGreaterThan(0);
+    expect(
+      compareVersions(
+        (await runtime.conversation("shared", { history: false })).version,
+        admittedVersion,
+      ),
+    ).toBeGreaterThan(0);
     answer = undefined;
-    const refused = runtime.submit({...input(), requestId: 'two', text: 'Refused'});
+    const refused = runtime.submit({ ...input(), requestId: "two", text: "Refused" });
     await vi.waitFor(() => expect(answer).toBeDefined());
     answer!();
-    expect(await refused).not.toHaveProperty('admittedVersion');
+    expect(await refused).not.toHaveProperty("admittedVersion");
   });
 
-  it('refuses approval settings on an add-on that cannot manage them, before contacting it', async () => {
-    const fetched = vi.fn(async () => Response.json({allowlist: ['recursive delete'], mode: 'smart'}));
-    vi.stubGlobal('fetch', fetched);
-    await expect(runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'}))
-      .rejects.toMatchObject({statusCode: 409, code: 'approval_settings_unsupported'});
+  it("refuses approval settings on an add-on that cannot manage them, before contacting it", async () => {
+    const fetched = vi.fn(async () =>
+      Response.json({ allowlist: ["recursive delete"], mode: "smart" }),
+    );
+    vi.stubGlobal("fetch", fetched);
+    await expect(
+      runtime.automationRequest!({ operation: "approval_settings", profile: "shared" }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "approval_settings_unsupported" });
     expect(fetched).not.toHaveBeenCalled();
     await runtime.close();
-    capabilities({approval_settings: true});
-    runtime = createHermesRuntime({ files: testFiles(token), url: 'http://127.0.0.1:19119', token});
-    expect(await runtime.automationRequest!({operation: 'approval_settings', profile: 'shared'})).toEqual({allowlist: ['recursive delete'], mode: 'smart'});
-    expect(JSON.parse(bodyText((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body))).toEqual({operation: 'approval_settings', profile: 'shared'});
+    capabilities({ approval_settings: true });
+    runtime = createHermesRuntime({
+      files: testFiles(token),
+      url: "http://127.0.0.1:19119",
+      token,
+    });
+    expect(
+      await runtime.automationRequest!({ operation: "approval_settings", profile: "shared" }),
+    ).toEqual({ allowlist: ["recursive delete"], mode: "smart" });
+    expect(
+      JSON.parse(bodyText((fetched.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body)),
+    ).toEqual({ operation: "approval_settings", profile: "shared" });
   });
 });
 
 // Review round 2: each case reproduced a misattribution of the event-order model through this runtime.
-describe('send timing through the real runtime', () => {
+describe("send timing through the real runtime", () => {
   type Line = Record<string, unknown>;
   function attach() {
-    vi.useFakeTimers({toFake: ['performance']});
+    vi.useFakeTimers({ toFake: ["performance"] });
     const lines: Line[] = [];
-    const log = {info: (fields: {sendTiming: Line}) => { lines.push(fields.sendTiming); }, warn: () => { throw new Error('warn'); }, error: () => { throw new Error('error'); }};
+    const log = {
+      info: (fields: { sendTiming: Line }) => {
+        lines.push(fields.sendTiming);
+      },
+      warn: () => {
+        throw new Error("warn");
+      },
+      error: () => {
+        throw new Error("error");
+      },
+    };
     const timings = new SendTimings(log as never);
     runtime.watchTurns!(timings);
     const now = () => performance.now();
     const start = now();
     const at = (ms: number) => vi.advanceTimersByTime(start + ms - now());
-    const frame = (type: string) => sockets.at(-1)!.receive({method: 'event', params: {session_id: 'live-one', type, payload: {text: 'x'}}});
+    const frame = (type: string) =>
+      sockets.at(-1)!.receive({
+        method: "event",
+        params: { session_id: "live-one", type, payload: { text: "x" } },
+      });
     /** A conversation read, as an open chat makes after each structural change. */
     const read = async (runId?: string, running = true) => {
-      snapshot.app_run_id = runId; snapshot.info = {running};
+      snapshot.app_run_id = runId;
+      snapshot.info = { running };
       hermesChanged();
-      await runtime.conversation('shared');
+      await runtime.conversation("shared");
     };
     /** The event stream writes the live reply, as conversation-routes.ts does. */
-    const written = () => { const value = runtime.inflight!('shared'); if (value) timings.written('shared', value.activity.runId); };
-    const admitted = (record: ReturnType<SendTimings['begin']>, runId: string, steered = false) =>
-      timings.admitted(record, steered ? 'steer' : 'messages', steered, {arrival: record.arrival, hermesStart: record.arrival, admitted: now()}, runId);
-    const timing = (requestId: string) => lines.find(line => line.requestId === requestId);
-    return {timings, now, at, frame, read, written, admitted, timing};
+    const written = () => {
+      const value = runtime.inflight!("shared");
+      if (value) timings.written("shared", value.activity.runId);
+    };
+    const admitted = (record: ReturnType<SendTimings["begin"]>, runId: string, steered = false) =>
+      timings.admitted(
+        record,
+        steered ? "steer" : "messages",
+        steered,
+        { arrival: record.arrival, hermesStart: record.arrival, admitted: now() },
+        runId,
+      );
+    const timing = (requestId: string) => lines.find((line) => line.requestId === requestId);
+    return { timings, now, at, frame, read, written, admitted, timing };
   }
 
-  it('times two sends begun while idle each by its own run, not by the next turn to start', async () => {
-    await runtime.conversation('shared');
+  it("times two sends begun while idle each by its own run, not by the next turn to start", async () => {
+    await runtime.conversation("shared");
     const t = attach();
-    const a = t.timings.begin('shared', 'A', t.now()), b = t.timings.begin('shared', 'B', t.now());
-    t.at(10); t.frame('message.start'); await t.read('A');
-    t.at(14); t.frame('message.delta');
-    t.at(17); t.written();
-    t.at(18); t.admitted(a, 'A');
-    t.at(30); t.frame('message.complete');
-    t.at(40); t.frame('message.start'); await t.read('B');
-    t.at(64); t.frame('message.delta');
-    t.at(67); t.written();
-    t.at(70); t.admitted(b, 'B');
-    expect(t.timing('A')).toMatchObject({firstFrameMs: 14, firstLiveMs: 17, ended: 'measured'});
-    expect(t.timing('B')).toMatchObject({firstFrameMs: 64, firstLiveMs: 67, ended: 'measured'});
+    const a = t.timings.begin("shared", "A", t.now()),
+      b = t.timings.begin("shared", "B", t.now());
+    t.at(10);
+    t.frame("message.start");
+    await t.read("A");
+    t.at(14);
+    t.frame("message.delta");
+    t.at(17);
+    t.written();
+    t.at(18);
+    t.admitted(a, "A");
+    t.at(30);
+    t.frame("message.complete");
+    t.at(40);
+    t.frame("message.start");
+    await t.read("B");
+    t.at(64);
+    t.frame("message.delta");
+    t.at(67);
+    t.written();
+    t.at(70);
+    t.admitted(b, "B");
+    expect(t.timing("A")).toMatchObject({ firstFrameMs: 14, firstLiveMs: 17, ended: "measured" });
+    expect(t.timing("B")).toMatchObject({ firstFrameMs: 64, firstLiveMs: 67, ended: "measured" });
   });
 
-  it('never credits a routine turn that started before Hermes answered to the send', async () => {
-    await runtime.conversation('shared');
+  it("never credits a routine turn that started before Hermes answered to the send", async () => {
+    await runtime.conversation("shared");
     const t = attach();
-    const send = t.timings.begin('shared', 'mine', t.now());
+    const send = t.timings.begin("shared", "mine", t.now());
     // A routine's turn runs in the chat first. Hermes has no app run open for it.
-    t.at(10); t.frame('message.start'); await t.read(undefined);
-    t.at(20); t.frame('message.delta'); t.written();
-    t.at(30); t.frame('message.complete');
-    t.at(40); t.frame('message.start'); await t.read('mine');
-    t.at(50); t.admitted(send, 'mine');
-    t.at(60); t.frame('message.delta');
-    t.at(65); t.written();
-    expect(t.timing('mine')).toMatchObject({firstFrameMs: 60, firstLiveMs: 65, ended: 'measured'});
+    t.at(10);
+    t.frame("message.start");
+    await t.read(undefined);
+    t.at(20);
+    t.frame("message.delta");
+    t.written();
+    t.at(30);
+    t.frame("message.complete");
+    t.at(40);
+    t.frame("message.start");
+    await t.read("mine");
+    t.at(50);
+    t.admitted(send, "mine");
+    t.at(60);
+    t.frame("message.delta");
+    t.at(65);
+    t.written();
+    expect(t.timing("mine")).toMatchObject({
+      firstFrameMs: 60,
+      firstLiveMs: 65,
+      ended: "measured",
+    });
   });
 
-  it('measures a steer Hermes queued by the first growth of its run after the send, past the turn that was running', async () => {
-    await runtime.conversation('shared');
+  it("measures a steer Hermes queued by the first growth of its run after the send, past the turn that was running", async () => {
+    await runtime.conversation("shared");
     const t = attach();
-    const first = t.timings.begin('shared', 'first', t.now());
-    t.at(10); t.frame('message.start'); await t.read('R');
-    t.at(12); t.frame('message.delta'); t.written();
-    t.admitted(first, 'R');
+    const first = t.timings.begin("shared", "first", t.now());
+    t.at(10);
+    t.frame("message.start");
+    await t.read("R");
+    t.at(12);
+    t.frame("message.delta");
+    t.written();
+    t.admitted(first, "R");
     // A steer arrives while the reply runs. Hermes queues it: the running turn ends without growing.
-    t.at(50); const steer = t.timings.begin('shared', 'steer', t.now());
-    t.at(55); t.admitted(steer, 'R', true);
-    t.at(60); t.frame('message.complete');
+    t.at(50);
+    const steer = t.timings.begin("shared", "steer", t.now());
+    t.at(55);
+    t.admitted(steer, "R", true);
+    t.at(60);
+    t.frame("message.complete");
     // The queued guidance drains into the next turn of the same run.
-    t.at(70); t.frame('message.start'); await t.read('R');
-    t.at(90); t.frame('message.delta');
-    t.at(95); t.written();
-    expect(t.timing('steer')).toMatchObject({firstFrameMs: 40, firstLiveMs: 45, ended: 'measured'});
+    t.at(70);
+    t.frame("message.start");
+    await t.read("R");
+    t.at(90);
+    t.frame("message.delta");
+    t.at(95);
+    t.written();
+    expect(t.timing("steer")).toMatchObject({
+      firstFrameMs: 40,
+      firstLiveMs: 45,
+      ended: "measured",
+    });
   });
 
-  it('drops a measurement when the socket disconnects while it is open', async () => {
-    await runtime.conversation('shared');
+  it("drops a measurement when the socket disconnects while it is open", async () => {
+    await runtime.conversation("shared");
     const t = attach();
-    const send = t.timings.begin('shared', 'cut', t.now());
-    t.at(10); t.frame('message.start'); await t.read('R');
-    t.at(20); t.admitted(send, 'R');
+    const send = t.timings.begin("shared", "cut", t.now());
+    t.at(10);
+    t.frame("message.start");
+    await t.read("R");
+    t.at(20);
+    t.admitted(send, "R");
     // The socket drops before any text. Hermes ends that turn and starts another while nobody listens.
     sockets.at(-1)!.close();
     await runtime.reconnect!();
-    t.at(200); await t.read('R');
+    t.at(200);
+    await t.read("R");
     // The later turn streams, and its start was never seen.
-    t.at(220); t.frame('message.delta');
-    t.at(230); t.written();
-    expect(t.timing('cut')).toMatchObject({ended: 'disconnected', firstFrameMs: undefined, firstLiveMs: undefined});
+    t.at(220);
+    t.frame("message.delta");
+    t.at(230);
+    t.written();
+    expect(t.timing("cut")).toMatchObject({
+      ended: "disconnected",
+      firstFrameMs: undefined,
+      firstLiveMs: undefined,
+    });
   });
 
-  it('measures a steer by the first growth after it arrived, while the session had no owner yet', async () => {
+  it("measures a steer by the first growth after it arrived, while the session had no owner yet", async () => {
     await runtime.status();
     const t = attach();
     // An unowned session's turn streams before any send.
-    t.at(20); t.frame('message.start'); t.frame('message.delta');
-    t.at(30); const steer = t.timings.begin('shared', 'steer', t.now());
-    t.at(40); t.frame('message.delta');
+    t.at(20);
+    t.frame("message.start");
+    t.frame("message.delta");
+    t.at(30);
+    const steer = t.timings.begin("shared", "steer", t.now());
+    t.at(40);
+    t.frame("message.delta");
     // The open names the owner, then Hermes answers the steer.
-    t.at(45); await t.read('R');
-    t.at(50); t.admitted(steer, 'R', true);
-    t.at(60); t.written();
-    t.at(70); t.frame('message.complete');
-    expect(t.timing('steer')).toMatchObject({firstFrameMs: 10, firstLiveMs: 30, ended: 'measured'});
+    t.at(45);
+    await t.read("R");
+    t.at(50);
+    t.admitted(steer, "R", true);
+    t.at(60);
+    t.written();
+    t.at(70);
+    t.frame("message.complete");
+    expect(t.timing("steer")).toMatchObject({
+      firstFrameMs: 10,
+      firstLiveMs: 30,
+      ended: "measured",
+    });
   });
 });
 
-describe('Hermes refusals over HTTP', () => {
-  it('reports a profile deleted since the roster read as a missing assistant, which the roster drops', async () => {
-    await expect(runtime.botDetail!('gone')).rejects.toMatchObject({statusCode:404,code:'assistant_not_found'});
+describe("Hermes refusals over HTTP", () => {
+  it("reports a profile deleted since the roster read as a missing assistant, which the roster drops", async () => {
+    await expect(runtime.botDetail!("gone")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "assistant_not_found",
+    });
   });
-  it('refuses a new profile whose name makes no ID without creating anything', async () => {
-    await expect(runtime.saveBot({name:'🌵🐎',instructions:'',model:'test',shared:true}))
-      .rejects.toMatchObject({statusCode:400,code:'assistant_name_invalid'});
-    expect(calls.some(call=>call.method==='profiles.create')).toBe(false);
+  it("refuses a new profile whose name makes no ID without creating anything", async () => {
+    await expect(
+      runtime.saveBot({ name: "🌵🐎", instructions: "", model: "test", shared: true }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "assistant_name_invalid" });
+    expect(calls.some((call) => call.method === "profiles.create")).toBe(false);
   });
   async function served() {
-    const {app}=await createApp(loadConfig({LOCAL_DEV_AUTH:'true',APP_DATABASE:':memory:'}),runtime,{background:false});
-    const login=await app.inject({method:'POST',url:'/api/auth/local',headers:{origin:'http://127.0.0.1:3000'},payload:{member:'one'}});
-    const headers={origin:'http://127.0.0.1:3000',cookie:`session=${login.cookies[0].value}`,'x-csrf-token':login.json().csrfToken as string};
-    return {app,headers};
+    const { app } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/local",
+      headers: { origin: "http://127.0.0.1:3000" },
+      payload: { member: "one" },
+    });
+    const headers = {
+      origin: "http://127.0.0.1:3000",
+      cookie: `session=${login.cookies[0].value}`,
+      "x-csrf-token": login.json().csrfToken as string,
+    };
+    return { app, headers };
   }
-  it('answers a file ID this server did not issue with 404, never asking Hermes', async () => {
-    const {app,headers}=await served();
-    const signed=(body:string)=>`${body}.${createHmac('sha256',token).update(body).digest('base64url')}`;
-    const body=(path:string)=>Buffer.from(JSON.stringify({path,name:'passwd',mime:'text/plain',botId:'shared',kind:'upload',version:1})).toString('base64url');
+  it("answers a file ID this server did not issue with 404, never asking Hermes", async () => {
+    const { app, headers } = await served();
+    const signed = (body: string) =>
+      `${body}.${createHmac("sha256", token).update(body).digest("base64url")}`;
+    const body = (path: string) =>
+      Buffer.from(
+        JSON.stringify({
+          path,
+          name: "passwd",
+          mime: "text/plain",
+          botId: "shared",
+          kind: "upload",
+          version: 1,
+        }),
+      ).toString("base64url");
     try {
       // No signature, a signature this server did not make, and a genuine signature over a path it never vouches for.
-      for (const id of ['not-a-file', `${body('/etc/passwd')}.forged`, signed(body('/etc/../passwd'))]) {
-        const response=await app.inject({url:`/api/files/${encodeURIComponent(id)}`,headers});
-        expect([response.statusCode,response.json().error,response.json().code],id).toEqual([404,'That file is no longer available.','file_not_found']);
+      for (const id of [
+        "not-a-file",
+        `${body("/etc/passwd")}.forged`,
+        signed(body("/etc/../passwd")),
+      ]) {
+        const response = await app.inject({ url: `/api/files/${encodeURIComponent(id)}`, headers });
+        expect([response.statusCode, response.json().error, response.json().code], id).toEqual([
+          404,
+          "That file is no longer available.",
+          "file_not_found",
+        ]);
       }
-      expect(vi.mocked(fetch).mock.calls.some(([url])=>urlText(url).includes('/api/files/download'))).toBe(false);
-    } finally { await app.close(); }
+      expect(
+        vi.mocked(fetch).mock.calls.some(([url]) => urlText(url).includes("/api/files/download")),
+      ).toBe(false);
+    } finally {
+      await app.close();
+    }
   });
-  it('answers an approval Hermes no longer has open with 409 and the reason', async () => {
-    const {app,headers}=await served();
+  it("answers an approval Hermes no longer has open with 409 and the reason", async () => {
+    const { app, headers } = await served();
     try {
-      snapshot.open_requests=[{id:'gate',method:'approval',description:'Open the gate'}];
+      snapshot.open_requests = [{ id: "gate", method: "approval", description: "Open the gate" }];
       // Hermes says the request expired while the decision was on its way.
-      beforeSend=(request,socket)=>{if(request.method==='request.answer'){deferredMethods.add('request.answer');queueMicrotask(()=>socket.receive({id:request.id,result:{status:'expired',resolved:false}}));}};
-      const response=await app.inject({method:'POST',url:'/api/bots/shared/approvals/gate',headers,payload:{decision:'approved'}});
-      expect([response.statusCode,response.json().error,response.json().code]).toEqual([409,'That approval expired before it was answered.','request_not_pending']);
-    } finally { await app.close(); }
+      beforeSend = (request, socket) => {
+        if (request.method === "request.answer") {
+          deferredMethods.add("request.answer");
+          queueMicrotask(() =>
+            socket.receive({ id: request.id, result: { status: "expired", resolved: false } }),
+          );
+        }
+      };
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/bots/shared/approvals/gate",
+        headers,
+        payload: { decision: "approved" },
+      });
+      expect([response.statusCode, response.json().error, response.json().code]).toEqual([
+        409,
+        "That approval expired before it was answered.",
+        "request_not_pending",
+      ]);
+    } finally {
+      await app.close();
+    }
   });
 });

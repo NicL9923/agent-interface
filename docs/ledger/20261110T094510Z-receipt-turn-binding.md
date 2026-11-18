@@ -203,11 +203,11 @@ and the image-recovery test are removed with the code they tested.
 
 First round, each line broken with a scripted text replacement and the module run:
 
-| Broken | Red |
-| --- | --- |
+| Broken                                                     | Red                                                                                                                          |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Completion binds the oldest unbound receipt, as `main` did | 8 tests: both reproductions, the queued image send, two members, merged texts, resumed turn, goal continuation, drained send |
-| A request ID claimable more than once | `test_a_send_drained_under_an_app_turns_request_id_never_takes_its_receipt` |
-| `prompt.submit` sent without its own request ID | `test_an_image_send_is_bound_to_the_row_its_own_turn_reports` |
+| A request ID claimable more than once                      | `test_a_send_drained_under_an_app_turns_request_id_never_takes_its_receipt`                                                  |
+| `prompt.submit` sent without its own request ID            | `test_an_image_send_is_bound_to_the_row_its_own_turn_reports`                                                                |
 
 The first round's rows for the read-time check and image recovery tested code this round removed. Its note that
 either claim guard alone kept every test green is answered below.
@@ -215,12 +215,12 @@ either claim guard alone kept every test green is answered below.
 Second round, reproductions written first and run against `c8f9a85`'s `src/hermes/extension.py` with the new test
 module (`git show c8f9a85:src/hermes/extension.py` over the file, then restored and compared byte for byte):
 
-| Reproduction | Red on `c8f9a85`, for the reviewer's reason |
-| --- | --- |
-| Item 1: a stored binding to a row whose words Hermes sanitized | `test_a_stored_binding_is_shown_however_hermes_changed_the_rows_words`: shown `(None, None)`, not `alice-1` |
-| Item 2: Kim's steer beside a native correction with the same words | `test_a_steer_beside_another_clients_correction_with_the_same_words_stays_unbound`: `kim-1` shown on the native row |
-| Item 3: a queued image send beside an older native row with its words and file | `test_a_queued_image_send_stays_unbound_beside_an_older_row_with_its_words_and_file`: `alice-1` shown on the native row |
-| Item 3: an image sent alone, opened while its turn runs, beside an older row with its file | `test_an_image_send_is_bound_to_the_row_its_own_turn_reports_never_an_older_one`: `alice-1` shown on the desktop's row |
+| Reproduction                                                                               | Red on `c8f9a85`, for the reviewer's reason                                                                             |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| Item 1: a stored binding to a row whose words Hermes sanitized                             | `test_a_stored_binding_is_shown_however_hermes_changed_the_rows_words`: shown `(None, None)`, not `alice-1`             |
+| Item 2: Kim's steer beside a native correction with the same words                         | `test_a_steer_beside_another_clients_correction_with_the_same_words_stays_unbound`: `kim-1` shown on the native row     |
+| Item 3: a queued image send beside an older native row with its words and file             | `test_a_queued_image_send_stays_unbound_beside_an_older_row_with_its_words_and_file`: `alice-1` shown on the native row |
+| Item 3: an image sent alone, opened while its turn runs, beside an older row with its file | `test_an_image_send_is_bound_to_the_row_its_own_turn_reports_never_an_older_one`: `alice-1` shown on the desktop's row  |
 
 On `c8f9a85` the goal-continuation, drained-send and guidance tests also fail, on the recovery and word matching
 this round removed, and the steering-table and cache tests error because `turn_rows` does not exist there.
@@ -228,31 +228,31 @@ this round removed, and the steering-table and cache tests error because `turn_r
 Second round mutants, each applied to the fixed source by a script, the module run, and the source restored and
 compared:
 
-| Broken | Red |
-| --- | --- |
-| Claim: no same-session guard | `test_only_the_turn_hermes_started_for_the_send_claims_it` [another session] |
-| Claim: no exact-text guard | the same test [other words] |
-| Claim: no display-kind guard | the same test [a display kind] |
-| Claim: no author guard | the same test [a relayed author] |
-| Claim: ID read, not taken, so claimable again | `test_a_send_drained_under_an_app_turns_request_id_never_takes_its_receipt` |
-| Wrapper keeps an inherited claim instead of clearing it | `test_a_continuation_after_a_claimed_turn_failed_never_inherits_its_claim` |
-| Bind: no one-use marking | `test_a_claim_binds_at_most_once_even_when_its_first_completion_named_no_row` |
-| Bind: no completion-session guard | `test_a_completion_for_another_session_neither_binds_nor_spends_the_claim` |
-| Bind: no `row_ids` shape guard | `test_a_steer_stays_unbound_when_its_roots_turn_reports_no_rows` |
-| Steer: any number of matching rows | the same-words test and the steering table [two rows in the turn] |
-| Steer: no finished-turn requirement | the steering table [the turn has not finished], the no-rows test, the two-members test |
-| Steer: rows outside the root's turn count | the steering table [one row in the turn], the guidance test |
-| Steer: other receipts' words ignored | the steering table [another unbound steer], [another bound steer] |
-| Steer: a row another receipt holds can be taken | the steering table [the row held by another receipt] |
-| Cache off while any receipt is unbound | `test_unbound_sends_and_steers_still_let_opens_reuse_decorated_history` |
+| Broken                                                  | Red                                                                                    |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Claim: no same-session guard                            | `test_only_the_turn_hermes_started_for_the_send_claims_it` [another session]           |
+| Claim: no exact-text guard                              | the same test [other words]                                                            |
+| Claim: no display-kind guard                            | the same test [a display kind]                                                         |
+| Claim: no author guard                                  | the same test [a relayed author]                                                       |
+| Claim: ID read, not taken, so claimable again           | `test_a_send_drained_under_an_app_turns_request_id_never_takes_its_receipt`            |
+| Wrapper keeps an inherited claim instead of clearing it | `test_a_continuation_after_a_claimed_turn_failed_never_inherits_its_claim`             |
+| Bind: no one-use marking                                | `test_a_claim_binds_at_most_once_even_when_its_first_completion_named_no_row`          |
+| Bind: no completion-session guard                       | `test_a_completion_for_another_session_neither_binds_nor_spends_the_claim`             |
+| Bind: no `row_ids` shape guard                          | `test_a_steer_stays_unbound_when_its_roots_turn_reports_no_rows`                       |
+| Steer: any number of matching rows                      | the same-words test and the steering table [two rows in the turn]                      |
+| Steer: no finished-turn requirement                     | the steering table [the turn has not finished], the no-rows test, the two-members test |
+| Steer: rows outside the root's turn count               | the steering table [one row in the turn], the guidance test                            |
+| Steer: other receipts' words ignored                    | the steering table [another unbound steer], [another bound steer]                      |
+| Steer: a row another receipt holds can be taken         | the steering table [the row held by another receipt]                                   |
+| Cache off while any receipt is unbound                  | `test_unbound_sends_and_steers_still_let_opens_reuse_decorated_history`                |
 
 Third round. Tests written before the fix, run against `579fc08`'s `src/hermes/extension.py`:
 
-| Reproduction | Red on `579fc08`, for the reviewer's reason |
-| --- | --- |
-| A completion with a dict, string, boolean or zero among its `row_ids` | `test_a_completion_with_malformed_row_ids_saves_no_turn_and_later_opens_still_answer` [each of the four]: the bad list was stored |
+| Reproduction                                                           | Red on `579fc08`, for the reviewer's reason                                                                                         |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| A completion with a dict, string, boolean or zero among its `row_ids`  | `test_a_completion_with_malformed_row_ids_saves_no_turn_and_later_opens_still_answer` [each of the four]: the bad list was stored   |
 | A stored turn with a dict element, a non-list or text that is not JSON | `test_a_damaged_stored_turn_leaves_the_steer_unbound_and_the_open_answers` [each]: the open raised `TypeError` or `JSONDecodeError` |
-| A stored turn with a string, boolean or zero element | the same test [each]: Kim's steer bound to row 12 |
+| A stored turn with a string, boolean or zero element                   | the same test [each]: Kim's steer bound to row 12                                                                                   |
 
 The write case of a whole value that is not a list passed on `579fc08`, which already refused it at the write. The
 steering and admission-row tests accompany no code fix: they passed on `579fc08` once the fake behaved as Hermes does,
@@ -261,19 +261,19 @@ and each protects a line, proved below.
 Third round mutants, applied by a script that replaces one exact text, runs the module, restores the file and checks
 its SHA-256:
 
-| Broken | Red |
-| --- | --- |
-| Completion overwrites the admission row (`row_id=?` for `COALESCE(row_id,?)`) | `test_a_row_hermes_named_at_admission_is_kept_when_its_turn_reports_another` |
-| Write stores any list, as on `579fc08` | the malformed-completion test [dict], [string], [boolean], [zero] |
-| `isinstance(row, int)` for `type(row) is int` | the malformed-completion test and the damaged-turn test, each [boolean] |
-| `row >= 0` for `row > 0` | both tests [zero] |
-| No list check | the malformed-completion test [not a list], the damaged-turn test [not a list], `test_a_steer_stays_unbound_when_its_roots_turn_reports_no_rows` |
-| Read uses the stored value unchecked | the damaged-turn test [dict], [not a list], [string], [boolean], [zero] |
-| Read does not catch the JSON error | the damaged-turn test [not JSON] |
-| Steer matches one line of a joined row | `test_two_members_steers_hermes_joined_into_one_row_bind_to_neither` |
-| Steer never binds | `test_a_turn_binds_the_steer_it_delivered_alone_and_not_the_one_it_handed_to_the_next_turn`, `test_a_steer_consumed_in_place_is_bound_to_the_only_row_in_its_turn_with_its_words`, the steering table [one row in the turn], both guard tests [well formed] |
-| Steer rows outside the root's turn count | the delivered-alone test, `test_guidance_that_runs_as_its_own_turn_stays_unattributed`, the steering table [one row in the turn], the damaged-turn test [well formed] |
-| Fake: a tool batch writes each steer as its own row, as before | the joined-row test errors: Hermes wrote no joined row |
+| Broken                                                                        | Red                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Completion overwrites the admission row (`row_id=?` for `COALESCE(row_id,?)`) | `test_a_row_hermes_named_at_admission_is_kept_when_its_turn_reports_another`                                                                                                                                                                                |
+| Write stores any list, as on `579fc08`                                        | the malformed-completion test [dict], [string], [boolean], [zero]                                                                                                                                                                                           |
+| `isinstance(row, int)` for `type(row) is int`                                 | the malformed-completion test and the damaged-turn test, each [boolean]                                                                                                                                                                                     |
+| `row >= 0` for `row > 0`                                                      | both tests [zero]                                                                                                                                                                                                                                           |
+| No list check                                                                 | the malformed-completion test [not a list], the damaged-turn test [not a list], `test_a_steer_stays_unbound_when_its_roots_turn_reports_no_rows`                                                                                                            |
+| Read uses the stored value unchecked                                          | the damaged-turn test [dict], [not a list], [string], [boolean], [zero]                                                                                                                                                                                     |
+| Read does not catch the JSON error                                            | the damaged-turn test [not JSON]                                                                                                                                                                                                                            |
+| Steer matches one line of a joined row                                        | `test_two_members_steers_hermes_joined_into_one_row_bind_to_neither`                                                                                                                                                                                        |
+| Steer never binds                                                             | `test_a_turn_binds_the_steer_it_delivered_alone_and_not_the_one_it_handed_to_the_next_turn`, `test_a_steer_consumed_in_place_is_bound_to_the_only_row_in_its_turn_with_its_words`, the steering table [one row in the turn], both guard tests [well formed] |
+| Steer rows outside the root's turn count                                      | the delivered-alone test, `test_guidance_that_runs_as_its_own_turn_stays_unattributed`, the steering table [one row in the turn], the damaged-turn test [well formed]                                                                                       |
+| Fake: a tool batch writes each steer as its own row, as before                | the joined-row test errors: Hermes wrote no joined row                                                                                                                                                                                                      |
 
 Third round, on the committed tree:
 
@@ -325,7 +325,6 @@ admission-row test, and all five mutations. One finding, P2, in the documents an
 - The time read with a bare `float()`: the string case of "a row with no usable time is judged by the other rules and
   the open answers" errors with `ValueError`.
 
-
 ### Checks
 
 - `npm run test:py`: 43 files passed, 0 failed, Python 3.14.10. `tests/hermes_turn_binding_test.py`: 27 tests passed.
@@ -364,4 +363,3 @@ sides of the one-second boundary, and that for finite numeric times the document
 - `npx vitest run tests/hermes-adapter.test.ts tests/hermes-qualification.test.ts tests/sent-echo.test.ts`: 3 files,
   251 tests passed.
 - Real Hermes, the extension probe, `npm test`, iOS and production: not run.
-

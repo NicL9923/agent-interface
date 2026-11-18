@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bootstrap, Preferences } from "../shared/types";
-import { AccountChanged, ApiError, changeStream, request as apiRequest, setCsrf } from "../client-api";
+import {
+  AccountChanged,
+  ApiError,
+  changeStream,
+  request as apiRequest,
+  setCsrf,
+} from "../client-api";
 import { preferenceQueue } from "./preference-queue";
 import { prefetchLinkedChat, settleLinkedChat } from "./linked-chat";
-import { accountEpoch, accountNamed, accountRefused, pendingSignOut, rememberChats } from "./account-epoch";
+import {
+  accountEpoch,
+  accountNamed,
+  accountRefused,
+  pendingSignOut,
+  rememberChats,
+} from "./account-epoch";
 import { finishSignOut } from "./account-change";
 import { reportStream, streamUp } from "./stream-health";
 type SessionEvents = {
@@ -40,9 +52,7 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   const [auth, setAuth] = useState(start === "signed-out");
   /** The account whose household stream has sent a `groups` notice: that server pushes catalog changes. */
   const [groupsNotifiedFor, setGroupsNotifiedFor] = useState<string | null>(null);
-  const [botId, setBotId] = useState(
-    () => new URLSearchParams(location.search).get("bot") || "",
-  );
+  const [botId, setBotId] = useState(() => new URLSearchParams(location.search).get("bot") || "");
   const [disconnected, setDisconnected] = useState(false);
   const [appUnavailable, setAppUnavailable] = useState(false);
   const [offline, setOffline] = useState(() => navigator.onLine === false);
@@ -83,27 +93,48 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
           handlers.current.onFirstBootstrap(next);
         }
         setCsrf(next.csrfToken ?? "");
-        if (next.connection.connected) rememberChats(next.user.id, next.bots.map(bot => bot.id));
+        if (next.connection.connected)
+          rememberChats(
+            next.user.id,
+            next.bots.map((bot) => bot.id),
+          );
         // A save that overlapped this read may be newer than its preferences; keep the saved copy.
         const stalePreferences = !preferences.current?.fresh(marked);
         // An unchanged poll returns the cached object; keeping the derived state lets React skip the app render.
         // A read whose preferences were held back is not remembered, so the next one reconciles them.
         const unchanged = lastBootstrap.current === next;
         lastBootstrap.current = stalePreferences ? null : next;
-        setBoot((previous) => unchanged && previous ? previous : { ...next,
-          bots: !next.connection.connected && !next.bots.length && previous?.user.id === next.user.id
-            ? previous.bots : next.bots,
-          preferences: stalePreferences && previous?.user.id === next.user.id ? previous.preferences : next.preferences,
-        });
+        setBoot((previous) =>
+          unchanged && previous
+            ? previous
+            : {
+                ...next,
+                bots:
+                  !next.connection.connected &&
+                  !next.bots.length &&
+                  previous?.user.id === next.user.id
+                    ? previous.bots
+                    : next.bots,
+                preferences:
+                  stalePreferences && previous?.user.id === next.user.id
+                    ? previous.preferences
+                    : next.preferences,
+              },
+        );
         setAuth(false);
         setAppUnavailable(false);
         setDisconnected(!next.connection.connected);
         const open = botIdRef.current;
-        if (next.connection.connected && open && !next.bots.some(bot => bot.id === open)) handlers.current.onBotGone(open);
+        if (next.connection.connected && open && !next.bots.some((bot) => bot.id === open))
+          handlers.current.onBotGone(open);
         setBotId((previous) => {
           if (!next.connection.connected) return previous;
-          if (next.bots.some(bot => bot.id === previous)) return previous;
-          return next.bots.find(bot => bot.id === next.preferences.defaultBotId)?.id || next.bots[0]?.id || "";
+          if (next.bots.some((bot) => bot.id === previous)) return previous;
+          return (
+            next.bots.find((bot) => bot.id === next.preferences.defaultBotId)?.id ||
+            next.bots[0]?.id ||
+            ""
+          );
         });
         return next;
       } catch (e) {
@@ -111,10 +142,13 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
         if (e instanceof ApiError && e.status === 401) {
           // A generation that drew an account ends, in every tab; one that drew none shows sign-in here.
           if (accountRefused(drawn.current !== undefined)) return null;
-          setAuth(true); setBoot(null); setCsrf("");
+          setAuth(true);
+          setBoot(null);
+          setCsrf("");
         } else {
           lastSuccess.current = 0;
-          setDisconnected(true); setAppUnavailable(true);
+          setDisconnected(true);
+          setAppUnavailable(true);
         }
         return null;
       }
@@ -134,7 +168,8 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
       window.dispatchEvent(new Event("agent-interface:reconnect"));
     } catch {
       lastSuccess.current = 0;
-      setDisconnected(true); setAppUnavailable(true);
+      setDisconnected(true);
+      setAppUnavailable(true);
     } finally {
       setCheckingConnection(false);
     }
@@ -149,7 +184,8 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     // Hermes outages included, so only changes it never announces, such as preferences saved on another
     // device, wait for this, at most about 5 minutes. Focus and showing the page still read at once.
     const id = setInterval(() => {
-      if (authRef.current || document.visibilityState === "hidden" || navigator.onLine === false) return;
+      if (authRef.current || document.visibilityState === "hidden" || navigator.onLine === false)
+        return;
       if (streamUp("household") && Date.now() - lastSuccess.current < BOOTSTRAP_FALLBACK_MS) return;
       void refresh();
     }, 45_000);
@@ -160,8 +196,11 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
       if (skipIfFresh && Date.now() - lastSuccess.current < FRESH_MS) return;
       void refresh();
     };
-    const online = wake(false), returned = wake(true);
-    const lost = () => { setOffline(true); };
+    const online = wake(false),
+      returned = wake(true);
+    const lost = () => {
+      setOffline(true);
+    };
     window.addEventListener("online", online);
     window.addEventListener("offline", lost);
     window.addEventListener("focus", returned);
@@ -179,8 +218,21 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
     const userId = boot.user.id;
     // The server sends `groups` once on every connect and on each catalog change, so connecting or a
     // roster notice does not read the group catalog itself.
-    const stream = changeStream("/events", () => { void refresh(); }, undefined, { groups: () => { setGroupsNotifiedFor(userId); groupsChanged(); } },
-      undefined, { onHealth: up => reportStream("household", up) });
+    const stream = changeStream(
+      "/events",
+      () => {
+        void refresh();
+      },
+      undefined,
+      {
+        groups: () => {
+          setGroupsNotifiedFor(userId);
+          groupsChanged();
+        },
+      },
+      undefined,
+      { onHealth: (up) => reportStream("household", up) },
+    );
     // A hidden page or an offline device pauses the stream, keeping its retry budget for when it wakes.
     const wake = () => {
       if (document.visibilityState !== "hidden" && navigator.onLine !== false) stream.open();
@@ -208,19 +260,33 @@ export function useSession(events: SessionEvents, start: "bootstrap" | "signed-o
   preferences.current ??= preferenceQueue({
     // Model stars have their own endpoint; leaving them out keeps the server's current list.
     send: ({ modelFavorites: _, ...value }) => apiRequest("PATCH /preferences", { body: value }),
-    apply: saved => setBoot(previous => previous ? { ...previous, preferences: saved } : previous),
-    failed: error => handlers.current.onError(error.message),
+    apply: (saved) =>
+      setBoot((previous) => (previous ? { ...previous, preferences: saved } : previous)),
+    failed: (error) => handlers.current.onError(error.message),
     account: () => accountEpoch.current,
   });
   const savePreferences = (value: Preferences) => preferences.current!.save(value);
   /** Puts preferences a server route answered with on screen, such as a new main assistant. */
-  const applyPreferences = (value: Preferences) => setBoot(previous => previous ? { ...previous, preferences: value } : previous);
+  const applyPreferences = (value: Preferences) =>
+    setBoot((previous) => (previous ? { ...previous, preferences: value } : previous));
   /** Applies an edit to the newest preferences, including a save still on its way. */
   const editPreferences = (edit: (value: Preferences) => Preferences) =>
     preferences.current!.edit(edit, bootRef.current?.preferences);
   return {
-    boot, auth, botId, setBotId, disconnected, appUnavailable, offline, checkingConnection,
-    identityEpoch: accountEpoch, refresh, reconnect, savePreferences, editPreferences, applyPreferences,
+    boot,
+    auth,
+    botId,
+    setBotId,
+    disconnected,
+    appUnavailable,
+    offline,
+    checkingConnection,
+    identityEpoch: accountEpoch,
+    refresh,
+    reconnect,
+    savePreferences,
+    editPreferences,
+    applyPreferences,
     /** This server sends `groups` notices, so a slow fallback poll is enough. */
     // Per account, so another account starts unproven in the same render that switches to it.
     groupsNotified: !!boot?.user.id && groupsNotifiedFor === boot.user.id,

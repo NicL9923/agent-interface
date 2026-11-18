@@ -24,20 +24,20 @@ local connection; it does not claim to revoke an account-wide grant at the vendo
 
 ## Available connections
 
-| Connection | Setup and use |
-| --- | --- |
-| Google Workspace | Connect or reconnect Gmail, Calendar, Drive, Tasks and Contacts through Google consent. Permission indicators describe the saved scopes; the health check identifies the service it actually queried. |
-| GitHub | Use the official remote MCP server with a repository-scoped personal access token. Remote OAuth needs a separately configured GitHub application. |
-| Selected files and Synology | Select an installer-approved directory visible to Hermes, including a mounted NAS directory. The bounded read tool lists directories and reads text without following symlinks. An existing NAS MCP service can also be connected. |
-| Discord | Inspect Hermes's existing connection and check its status. Native messaging setup remains responsible for its bot token and gateway lifecycle. |
-| Supabase | Connect the official remote MCP service. Prefer a selected project and read-only access for monitoring. |
-| Cloudflare | Connect an official remote MCP service. The observability endpoint covers monitoring; the general endpoint exposes the permissions selected during authorization. |
-| VPS health | Connect an existing HTTPS MCP service exposing the host information you want the bot to use. This does not install a server agent or grant SSH access. |
-| Home Assistant | Connect the home's configured HTTPS `/api/mcp` endpoint using a long-lived access token. OAuth additionally needs the native client's IndieAuth settings. |
-| Models, search and images | Manage supported native provider sign-ins and API keys. Existing native tool and model configuration continues to control execution. |
-| Custom MCP | Add an HTTPS server with OAuth, a bearer token or no authentication. Hermes owns discovery and tool execution. Local command installation is not exposed. |
-| T3 Code | Add T3 Code's `/mcp` endpoint as a Custom MCP server with OAuth. T3 Code asks its owner to approve the client with read-only access or a runtime-mode ceiling. See [T3 Code](#t3-code). |
-| Apple Calendar and Reminders | In iOS, grant device permission, select calendars or reminder lists and a date range, preview the selection, then add it to a bot's draft. Send the draft to share it. Refresh explicitly to share newer data. |
+| Connection                   | Setup and use                                                                                                                                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google Workspace             | Connect or reconnect Gmail, Calendar, Drive, Tasks and Contacts through Google consent. Permission indicators describe the saved scopes; the health check identifies the service it actually queried.                              |
+| GitHub                       | Use the official remote MCP server with a repository-scoped personal access token. Remote OAuth needs a separately configured GitHub application.                                                                                  |
+| Selected files and Synology  | Select an installer-approved directory visible to Hermes, including a mounted NAS directory. The bounded read tool lists directories and reads text without following symlinks. An existing NAS MCP service can also be connected. |
+| Discord                      | Inspect Hermes's existing connection and check its status. Native messaging setup remains responsible for its bot token and gateway lifecycle.                                                                                     |
+| Supabase                     | Connect the official remote MCP service. Prefer a selected project and read-only access for monitoring.                                                                                                                            |
+| Cloudflare                   | Connect an official remote MCP service. The observability endpoint covers monitoring; the general endpoint exposes the permissions selected during authorization.                                                                  |
+| VPS health                   | Connect an existing HTTPS MCP service exposing the host information you want the bot to use. This does not install a server agent or grant SSH access.                                                                             |
+| Home Assistant               | Connect the home's configured HTTPS `/api/mcp` endpoint using a long-lived access token. OAuth additionally needs the native client's IndieAuth settings.                                                                          |
+| Models, search and images    | Manage supported native provider sign-ins and API keys. Existing native tool and model configuration continues to control execution.                                                                                               |
+| Custom MCP                   | Add an HTTPS server with OAuth, a bearer token or no authentication. Hermes owns discovery and tool execution. Local command installation is not exposed.                                                                          |
+| T3 Code                      | Add T3 Code's `/mcp` endpoint as a Custom MCP server with OAuth. T3 Code asks its owner to approve the client with read-only access or a runtime-mode ceiling. See [T3 Code](#t3-code).                                            |
+| Apple Calendar and Reminders | In iOS, grant device permission, select calendars or reminder lists and a date range, preview the selection, then add it to a bot's draft. Send the draft to share it. Refresh explicitly to share newer data.                     |
 
 ## Connection requests in chat
 
@@ -99,11 +99,11 @@ the qualification digest.
 
 These settings belong to the **Hermes service environment**, not the browser:
 
-| Variable | Purpose |
-| --- | --- |
-| `HERMES_AGENT_INTERFACE_GOOGLE_CLIENT_FILE` | Absolute path to an owner-only Google web OAuth client JSON file for automatic browser callbacks. |
-| `HERMES_AGENT_INTERFACE_FILE_BASES` | Allowed directory bases, separated by the host's path separator. Administrators can share only directories within these bases. Mount a NAS on the host before selecting it. |
-| `HERMES_AGENT_INTERFACE_MCP_HOSTS` | Installer-approved custom MCP hostnames. Required for public and private hosts outside the built-in presets; include only hosts whose MCP service and authorization endpoints you trust. |
+| Variable                                    | Purpose                                                                                                                                                                                  |
+| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HERMES_AGENT_INTERFACE_GOOGLE_CLIENT_FILE` | Absolute path to an owner-only Google web OAuth client JSON file for automatic browser callbacks.                                                                                        |
+| `HERMES_AGENT_INTERFACE_FILE_BASES`         | Allowed directory bases, separated by the host's path separator. Administrators can share only directories within these bases. Mount a NAS on the host before selecting it.              |
+| `HERMES_AGENT_INTERFACE_MCP_HOSTS`          | Installer-approved custom MCP hostnames. Required for public and private hosts outside the built-in presets; include only hosts whose MCP service and authorization endpoints you trust. |
 
 ### Google Workspace authorization
 

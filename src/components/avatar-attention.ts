@@ -30,7 +30,9 @@ export function glanceAtAvatar(botId: string) {
 
 /** Where an avatar centered at `center` looks to see `point`: each axis from -1 to 1, weaker up close. */
 export function gazeToward(center: Point, point: Point, reach = REACH): Gaze {
-  const dx = point.x - center.x, dy = point.y - center.y, distance = Math.hypot(dx, dy);
+  const dx = point.x - center.x,
+    dy = point.y - center.y,
+    distance = Math.hypot(dx, dy);
   if (distance < 1) return still;
   const strength = Math.min(distance / reach, 1);
   return { x: (dx / distance) * strength, y: (dy / distance) * strength * 0.8 };
@@ -83,14 +85,19 @@ const centerOf = (element: Element | null | undefined): Point | null => {
  * The gaze an aware avatar adds to its pose. It eases toward the pointer while one moves nearby,
  * toward a sibling that just finished, and back to the front once the pointer rests or leaves.
  */
-export function useAvatarAttention(wrapper: RefObject<HTMLElement | null>, botId: string | undefined, enabled: boolean): Gaze {
+export function useAvatarAttention(
+  wrapper: RefObject<HTMLElement | null>,
+  botId: string | undefined,
+  enabled: boolean,
+): Gaze {
   const [gaze, setGaze] = useState(still);
   const motion = useRef({ x: 0, y: 0, tx: 0, ty: 0, last: 0, frame: 0 });
   useEffect(() => {
     if (!enabled) return;
     const m = motion.current;
     let glance: (Point & { until: number }) | null = null;
-    let rest = 0, glanceEnd = 0;
+    let rest = 0,
+      glanceEnd = 0;
     const step = (now: number) => {
       m.frame = 0;
       const dt = Math.min((now - m.last) / 1000, 0.05);
@@ -99,13 +106,23 @@ export function useAvatarAttention(wrapper: RefObject<HTMLElement | null>, botId
       m.x += (m.tx - m.x) * k;
       m.y += (m.ty - m.y) * k;
       const settled = Math.abs(m.tx - m.x) < 0.004 && Math.abs(m.ty - m.y) < 0.004;
-      if (settled) { m.x = m.tx; m.y = m.ty; }
+      if (settled) {
+        m.x = m.tx;
+        m.y = m.ty;
+      }
       setGaze({ x: m.x, y: m.y });
       if (!settled) m.frame = requestAnimationFrame(step);
     };
     const retarget = () => {
-      const now = performance.now(), center = centerOf(wrapper.current);
-      const point = !center ? null : glance && glance.until > now ? glance : pointer && now - pointer.at < POINTER_REST_MS ? pointer : null;
+      const now = performance.now(),
+        center = centerOf(wrapper.current);
+      const point = !center
+        ? null
+        : glance && glance.until > now
+          ? glance
+          : pointer && now - pointer.at < POINTER_REST_MS
+            ? pointer
+            : null;
       const target = center && point ? gazeToward(center, point) : still;
       m.tx = target.x;
       m.ty = target.y;
@@ -122,7 +139,9 @@ export function useAvatarAttention(wrapper: RefObject<HTMLElement | null>, botId
     const glanced = (event: Event) => {
       const source = (event as CustomEvent<{ botId?: string }>).detail?.botId;
       if (!source || source === botId) return;
-      const center = centerOf(document.querySelector(`[data-glance-target="${CSS.escape(source)}"]`));
+      const center = centerOf(
+        document.querySelector(`[data-glance-target="${CSS.escape(source)}"]`),
+      );
       if (!center) return;
       glance = { ...center, until: performance.now() + GLANCE_MS };
       retarget();
@@ -164,7 +183,11 @@ export const nodFrames: Keyframe[] = [
  * Plays reactions sent to this assistant on the avatar's wrapper. Returns a key that changes on
  * each cheer, so the avatar can draw a fresh burst of sparks.
  */
-export function useAvatarReactions(wrapper: RefObject<HTMLElement | null>, botId: string | undefined, enabled: boolean) {
+export function useAvatarReactions(
+  wrapper: RefObject<HTMLElement | null>,
+  botId: string | undefined,
+  enabled: boolean,
+) {
   const [burst, setBurst] = useState(0);
   useEffect(() => {
     if (!enabled || !botId) return;
@@ -173,8 +196,11 @@ export function useAvatarReactions(wrapper: RefObject<HTMLElement | null>, botId
       const element = wrapper.current;
       if (detail?.botId !== botId || !element?.isConnected) return;
       const cheer = detail.kind === "cheer";
-      element.animate?.(cheer ? cheerFrames : nodFrames, { duration: cheer ? 760 : 520, easing: "ease-out" });
-      if (cheer) setBurst(count => count + 1);
+      element.animate?.(cheer ? cheerFrames : nodFrames, {
+        duration: cheer ? 760 : 520,
+        easing: "ease-out",
+      });
+      if (cheer) setBurst((count) => count + 1);
     };
     window.addEventListener(REACT_EVENT, reacted);
     return () => window.removeEventListener(REACT_EVENT, reacted);
@@ -183,7 +209,10 @@ export function useAvatarReactions(wrapper: RefObject<HTMLElement | null>, botId
 }
 
 /** Turns a pose's eyes and head toward an attention gaze, in proportion to how strongly it pulls. */
-export function withGaze<P extends { gazeX: number; gazeY: number; yaw: number }>(pose: P, gaze: Gaze): P {
+export function withGaze<P extends { gazeX: number; gazeY: number; yaw: number }>(
+  pose: P,
+  gaze: Gaze,
+): P {
   const pull = Math.min(Math.hypot(gaze.x, gaze.y), 1);
   if (pull < 0.001) return pose;
   return {

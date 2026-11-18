@@ -7,28 +7,59 @@ import { api, ApiError, write } from "../src/client-api";
 import { COPY_HANDOFF_MS, ECHO_PATIENCE, SENDING_ROW_MS } from "../src/app/sent-echo";
 import { draftKey, localRead, type Draft } from "../src/app/storage";
 import { defaultPreferences } from "../src/shared/types";
-import type { ActivityState, Bootstrap, Conversation, SubmissionReceipt } from "../src/shared/types";
+import type {
+  ActivityState,
+  Bootstrap,
+  Conversation,
+  SubmissionReceipt,
+} from "../src/shared/types";
 import { FakeEventSource } from "./fake-event-source";
 import { advance, mountRoot, stubMatchMedia, waitForUi } from "./ui-harness";
 
 // Only the client API is faked. Each fake throws on a call the test did not configure.
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest({
-  ...await original<typeof import("../src/client-api")>(),
-  api: vi.fn(), write: vi.fn(), uploadFile: vi.fn(), clearResponseCache: vi.fn(),
-}));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest({
+    ...(await original<typeof import("../src/client-api")>()),
+    api: vi.fn(),
+    write: vi.fn(),
+    uploadFile: vi.fn(),
+    clearResponseCache: vi.fn(),
+  }),
+);
 
 const bootstrap: Bootstrap = {
   user: { id: "one", name: "One", email: "one@example.test" },
   household: [],
   preferences: { ...defaultPreferences, startPage: "assistant" },
   bots: [{ id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" }],
-  capabilities: Object.fromEntries(["chat", "steering", "approvals", "uploads", "generatedFiles", "botConfiguration", "tools", "skills",
-    "routines", "durableEvents", "idempotency", "imageGeneration", "stop", "portraitGeneration", "avatarMetadata"]
-    .map(key => [key, { supported: true }])) as Bootstrap["capabilities"],
+  capabilities: Object.fromEntries(
+    [
+      "chat",
+      "steering",
+      "approvals",
+      "uploads",
+      "generatedFiles",
+      "botConfiguration",
+      "tools",
+      "skills",
+      "routines",
+      "durableEvents",
+      "idempotency",
+      "imageGeneration",
+      "stop",
+      "portraitGeneration",
+      "avatarMetadata",
+    ].map((key) => [key, { supported: true }]),
+  ) as Bootstrap["capabilities"],
   connection: { connected: true },
   csrfToken: "test",
 };
-const prompt = { id: "u0", role: "user" as const, text: "Check the fence", sender: { id: "one", name: "One" } };
+const prompt = {
+  id: "u0",
+  role: "user" as const,
+  text: "Check the fence",
+  sender: { id: "one", name: "One" },
+};
 const answer = { id: "a0", role: "assistant" as const, text: "The fence is fine." };
 let conversation: Conversation;
 /** Assistants in the roster; a test that switches chats adds a second. */
@@ -37,7 +68,13 @@ let readFails = false;
 let root: Root;
 let container: HTMLElement;
 /** The message POST, held until the test answers it. */
-let sent: { body: { requestId: string; text: string }; resolve(receipt: Partial<SubmissionReceipt>): void; reject(error: Error): void } | undefined;
+let sent:
+  | {
+      body: { requestId: string; text: string };
+      resolve(receipt: Partial<SubmissionReceipt>): void;
+      reject(error: Error): void;
+    }
+  | undefined;
 /** Receipt checks for a send that ended without one. */
 let lookup: (requestId: string) => SubmissionReceipt | Promise<SubmissionReceipt>;
 /** Requests no test served. The app swallows some failures, so they are also checked after each test. */
@@ -52,28 +89,54 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
   stubMatchMedia();
   // jsdom lays out no SVG; the avatar measures its paths.
-  Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
-  vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
+  Object.assign(SVGElement.prototype, {
+    getTotalLength: () => 100,
+    getPointAtLength: (length: number) => ({ x: length, y: 0 }),
+  });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
   history.replaceState(null, "", "/");
   localStorage.clear();
   readFails = false;
   sent = undefined;
-  lookup = requestId => { throw new Error(`Unexpected receipt check for ${requestId}`); };
-  conversation = { botId: "shared", messages: [prompt, answer], approvals: [], files: [], activity: { state: "idle" } };
+  lookup = (requestId) => {
+    throw new Error(`Unexpected receipt check for ${requestId}`);
+  };
+  conversation = {
+    botId: "shared",
+    messages: [prompt, answer],
+    approvals: [],
+    files: [],
+    activity: { state: "idle" },
+  };
   bots = bootstrap.bots;
   vi.mocked(api).mockImplementation(async <T>(path: string) => {
     if (path === "/bootstrap?roster=lean") return { ...bootstrap, bots } as T;
-    if (bots.some(bot => bot.id === "corral")) {
+    if (bots.some((bot) => bot.id === "corral")) {
       if (path === "/bots/corral/draft") return { text: "", attachments: [], revision: 0 } as T;
-      if (path.startsWith("/bots/corral/conversation?")) return { botId: "corral", messages: [], approvals: [], files: [], activity: { state: "idle" } } as T;
+      if (path.startsWith("/bots/corral/conversation?"))
+        return {
+          botId: "corral",
+          messages: [],
+          approvals: [],
+          files: [],
+          activity: { state: "idle" },
+        } as T;
       if (path === "/bots/corral/routine-runs") return { runs: [], unavailable: [] } as T;
     }
-    if (path === "/bots/shared/draft") return { text: "Feed the horses", attachments: [], revision: 0 } as T;
+    if (path === "/bots/shared/draft")
+      return { text: "Feed the horses", attachments: [], revision: 0 } as T;
     if (path.startsWith("/bots/shared/conversation?")) {
       if (readFails) throw new ApiError("Can't reach the app right now.", 503);
       return conversation as T;
     }
-    if (path.startsWith("/submissions/")) return await lookup(decodeURIComponent(path.slice("/submissions/".length))) as T;
+    if (path.startsWith("/submissions/"))
+      return (await lookup(decodeURIComponent(path.slice("/submissions/".length)))) as T;
     if (path === "/bots/shared/routine-runs") return { runs: [], unavailable: [] } as T;
     if (path === "/groups") return { supported: true, canSend: true, rooms: [] } as T;
     unexpected.push(`GET ${path}`);
@@ -81,11 +144,27 @@ beforeEach(() => {
   });
   vi.mocked(write).mockImplementation(async <T>(path: string, body?: unknown, method = "POST") => {
     // Presence and device activity report on their own schedule.
-    if (method === "PUT" && (/^\/bots\/(shared|corral)\/(presence|read-position)$/.test(path) || path === "/devices/activity")) return {} as T;
-    if (path === "/bots/shared/messages") return await new Promise<T>((resolve, reject) => {
-      const request = body as { requestId: string; text: string };
-      sent = { body: request, resolve: receipt => resolve({ requestId: request.requestId, status: "accepted", runId: "run", ...receipt } as T), reject };
-    });
+    if (
+      method === "PUT" &&
+      (/^\/bots\/(shared|corral)\/(presence|read-position)$/.test(path) ||
+        path === "/devices/activity")
+    )
+      return {} as T;
+    if (path === "/bots/shared/messages")
+      return await new Promise<T>((resolve, reject) => {
+        const request = body as { requestId: string; text: string };
+        sent = {
+          body: request,
+          resolve: (receipt) =>
+            resolve({
+              requestId: request.requestId,
+              status: "accepted",
+              runId: "run",
+              ...receipt,
+            } as T),
+          reject,
+        };
+      });
     unexpected.push(`${method} ${path}`);
     throw new Error(`This test serves no ${method} ${path}`);
   });
@@ -101,7 +180,10 @@ async function open() {
   await waitForUi(() => expect(sendButton().disabled).toBe(false));
 }
 // Send reads "Send guidance" while the assistant works.
-const sendButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Send message"], [aria-label="Send guidance"]')!;
+const sendButton = () =>
+  container.querySelector<HTMLButtonElement>(
+    '[aria-label="Send message"], [aria-label="Send guidance"]',
+  )!;
 /** Sends the draft. The echo starts between the click and the request, so these bracket its start. */
 async function send() {
   const clicked = Date.now();
@@ -125,25 +207,41 @@ function watchStatusNodes() {
   return { nodes, stop: () => observer.disconnect() };
 }
 /** The sidebar row's activity for the assistant, as its class names it. */
-const sidebarState = () => container.querySelector(".bot-activity")?.className.match(/state-(\w+)/)?.[1] ?? null;
+const sidebarState = () =>
+  container.querySelector(".bot-activity")?.className.match(/state-(\w+)/)?.[1] ?? null;
 /** The activity row under the transcript, and what its status line says. */
 const row = () => container.querySelector<HTMLElement>(".conversation-activity");
 /** What the row's status says to assistive technology: its text without the parts hidden from it. */
 const status = () => {
   const line = row()?.querySelector('[role="status"]')?.cloneNode(true) as HTMLElement | undefined;
-  line?.querySelectorAll('[aria-hidden="true"]').forEach(hidden => hidden.remove());
+  line?.querySelectorAll('[aria-hidden="true"]').forEach((hidden) => hidden.remove());
   return line?.textContent ?? null;
 };
-const echo = () => [...container.querySelectorAll<HTMLElement>(".message-user")].find(item => item.textContent?.includes("Feed the horses"));
+const echo = () =>
+  [...container.querySelectorAll<HTMLElement>(".message-user")].find((item) =>
+    item.textContent?.includes("Feed the horses"),
+  );
 /** Hermes reports a change to the conversation, and the chat reads it. */
 async function report(next: Partial<Conversation> & { state?: ActivityState }) {
   const { state, ...rest } = next;
-  conversation = { ...conversation, ...rest, ...state ? { activity: { state, runId: "run" } } : {} };
+  conversation = {
+    ...conversation,
+    ...rest,
+    ...(state ? { activity: { state, runId: "run" } } : {}),
+  };
   await act(async () => FakeEventSource.notifyAll());
   await advance(1500);
 }
-const notice = (label: string) => [...container.querySelectorAll<HTMLButtonElement>(".notice button")].find(button => button.textContent?.trim() === label)!;
-const copy = () => ({ id: "u1", role: "user" as const, text: "Feed the horses", sender: { id: "one", name: "One" } });
+const notice = (label: string) =>
+  [...container.querySelectorAll<HTMLButtonElement>(".notice button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+const copy = () => ({
+  id: "u1",
+  role: "user" as const,
+  text: "Feed the horses",
+  sender: { id: "one", name: "One" },
+});
 
 describe("the assistant's thinking row from the moment a message is sent", () => {
   it("appears with the echo and becomes Hermes's own row, in the same node, without a second announcement", async () => {
@@ -164,7 +262,10 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await report({ state: "working" });
     expect(row()).toBe(early);
     expect(status()).toBe("Shared is working...");
-    await report({ state: "done", messages: [prompt, answer, copy(), { id: "a1", role: "assistant", text: "Fed." }] });
+    await report({
+      state: "done",
+      messages: [prompt, answer, copy(), { id: "a1", role: "assistant", text: "Fed." }],
+    });
     expect(row()).toBeNull();
   });
 
@@ -185,7 +286,9 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await open();
     await send();
     expect(status()).toBe("Shared is thinking...");
-    await act(async () => sent!.resolve({ status: "rejected", message: "Hermes is finishing the preceding task." }));
+    await act(async () =>
+      sent!.resolve({ status: "rejected", message: "Hermes is finishing the preceding task." }),
+    );
     expect(row()).toBeNull();
     expect(echo()).toBeUndefined();
   });
@@ -253,7 +356,10 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await act(async () => sent!.resolve({ steered: false }));
     expect(row()).toBe(early);
     expect(status()).toBe("Shared is working...");
-    await report({ state: "done", messages: [prompt, answer, { id: "a1", role: "assistant", text: "Other task done." }] });
+    await report({
+      state: "done",
+      messages: [prompt, answer, { id: "a1", role: "assistant", text: "Other task done." }],
+    });
     // The queued message's own turn has shown work already, so the chat waits for Hermes to report it.
     expect(row()).toBeNull();
   });
@@ -314,7 +420,9 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await open();
     await send();
     await act(async () => sent!.resolve({}));
-    await report({ messages: [prompt, answer, copy(), { id: "a1", role: "assistant", text: "Fed." }] });
+    await report({
+      messages: [prompt, answer, copy(), { id: "a1", role: "assistant", text: "Fed." }],
+    });
     expect(row()).toBeNull();
   });
 
@@ -323,7 +431,9 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await send();
     expect(status()).toBe("Shared is thinking...");
     Object.defineProperty(navigator, "onLine", { configurable: true, get: () => false });
-    await act(async () => { window.dispatchEvent(new Event("offline")); });
+    await act(async () => {
+      window.dispatchEvent(new Event("offline"));
+    });
     expect(row()?.className).toContain("state-disconnected");
     expect(status()).toBeNull();
   });
@@ -344,10 +454,17 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await send();
     expect(status()).toBe("Shared is thinking...");
     expect(container.querySelector("textarea")!.value).toBe("");
-    await act(async () => sent!.resolve({ turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." }));
+    await act(async () =>
+      sent!.resolve({
+        turn: "none",
+        message: "Hermes ended its voice chat. Nothing was sent to the assistant.",
+      }),
+    );
     expect(row()).toBeNull();
     expect(echo()).toBeUndefined();
-    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe(
+      "Hermes ended its voice chat. Nothing was sent to the assistant.",
+    );
     expect(container.querySelector("textarea")!.value).toBe("Feed the horses");
     // A reload finds the words too, no longer marked as the copy on its way.
     expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
@@ -358,11 +475,21 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
   it("keeps the draft when a check finds a lost send was a typed stop that admitted nothing", async () => {
     await open();
     await send();
-    lookup = requestId => ({ requestId, status: "accepted", runId: "run", turn: "none", message: "Hermes ended its voice chat. Nothing was sent to the assistant." });
+    lookup = (requestId) => ({
+      requestId,
+      status: "accepted",
+      runId: "run",
+      turn: "none",
+      message: "Hermes ended its voice chat. Nothing was sent to the assistant.",
+    });
     await act(async () => sent!.reject(new ApiError("Hermes is unavailable.", 503)));
-    await waitForUi(() => expect(container.querySelector("textarea")!.value).toBe("Feed the horses"));
+    await waitForUi(() =>
+      expect(container.querySelector("textarea")!.value).toBe("Feed the horses"),
+    );
     expect(echo()).toBeUndefined();
-    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe("Hermes ended its voice chat. Nothing was sent to the assistant.");
+    expect(container.querySelector(".composer-area [role='status']")?.textContent).toBe(
+      "Hermes ended its voice chat. Nothing was sent to the assistant.",
+    );
     // A reload finds the words too, no longer marked as the copy on its way.
     expect(localRead<Draft>(draftKey("one", "shared"))).toMatchObject({ text: "Feed the horses" });
     expect(localRead<Draft>(draftKey("one", "shared"))).not.toHaveProperty("sentHash");
@@ -389,58 +516,110 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
   });
 
   it("steps a failed turn's Retry aside while the new message starts, and brings it back when the message is refused", async () => {
-    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed", runId: "old" } };
+    conversation = {
+      ...conversation,
+      messages: [answer, prompt],
+      activity: { state: "failed", runId: "old" },
+    };
     await open();
-    const retry = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry");
+    const retry = () =>
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
     expect(status()).toBe("Shared couldn't finish.");
     expect(retry()).toBeDefined();
     await send();
     expect(status()).toBe("Shared is thinking...");
     expect(retry()).toBeUndefined();
-    await act(async () => sent!.resolve({ status: "rejected", message: "Hermes is finishing the preceding task." }));
+    await act(async () =>
+      sent!.resolve({ status: "rejected", message: "Hermes is finishing the preceding task." }),
+    );
     expect(status()).toBe("Shared couldn't finish.");
     expect(retry()).toBeDefined();
   });
 
   it("keeps a failed turn's Retry away once Hermes accepts the new message, through its own report", async () => {
-    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed", runId: "old" } };
+    conversation = {
+      ...conversation,
+      messages: [answer, prompt],
+      activity: { state: "failed", runId: "old" },
+    };
     await open();
     await send();
     await act(async () => sent!.resolve({}));
     expect(status()).toBe("Shared is thinking...");
-    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Retry",
+      ),
+    ).toBe(false);
     await report({ state: "thinking", messages: [answer, prompt, copy()] });
     expect(status()).toBe("Shared is thinking...");
-    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Retry",
+      ),
+    ).toBe(false);
   });
   // A turn can end before the chat ever reads it running. The read that brings the copy may still report the turn
   // before, so the row stays through it, and the turn's own outcome replaces it from the next read.
   it.each<[string, "failed" | "interrupted" | "done", (shown: HTMLElement | null) => void]>([
-    ["failed, with its Retry", "failed", shown => {
-      expect(shown?.textContent).toContain("Shared couldn't finish.");
-      expect([...shown!.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(true);
-    }],
-    ["interrupted", "interrupted", shown => expect(shown?.textContent).toContain("Shared's task was interrupted.")],
-    ["finished", "done", shown => expect(shown).toBeNull()],
-  ])("keeps thinking, without Retry, through a %s report in the read that brings the copy, and shows it from the next read", async (_, state, check) => {
-    conversation = { ...conversation, version: "boot:0:4" };
-    await open();
-    await send();
-    await act(async () => sent!.resolve({}));
-    expect(status()).toBe("Shared is thinking...");
-    // A settled turn's report carries no run ID, as Hermes reports one. The chat showed an idle assistant at the send,
-    // so this outcome differs from it, and it can still be the last turn's.
-    await report({ messages: [prompt, answer, copy()], activity: { state }, version: "boot:0:5" });
-    expect(status()).toBe("Shared is thinking...");
-    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(false);
-    await report({ version: "boot:0:6" });
-    check(row());
-  });
+    [
+      "failed, with its Retry",
+      "failed",
+      (shown) => {
+        expect(shown?.textContent).toContain("Shared couldn't finish.");
+        expect(
+          [...shown!.querySelectorAll("button")].some(
+            (button) => button.textContent?.trim() === "Retry",
+          ),
+        ).toBe(true);
+      },
+    ],
+    [
+      "interrupted",
+      "interrupted",
+      (shown) => expect(shown?.textContent).toContain("Shared's task was interrupted."),
+    ],
+    ["finished", "done", (shown) => expect(shown).toBeNull()],
+  ])(
+    "keeps thinking, without Retry, through a %s report in the read that brings the copy, and shows it from the next read",
+    async (_, state, check) => {
+      conversation = { ...conversation, version: "boot:0:4" };
+      await open();
+      await send();
+      await act(async () => sent!.resolve({}));
+      expect(status()).toBe("Shared is thinking...");
+      // A settled turn's report carries no run ID, as Hermes reports one. The chat showed an idle assistant at the send,
+      // so this outcome differs from it, and it can still be the last turn's.
+      await report({
+        messages: [prompt, answer, copy()],
+        activity: { state },
+        version: "boot:0:5",
+      });
+      expect(status()).toBe("Shared is thinking...");
+      expect(
+        [...container.querySelectorAll("button")].some(
+          (button) => button.textContent?.trim() === "Retry",
+        ),
+      ).toBe(false);
+      await report({ version: "boot:0:6" });
+      check(row());
+    },
+  );
 
   it("keeps thinking through the last turn's failure in the read that brings the copy, and shows this turn's failure from a later read", async () => {
-    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed" }, version: "boot:0:4" };
+    conversation = {
+      ...conversation,
+      messages: [answer, prompt],
+      activity: { state: "failed" },
+      version: "boot:0:4",
+    };
     await open();
-    const retry = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry");
+    const retry = () =>
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
     expect(status()).toBe("Shared couldn't finish.");
     expect(retry()).toBeDefined();
     await send();
@@ -460,9 +639,17 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
   // Two reads asked while Hermes admits the message both report the last turn's failure, the second ordered after the
   // first. Hermes's answer says the turn started, at the version it reached the server, so neither ends the row.
   it("keeps thinking through the last turn's failure in every read asked during a started turn's admission, and shows this turn's from the first read after", async () => {
-    conversation = { ...conversation, messages: [answer, prompt], activity: { state: "failed" }, version: "boot:0:4" };
+    conversation = {
+      ...conversation,
+      messages: [answer, prompt],
+      activity: { state: "failed" },
+      version: "boot:0:4",
+    };
     await open();
-    const retry = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "Retry");
+    const retry = () =>
+      [...container.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
     await send();
     const watch = watchStatusNodes();
     await act(async () => sent!.resolve({ turn: "started", admittedVersion: "boot:0:7" }));
@@ -483,39 +670,62 @@ describe("the assistant's thinking row from the moment a message is sent", () =>
     await open();
     await send();
     await act(async () => sent!.resolve({ turn: "started", admittedVersion: "boot:0:7" }));
-    await report({ messages: [prompt, answer, copy()], activity: { state: "failed" }, version: "boot:0:8" });
+    await report({
+      messages: [prompt, answer, copy()],
+      activity: { state: "failed" },
+      version: "boot:0:8",
+    });
     expect(row()?.textContent).toContain("Shared couldn't finish.");
-    expect([...container.querySelectorAll("button")].some(button => button.textContent?.trim() === "Retry")).toBe(true);
+    expect(
+      [...container.querySelectorAll("button")].some(
+        (button) => button.textContent?.trim() === "Retry",
+      ),
+    ).toBe(true);
   });
 
   it("never paints thinking on returning to the chat after the handoff bound passed in another chat", async () => {
-    bots = [...bootstrap.bots, { id: "corral", name: "Corral", shared: true, model: "test", activity: "idle" }];
+    bots = [
+      ...bootstrap.bots,
+      { id: "corral", name: "Corral", shared: true, model: "test", activity: "idle" },
+    ];
     await open();
     await send();
     await act(async () => sent!.resolve({}));
     await report({ messages: [prompt, answer, copy()] });
     expect(status()).toBe("Shared is thinking...");
-    const choose = (name: string) => act(async () =>
-      [...container.querySelectorAll<HTMLButtonElement>(".bot-row")].find(button => button.textContent?.includes(name))!.click());
+    const choose = (name: string) =>
+      act(async () =>
+        [...container.querySelectorAll<HTMLButtonElement>(".bot-row")]
+          .find((button) => button.textContent?.includes(name))!
+          .click(),
+      );
     const current = () => container.querySelector(".bot-row[aria-current='page']")?.textContent;
     await choose("Corral");
     await waitForUi(() => expect(current()).toContain("Corral"));
-    await waitForUi(() => expect(vi.mocked(api).mock.calls.some(([path]) => path.startsWith("/bots/corral/conversation?"))).toBe(true));
+    await waitForUi(() =>
+      expect(
+        vi.mocked(api).mock.calls.some(([path]) => path.startsWith("/bots/corral/conversation?")),
+      ).toBe(true),
+    );
     await advance(COPY_HANDOFF_MS + 1000);
     // Every status line drawn from the moment the person comes back, whether or not it stays.
     const drawn: string[] = [];
-    const observer = new MutationObserver(records => {
-      for (const record of records) for (const node of record.addedNodes) {
-        if (!(node instanceof HTMLElement)) continue;
-        for (const line of [node, ...node.querySelectorAll("*")].filter(item => item.getAttribute("role") === "status")) drawn.push(line.textContent ?? "");
-      }
+    const observer = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes) {
+          if (!(node instanceof HTMLElement)) continue;
+          for (const line of [node, ...node.querySelectorAll("*")].filter(
+            (item) => item.getAttribute("role") === "status",
+          ))
+            drawn.push(line.textContent ?? "");
+        }
     });
     observer.observe(container, { childList: true, subtree: true });
     await choose("Shared");
     await waitForUi(() => expect(current()).toContain("Shared"));
     await waitForUi(() => expect(echo()).toBeDefined());
     observer.disconnect();
-    expect(drawn.filter(line => line.includes("thinking"))).toEqual([]);
+    expect(drawn.filter((line) => line.includes("thinking"))).toEqual([]);
     expect(row()).toBeNull();
   });
 });

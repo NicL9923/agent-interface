@@ -25,7 +25,10 @@ export function imageKind(file: Pick<File, "type" | "name">): ImageKind | undefi
   if (mime === "image/gif") return "gif";
   if (HEIC_TYPES.includes(mime)) return "heic";
   const extension = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : "";
-  return (!mime || mime === "application/octet-stream") && (extension === "heic" || extension === "heif") ? "heic" : undefined;
+  return (!mime || mime === "application/octet-stream") &&
+    (extension === "heic" || extension === "heif")
+    ? "heic"
+    : undefined;
 }
 
 /**
@@ -50,27 +53,33 @@ export function prepareAttachment(file: File): { file: File } | { error: string 
 /** The size an image of this shape takes under the long-edge cap; it never grows. */
 export function fitWithin(width: number, height: number, edge = MAX_IMAGE_EDGE): ImageSize {
   const scale = Math.min(1, edge / Math.max(width, height));
-  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
 }
 
 const baseName = (name: string) => name.replace(/\.[^./\\]*$/, "") || "Photo";
 
 let webpEncodes: Promise<boolean> | undefined;
 /** Safari answers a WebP request with a PNG, so the output type is whatever the browser actually produced. */
-const canEncodeWebp = () => webpEncodes ??= new Promise<boolean>(resolve => {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  canvas.toBlob(blob => resolve(blob?.type === "image/webp"), "image/webp");
-}).catch(() => false);
+const canEncodeWebp = () =>
+  (webpEncodes ??= new Promise<boolean>((resolve) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    canvas.toBlob((blob) => resolve(blob?.type === "image/webp"), "image/webp");
+  }).catch(() => false));
 
 const toBlob = (canvas: HTMLCanvasElement, type: string) =>
-  new Promise<Blob | null>(resolve => canvas.toBlob(resolve, type, IMAGE_QUALITY));
+  new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, type, IMAGE_QUALITY));
 
-export type OptimizedImage = {
-  file: File;
-  /** The image's size as the person sees it, with its EXIF rotation applied. Absent when the browser never decoded it. */
-  size?: ImageSize;
-} | { error: string };
+export type OptimizedImage =
+  | {
+      file: File;
+      /** The image's size as the person sees it, with its EXIF rotation applied. Absent when the browser never decoded it. */
+      size?: ImageSize;
+    }
+  | { error: string };
 
 /**
  * Shrinks a photo for upload: decodes it with its EXIF rotation applied, caps the long edge, and encodes WebP where
@@ -81,9 +90,12 @@ export type OptimizedImage = {
 export async function optimizeImage(file: File): Promise<OptimizedImage> {
   if (!needsPreparation(file)) return { file };
   const heic = imageKind(file) === "heic";
-  const failed = (): OptimizedImage => heic
-    ? { error: `${file.name || "This photo"} is a HEIC photo, and this browser can't open it. Convert it to JPEG, or try Safari.` }
-    : { file };
+  const failed = (): OptimizedImage =>
+    heic
+      ? {
+          error: `${file.name || "This photo"} is a HEIC photo, and this browser can't open it. Convert it to JPEG, or try Safari.`,
+        }
+      : { file };
   let bitmap: ImageBitmap;
   try {
     bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
@@ -92,19 +104,23 @@ export async function optimizeImage(file: File): Promise<OptimizedImage> {
   }
   try {
     const size = fitWithin(bitmap.width, bitmap.height);
-    const type = await canEncodeWebp() ? "image/webp" : "image/jpeg";
+    const type = (await canEncodeWebp()) ? "image/webp" : "image/jpeg";
     const canvas = document.createElement("canvas");
     canvas.width = size.width;
     canvas.height = size.height;
     const context = canvas.getContext("2d");
     if (!context) return failed();
     // JPEG has no transparency; a transparent pixel would turn black.
-    if (type === "image/jpeg") { context.fillStyle = "#fff"; context.fillRect(0, 0, size.width, size.height); }
+    if (type === "image/jpeg") {
+      context.fillStyle = "#fff";
+      context.fillRect(0, 0, size.width, size.height);
+    }
     context.imageSmoothingQuality = "high";
     context.drawImage(bitmap, 0, 0, size.width, size.height);
     const blob = await toBlob(canvas, type);
     if (!blob || blob.type !== type) return failed();
-    if (!heic && blob.size >= file.size) return { file, size: { width: bitmap.width, height: bitmap.height } };
+    if (!heic && blob.size >= file.size)
+      return { file, size: { width: bitmap.width, height: bitmap.height } };
     const name = `${baseName(file.name)}.${type === "image/webp" ? "webp" : "jpg"}`;
     return { file: new File([blob], name, { type, lastModified: file.lastModified }), size };
   } catch {

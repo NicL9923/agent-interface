@@ -15,8 +15,16 @@ async function load(signedIn = true) {
   return { api, reports, RootBoundary };
 }
 let fetch: ReturnType<typeof vi.fn>;
-const sent = () => fetch.mock.calls.map(([url, init]) => ({ url, headers: Object.fromEntries(new Headers((init as RequestInit).headers)), body: JSON.parse(bodyText((init as RequestInit).body)) }));
-const settle = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+const sent = () =>
+  fetch.mock.calls.map(([url, init]) => ({
+    url,
+    headers: Object.fromEntries(new Headers((init as RequestInit).headers)),
+    body: JSON.parse(bodyText((init as RequestInit).body)),
+  }));
+const settle = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 beforeEach(() => {
   fetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
   vi.stubGlobal("fetch", fetch);
@@ -27,7 +35,9 @@ beforeEach(() => {
 describe("root error boundary", () => {
   it("replaces a crashed app with a reload screen and reports the crash with its component stack", async () => {
     const { RootBoundary } = await load();
-    function Broken(): never { throw new TypeError("rows is undefined"); }
+    function Broken(): never {
+      throw new TypeError("rows is undefined");
+    }
     const { container, render } = mountRoot();
     await render(createElement(RootBoundary, null, createElement(Broken)));
     await settle();
@@ -38,7 +48,11 @@ describe("root error boundary", () => {
     const [report] = sent();
     expect(report.url).toBe("/api/client-errors");
     expect(report.headers["x-csrf-token"]).toBe("token");
-    expect(report.body).toMatchObject({ kind: "render", message: "TypeError: rows is undefined", route: "/" });
+    expect(report.body).toMatchObject({
+      kind: "render",
+      message: "TypeError: rows is undefined",
+      route: "/",
+    });
     // The route carries neither the query nor the hash.
     expect(JSON.stringify(report.body)).not.toContain("secret-room");
     expect(report.body.stack).toContain("Broken");
@@ -60,7 +74,9 @@ describe("client error reports", () => {
     const page = new EventTarget();
     const window = page as unknown as Window;
     const stop = reports.installErrorReporting(window);
-    window.dispatchEvent(new ErrorEvent("error", { error: new RangeError("bad index"), message: "bad index" }));
+    window.dispatchEvent(
+      new ErrorEvent("error", { error: new RangeError("bad index"), message: "bad index" }),
+    );
     const rejection = new Event("unhandledrejection") as PromiseRejectionEvent;
     Object.defineProperty(rejection, "reason", { value: "socket closed" });
     window.dispatchEvent(rejection);
@@ -69,14 +85,17 @@ describe("client error reports", () => {
     stop();
     window.dispatchEvent(new ErrorEvent("error", { error: new Error("after stop") }));
     await settle();
-    expect(sent().map(report => [report.body.kind, report.body.message])).toEqual([
-      ["error", "RangeError: bad index"], ["rejection", "socket closed"]]);
+    expect(sent().map((report) => [report.body.kind, report.body.message])).toEqual([
+      ["error", "RangeError: bad index"],
+      ["rejection", "socket closed"],
+    ]);
   });
 
   it("strips URL queries and hashes from what it sends, keeping stack line numbers", async () => {
     const { reports } = await load();
     const cause = new Error("load failed for /api/search?q=SENTINEL#private-draft");
-    cause.stack = "Error: load failed\n    at search (https://app.example.invalid/assets/index-abc.js?v=SENTINEL:10:5)";
+    cause.stack =
+      "Error: load failed\n    at search (https://app.example.invalid/assets/index-abc.js?v=SENTINEL:10:5)";
     reports.reportClientError("error", cause);
     await settle();
     const [report] = sent();
@@ -89,7 +108,10 @@ describe("client error reports", () => {
     const signedOut = await load(false);
     signedOut.reports.reportClientError("error", new Error("before sign-in"));
     const { reports } = await load();
-    reports.reportClientError("rejection", new TypeError("Failed to fetch dynamically imported module: /assets/Find-OLD.js"));
+    reports.reportClientError(
+      "rejection",
+      new TypeError("Failed to fetch dynamically imported module: /assets/Find-OLD.js"),
+    );
     reports.reportClientError("render", new TypeError("Importing a module script failed."));
     await settle();
     expect(fetch).not.toHaveBeenCalled();
@@ -101,7 +123,13 @@ describe("client error reports", () => {
     for (let index = 0; index < 3; index++) reports.reportClientError("error", same);
     for (let index = 0; index < 10; index++) reports.reportClientError("error", `failure ${index}`);
     await settle();
-    expect(sent().map(report => report.body.message)).toEqual(["Error: same", "failure 0", "failure 1", "failure 2", "failure 3"]);
+    expect(sent().map((report) => report.body.message)).toEqual([
+      "Error: same",
+      "failure 0",
+      "failure 1",
+      "failure 2",
+      "failure 3",
+    ]);
     expect(reports.MAX_REPORTS_PER_PAGE).toBe(5);
   });
 
@@ -115,14 +143,17 @@ describe("client error reports", () => {
     expect(() => reports.reportClientError("error", huge)).not.toThrow();
     expect(() => reports.reportClientError("rejection", circular)).not.toThrow();
     await settle();
-    const [first, second] = sent().map(report => report.body);
+    const [first, second] = sent().map((report) => report.body);
     expect([first.message.length, first.stack.length]).toEqual([1024, 8192]);
     expect(second.message).toBe("[object Object]");
   });
 
   it("names the release from the built entry script", async () => {
     const { reports } = await load();
-    const script = Object.assign(document.createElement("script"), { type: "module", src: "/assets/index-DjeCT2iD.js" });
+    const script = Object.assign(document.createElement("script"), {
+      type: "module",
+      src: "/assets/index-DjeCT2iD.js",
+    });
     document.head.append(script);
     reports.reportClientError("error", new Error("built"));
     script.remove();

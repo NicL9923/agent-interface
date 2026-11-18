@@ -26,11 +26,11 @@ job started gets its own.
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_extension_journal_test.py ReadMergeTests`:
 
-| Mutation | Result |
-| --- | --- |
-| window still keys the merge | failed: test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut (exit 1) |
-| only the profile keys the merge | failed: test_waiting_opens_merge_only_with_the_same_parameters_connection_and_method (exit 1) |
-| every merged open gets the first window | failed: test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut (exit 1) |
-| answers share their rows (against `tests/hermes_open_row_cache_test.py`) | failed: test_changing_one_response_never_changes_another (exit 1) |
+| Mutation                                                                 | Result                                                                                                        |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| window still keys the merge                                              | failed: test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut (exit 1) |
+| only the profile keys the merge                                          | failed: test_waiting_opens_merge_only_with_the_same_parameters_connection_and_method (exit 1)                 |
+| every merged open gets the first window                                  | failed: test_waiting_opens_that_differ_only_in_window_share_one_activation_and_each_gets_its_own_cut (exit 1) |
+| answers share their rows (against `tests/hermes_open_row_cache_test.py`) | failed: test_changing_one_response_never_changes_another (exit 1)                                             |
 
 Not exercised: real Hermes, release qualification, and a production measurement of merged turn reads.

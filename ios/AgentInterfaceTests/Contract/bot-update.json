@@ -7,9 +7,7 @@
     "instructions": "Be concise.",
     "model": "claude-sonnet",
     "provider": "anthropic",
-    "enabledMcpServers": [
-      "calendar"
-    ],
+    "enabledMcpServers": ["calendar"],
     "shared": true,
     "avatar": {
       "mode": "geometric",
@@ -21,13 +19,8 @@
       "eyeHeight": 0.9,
       "eyeSpacing": 1.2
     },
-    "enabledTools": [
-      "terminal",
-      "web"
-    ],
-    "enabledSkills": [
-      "meal-planning"
-    ],
+    "enabledTools": ["terminal", "web"],
+    "enabledSkills": ["meal-planning"],
     "sessionId": "session-household",
     "activity": "working"
   }

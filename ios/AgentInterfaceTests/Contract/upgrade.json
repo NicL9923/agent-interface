@@ -33,8 +33,6 @@
     "error": "previous_attempt_failed",
     "checkedAt": "2026-10-01T11:45:00.000Z",
     "updatedAt": "2026-10-01T11:46:00.000Z",
-    "busyBots": [
-      "Household"
-    ]
+    "busyBots": ["Household"]
   }
 }

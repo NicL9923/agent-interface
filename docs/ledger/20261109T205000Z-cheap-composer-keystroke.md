@@ -24,7 +24,7 @@ First round, at `aa108c0`, before the review fixes:
 
 - `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/shell-ui.test.ts tests/connection-ui.test.ts tests/composer-layout.test.ts
-  tests/draft-sync-ui.test.ts tests/local-save.test.ts tests/transcript-rerender.test.ts`:
+tests/draft-sync-ui.test.ts tests/local-save.test.ts tests/transcript-rerender.test.ts`:
   6 files, 91 tests passed.
 - `npm test`: 170 files, 2,496 tests passed.
 - `npm run build` passed, then `npm run test:e2e`: 3 Chromium tests passed.
@@ -35,7 +35,7 @@ Review round, at the commit that carries this revision:
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/shell-ui.test.ts tests/composer-layout.test.ts tests/draft-sync-ui.test.ts
-  tests/connection-ui.test.ts tests/transcript-rerender.test.ts`: 5 files, 88 tests passed. That is
+tests/connection-ui.test.ts tests/transcript-rerender.test.ts`: 5 files, 88 tests passed. That is
   the first round's set less the 7 deferral tests, plus the 4 new `textWidth` tests.
 - `npm test`: 169 files, 2,493 tests passed.
 - `npm run build` passed, then `npm run test:e2e`: 3 Chromium tests passed.
@@ -52,24 +52,24 @@ that object when the element's component renders again (`commitUpdate` in
 `react-dom-client.development.js`) and keeps it when a memoized component above skips. The test
 also checks the field's object did change, so it fails if React stops exposing renders this way.
 
-| Mutation | Test | Result |
-| --- | --- | --- |
-| `Conversation` not memoized | shell-ui "re-renders nothing in the transcript while typing" | failed: 6 transcript elements re-rendered |
-| `onDraft` an inline closure | same | failed |
-| `onCreate` an inline closure | same | failed |
-| `history` rebuilt each render | same | failed |
-| notifications result rebuilt each render | same | failed |
-| `enable` a fresh closure each render | same | failed |
-| height script runs where CSS sizes the field | shell-ui "lets CSS size the field" | failed: `96px` |
-| `cssSizesField` always true | connection-ui "fits a restored multi-line draft" | failed: no height |
-| slot read on every keystroke | shell-ui "lets CSS size the field" | failed: 5 `getComputedStyle` calls |
-| measure before the line-break and length rules | composer-layout "without measuring" | failed |
-| measure for empty text | composer-layout "placeholder" | failed |
-| tab left out of the span characters | composer-layout "with a tab in the span" | failed |
-| vertical tab left out | composer-layout "with a vertical tab in the span" | failed |
-| form feed left out | composer-layout "with a form feed in the span" | failed |
-| canvas used for every text | composer-layout, all three span cases | failed |
-| span characters checked without checking for a canvas | shell-ui "lets CSS size the field" | failed: jsdom has no canvas |
+| Mutation                                              | Test                                                         | Result                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------- |
+| `Conversation` not memoized                           | shell-ui "re-renders nothing in the transcript while typing" | failed: 6 transcript elements re-rendered |
+| `onDraft` an inline closure                           | same                                                         | failed                                    |
+| `onCreate` an inline closure                          | same                                                         | failed                                    |
+| `history` rebuilt each render                         | same                                                         | failed                                    |
+| notifications result rebuilt each render              | same                                                         | failed                                    |
+| `enable` a fresh closure each render                  | same                                                         | failed                                    |
+| height script runs where CSS sizes the field          | shell-ui "lets CSS size the field"                           | failed: `96px`                            |
+| `cssSizesField` always true                           | connection-ui "fits a restored multi-line draft"             | failed: no height                         |
+| slot read on every keystroke                          | shell-ui "lets CSS size the field"                           | failed: 5 `getComputedStyle` calls        |
+| measure before the line-break and length rules        | composer-layout "without measuring"                          | failed                                    |
+| measure for empty text                                | composer-layout "placeholder"                                | failed                                    |
+| tab left out of the span characters                   | composer-layout "with a tab in the span"                     | failed                                    |
+| vertical tab left out                                 | composer-layout "with a vertical tab in the span"            | failed                                    |
+| form feed left out                                    | composer-layout "with a form feed in the span"               | failed                                    |
+| canvas used for every text                            | composer-layout, all three span cases                        | failed                                    |
+| span characters checked without checking for a canvas | shell-ui "lets CSS size the field"                           | failed: jsdom has no canvas               |
 
 ## Real browser
 
@@ -79,13 +79,13 @@ Playwright Chromium (`@playwright/test`'s bundled build), 1280 by 800, against `
 wrapped `getComputedStyle`. `origin/main` was built in a scratch worktree; its service-worker step
 failed on the scratch path, which ends that run with a worker console error after measuring.
 
-| Per 48 keystrokes | `origin/main` | This branch |
-| --- | --- | --- |
-| `getComputedStyle` calls | 48, 48, 48 | 0, 0, 0 |
-| Layouts | 232, 227, 219 | 82, 80, 75 |
-| Style recalculations | 348, 333, 309 | 196, 183, 164 |
-| Layout time (ms) | 55.2, 36.1, 21.6 | 24.5, 20.4, 10.1 |
-| Script time (ms) | 144.7, 103.7, 64.6 | 132.4, 101.1, 51.7 |
+| Per 48 keystrokes        | `origin/main`      | This branch        |
+| ------------------------ | ------------------ | ------------------ |
+| `getComputedStyle` calls | 48, 48, 48         | 0, 0, 0            |
+| Layouts                  | 232, 227, 219      | 82, 80, 75         |
+| Style recalculations     | 348, 333, 309      | 196, 183, 164      |
+| Layout time (ms)         | 55.2, 36.1, 21.6   | 24.5, 20.4, 10.1   |
+| Script time (ms)         | 144.7, 103.7, 64.6 | 132.4, 101.1, 51.7 |
 
 These measurements were taken at `aa108c0`, with the deferred draft write. They were not repeated
 after it was removed. That write touched only `localStorage`, never layout, so the layout and style
@@ -138,8 +138,8 @@ wrong. In Chromium with the app's CSS, `Name\uFFFCQuantity` measured 102.27 px o
 U+FFFC, the object replacement character, now joins tab, vertical tab and form feed in
 `canvasMismeasures` and is measured by the span.
 
-| Break | Test | Result |
-| --- | --- | --- |
+| Break                                                             | Test                                                               | Result                           |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------- |
 | U+FFFC left out of `canvasMismeasures` (the head before this fix) | composer-layout "with an object replacement character in the span" | failed, then passed with the fix |
 
 The reviewer accepted the render test as written. It noted that React's `Profiler` inside

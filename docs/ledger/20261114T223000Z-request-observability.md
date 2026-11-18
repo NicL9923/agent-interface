@@ -21,15 +21,15 @@ failures were the three tests that need the `127.0.0.2` loopback alias, which th
 
 Each broke one line by hand, ran `tests/request-log.test.ts` and `tests/ops.test.ts`, then restored it with `git checkout`.
 
-| Break | Test that failed |
-| --- | --- |
-| drop the skip for a 5xx the error handler already logged | `logs a thrown 5xx once, through the error handler, and not again here` |
-| drop `markStream` from `eventStreamConnection` | `keeps an open event stream out of the slow log but still logs a slow ordinary request` |
-| log `req.url` instead of the route pattern | `logs a refused request with its method, route pattern, status, duration and request id, never the URL or query` |
-| drop the once-a-minute throttle | `warns at most once a minute` |
-| log only slow requests, not 400 and above | five tests, including `logs a reply sent directly with a 503, which the error handler never sees` |
-| show the p99 to every caller | `shows the event loop's last p99 to direct loopback callers only` |
-| drop the `repeats` count from the reminder line | `logs a repeating failure once with its count at the reminder, so a polling client cannot flood journald` |
+| Break                                                    | Test that failed                                                                                                 |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| drop the skip for a 5xx the error handler already logged | `logs a thrown 5xx once, through the error handler, and not again here`                                          |
+| drop `markStream` from `eventStreamConnection`           | `keeps an open event stream out of the slow log but still logs a slow ordinary request`                          |
+| log `req.url` instead of the route pattern               | `logs a refused request with its method, route pattern, status, duration and request id, never the URL or query` |
+| drop the once-a-minute throttle                          | `warns at most once a minute`                                                                                    |
+| log only slow requests, not 400 and above                | five tests, including `logs a reply sent directly with a 503, which the error handler never sees`                |
+| show the p99 to every caller                             | `shows the event loop's last p99 to direct loopback callers only`                                                |
+| drop the `repeats` count from the reminder line          | `logs a repeating failure once with its count at the reminder, so a polling client cannot flood journald`        |
 
 ## Not exercised
 

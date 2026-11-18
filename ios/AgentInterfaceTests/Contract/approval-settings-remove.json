@@ -2,9 +2,7 @@
   "request": "DELETE /api/bots/household/approval-settings/allowlist",
   "response": {
     "supported": true,
-    "allowlist": [
-      "grocery order"
-    ],
+    "allowlist": ["grocery order"],
     "mode": "manual",
     "canManageAutoReview": true
   }

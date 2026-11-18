@@ -20,16 +20,16 @@ No shape picker, color picker, eye picker or accessory editor is exposed by the 
 
 The live desktop gallery contains eight silhouettes. Colors were confirmed in the delivered gallery configuration.
 
-| Reference name | App name | Color |
-| --- | --- | --- |
-| Blob, nearly circular with an organic outline | Blob | `#1084FE` |
-| Pebble, irregular rounded rectangle | Pebble | `#FF6700` |
-| Squircle, softened square | Squircle | `#00BCA6` |
-| Tablet, vertical capsule | Capsule | `#FF263C` |
-| Wedge, rounded triangle | Triangle | `#FF309B` |
-| Hex, rounded hexagon | Hex | `#9159FE` |
-| Cloud, overlapping soft lobes | Cloud | `#FF9800` |
-| Teardrop | Drop | `#97683D` |
+| Reference name                                | App name | Color     |
+| --------------------------------------------- | -------- | --------- |
+| Blob, nearly circular with an organic outline | Blob     | `#1084FE` |
+| Pebble, irregular rounded rectangle           | Pebble   | `#FF6700` |
+| Squircle, softened square                     | Squircle | `#00BCA6` |
+| Tablet, vertical capsule                      | Capsule  | `#FF263C` |
+| Wedge, rounded triangle                       | Triangle | `#FF309B` |
+| Hex, rounded hexagon                          | Hex      | `#9159FE` |
+| Cloud, overlapping soft lobes                 | Cloud    | `#FF9800` |
+| Teardrop                                      | Drop     | `#97683D` |
 
 A compact gallery shows a subset of four. The article hero also shows a neutral gray drop and black circle, so a neutral color and explicit circle shape are useful app choices. The app adds 11 original shapes with no reference counterpart: diamond, sparkle, clover, heart, cookie, pentagon, burst, alien, ghost, flower and sun, for 20 in all. Eyes are contrasting cutouts without a conventional mouth. Common resting eyes are two upright rounded capsules; their sizes, spacing, lid opening, angle and location change with expression. The source varies eye width/height and spacing between active and emotive states, interpolated over 280 ms in the lifecycle example. It includes natural lids and minimum stroke treatments for tired expressions.
 
@@ -37,14 +37,14 @@ A compact gallery shows a subset of four. The article hero also shows a neutral 
 
 Tour dwell durations were verified in the article implementation. They are demo durations, not task durations; production state must come from the backend.
 
-| State | Demo duration | Observed motion and transitions | Specimen treatment |
-| --- | --- | --- | --- |
-| Idle | 4200 ms | Calm body; slight turn/tilt, gaze and blink. Upright rounded eyes. | Breathing squash, glances that turn the face slightly, and occasional double blinks. No busy indication. |
-| Working | 4600 ms | Body rotates in depth; eyes track across the curved face and vanish on the back. Small rhythmic effort motion; occasional spins produce colored trail strokes. | A 3.8 s cycle: the face scans side to side with small effort hops, then one full spin. Each eye is projected separately onto a sphere, so it compresses and disappears on the back. Trails appear only during the spin and pass behind and in front of the body. |
-| Waiting | 4200 ms | Relaxed horizontal eyes, slower/drooped pose. Transition retains residual trails while settling. | Lidded eyes widen into horizontal shapes, slow breathing and a slight sag. Residual trails keep sweeping for 600 ms after any state change. |
-| Blocked | 4200 ms | Body shrinks/morphs into an exclamation mark with separate circular dot. A small attention emphasis. | The body shrinks and narrows while the exclamation grows from its center, then wiggles briefly every 2.6 s. |
-| Thinking | 4600 ms | Character morphs into three small animated dots. Their size/opacity changes in sequence. | The character stays visible with breathing, a gentle tilt, and an upward gaze that moves side to side. This intentionally differs from the reference dots. |
-| Done | 4200 ms | Wild spin with multiple colored trails, expressive eyes; celebratory movement. | The specimen retains a 1.8 s celebration of two spins, two hops, a damped roll and wrapped trails, settling into happy eyes with a check badge. Conversations show the final reply and return the avatar to idle without a Done status. |
+| State    | Demo duration | Observed motion and transitions                                                                                                                                | Specimen treatment                                                                                                                                                                                                                                               |
+| -------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Idle     | 4200 ms       | Calm body; slight turn/tilt, gaze and blink. Upright rounded eyes.                                                                                             | Breathing squash, glances that turn the face slightly, and occasional double blinks. No busy indication.                                                                                                                                                         |
+| Working  | 4600 ms       | Body rotates in depth; eyes track across the curved face and vanish on the back. Small rhythmic effort motion; occasional spins produce colored trail strokes. | A 3.8 s cycle: the face scans side to side with small effort hops, then one full spin. Each eye is projected separately onto a sphere, so it compresses and disappears on the back. Trails appear only during the spin and pass behind and in front of the body. |
+| Waiting  | 4200 ms       | Relaxed horizontal eyes, slower/drooped pose. Transition retains residual trails while settling.                                                               | Lidded eyes widen into horizontal shapes, slow breathing and a slight sag. Residual trails keep sweeping for 600 ms after any state change.                                                                                                                      |
+| Blocked  | 4200 ms       | Body shrinks/morphs into an exclamation mark with separate circular dot. A small attention emphasis.                                                           | The body shrinks and narrows while the exclamation grows from its center, then wiggles briefly every 2.6 s.                                                                                                                                                      |
+| Thinking | 4600 ms       | Character morphs into three small animated dots. Their size/opacity changes in sequence.                                                                       | The character stays visible with breathing, a gentle tilt, and an upward gaze that moves side to side. This intentionally differs from the reference dots.                                                                                                       |
+| Done     | 4200 ms       | Wild spin with multiple colored trails, expressive eyes; celebratory movement.                                                                                 | The specimen retains a 1.8 s celebration of two spins, two hops, a damped roll and wrapped trails, settling into happy eyes with a check badge. Conversations show the final reply and return the avatar to idle without a Done status.                          |
 
 The article's thinking morph is intentionally distinct from applying a generic dot loader to all activity. The source combines springs, expression changes, shape interpolation, depth geometry and trails. Our implementation uses simpler independent SVG geometry and keeps the character visible during thinking, as requested for inline conversation activity. It does not copy the proprietary motion engine and is not claimed to be pixel-identical. Working needs review in motion, not only a screenshot, because a rear-face frame legitimately has no visible eyes.
 

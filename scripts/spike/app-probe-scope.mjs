@@ -9,9 +9,15 @@ const PROBE_ONLY = ["package.json", "scripts/spike/app-probe-scope.mjs"];
 
 /** The qualification inputs plus the probe-only files, as sorted paths relative to root. */
 export function probeScope(root = ".") {
-  const manifest = JSON.parse(readFileSync(join(root, "src/shared/qualification-inputs.json"), "utf8"));
-  const trees = TREES.flatMap(tree => readdirSync(join(root, tree), { recursive: true })
-    .map(name => `${tree}/${String(name).replaceAll("\\", "/")}`)
-    .filter(path => !/(^|\/)\./.test(path) && statSync(join(root, path)).isFile()));
-  return [...new Set([...manifest, ...trees, ...PROBE_ONLY])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const manifest = JSON.parse(
+    readFileSync(join(root, "src/shared/qualification-inputs.json"), "utf8"),
+  );
+  const trees = TREES.flatMap((tree) =>
+    readdirSync(join(root, tree), { recursive: true })
+      .map((name) => `${tree}/${String(name).replaceAll("\\", "/")}`)
+      .filter((path) => !/(^|\/)\./.test(path) && statSync(join(root, path)).isFile()),
+  );
+  return [...new Set([...manifest, ...trees, ...PROBE_ONLY])].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
 }

@@ -7,7 +7,10 @@ class FakeViewport extends EventTarget {
   height = 800;
   scale = 1;
   pageTop = 0;
-  set(next: Partial<Pick<FakeViewport, "height" | "scale" | "pageTop">>, event: "resize" | "scroll" = "resize") {
+  set(
+    next: Partial<Pick<FakeViewport, "height" | "scale" | "pageTop">>,
+    event: "resize" | "scroll" = "resize",
+  ) {
     Object.assign(this, next);
     this.dispatchEvent(new Event(event));
   }
@@ -29,7 +32,9 @@ class FakeWindow extends EventTarget {
   layout = 800;
   innerHeight = 800;
   scrollY = 0;
-  constructor(readonly visualViewport: FakeViewport | null) { super(); }
+  constructor(readonly visualViewport: FakeViewport | null) {
+    super();
+  }
   readonly document = document;
   scroll(scrollY: number) {
     this.scrollY = scrollY;
@@ -43,7 +48,10 @@ const follow = (viewport: FakeViewport | null, layout = 800) => {
   stop = followKeyboard(page);
   return page;
 };
-afterEach(() => { stop(); stop = () => {}; });
+afterEach(() => {
+  stop();
+  stop = () => {};
+});
 
 describe("following an on-screen keyboard", () => {
   it("fits the shell to what is visible while an iOS keyboard is up, and gives the space back when it closes", () => {
@@ -83,14 +91,17 @@ describe("following an on-screen keyboard", () => {
     ["a negative height", -44],
     ["no height at all", 0],
     ["one pixel short of the composer's floor", 111],
-  ])("keeps the layout viewport's height when the visible frame is %s, so Safari pans to the field", (_, height) => {
-    const viewport = new FakeViewport();
-    follow(viewport, 326);
-    viewport.set({ height: 160, pageTop: 0 });
-    expect(shell().open).toBe(true);
-    viewport.set({ height });
-    expect(shell()).toEqual(full);
-  });
+  ])(
+    "keeps the layout viewport's height when the visible frame is %s, so Safari pans to the field",
+    (_, height) => {
+      const viewport = new FakeViewport();
+      follow(viewport, 326);
+      viewport.set({ height: 160, pageTop: 0 });
+      expect(shell().open).toBe(true);
+      viewport.set({ height });
+      expect(shell()).toEqual(full);
+    },
+  );
 
   it("fits the shell to a frame exactly as tall as the composer's floor", () => {
     const viewport = new FakeViewport();

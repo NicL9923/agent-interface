@@ -11,7 +11,9 @@ export const fileRef = z.object({
     .min(1)
     .max(8192)
     // `v2.<key id>.<body>.<signature>` since the app signs with its own key, or the earlier `<body>.<signature>`.
-    .regex(/^(?:v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/),
+    .regex(
+      /^(?:v2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/,
+    ),
   name: z.string().max(255),
   mime: z.string().max(100),
   size: z.number().optional(),
@@ -54,7 +56,10 @@ export const botSaveRequest = botInput.extend({
   // Sharing someone's main assistant ends it being their main one and stops its check-ins.
   confirmMainCleared: z.boolean().optional(),
 });
-const quietTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional();
+const quietTime = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+  .optional();
 const validTimezone = (value: string) => {
   try {
     new Intl.DateTimeFormat("en", { timeZone: value });
@@ -70,7 +75,9 @@ export const preferences = z.object({
   favorites: z.array(id).max(100),
   modelFavorites: modelFavoriteList.optional(),
   defaultBotId: id.optional(),
-  sections: z.array(z.object({ id, name: z.string().max(100), botIds: z.array(id).max(100) })).max(30),
+  sections: z
+    .array(z.object({ id, name: z.string().max(100), botIds: z.array(id).max(100) }))
+    .max(30),
   followBots: z.array(id).max(100),
   startPage: z.enum(["today", "assistant"]).optional(),
   notifications: z
@@ -81,14 +88,22 @@ export const preferences = z.object({
       batchMinutes: z.number().int().min(0).max(60),
     })
     .refine(
-      value => !!value.quietStart === !!value.quietEnd && (!value.quietStart || value.quietStart !== value.quietEnd),
+      (value) =>
+        !!value.quietStart === !!value.quietEnd &&
+        (!value.quietStart || value.quietStart !== value.quietEnd),
       "Choose different quiet start and end times.",
     )
     .optional(),
-  hiddenRoutineRuns: z.array(z.object({ botId: id, routineId: id }).strict()).max(500).optional(),
+  hiddenRoutineRuns: z
+    .array(z.object({ botId: id, routineId: id }).strict())
+    .max(500)
+    .optional(),
   // --- Main assistant: server-owned, so PATCH /preferences ignores what a client sends for these two. ---
   mainBotId: id.optional(),
-  checkIns: z.object({ enabled: z.boolean(), everyHours: z.number(), timezone: z.string() }).strict().optional(),
+  checkIns: z
+    .object({ enabled: z.boolean(), everyHours: z.number(), timezone: z.string() })
+    .strict()
+    .optional(),
   mainSuggestionDismissed: z.boolean().optional(),
 });
 // --- Main assistant ---
@@ -99,7 +114,9 @@ type Keys<T> = T extends unknown ? keyof T : never;
 /** True when each type is assignable to the other and every union member has the same field names. */
 type Same<A, B> = [A] extends [B]
   ? [B] extends [A]
-    ? [Exclude<Keys<A>, Keys<B>> | Exclude<Keys<B>, Keys<A>>] extends [never] ? true : false
+    ? [Exclude<Keys<A>, Keys<B>> | Exclude<Keys<B>, Keys<A>>] extends [never]
+      ? true
+      : false
     : false
   : false;
 type Assert<T extends true> = T;

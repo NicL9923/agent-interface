@@ -138,19 +138,12 @@
   ],
   "preferences": {
     "presentation": "simple",
-    "favorites": [
-      "ranch",
-      "garden"
-    ],
+    "favorites": ["ranch", "garden"],
     "sections": [
       {
         "id": "house",
         "name": "Around the house",
-        "botIds": [
-          "ranch",
-          "kitchen",
-          "garden"
-        ]
+        "botIds": ["ranch", "kitchen", "garden"]
       }
     ],
     "followBots": [],

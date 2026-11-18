@@ -43,17 +43,17 @@ script tag. Chromium, Slow 4G (150 ms, 1.6 Mbps down, 750 kbps up) and a 4x CPU 
 member's theme dark on a light system. Medians of 12 loads each, in ms from navigation start, rounds
 alternated because the machine was loaded (load average 18 to 31).
 
-| Build, load | Bootstrap sent | Answered | First paint | Theme | Roster | Light shown |
-| --- | --- | --- | --- | --- | --- | --- |
-| main, no worker, cold cache | 5571 | 5736 | 2404 | 5919 | 5919 | 3514 |
-| main, no worker, warm cache | 496 | 658 | 252 | 850 | 851 | 610 |
-| main, worker's cached shell | 317 | 478 | 52 | 661 | 662 | 613 |
-| branch, no worker, cold cache | 3340 | 3554 | 2348 | 455 | 5831 | 0 |
-| branch, no worker, warm cache | 328 | 489 | 336 | 327 | 810 | 0 |
-| branch, worker's cached shell | 40 | 203 | 48 | 40 | 513 | 0 |
-| async tag, no worker, cold cache | 3483 | 3688 | 2340 | 3483 | 5832 | 1141 |
-| async tag, no worker, warm cache | 439 | 601 | 204 | 451 | 785 | 244 |
-| async tag, worker's cached shell | 46 | 210 | 48 | 46 | 511 | 0 |
+| Build, load                      | Bootstrap sent | Answered | First paint | Theme | Roster | Light shown |
+| -------------------------------- | -------------- | -------- | ----------- | ----- | ------ | ----------- |
+| main, no worker, cold cache      | 5571           | 5736     | 2404        | 5919  | 5919   | 3514        |
+| main, no worker, warm cache      | 496            | 658      | 252         | 850   | 851    | 610         |
+| main, worker's cached shell      | 317            | 478      | 52          | 661   | 662    | 613         |
+| branch, no worker, cold cache    | 3340           | 3554     | 2348        | 455   | 5831   | 0           |
+| branch, no worker, warm cache    | 328            | 489      | 336         | 327   | 810    | 0           |
+| branch, worker's cached shell    | 40             | 203      | 48          | 40    | 513    | 0           |
+| async tag, no worker, cold cache | 3483           | 3688     | 2340        | 3483  | 5832   | 1141        |
+| async tag, no worker, warm cache | 439            | 601      | 204         | 451   | 785    | 244         |
+| async tag, worker's cached shell | 46             | 210      | 48          | 46    | 511    | 0           |
 
 - Every load counted one bootstrap read before the roster painted, except one of the 12 async-tag
   loads under the worker, which counted two. An async script can run after the bundle has made its
@@ -93,26 +93,26 @@ phone would settle the median; neither was available.
 
 Each line was broken by hand, the focused tests run, and the source restored. All 29 went red.
 
-| Mutation | Failed |
-| --- | --- |
-| `api()` never takes the startup read | "is the page's only bootstrap read on a normal load", "answers the app's first bootstrap, so the page reads it once" and 2 more |
-| `clearResponseCache` keeps it | "is dropped when the account changes before the app asks for it" |
-| Path check removed | "is left for its own path…" |
-| Version check removed | "is dropped, and aborted, when it has a version from the future" |
-| Response shape check removed | "…when it has no response" |
-| A failed read not handed to `api()`'s own | "is read again by the app when it fails…", "hands over to the app's own read after a network failure", "…after an abort" |
-| A deadline falls back instead of failing | "counts toward the app's deadline, which aborts it without a second read" |
-| The deadline does not abort the read | same |
-| A taken read stays on `window` | survived the first pass; "is taken once, so the read after an error answer asks the server again" was added and goes red |
-| `boot.js`: theme for another account, lapsed sign-in, theme version, theme value, hint without a chat list | the matching "is not applied for…" case each |
-| `boot.js`: runs twice, no cookie, full roster, no expiry | "starts once per page", "is the request the app makes…", the UI bootstrap cases, "lets go after a minute…" |
-| `App` resets the theme before bootstrap | "stays as boot.js applied it until bootstrap answers…" |
-| `App` keeps the saved theme on sign-in | "gives way to the system's on the sign-in screen" |
-| Theme not saved, or saved without a hint for the account | "starts at sign-in…", "is forgotten when bootstrap names an account other…", "does not invent a sign-in…" |
-| Sign-in or sign-out keeps account records | "starts at sign-in…", "is forgotten when the person signs out" |
-| Server: `boot.js` not revalidated; missing `boot.js` gets the shell | the two `static-cache` cases |
-| Worker: ignores the outdated note; no offline fallback; not intercepted | the three `boot.js` worker cases |
-| e2e: `<script src="/boot.js">` removed, rebuilt | "a returning member's load…" at the request order, `bundle` before `/api/bootstrap` |
+| Mutation                                                                                                   | Failed                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `api()` never takes the startup read                                                                       | "is the page's only bootstrap read on a normal load", "answers the app's first bootstrap, so the page reads it once" and 2 more |
+| `clearResponseCache` keeps it                                                                              | "is dropped when the account changes before the app asks for it"                                                                |
+| Path check removed                                                                                         | "is left for its own path…"                                                                                                     |
+| Version check removed                                                                                      | "is dropped, and aborted, when it has a version from the future"                                                                |
+| Response shape check removed                                                                               | "…when it has no response"                                                                                                      |
+| A failed read not handed to `api()`'s own                                                                  | "is read again by the app when it fails…", "hands over to the app's own read after a network failure", "…after an abort"        |
+| A deadline falls back instead of failing                                                                   | "counts toward the app's deadline, which aborts it without a second read"                                                       |
+| The deadline does not abort the read                                                                       | same                                                                                                                            |
+| A taken read stays on `window`                                                                             | survived the first pass; "is taken once, so the read after an error answer asks the server again" was added and goes red        |
+| `boot.js`: theme for another account, lapsed sign-in, theme version, theme value, hint without a chat list | the matching "is not applied for…" case each                                                                                    |
+| `boot.js`: runs twice, no cookie, full roster, no expiry                                                   | "starts once per page", "is the request the app makes…", the UI bootstrap cases, "lets go after a minute…"                      |
+| `App` resets the theme before bootstrap                                                                    | "stays as boot.js applied it until bootstrap answers…"                                                                          |
+| `App` keeps the saved theme on sign-in                                                                     | "gives way to the system's on the sign-in screen"                                                                               |
+| Theme not saved, or saved without a hint for the account                                                   | "starts at sign-in…", "is forgotten when bootstrap names an account other…", "does not invent a sign-in…"                       |
+| Sign-in or sign-out keeps account records                                                                  | "starts at sign-in…", "is forgotten when the person signs out"                                                                  |
+| Server: `boot.js` not revalidated; missing `boot.js` gets the shell                                        | the two `static-cache` cases                                                                                                    |
+| Worker: ignores the outdated note; no offline fallback; not intercepted                                    | the three `boot.js` worker cases                                                                                                |
+| e2e: `<script src="/boot.js">` removed, rebuilt                                                            | "a returning member's load…" at the request order, `bundle` before `/api/bootstrap`                                             |
 
 ## Not exercised
 

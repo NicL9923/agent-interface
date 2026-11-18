@@ -30,10 +30,10 @@ client takes meanwhile hides growth on the older version until its own turn arri
 app and Hermes runtime over the fake socket, one word every 50 ms, two tools, every open answered after 2.8 s, a
 client that reads on each change notice.
 
-| Build | Word delay after each tool, p50 / p95 / max | Before any tool, p50 / max |
-| --- | --- | --- |
-| `265f36d` | 1005 / 2655 / 2805 ms and 1002 / 2651 / 2801 ms | 66 / 70 ms |
-| this change | 53 / 62 / 64 ms and 53 / 63 / 64 ms | 22 / 72 ms |
+| Build       | Word delay after each tool, p50 / p95 / max     | Before any tool, p50 / max |
+| ----------- | ----------------------------------------------- | -------------------------- |
+| `265f36d`   | 1005 / 2655 / 2805 ms and 1002 / 2651 / 2801 ms | 66 / 70 ms                 |
+| this change | 53 / 62 / 64 ms and 53 / 63 / 64 ms             | 22 / 72 ms                 |
 
 `tests/live-turn-timing.test.ts` pins the virtual-time figures: the token after each tool now shows at 0 ms instead
 of 61 ms (one Hermes read), with the same 10 and 18 opens.
@@ -48,14 +48,14 @@ of 61 ms (one Hermes read), with the same 10 and 18 opens.
 
 Each mutation by hand against `npx vitest run tests/live-turn-runtime.test.ts tests/live-turn-stream.test.ts`, restored after:
 
-| Mutation | Result |
-| --- | --- |
-| drop the turn snapshot on every structural frame | failed: keeps growth coming at the last read's version… (5 tests) |
-| keep it past any frame | failed: keeps no live reply on the last read's version past a frame the runtime does not know… (7 tests) |
-| a marked snapshot counts as read | failed: ?inflight=1 gets the same events and reads… (43 tests) |
-| no seams applied | failed: reads the turn itself after a structural frame… (2 tests) |
-| break even over a blank line | failed: starts a paragraph at each seam text follows… |
-| a seam with no text after it | failed: adds nothing at a seam no text follows yet… (4 tests) |
+| Mutation                                         | Result                                                                                                   |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| drop the turn snapshot on every structural frame | failed: keeps growth coming at the last read's version… (5 tests)                                        |
+| keep it past any frame                           | failed: keeps no live reply on the last read's version past a frame the runtime does not know… (7 tests) |
+| a marked snapshot counts as read                 | failed: ?inflight=1 gets the same events and reads… (43 tests)                                           |
+| no seams applied                                 | failed: reads the turn itself after a structural frame… (2 tests)                                        |
+| break even over a blank line                     | failed: starts a paragraph at each seam text follows…                                                    |
+| a seam with no text after it                     | failed: adds nothing at a seam no text follows yet… (4 tests)                                            |
 
 ## Checks
 

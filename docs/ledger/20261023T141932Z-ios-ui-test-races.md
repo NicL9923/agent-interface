@@ -62,7 +62,7 @@ released after the run.
   its new Python tests and its tool-index description changed afterward; application
   inputs are unchanged.
 - The exact production-version command, `PATH=/opt/homebrew/opt/node@24/bin:$PATH
-  node node_modules/vitest/vitest.mjs run`, passed at `5ff29c6` on Node 24.21.0:
+node node_modules/vitest/vitest.mjs run`, passed at `5ff29c6` on Node 24.21.0:
   88 files and 1,023 tests.
 - `TMPDIR=/Volumes/DevSSD/scratch/agent-interface-cleanup-r2/tmp npm run test:py`
   passed at `5ff29c6`: 32 files, no skips or failures, Python 3.14.7. `tmux` was

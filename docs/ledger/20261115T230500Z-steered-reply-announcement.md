@@ -51,7 +51,6 @@ with HTTP 402 for exhausted balance; Anthropic is weekly-limited. The implementa
 is OpenAI, so same-provider review cannot clear this obligation. Keep the PR unmerged.
 No manual browser or physical-device interaction was performed for this change.
 
-
 ## Completed native single-predicate validation
 
 Mac validation ran at `4a4e3cc8f03477d44ad21aed602381000fabf0a3` on Xcode 27.2.

@@ -17,6 +17,8 @@ export function useSavedMessages(messages: Message[] | undefined): Message[] | u
     const next = messages?.filter(isSaved);
     return previous.current && next && sameRows(previous.current, next) ? previous.current : next;
   }, [messages]);
-  useEffect(() => { previous.current = saved; }, [saved]);
+  useEffect(() => {
+    previous.current = saved;
+  }, [saved]);
   return saved;
 }

@@ -10,13 +10,18 @@ export type CloseRequest = (onStay: () => void) => void;
 export type SheetClose = { close: CloseRequest; sheet: object };
 
 /** Offers this panel's close on `closer` while the panel is mounted. Panels without one close at once. */
-export function useCloseRequest(closer: RefObject<SheetClose | null> | undefined, close: CloseRequest) {
+export function useCloseRequest(
+  closer: RefObject<SheetClose | null> | undefined,
+  close: CloseRequest,
+) {
   // One per mount: a sheet opened again is another sheet.
   const [sheet] = useState(() => ({}));
   useEffect(() => {
     if (!closer) return;
     closer.current = { close, sheet };
-    return () => { if (closer.current?.sheet === sheet) closer.current = null; };
+    return () => {
+      if (closer.current?.sheet === sheet) closer.current = null;
+    };
   });
 }
 
@@ -33,7 +38,9 @@ export function waitingOnClose<T>() {
     wait(value: T, sheet: object, account: string | undefined) {
       const entry = { value, sheet, account };
       waiting = entry;
-      return () => { if (waiting === entry) waiting = null; };
+      return () => {
+        if (waiting === entry) waiting = null;
+      };
     },
     /** A sheet closed: what waited on it for this account, if anything. Nothing waits after. */
     take(sheet: object | undefined, account: string | undefined) {
@@ -50,5 +57,10 @@ export function waitingOnClose<T>() {
  * Keep editing would cancel only the newest and the notification would go ahead after all.
  */
 export function stayAlso(waiting: (() => void) | null, onStay: () => void): () => void {
-  return waiting ? () => { waiting(); onStay(); } : onStay;
+  return waiting
+    ? () => {
+        waiting();
+        onStay();
+      }
+    : onStay;
 }

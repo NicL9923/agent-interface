@@ -40,18 +40,18 @@ The first placement of the rollback write came before `restore_baseline_objects`
 `hermes_upgrade_linux_test` (`LiveCheckoutTests` and the install, partial clone and lost-object-store rollback tests),
 or `release_app_test.QualificationBrowser` for the host program.
 
-| Mutation | Result |
-| --- | --- |
-| install skips the protection | failed: test_install_and_rollback_turn_off_automatic_repacks_in_the_live_checkout |
-| rollback skips the protection | failed: test_install_and_rollback_turn_off_automatic_repacks_in_the_live_checkout |
-| refuse only when both settings are off | failed: test_automatic_gc_or_maintenance_is_refused_with_a_one_line_fix_that_works |
-| read settings without git's type normalization | failed: test_a_complete_protected_clone_may_be_qualified |
-| printed fix sets gc.auto to 1 | failed: test_automatic_gc_or_maintenance_is_refused_with_a_one_line_fix_that_works |
-| ignore a listing that failed | failed: test_a_head_git_cannot_list_is_refused |
-| count no missing objects | failed: test_missing_head_objects_are_counted_without_fetching_them |
-| list with --missing=allow-any | failed: test_missing_head_objects_are_counted_without_fetching_them |
-| lazy fetch left on | survived |
-| qualification ignores the refusals | failed: test_operator_qualification_persists_selection_in_private_receipt |
+| Mutation                                       | Result                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------- |
+| install skips the protection                   | failed: test_install_and_rollback_turn_off_automatic_repacks_in_the_live_checkout  |
+| rollback skips the protection                  | failed: test_install_and_rollback_turn_off_automatic_repacks_in_the_live_checkout  |
+| refuse only when both settings are off         | failed: test_automatic_gc_or_maintenance_is_refused_with_a_one_line_fix_that_works |
+| read settings without git's type normalization | failed: test_a_complete_protected_clone_may_be_qualified                           |
+| printed fix sets gc.auto to 1                  | failed: test_automatic_gc_or_maintenance_is_refused_with_a_one_line_fix_that_works |
+| ignore a listing that failed                   | failed: test_a_head_git_cannot_list_is_refused                                     |
+| count no missing objects                       | failed: test_missing_head_objects_are_counted_without_fetching_them                |
+| list with --missing=allow-any                  | failed: test_missing_head_objects_are_counted_without_fetching_them                |
+| lazy fetch left on                             | survived                                                                           |
+| qualification ignores the refusals             | failed: test_operator_qualification_persists_selection_in_private_receipt          |
 
 The survivor is expected. `rev-list --missing=print` turns lazy fetching off by itself, as the container run without
 `GIT_NO_LAZY_FETCH` showed, and `git config` never fetches. The variable stays as a guard for later reads added to
@@ -67,8 +67,8 @@ GPT-6.1 Sol's review found that the printed repair assumed `.git/config` ends wi
 without one, `[gc]` joined the last value, the command succeeded and qualification still refused. The printed line now
 starts with a newline, which also leaves an ordinary config valid.
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                    | Result                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------- |
 | The printed fix without its leading newline | failed: `test_the_printed_fix_works_on_a_config_whose_last_line_has_no_newline` |
 
 `LiveCheckoutTests` passed 5 of 5 on macOS (git from Xcode) after the restore.

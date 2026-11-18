@@ -4,10 +4,13 @@
  */
 export function primitiveText(value: unknown, fallback = ""): string {
   switch (typeof value) {
-    case "string": return value;
+    case "string":
+      return value;
     case "number":
     case "boolean":
-    case "bigint": return String(value);
-    default: return fallback;
+    case "bigint":
+      return String(value);
+    default:
+      return fallback;
   }
 }

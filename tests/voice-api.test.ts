@@ -15,60 +15,189 @@ import { errorHandler } from "../src/server/http-error.js";
 
 const origin = "https://voice.example.invalid";
 const apps: ReturnType<typeof Fastify>[] = [];
-afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
+afterEach(async () => {
+  for (const app of apps.splice(0)) await app.close();
+});
 async function setup() {
   let clock = Date.now();
-  const app = Fastify({ logger: false }); apps.push(app);
+  const app = Fastify({ logger: false });
+  apps.push(app);
   const store = new Store(":memory:");
-  const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture", HOUSEHOLD_EMAILS: "first@example.invalid,second@example.invalid" });
-  await app.register(cookie); await app.register(multipart);
+  const config = loadConfig({
+    NODE_ENV: "production",
+    APP_ORIGIN: origin,
+    APP_DATABASE: ":memory:",
+    GOOGLE_CLIENT_ID: "fixture",
+    HOUSEHOLD_EMAILS: "first@example.invalid,second@example.invalid",
+  });
+  await app.register(cookie);
+  await app.register(multipart);
   await installAuth(app, store, config);
   app.setErrorHandler(errorHandler({ production: true }));
   const transcribeVoice = vi.fn(async () => ({ text: " Pick up milk ", provider: "fixture" }));
-  const synthesizeVoice = vi.fn(async () => ({ data: Buffer.from("fixture audio"), mime: "audio/mpeg" }));
-  const conversation = vi.fn<() => Promise<Conversation>>(async () => conversationFixture({ botId: "ranch", messages: [{ id: "reply", role: "assistant", text: "The list is ready." }, { id: "user", role: "user", text: "secret user text" }, { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" }] }));
+  const synthesizeVoice = vi.fn(async () => ({
+    data: Buffer.from("fixture audio"),
+    mime: "audio/mpeg",
+  }));
+  const conversation = vi.fn<() => Promise<Conversation>>(async () =>
+    conversationFixture({
+      botId: "ranch",
+      messages: [
+        { id: "reply", role: "assistant", text: "The list is ready." },
+        { id: "user", role: "user", text: "secret user text" },
+        { id: "ranch-inflight", role: "assistant", text: "Unfinished thought" },
+      ],
+    }),
+  );
   const listBots = vi.fn(async () => [botFixture({ id: "ranch" })]);
   const runtime = fakeRuntime({ transcribeVoice, synthesizeVoice, conversation, listBots });
   const hidden = new Set<string>();
   const roster = new Roster(runtime, store);
-  await registerVoiceRoutes(app, runtime, { now: () => clock, visible: botId => !hidden.has(botId), redact: async (message,userId) => (await redactAgents(store,roster,userId)).message(message) });
+  await registerVoiceRoutes(app, runtime, {
+    now: () => clock,
+    visible: (botId) => !hidden.has(botId),
+    redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message),
+  });
   app.addHook("onClose", async () => store.close());
-  return { app, store, runtime, hidden, transcribeVoice, synthesizeVoice, conversation, listBots, first: signIn(store, origin, "first", { now: clock }), second: signIn(store, origin, "second", { now: clock }), advance: (ms: number) => { clock += ms; } };
+  return {
+    app,
+    store,
+    runtime,
+    hidden,
+    transcribeVoice,
+    synthesizeVoice,
+    conversation,
+    listBots,
+    first: signIn(store, origin, "first", { now: clock }),
+    second: signIn(store, origin, "second", { now: clock }),
+    advance: (ms: number) => {
+      clock += ms;
+    },
+  };
 }
 function recording(mime = "audio/webm", data = Buffer.from("fixture recording")) {
   const boundary = "voice-fixture";
-  return { headers: { "content-type": `multipart/form-data; boundary=${boundary}` }, payload: Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="../../ignored-name.webm"\r\nContent-Type: ${mime}\r\n\r\n`), data, Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]) };
+  return {
+    headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    payload: Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="../../ignored-name.webm"\r\nContent-Type: ${mime}\r\n\r\n`,
+      ),
+      data,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]),
+  };
 }
 it("authenticates and CSRF-protects recordings before contacting a provider", async () => {
-  const s = await setup(), upload = recording();
-  for (const [headers, status] of [[{}, 401], [{ cookie: s.first.cookie, origin }, 403], [{ ...s.first, origin: "https://other.invalid" }, 403]] as const) {
-    expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", payload: upload.payload, headers: { ...upload.headers, ...headers } })).statusCode).toBe(status);
+  const s = await setup(),
+    upload = recording();
+  for (const [headers, status] of [
+    [{}, 401],
+    [{ cookie: s.first.cookie, origin }, 403],
+    [{ ...s.first, origin: "https://other.invalid" }, 403],
+  ] as const) {
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/bots/ranch/voice/transcribe",
+          payload: upload.payload,
+          headers: { ...upload.headers, ...headers },
+        })
+      ).statusCode,
+    ).toBe(status);
   }
   expect(s.transcribeVoice).not.toHaveBeenCalled();
-  const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", payload: upload.payload, headers: { ...upload.headers, ...s.first } });
-  expect(response.statusCode).toBe(200); expect(response.json()).toEqual({ text: "Pick up milk", provider: "fixture" });
-  expect(s.transcribeVoice).toHaveBeenCalledWith("ranch", { mime: "audio/webm", data: Buffer.from("fixture recording") });
+  const response = await s.app.inject({
+    method: "POST",
+    url: "/api/bots/ranch/voice/transcribe",
+    payload: upload.payload,
+    headers: { ...upload.headers, ...s.first },
+  });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toEqual({ text: "Pick up milk", provider: "fixture" });
+  expect(s.transcribeVoice).toHaveBeenCalledWith("ranch", {
+    mime: "audio/webm",
+    data: Buffer.from("fixture recording"),
+  });
   expect(response.headers["cache-control"]).toBe("private, no-store");
 });
 it("rejects missing assistants, unsupported, empty, oversized and malformed recordings", async () => {
   const s = await setup();
-  for (const [mime, bytes, expected] of [["text/html", Buffer.from("html"), 415], ["audio/mp4", Buffer.alloc(0), 400], ["audio/mp4", Buffer.alloc(MAX_VOICE_BYTES + 1), 413]] as const) {
+  for (const [mime, bytes, expected] of [
+    ["text/html", Buffer.from("html"), 415],
+    ["audio/mp4", Buffer.alloc(0), 400],
+    ["audio/mp4", Buffer.alloc(MAX_VOICE_BYTES + 1), 413],
+  ] as const) {
     const upload = recording(mime, bytes);
-    expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", headers: { ...upload.headers, ...s.first }, payload: upload.payload })).statusCode).toBe(expected);
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/bots/ranch/voice/transcribe",
+          headers: { ...upload.headers, ...s.first },
+          payload: upload.payload,
+        })
+      ).statusCode,
+    ).toBe(expected);
   }
   const upload = recording();
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/missing/voice/transcribe", headers: { ...upload.headers, ...s.first }, payload: upload.payload })).statusCode).toBe(404);
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", headers: s.first, payload: {} })).statusCode).toBe(406);
-  const extra = Buffer.concat([upload.payload.subarray(0, upload.payload.length - Buffer.byteLength("--voice-fixture--\r\n")), Buffer.from('--voice-fixture\r\nContent-Disposition: form-data; name="extra"\r\n\r\nextra field\r\n--voice-fixture--\r\n')]);
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/transcribe", headers: { ...upload.headers, ...s.first }, payload: extra })).statusCode).toBe(413);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/missing/voice/transcribe",
+        headers: { ...upload.headers, ...s.first },
+        payload: upload.payload,
+      })
+    ).statusCode,
+  ).toBe(404);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/transcribe",
+        headers: s.first,
+        payload: {},
+      })
+    ).statusCode,
+  ).toBe(406);
+  const extra = Buffer.concat([
+    upload.payload.subarray(0, upload.payload.length - Buffer.byteLength("--voice-fixture--\r\n")),
+    Buffer.from(
+      '--voice-fixture\r\nContent-Disposition: form-data; name="extra"\r\n\r\nextra field\r\n--voice-fixture--\r\n',
+    ),
+  ]);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/transcribe",
+        headers: { ...upload.headers, ...s.first },
+        payload: extra,
+      })
+    ).statusCode,
+  ).toBe(413);
   expect(s.transcribeVoice).not.toHaveBeenCalled();
 });
 it("does not read a progress line aloud, because it is not a reply", async () => {
   const s = await setup();
-  s.conversation.mockImplementation(async () => conversationFixture({ botId: "ranch", messages: [{ id: "note", role: "assistant", text: "I'll check the list.", interim: true }, { id: "reply", role: "assistant", text: "The list is ready." }] }));
-  const speak = (messageId: string) => s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId } });
+  s.conversation.mockImplementation(async () =>
+    conversationFixture({
+      botId: "ranch",
+      messages: [
+        { id: "note", role: "assistant", text: "I'll check the list.", interim: true },
+        { id: "reply", role: "assistant", text: "The list is ready." },
+      ],
+    }),
+  );
+  const speak = (messageId: string) =>
+    s.app.inject({
+      method: "POST",
+      url: "/api/bots/ranch/voice/speak",
+      headers: s.first,
+      payload: { messageId },
+    });
   const refused = await speak("note");
   expect(refused.statusCode).toBe(404);
   expect(refused.json().error).toBe("Choose a completed assistant reply to listen to.");
@@ -77,25 +206,75 @@ it("does not read a progress line aloud, because it is not a reply", async () =>
 });
 it("reads only stored assistant replies and delivers speech once to its requesting identity", async () => {
   const s = await setup();
-  for (const payload of [{ messageId: "user" }, { messageId: "missing" }, { messageId: "reply", text: "client-controlled" }])
-    expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload })).statusCode).toBe(payload.messageId === "reply" ? 400 : 404);
+  for (const payload of [
+    { messageId: "user" },
+    { messageId: "missing" },
+    { messageId: "reply", text: "client-controlled" },
+  ])
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/bots/ranch/voice/speak",
+          headers: s.first,
+          payload,
+        })
+      ).statusCode,
+    ).toBe(payload.messageId === "reply" ? 400 : 404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "ranch-inflight" } })).statusCode).toBe(409);
-  const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } });
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "ranch-inflight" },
+      })
+    ).statusCode,
+  ).toBe(409);
+  const response = await s.app.inject({
+    method: "POST",
+    url: "/api/bots/ranch/voice/speak",
+    headers: s.first,
+    payload: { messageId: "reply" },
+  });
   const url = response.json().url;
-  expect(response.statusCode).toBe(200); expect(s.synthesizeVoice).toHaveBeenCalledWith("ranch", "The list is ready.");
+  expect(response.statusCode).toBe(200);
+  expect(s.synthesizeVoice).toHaveBeenCalledWith("ranch", "The list is ready.");
   expect((await s.app.inject({ url })).statusCode).toBe(401);
   expect((await s.app.inject({ url, headers: s.second })).statusCode).toBe(404);
   const audio = await s.app.inject({ url, headers: s.first });
-  expect(audio.body).toBe("fixture audio"); expect(audio.headers["content-type"]).toBe("audio/mpeg"); expect(audio.headers["cache-control"]).toBe("private, no-store");
+  expect(audio.body).toBe("fixture audio");
+  expect(audio.headers["content-type"]).toBe("audio/mpeg");
+  expect(audio.headers["cache-control"]).toBe("private, no-store");
   expect((await s.app.inject({ url, headers: s.first })).statusCode).toBe(404);
-  const concurrentUrl = (await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).json().url;
-  const concurrent = await Promise.all([s.app.inject({ url: concurrentUrl, headers: s.first }), s.app.inject({ url: concurrentUrl, headers: s.first })]);
-  expect(concurrent.map(response => response.statusCode).sort((a, b) => a - b)).toEqual([200, 404]);
+  const concurrentUrl = (
+    await s.app.inject({
+      method: "POST",
+      url: "/api/bots/ranch/voice/speak",
+      headers: s.first,
+      payload: { messageId: "reply" },
+    })
+  ).json().url;
+  const concurrent = await Promise.all([
+    s.app.inject({ url: concurrentUrl, headers: s.first }),
+    s.app.inject({ url: concurrentUrl, headers: s.first }),
+  ]);
+  expect(concurrent.map((response) => response.statusCode).sort((a, b) => a - b)).toEqual([
+    200, 404,
+  ]);
 });
 it("expires prepared audio, replaces old audio and rejects invalid provider output", async () => {
-  const s = await setup(), speak = () => s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } });
-  const previous = (await speak()).json().url, next = (await speak()).json().url;
+  const s = await setup(),
+    speak = () =>
+      s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "reply" },
+      });
+  const previous = (await speak()).json().url,
+    next = (await speak()).json().url;
   expect((await s.app.inject({ url: previous, headers: s.first })).statusCode).toBe(404);
   s.advance(300001);
   expect((await s.app.inject({ url: next, headers: s.first })).statusCode).toBe(404);
@@ -103,18 +282,55 @@ it("expires prepared audio, replaces old audio and rejects invalid provider outp
   expect((await speak()).statusCode).toBe(502);
 });
 it("limits concurrent voice provider calls for an identity and releases the slot after failure", async () => {
-  const s = await setup(); let reject!: (error: Error) => void;
-  s.synthesizeVoice.mockImplementationOnce(() => new Promise((_resolve, rejectPromise) => { reject = rejectPromise; }));
-  const first = s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } });
+  const s = await setup();
+  let reject!: (error: Error) => void;
+  s.synthesizeVoice.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, rejectPromise) => {
+        reject = rejectPromise;
+      }),
+  );
+  const first = s.app.inject({
+    method: "POST",
+    url: "/api/bots/ranch/voice/speak",
+    headers: s.first,
+    payload: { messageId: "reply" },
+  });
   await vi.waitFor(() => expect(s.synthesizeVoice).toHaveBeenCalledOnce());
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).statusCode).toBe(429);
-  reject(new Error("provider fixture failure")); expect((await first).statusCode).toBe(502);
-  expect((await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).statusCode).toBe(200);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "reply" },
+      })
+    ).statusCode,
+  ).toBe(429);
+  reject(new Error("provider fixture failure"));
+  expect((await first).statusCode).toBe(502);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "reply" },
+      })
+    ).statusCode,
+  ).toBe(200);
 });
 
 it("refuses cached speech once its assistant becomes another member's private one", async () => {
   const s = await setup();
-  const url = (await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "reply" } })).json().url;
+  const url = (
+    await s.app.inject({
+      method: "POST",
+      url: "/api/bots/ranch/voice/speak",
+      headers: s.first,
+      payload: { messageId: "reply" },
+    })
+  ).json().url;
   s.hidden.add("ranch");
   const audio = await s.app.inject({ url, headers: s.first });
   expect([audio.statusCode, audio.body]).not.toContain("fixture audio");
@@ -122,33 +338,105 @@ it("refuses cached speech once its assistant becomes another member's private on
 });
 
 it("refuses internal replies instead of sending their text to speech", async () => {
-  const s=await setup();
-  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'internal',role:'assistant',text:'Internal bot reply',origin:{kind:'agent',visibility:'activity'}}]}));
-  expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'internal'}})).statusCode).toBe(404);
+  const s = await setup();
+  s.conversation.mockResolvedValue(
+    conversationFixture({
+      messages: [
+        {
+          id: "internal",
+          role: "assistant",
+          text: "Internal bot reply",
+          origin: { kind: "agent", visibility: "activity" },
+        },
+      ],
+    }),
+  );
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "internal" },
+      })
+    ).statusCode,
+  ).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });
 
-it("rechecks message visibility before returning cached speech",async()=>{
-  const s=await setup();
-  const response=await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'reply'}});
+it("rechecks message visibility before returning cached speech", async () => {
+  const s = await setup();
+  const response = await s.app.inject({
+    method: "POST",
+    url: "/api/bots/ranch/voice/speak",
+    headers: s.first,
+    payload: { messageId: "reply" },
+  });
   expect(response.statusCode).toBe(200);
-  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'reply',role:'assistant',text:'Private bot output',origin:{kind:'agent',visibility:'activity'}}]}));
-  expect((await s.app.inject({url:response.json().url,headers:{cookie:s.first.cookie}})).statusCode).toBe(404);
+  s.conversation.mockResolvedValue(
+    conversationFixture({
+      messages: [
+        {
+          id: "reply",
+          role: "assistant",
+          text: "Private bot output",
+          origin: { kind: "agent", visibility: "activity" },
+        },
+      ],
+    }),
+  );
+  expect(
+    (await s.app.inject({ url: response.json().url, headers: { cookie: s.first.cookie } }))
+      .statusCode,
+  ).toBe(404);
 });
 
-it("redacts a private bot source before sending a shared-chat reply to speech",async()=>{
-  const s=await setup();
-  s.store.savePresentation('private',{shared:false,ownerId:'second'});
-  s.conversation.mockResolvedValue(conversationFixture({messages:[{id:'private-reply',role:'assistant',text:'Private canary',origin:{kind:'agent',visibility:'conversation',handle:'private'}}]}));
-  expect((await s.app.inject({method:'POST',url:'/api/bots/ranch/voice/speak',headers:s.first,payload:{messageId:'private-reply'}})).statusCode).toBe(404);
+it("redacts a private bot source before sending a shared-chat reply to speech", async () => {
+  const s = await setup();
+  s.store.savePresentation("private", { shared: false, ownerId: "second" });
+  s.conversation.mockResolvedValue(
+    conversationFixture({
+      messages: [
+        {
+          id: "private-reply",
+          role: "assistant",
+          text: "Private canary",
+          origin: { kind: "agent", visibility: "conversation", handle: "private" },
+        },
+      ],
+    }),
+  );
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/bots/ranch/voice/speak",
+        headers: s.first,
+        payload: { messageId: "private-reply" },
+      })
+    ).statusCode,
+  ).toBe(404);
   expect(s.synthesizeVoice).not.toHaveBeenCalled();
 });
 
 it("speaks any completed reply in the conversation, not only the latest", async () => {
   const s = await setup();
-  s.conversation.mockResolvedValue(conversationFixture({ botId: "ranch", messages: [
-    { id: "first", role: "assistant", text: "The first answer." }, { id: "q", role: "user", text: "And then?" }, { id: "latest", role: "assistant", text: "The latest answer." }] }));
-  const response = await s.app.inject({ method: "POST", url: "/api/bots/ranch/voice/speak", headers: s.first, payload: { messageId: "first" } });
+  s.conversation.mockResolvedValue(
+    conversationFixture({
+      botId: "ranch",
+      messages: [
+        { id: "first", role: "assistant", text: "The first answer." },
+        { id: "q", role: "user", text: "And then?" },
+        { id: "latest", role: "assistant", text: "The latest answer." },
+      ],
+    }),
+  );
+  const response = await s.app.inject({
+    method: "POST",
+    url: "/api/bots/ranch/voice/speak",
+    headers: s.first,
+    payload: { messageId: "first" },
+  });
   expect(response.statusCode).toBe(200);
   expect(s.synthesizeVoice).toHaveBeenCalledExactlyOnceWith("ranch", "The first answer.");
 });

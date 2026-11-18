@@ -7,19 +7,46 @@ import type { Bot, Message } from "../src/shared/types";
 import { mountRoot } from "./ui-harness";
 import type { Mount } from "./ui-harness";
 
-const message = (id: string, createdAt: string, text = id): Message => ({ id, role: "assistant", text, createdAt });
-const a = message("a", "2026-11-10T10:00:00Z"), b = message("b", "2026-11-10T10:01:00Z");
-const live = (text: string): Message => ({ id: "s-inflight", role: "assistant", text, createdAt: "2026-11-10T10:05:00Z" });
-const bot = (at?: string) => ({ id: "bot", name: "Bot", activity: "idle", ...at ? { lastMessage: { at, text: "hi" } } : {} }) as unknown as Bot;
+const message = (id: string, createdAt: string, text = id): Message => ({
+  id,
+  role: "assistant",
+  text,
+  createdAt,
+});
+const a = message("a", "2026-11-10T10:00:00Z"),
+  b = message("b", "2026-11-10T10:01:00Z");
+const live = (text: string): Message => ({
+  id: "s-inflight",
+  role: "assistant",
+  text,
+  createdAt: "2026-11-10T10:05:00Z",
+});
+const bot = (at?: string) =>
+  ({
+    id: "bot",
+    name: "Bot",
+    activity: "idle",
+    ...(at ? { lastMessage: { at, text: "hi" } } : {}),
+  }) as unknown as Bot;
 
 let mount: Mount;
-beforeEach(() => { mount = mountRoot(); });
+beforeEach(() => {
+  mount = mountRoot();
+});
 
 describe("useSavedMessages", () => {
   const seen: (Message[] | undefined)[] = [];
-  const Probe = ({ messages }: { messages: Message[] | undefined }) => { seen.push(useSavedMessages(messages)); return null; };
-  const show = async (messages: Message[] | undefined) => { await mount.render(createElement(Probe, { messages })); return seen.at(-1); };
-  beforeEach(() => { seen.length = 0; });
+  const Probe = ({ messages }: { messages: Message[] | undefined }) => {
+    seen.push(useSavedMessages(messages));
+    return null;
+  };
+  const show = async (messages: Message[] | undefined) => {
+    await mount.render(createElement(Probe, { messages }));
+    return seen.at(-1);
+  };
+  beforeEach(() => {
+    seen.length = 0;
+  });
 
   it("leaves out the live row and keeps its list while only that row changes", async () => {
     const first = await show([a, b, live("The north")]);
@@ -40,7 +67,7 @@ describe("useSavedMessages", () => {
     const first = await show([a, b, live("x")]);
     const changed = await show(next);
     expect(changed).not.toBe(first);
-    expect(changed).toEqual(next.filter(item => !item.id.endsWith("-inflight")));
+    expect(changed).toEqual(next.filter((item) => !item.id.endsWith("-inflight")));
   });
 
   it("passes no messages through, and the list back from none", async () => {
@@ -55,18 +82,35 @@ describe("useLatestMessageAt", () => {
   const reads = { count: 0 };
   const watched = (id: string, createdAt: string): Message => {
     const row = { id, role: "assistant", text: id } as Message;
-    Object.defineProperty(row, "createdAt", { enumerable: true, get() { reads.count++; return createdAt; } });
+    Object.defineProperty(row, "createdAt", {
+      enumerable: true,
+      get() {
+        reads.count++;
+        return createdAt;
+      },
+    });
     return row;
   };
   const found: (string | undefined)[] = [];
-  const Probe = (props: { bot?: Bot; messages?: Message[] }) => { found.push(useLatestMessageAt(props.bot, props.messages)); return null; };
-  const show = async (props: { bot?: Bot; messages?: Message[] }) => { await mount.render(createElement(Probe, props)); return found.at(-1); };
-  beforeEach(() => { reads.count = 0; found.length = 0; });
+  const Probe = (props: { bot?: Bot; messages?: Message[] }) => {
+    found.push(useLatestMessageAt(props.bot, props.messages));
+    return null;
+  };
+  const show = async (props: { bot?: Bot; messages?: Message[] }) => {
+    await mount.render(createElement(Probe, props));
+    return found.at(-1);
+  };
+  beforeEach(() => {
+    reads.count = 0;
+    found.length = 0;
+  });
 
   it("reads each saved message once, however often the chat renders or its live reply changes", async () => {
     const rows = [watched("a", "2026-11-10T10:00:00Z"), watched("b", "2026-11-10T10:01:00Z")];
     const hello = bot();
-    expect(await show({ bot: hello, messages: [...rows, live("The")] })).toBe("2026-11-10T10:01:00Z");
+    expect(await show({ bot: hello, messages: [...rows, live("The")] })).toBe(
+      "2026-11-10T10:01:00Z",
+    );
     const first = reads.count;
     expect(first).toBeGreaterThan(0);
     // A keystroke renders the chat with the same list; a delta brings a new list with the same saved rows.
@@ -77,7 +121,9 @@ describe("useLatestMessageAt", () => {
 
   it("answers with the newest of the roster preview and the saved messages, and moves when one arrives", async () => {
     const rows = [watched("a", "2026-11-10T10:00:00Z")];
-    expect(await show({ bot: bot("2026-11-10T10:30:00Z"), messages: rows })).toBe("2026-11-10T10:30:00Z");
+    expect(await show({ bot: bot("2026-11-10T10:30:00Z"), messages: rows })).toBe(
+      "2026-11-10T10:30:00Z",
+    );
     // A new roster row is a new object; the same one across the next steps leaves the saved messages as the only change,
     // so a memo that ignored them would answer 10:00 and stay there.
     const older = bot("2026-11-10T09:00:00Z");
@@ -85,7 +131,9 @@ describe("useLatestMessageAt", () => {
     const arrived = [...rows, watched("b", "2026-11-10T11:00:00Z")];
     expect(await show({ bot: older, messages: arrived })).toBe("2026-11-10T11:00:00Z");
     // A live reply never counts as read.
-    expect(await show({ bot: older, messages: [...arrived, live("x")] })).toBe("2026-11-10T11:00:00Z");
+    expect(await show({ bot: older, messages: [...arrived, live("x")] })).toBe(
+      "2026-11-10T11:00:00Z",
+    );
   });
 
   it("has no time without a bot to be shown", async () => {

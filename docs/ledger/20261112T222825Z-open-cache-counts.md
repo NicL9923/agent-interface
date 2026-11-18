@@ -29,22 +29,22 @@ its memo emptied, or adopted the warm-up's projection.
 `python3 .agents/tools/mutate-py.py --batch ... --baseline` over `src/hermes/extension.py`, running
 `hermes_projection_memo_test`, `hermes_history_warmup_test` and `hermes_extension_journal_test`; the baseline passed.
 
-| Mutation | Result |
-| --- | --- |
-| emptied never counted | failed: test_an_open_reports_what_its_caches_did (exit 1) |
-| emptied counts an empty memo | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
-| warm adoption never reported | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
-| decorated hit reported as miss | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1) |
-| reuse not reported | failed: test_an_open_reports_what_its_caches_did (exit 1) |
-| fill ignores memos | failed: test_an_open_reports_what_its_caches_did (exit 1) |
-| resume counts dropped by later counts | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1) |
+| Mutation                              | Result                                                                                                     |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| emptied never counted                 | failed: test_an_open_reports_what_its_caches_did (exit 1)                                                  |
+| emptied counts an empty memo          | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
+| warm adoption never reported          | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                          |
+| decorated hit reported as miss        | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1)                         |
+| reuse not reported                    | failed: test_an_open_reports_what_its_caches_did (exit 1)                                                  |
+| fill ignores memos                    | failed: test_an_open_reports_what_its_caches_did (exit 1)                                                  |
+| resume counts dropped by later counts | failed: test_a_first_open_adopts_the_warmed_history_and_projects_nothing (exit 1)                          |
 
 After review, the decorated-hit case moved to `CacheCountTests`, whose fixture projects through the memo, because the
 journal test's fixture never does and so could not catch a leftover report. Same tool, `CacheCountTests` alone,
 baseline passed:
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                   | Result                                                    |
+| ------------------------------------------ | --------------------------------------------------------- |
 | an open keeps the last projection's report | failed: test_an_open_reports_what_its_caches_did (exit 1) |
 
 ## Review
@@ -55,11 +55,11 @@ said every read carries all counts, while a resume that created the chat reports
 
 TypeScript, by hand, each restored from a copy afterwards:
 
-| Mutation | Result |
-| --- | --- |
-| `hermes.ts` reads no `app_cache` | failed: hermes-adapter "reports the add-on round trip and phases for timing" |
-| `hermes.ts` keeps negative counts as their absolute value | failed: the same test, which sends `fill: -1` |
-| `readTimingHeader` leaves `addon-cache` out | failed: ops "reports where a conversation read spent its time" |
+| Mutation                                                  | Result                                                                       |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `hermes.ts` reads no `app_cache`                          | failed: hermes-adapter "reports the add-on round trip and phases for timing" |
+| `hermes.ts` keeps negative counts as their absolute value | failed: the same test, which sends `fill: -1`                                |
+| `readTimingHeader` leaves `addon-cache` out               | failed: ops "reports where a conversation read spent its time"               |
 
 ## Not exercised
 

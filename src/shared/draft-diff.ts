@@ -16,32 +16,54 @@ const tokens = (text: string) => text.match(/[ \t\r\n]+|[^ \t\r\n]+/g) ?? [];
 const blank = (text: string) => /^[ \t\r\n]+$/.test(text);
 
 export function wordDiff(before: string, after: string, limit = DIFF_CELL_LIMIT): DiffPart[] {
-  const a = tokens(before), b = tokens(after);
+  const a = tokens(before),
+    b = tokens(after);
   let start = 0;
   while (start < a.length && start < b.length && a[start] === b[start]) start++;
-  let endA = a.length, endB = b.length;
-  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
-  const raw: DiffPart[] = a.slice(0, start).map(text => ({ kind: "same", text }));
-  const n = endA - start, m = endB - start;
+  let endA = a.length,
+    endB = b.length;
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--;
+    endB--;
+  }
+  const raw: DiffPart[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
+  const n = endA - start,
+    m = endB - start;
   if (n * m > limit) {
-    raw.push(...a.slice(start, endA).map(text => ({ kind: "removed" as const, text })), ...b.slice(start, endB).map(text => ({ kind: "added" as const, text })));
+    raw.push(
+      ...a.slice(start, endA).map((text) => ({ kind: "removed" as const, text })),
+      ...b.slice(start, endB).map((text) => ({ kind: "added" as const, text })),
+    );
   } else {
     // lengths[i * (m + 1) + j]: the longest common run of a[start + i..] and b[start + j..].
     const lengths = new Int32Array((n + 1) * (m + 1));
-    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
-      lengths[i * (m + 1) + j] = a[start + i] === b[start + j] ? lengths[(i + 1) * (m + 1) + j + 1] + 1
-        : Math.max(lengths[(i + 1) * (m + 1) + j], lengths[i * (m + 1) + j + 1]);
-    let i = 0, j = 0;
+    for (let i = n - 1; i >= 0; i--)
+      for (let j = m - 1; j >= 0; j--)
+        lengths[i * (m + 1) + j] =
+          a[start + i] === b[start + j]
+            ? lengths[(i + 1) * (m + 1) + j + 1] + 1
+            : Math.max(lengths[(i + 1) * (m + 1) + j], lengths[i * (m + 1) + j + 1]);
+    let i = 0,
+      j = 0;
     while (i < n && j < m) {
-      if (a[start + i] === b[start + j]) { raw.push({ kind: "same", text: a[start + i] }); i++; j++; }
+      if (a[start + i] === b[start + j]) {
+        raw.push({ kind: "same", text: a[start + i] });
+        i++;
+        j++;
+      }
       // On a tie, removal goes first.
-      else if (lengths[(i + 1) * (m + 1) + j] >= lengths[i * (m + 1) + j + 1]) { raw.push({ kind: "removed", text: a[start + i] }); i++; }
-      else { raw.push({ kind: "added", text: b[start + j] }); j++; }
+      else if (lengths[(i + 1) * (m + 1) + j] >= lengths[i * (m + 1) + j + 1]) {
+        raw.push({ kind: "removed", text: a[start + i] });
+        i++;
+      } else {
+        raw.push({ kind: "added", text: b[start + j] });
+        j++;
+      }
     }
     for (; i < n; i++) raw.push({ kind: "removed", text: a[start + i] });
     for (; j < m; j++) raw.push({ kind: "added", text: b[start + j] });
   }
-  raw.push(...a.slice(endA).map(text => ({ kind: "same" as const, text })));
+  raw.push(...a.slice(endA).map((text) => ({ kind: "same" as const, text })));
   return group(raw);
 }
 
@@ -54,17 +76,22 @@ function group(raw: DiffPart[]): DiffPart[] {
     else merged.push({ ...part });
   }
   const parts: DiffPart[] = [];
-  let removed = "", added = "";
+  let removed = "",
+    added = "";
   const flush = () => {
     if (removed) parts.push({ kind: "removed", text: removed });
     if (added) parts.push({ kind: "added", text: added });
     removed = added = "";
   };
   merged.forEach((part, index) => {
-    const between = part.kind === "same" && blank(part.text) && index > 0 && index < merged.length - 1;
+    const between =
+      part.kind === "same" && blank(part.text) && index > 0 && index < merged.length - 1;
     if (part.kind === "removed" || between) removed += part.text;
     if (part.kind === "added" || between) added += part.text;
-    if (part.kind === "same" && !between) { flush(); parts.push(part); }
+    if (part.kind === "same" && !between) {
+      flush();
+      parts.push(part);
+    }
   });
   flush();
   return parts;
@@ -74,14 +101,33 @@ function group(raw: DiffPart[]): DiffPart[] {
 export type AddressPart = { kind: DiffPart["kind"]; address: string };
 /** Recipient lists compare address by address: an address holds no spaces, so each is one token. */
 export function addressDiff(before: string[] = [], after: string[] = []): AddressPart[] {
-  return wordDiff(before.join(" "), after.join(" ")).flatMap(part => part.text.split(" ").filter(Boolean).map(address => ({ kind: part.kind, address })));
+  return wordDiff(before.join(" "), after.join(" ")).flatMap((part) =>
+    part.text
+      .split(" ")
+      .filter(Boolean)
+      .map((address) => ({ kind: part.kind, address })),
+  );
 }
-export type DraftChanges = { to: AddressPart[]; cc: AddressPart[]; subject: DiffPart[]; body: DiffPart[]; changed: boolean };
+export type DraftChanges = {
+  to: AddressPart[];
+  cc: AddressPart[];
+  subject: DiffPart[];
+  body: DiffPart[];
+  changed: boolean;
+};
 /** What changed from `previous` to `current`, field by field. */
 export function draftChanges(previous: EmailCard, current: EmailCard): DraftChanges {
-  const to = addressDiff(previous.to, current.to), cc = addressDiff(previous.cc, current.cc);
-  const subject = wordDiff(previous.subject ?? "", current.subject ?? ""), body = wordDiff(previous.body, current.body);
-  return { to, cc, subject, body, changed: [...to, ...cc, ...subject, ...body].some(part => part.kind !== "same") };
+  const to = addressDiff(previous.to, current.to),
+    cc = addressDiff(previous.cc, current.cc);
+  const subject = wordDiff(previous.subject ?? "", current.subject ?? ""),
+    body = wordDiff(previous.body, current.body);
+  return {
+    to,
+    cc,
+    subject,
+    body,
+    changed: [...to, ...cc, ...subject, ...body].some((part) => part.kind !== "same"),
+  };
 }
 
 /** Where an email card sits: the reply's message ID and the card's ID. */
@@ -93,24 +139,37 @@ export const draftKey = (messageId: string, cardId: string) => `${messageId}\n${
  */
 export function draftLineage(id: string): { draft: string; revises?: string } {
   const match = /^(.+?)__revises__(.+)$/.exec(id);
-  return match && match[1] !== match[2] ? { draft: match[1], revises: match[2] } : { draft: match ? match[1] : id };
+  return match && match[1] !== match[2]
+    ? { draft: match[1], revises: match[2] }
+    : { draft: match ? match[1] : id };
 }
 /**
  * The earlier draft each email card revises, by draftKey. Only explicit lineage counts: a card's id
  * names the draft it revises, and the latest earlier card of that draft wins. Subjects and recipients
  * are never matched. A card naming itself or a later card revises nothing.
  */
-export function draftRevisions(messages: { id: string; role: string; text: string }[]): Map<string, EmailCard> {
+export function draftRevisions(
+  messages: { id: string; role: string; text: string }[],
+): Map<string, EmailCard> {
   return continueDraftRevisions(startDraftRevisions(), messages).revisions;
 }
 /** draftRevisions part way through a conversation: the latest card of each draft, and the revisions so far. */
-export type DraftRevisionsState = { drafts: ReadonlyMap<string, EmailCard>; revisions: Map<string, EmailCard> };
-export const startDraftRevisions = (): DraftRevisionsState => ({ drafts: new Map(), revisions: new Map() });
+export type DraftRevisionsState = {
+  drafts: ReadonlyMap<string, EmailCard>;
+  revisions: Map<string, EmailCard>;
+};
+export const startDraftRevisions = (): DraftRevisionsState => ({
+  drafts: new Map(),
+  revisions: new Map(),
+});
 /**
  * Reads `messages` after `state`, which it leaves as it was. Messages without an email card return
  * `state` itself, so the map of revisions keeps its identity while only a reply without one grows.
  */
-export function continueDraftRevisions(state: DraftRevisionsState, messages: { id: string; role: string; text: string }[]): DraftRevisionsState {
+export function continueDraftRevisions(
+  state: DraftRevisionsState,
+  messages: { id: string; role: string; text: string }[],
+): DraftRevisionsState {
   let drafts: Map<string, EmailCard> | undefined, revisions: Map<string, EmailCard> | undefined;
   for (const message of messages) {
     if (message.role !== "assistant") continue;
@@ -118,7 +177,8 @@ export function continueDraftRevisions(state: DraftRevisionsState, messages: { i
       if (card.type !== "email") continue;
       const { draft, revises } = draftLineage(card.id);
       const previous = revises ? (drafts ?? state.drafts).get(revises) : undefined;
-      if (previous) (revisions ??= new Map(state.revisions)).set(draftKey(message.id, card.id), previous);
+      if (previous)
+        (revisions ??= new Map(state.revisions)).set(draftKey(message.id, card.id), previous);
       (drafts ??= new Map(state.drafts)).set(draft, card);
     }
   }

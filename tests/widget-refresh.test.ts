@@ -5,10 +5,27 @@ import { Store } from "../src/server/store.js";
 import { WIDGET_CHECK_MS, WIDGET_REFRESH_MS, WidgetRefresh } from "../src/server/widget-refresh.js";
 import { defaultPreferences, type ActivityState, type Bot } from "../src/shared/types.js";
 
-let clock: number, store: Store, bots: Bot[], woken: string[], failure: Error | undefined, widgets: WidgetRefresh;
-const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({ id, name: id, shared: true, model: "test", activity, ...extra });
-const set = (id: string, extra: Partial<Bot>) => { bots = bots.map(value => value.id === id ? { ...value, ...extra } : value); };
-const tick = async (ms = WIDGET_CHECK_MS) => { clock += ms; await widgets.tick(); };
+let clock: number,
+  store: Store,
+  bots: Bot[],
+  woken: string[],
+  failure: Error | undefined,
+  widgets: WidgetRefresh;
+const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({
+  id,
+  name: id,
+  shared: true,
+  model: "test",
+  activity,
+  ...extra,
+});
+const set = (id: string, extra: Partial<Bot>) => {
+  bots = bots.map((value) => (value.id === id ? { ...value, ...extra } : value));
+};
+const tick = async (ms = WIDGET_CHECK_MS) => {
+  clock += ms;
+  await widgets.tick();
+};
 
 beforeEach(() => {
   clock = Date.parse("2026-11-06T12:00:00Z");
@@ -19,13 +36,27 @@ beforeEach(() => {
     store.registerNativeDevice(id, id, `${id}-phone`, id.repeat(32).slice(0, 64), "sandbox");
   }
   bots = [bot("kitchen"), bot("garden")];
-  woken = []; failure = undefined;
+  woken = [];
+  failure = undefined;
   const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
-  config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" };
-  widgets = new WidgetRefresh(store, { listBots: async () => bots }, config, async (device: NativeDevice) => {
-    if (failure) throw failure;
-    woken.push(device.deviceId);
-  }, undefined, () => clock);
+  config.apns = {
+    teamId: "TEAM123456",
+    keyId: "KEY1234567",
+    topic: "test.agentinterface",
+    privateKeyFile: "unused",
+    environment: "sandbox",
+  };
+  widgets = new WidgetRefresh(
+    store,
+    { listBots: async () => bots },
+    config,
+    async (device: NativeDevice) => {
+      if (failure) throw failure;
+      woken.push(device.deviceId);
+    },
+    undefined,
+    () => clock,
+  );
 });
 
 describe("widget refresh pushes", () => {
@@ -39,7 +70,10 @@ describe("widget refresh pushes", () => {
     // A change inside the window waits for it to end, then goes out once.
     set("kitchen", { activity: "working" });
     await tick();
-    set("kitchen", { activity: "idle", lastMessage: { text: "Dinner is planned.", at: new Date(clock).toISOString() } });
+    set("kitchen", {
+      activity: "idle",
+      lastMessage: { text: "Dinner is planned.", at: new Date(clock).toISOString() },
+    });
     await tick(WIDGET_REFRESH_MS - 2 * WIDGET_CHECK_MS);
     expect(woken).toHaveLength(2);
     await tick();

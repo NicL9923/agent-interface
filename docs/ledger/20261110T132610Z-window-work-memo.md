@@ -68,26 +68,26 @@ without it.
 
 Delta commit duration, median of each run (p95 in brackets), in ms:
 
-| Window | CPU | Before (`f0ae0a5`) | After |
-| --- | --- | --- | --- |
-| 485 messages (241 rows shown) | 4x | 8.8, 9.6, 9.1 (12.1, 13.2, 11.6) | 3.7, 4.2, 4.5 (4.7, 5.9, 6.0) |
-| 485 messages | 1x | 2.2, 2.2, 2.2 (3.6, 3.6, 3.2) | 0.9, 0.7, 0.8 (1.4, 1.1, 1.5) |
-| 124 messages, first page (60 rows) | 4x | 4.8, 5.0, 4.6 (6.1, 6.5, 9.0) | 3.0, 2.7, 2.7 (4.7, 3.8, 3.7) |
+| Window                             | CPU | Before (`f0ae0a5`)               | After                         |
+| ---------------------------------- | --- | -------------------------------- | ----------------------------- |
+| 485 messages (241 rows shown)      | 4x  | 8.8, 9.6, 9.1 (12.1, 13.2, 11.6) | 3.7, 4.2, 4.5 (4.7, 5.9, 6.0) |
+| 485 messages                       | 1x  | 2.2, 2.2, 2.2 (3.6, 3.6, 3.2)    | 0.9, 0.7, 0.8 (1.4, 1.1, 1.5) |
+| 124 messages, first page (60 rows) | 4x  | 4.8, 5.0, 4.6 (6.1, 6.5, 9.0)    | 3.0, 2.7, 2.7 (4.7, 3.8, 3.7) |
 
 After moving onto `3f8235d`, two more runs of the 485-message, 4x case: 3.9 and 3.9.
 
 Per second while the reply streams, 485 messages (the counts do not depend on the throttle):
 
-| | Before | After |
-| --- | --- | --- |
-| `Conversation` body runs | 4.2 | 4.2 |
-| Messages read by `withMessageOrigins` | 5,820 | 12 |
-| Messages read by the turn grouping | 1,940 | 4 |
-| Messages read by `replyArtifacts` | 3,880 | 8 |
-| Messages read by `draftRevisions` | 1,940 | 4 |
-| `JSON.parse` calls (4 are the stream's own events) | 84 | 4 |
-| Email cards re-rendered | 80 | 0 |
-| Time in the derivations, ms (4x) | 8.0 to 8.7 | 1.2 to 1.5 |
+|                                                    | Before     | After      |
+| -------------------------------------------------- | ---------- | ---------- |
+| `Conversation` body runs                           | 4.2        | 4.2        |
+| Messages read by `withMessageOrigins`              | 5,820      | 12         |
+| Messages read by the turn grouping                 | 1,940      | 4          |
+| Messages read by `replyArtifacts`                  | 3,880      | 8          |
+| Messages read by `draftRevisions`                  | 1,940      | 4          |
+| `JSON.parse` calls (4 are the stream's own events) | 84         | 4          |
+| Email cards re-rendered                            | 80         | 0          |
+| Time in the derivations, ms (4x)                   | 8.0 to 8.7 | 1.2 to 1.5 |
 
 The reveal-pacing commits are unchanged (median 1.3 to 1.6 ms at 4x). The settled readings did not run
 again during any 5-second window. What is left of a delta commit is the live turn's own render and
@@ -97,7 +97,7 @@ React visiting each memoized turn.
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/transcript-window.test.ts tests/live-reply-ui.test.ts tests/reply-artifacts.test.ts
-  tests/draft-diff.test.ts tests/message-origin.test.ts tests/transcript-ui.test.ts`: 6 files, 199 tests passed.
+tests/draft-diff.test.ts tests/message-origin.test.ts tests/transcript-ui.test.ts`: 6 files, 199 tests passed.
 - `npm test`: 184 files, 3,060 tests passed.
 - `npm run build` passed, then `npm run test:e2e`: 20 Chromium tests passed. The first attempt found
   ports 4173 and 4174 held by another worktree's run, so it ran again once they were free.
@@ -120,15 +120,15 @@ New tests:
 
 Each line was broken by hand, its focused test file run, and the source restored.
 
-| Mutation | Test | Result |
-| --- | --- | --- |
-| Revisions read over the whole window each render (main's behavior) | live-reply-ui "reads the saved drafts once" | failed: 50 card parses |
-| Settled window compared by message ID, not object | live-reply-ui | 8 failed, including "marks a live draft…" and "drops a reply a read redacts…" |
-| Live rows read without the settled provenance | transcript-window "turns … at every split" | failed |
-| A live row with files continues instead of reading again | transcript-window "chips … at every split" | failed |
-| Turns continued from the shown turns, not the read ones | transcript-window, 2 tests | failed |
-| An untouched turn returned as read, not as shown | transcript-window "turns … at every split" | failed |
-| Revisions written into the settled map | transcript-window "keep their map…" | failed |
+| Mutation                                                           | Test                                        | Result                                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------- |
+| Revisions read over the whole window each render (main's behavior) | live-reply-ui "reads the saved drafts once" | failed: 50 card parses                                                        |
+| Settled window compared by message ID, not object                  | live-reply-ui                               | 8 failed, including "marks a live draft…" and "drops a reply a read redacts…" |
+| Live rows read without the settled provenance                      | transcript-window "turns … at every split"  | failed                                                                        |
+| A live row with files continues instead of reading again           | transcript-window "chips … at every split"  | failed                                                                        |
+| Turns continued from the shown turns, not the read ones            | transcript-window, 2 tests                  | failed                                                                        |
+| An untouched turn returned as read, not as shown                   | transcript-window "turns … at every split"  | failed                                                                        |
+| Revisions written into the settled map                             | transcript-window "keep their map…"         | failed                                                                        |
 
 ## Not run
 
@@ -147,4 +147,3 @@ byte-identical answer returns the cached objects. The comment in `src/app/transc
 say so. No behavior changed.
 
 It suggests a follow-up: `useRoutineRuns` and `latestMessageAt` still scan the loaded window on each delta.
-

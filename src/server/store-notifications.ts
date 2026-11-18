@@ -16,12 +16,17 @@ export type PushAction = { userId: string; botId: string; approvalId: string; de
 /** Whether a stored subscription carries exactly these keys, which only the browser that made it holds. */
 function sameKeys(stored: string, keys: { p256dh: string; auth: string }) {
   let held: { keys?: { p256dh?: unknown; auth?: unknown } };
-  try { held = JSON.parse(stored); } catch { return false; }
+  try {
+    held = JSON.parse(stored);
+  } catch {
+    return false;
+  }
   // Lengths are compared in bytes: timingSafeEqual throws on buffers of unequal byte length, and a
   // string of the same character count can differ in bytes when it holds a multibyte character.
   const same = (a: unknown, b: string) => {
     if (typeof a !== "string") return false;
-    const left = Buffer.from(a), right = Buffer.from(b);
+    const left = Buffer.from(a),
+      right = Buffer.from(b);
     return left.length === right.length && timingSafeEqual(left, right);
   };
   return same(held.keys?.p256dh, keys.p256dh) && same(held.keys?.auth, keys.auth);
@@ -62,24 +67,34 @@ export interface NotificationCollaborators {
 
 /** Who hears about each event, the push outbox and its subscriptions, and which chats people have seen. */
 export class NotificationRepository {
-  constructor(private readonly database: StoreDatabase, private readonly areas: NotificationCollaborators) {}
-  private get db() { return this.database.db; }
+  constructor(
+    private readonly database: StoreDatabase,
+    private readonly areas: NotificationCollaborators,
+  ) {}
+  private get db() {
+    return this.database.db;
+  }
   recipients(event: RuntimeEvent): string[] {
     const ids = new Set<string>();
     if (event.routineId)
-      for (const userId of this.areas.routines.getRoutineRecipients(event.botId, event.routineId)) ids.add(userId);
+      for (const userId of this.areas.routines.getRoutineRecipients(event.botId, event.routineId))
+        ids.add(userId);
     else if (event.runId)
       for (const userId of this.areas.submissions.participants(event.runId)) ids.add(userId);
     for (const user of this.areas.accounts.users())
       if (this.areas.personal.preferences(user.id).followBots.includes(event.botId))
         ids.add(user.id);
     // A private assistant's news goes only to its owner, whoever else followed or joined in.
-    return [...ids].filter(userId => this.areas.presentation.mayReceive(event, userId));
+    return [...ids].filter((userId) => this.areas.presentation.mayReceive(event, userId));
   }
   queueNotification(eventId: string, userId: string, payload: object) {
-    return this.db
-      .prepare("INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload,created_at) VALUES(?,?,?,?,?)")
-      .run(randomUUID(), eventId, userId, JSON.stringify(payload), Date.now()).changes > 0;
+    return (
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO outbox(id,event_id,user_id,payload,created_at) VALUES(?,?,?,?,?)",
+        )
+        .run(randomUUID(), eventId, userId, JSON.stringify(payload), Date.now()).changes > 0
+    );
   }
   /** Assistant display names for notification titles, refreshed by the background worker. */
   botNames = new Map<string, string>();
@@ -88,33 +103,59 @@ export class NotificationRepository {
     if (event.quiet) return;
     // The replay in enqueueKnownEvents offers every recent event again, and almost every row already
     // exists, so work out who has none before doing anything that costs more.
-    const queued = new Set((this.db.prepare("SELECT user_id FROM outbox WHERE event_id=?").all(event.id) as { user_id: string }[]).map(row => row.user_id));
-    const waiting = this.recipients(event).filter(userId => !queued.has(userId));
+    const queued = new Set(
+      (
+        this.db.prepare("SELECT user_id FROM outbox WHERE event_id=?").all(event.id) as {
+          user_id: string;
+        }[]
+      ).map((row) => row.user_id),
+    );
+    const waiting = this.recipients(event).filter((userId) => !queued.has(userId));
     if (!waiting.length) return;
     // A notification is plain text, so the reply's Markdown becomes its words.
-    const copy = notificationCopy({ ...event, body: event.body && markdownPlain(event.body) }, this.botNames.get(event.botId));
+    const copy = notificationCopy(
+      { ...event, body: event.body && markdownPlain(event.body) },
+      this.botNames.get(event.botId),
+    );
     for (const userId of waiting)
       this.queueNotification(event.id, userId, {
         title: copy.title,
         body: copy.body,
-        url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ''}`,
+        url: `/?bot=${encodeURIComponent(event.botId)}${event.routineId ? `&routine=${encodeURIComponent(event.routineId)}` : ""}`,
         tag: event.id,
         kind: event.kind,
         botId: event.botId,
         // Lets an iOS notification decide this approval. Without it the notification only opens the chat.
-        ...(event.kind === "approval" && typeof event.approvalId === "string" && event.approvalId ? { approvalId: event.approvalId } : {}),
+        ...(event.kind === "approval" && typeof event.approvalId === "string" && event.approvalId
+          ? { approvalId: event.approvalId }
+          : {}),
         queuedAt: Date.now(),
       });
   }
   /** Records what one client reports about one chat. Reading and leaving after reading both mark it read until now. */
-  chatPresence(userId: string, botId: string, clientId: string, state: ChatPresence, now = Date.now()) {
+  chatPresence(
+    userId: string,
+    botId: string,
+    clientId: string,
+    state: ChatPresence,
+    now = Date.now(),
+  ) {
     this.database.transaction(() => {
       if (state === "active")
-        this.db.prepare("INSERT INTO chat_presence VALUES(?,?,?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET bot_id=excluded.bot_id,updated_at=excluded.updated_at")
+        this.db
+          .prepare(
+            "INSERT INTO chat_presence VALUES(?,?,?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET bot_id=excluded.bot_id,updated_at=excluded.updated_at",
+          )
           .run(userId, clientId, botId, now);
-      else this.db.prepare("DELETE FROM chat_presence WHERE user_id=? AND client_id=? AND bot_id=?").run(userId, clientId, botId);
+      else
+        this.db
+          .prepare("DELETE FROM chat_presence WHERE user_id=? AND client_id=? AND bot_id=?")
+          .run(userId, clientId, botId);
       if (state !== "idle")
-        this.db.prepare("INSERT INTO chat_reads VALUES(?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET read_at=max(chat_reads.read_at,excluded.read_at),client_id=excluded.client_id")
+        this.db
+          .prepare(
+            "INSERT INTO chat_reads VALUES(?,?,?,?) ON CONFLICT(user_id,bot_id) DO UPDATE SET read_at=max(chat_reads.read_at,excluded.read_at),client_id=excluded.client_id",
+          )
           .run(userId, botId, now, clientId);
     });
   }
@@ -124,35 +165,78 @@ export class NotificationRepository {
    */
   issuePushAction(action: PushAction, now = Date.now()) {
     const token = randomBytes(32).toString("base64url");
-    this.db.prepare("INSERT INTO push_action_tokens(hash,user_id,bot_id,approval_id,decision,expires) VALUES(?,?,?,?,?,?)")
-      .run(tokenHash(token), action.userId, action.botId, action.approvalId, action.decision, now + pushActionTtl);
+    this.db
+      .prepare(
+        "INSERT INTO push_action_tokens(hash,user_id,bot_id,approval_id,decision,expires) VALUES(?,?,?,?,?,?)",
+      )
+      .run(
+        tokenHash(token),
+        action.userId,
+        action.botId,
+        action.approvalId,
+        action.decision,
+        now + pushActionTtl,
+      );
     return token;
   }
   /** The action a token grants, removed as it is read so nobody can use it twice. Expired tokens grant nothing. */
   consumePushAction(token: string, now = Date.now()): PushAction | undefined {
-    const row = this.db.prepare("DELETE FROM push_action_tokens WHERE hash=? RETURNING user_id AS userId,bot_id AS botId,approval_id AS approvalId,decision,expires")
+    const row = this.db
+      .prepare(
+        "DELETE FROM push_action_tokens WHERE hash=? RETURNING user_id AS userId,bot_id AS botId,approval_id AS approvalId,decision,expires",
+      )
       .get(tokenHash(token)) as (PushAction & { expires: number }) | undefined;
     if (!row || row.expires <= now) return undefined;
-    return { userId: row.userId, botId: row.botId, approvalId: row.approvalId, decision: row.decision };
+    return {
+      userId: row.userId,
+      botId: row.botId,
+      approvalId: row.approvalId,
+      decision: row.decision,
+    };
   }
   /** When this person last read each chat, in milliseconds, for the home list's unread marks. */
   chatReads(userId: string): Map<string, number> {
-    const rows = this.db.prepare("SELECT bot_id,read_at FROM chat_reads WHERE user_id=?").all(userId) as { bot_id: string; read_at: number }[];
-    return new Map(rows.map(row => [row.bot_id, row.read_at]));
+    const rows = this.db
+      .prepare("SELECT bot_id,read_at FROM chat_reads WHERE user_id=?")
+      .all(userId) as { bot_id: string; read_at: number }[];
+    return new Map(rows.map((row) => [row.bot_id, row.read_at]));
   }
   /**
    * Whether the recipient has a notification's chat open now, or read it after the event.
    * Security alerts and routine results are not part of a chat, so they never count as seen.
    */
   seenInChat(outboxId: string, now = Date.now()) {
-    const row = this.db.prepare("SELECT o.user_id,o.payload,o.created_at,e.value,e.created_at AS discovered FROM outbox o LEFT JOIN notification_events e ON e.id=o.event_id WHERE o.id=?")
-      .get(outboxId) as { user_id: string; payload: string; created_at: number; value: string | null; discovered: number | null } | undefined;
+    const row = this.db
+      .prepare(
+        "SELECT o.user_id,o.payload,o.created_at,e.value,e.created_at AS discovered FROM outbox o LEFT JOIN notification_events e ON e.id=o.event_id WHERE o.id=?",
+      )
+      .get(outboxId) as
+      | {
+          user_id: string;
+          payload: string;
+          created_at: number;
+          value: string | null;
+          discovered: number | null;
+        }
+      | undefined;
     if (!row) return false;
     const payload = JSON.parse(row.payload) as { botId?: string; kind?: string; url?: string };
-    if (!payload.botId || payload.kind === "security" || new URL(payload.url ?? "/", "http://app").searchParams.has("routine")) return false;
-    if (this.db.prepare("SELECT 1 FROM chat_presence WHERE user_id=? AND bot_id=? AND updated_at>?").get(row.user_id, payload.botId, now - presenceTtl)) return true;
-    const read = this.db.prepare("SELECT read_at FROM chat_reads WHERE user_id=? AND bot_id=?").get(row.user_id, payload.botId) as { read_at: number } | undefined;
-    const event = row.value ? JSON.parse(row.value) as RuntimeEvent : undefined;
+    if (
+      !payload.botId ||
+      payload.kind === "security" ||
+      new URL(payload.url ?? "/", "http://app").searchParams.has("routine")
+    )
+      return false;
+    if (
+      this.db
+        .prepare("SELECT 1 FROM chat_presence WHERE user_id=? AND bot_id=? AND updated_at>?")
+        .get(row.user_id, payload.botId, now - presenceTtl)
+    )
+      return true;
+    const read = this.db
+      .prepare("SELECT read_at FROM chat_reads WHERE user_id=? AND bot_id=?")
+      .get(row.user_id, payload.botId) as { read_at: number } | undefined;
+    const event = row.value ? (JSON.parse(row.value) as RuntimeEvent) : undefined;
     return !!read && read.read_at >= eventTime(event?.occurredAt, row.discovered ?? row.created_at);
   }
   /**
@@ -164,15 +248,21 @@ export class NotificationRepository {
    * meanwhile, so this keeps the app badge counting it.
    */
   pendingDecisions(userId: string, now = Date.now()): Set<string> {
-    const rows = this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}
+    const rows = this.db
+      .prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}
       AND EXISTS(SELECT 1 FROM outbox o WHERE o.event_id=asked.id AND o.user_id=?)`)
       .all(now - 86400000, userId) as { bot_id: string | null }[];
-    return new Set(rows.flatMap(row => row.bot_id ? [row.bot_id] : []));
+    return new Set(rows.flatMap((row) => (row.bot_id ? [row.bot_id] : [])));
   }
   /** Assistants with any unresolved approval from the last day. */
   unresolvedApprovalBots(now = Date.now()): string[] {
-    return (this.db.prepare(`SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}`)
-      .all(now - 86400000) as { bot_id: string | null }[]).flatMap(row => row.bot_id ? [row.bot_id] : []);
+    return (
+      this.db
+        .prepare(
+          `SELECT DISTINCT json_extract(asked.value,'$.botId') AS bot_id ${unresolvedApprovals}`,
+        )
+        .all(now - 86400000) as { bot_id: string | null }[]
+    ).flatMap((row) => (row.bot_id ? [row.bot_id] : []));
   }
   /**
    * Records as resolved the approvals of this assistant that Hermes's open requests no longer
@@ -182,17 +272,27 @@ export class NotificationRepository {
    * only approvals notified before `notifiedBefore` count, so one opened after the read was taken
    * is never mistaken for resolved.
    */
-  reconcileApprovals(botId: string, session: string | undefined, open: Iterable<string>, notifiedBefore: number, now = Date.now()) {
+  reconcileApprovals(
+    botId: string,
+    session: string | undefined,
+    open: Iterable<string>,
+    notifiedBefore: number,
+    now = Date.now(),
+  ) {
     if (!session) return 0;
     const still = new Set(open);
-    const notified = this.db.prepare(`SELECT DISTINCT json_extract(value,'$.approvalId') AS id FROM notification_events
+    const notified = this.db
+      .prepare(`SELECT DISTINCT json_extract(value,'$.approvalId') AS id FROM notification_events
       WHERE created_at>? AND created_at<? AND json_extract(value,'$.kind')='approval' AND json_extract(value,'$.botId')=?
       AND json_extract(value,'$.sessionId')=?`)
       .all(now - 86400000, notifiedBefore, botId, session) as { id: unknown }[];
-    const resolve = this.db.prepare("INSERT OR IGNORE INTO approval_resolutions(approval_id,bot_id,resolved_at) VALUES(?,?,?)");
+    const resolve = this.db.prepare(
+      "INSERT OR IGNORE INTO approval_resolutions(approval_id,bot_id,resolved_at) VALUES(?,?,?)",
+    );
     let resolved = 0;
     for (const { id } of notified)
-      if (typeof id === "string" && id && !still.has(id)) resolved += Number(resolve.run(id, botId, now).changes);
+      if (typeof id === "string" && id && !still.has(id))
+        resolved += Number(resolve.run(id, botId, now).changes);
     return resolved;
   }
   /**
@@ -202,11 +302,19 @@ export class NotificationRepository {
    */
   readOnDevices(now = Date.now()) {
     // A week covers what a lock screen plausibly still shows.
-    return (this.db.prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
+    return (
+      this.db
+        .prepare(`SELECT d.outbox_id,d.endpoint,o.user_id,json_extract(o.payload,'$.tag') AS tag,r.client_id AS reader FROM delivered d
       JOIN outbox o ON o.id=d.outbox_id JOIN chat_reads r ON r.user_id=o.user_id AND r.bot_id=json_extract(o.payload,'$.botId')
       WHERE (d.endpoint LIKE 'apns:%' OR d.endpoint LIKE 'skipped:apns:%') AND o.created_at>? AND NOT EXISTS(SELECT 1 FROM delivered c WHERE c.outbox_id=d.outbox_id AND c.endpoint='cleared:'||d.endpoint) ORDER BY o.created_at`)
-      .all(now - 7 * 86400000) as { outbox_id: string; endpoint: string; user_id: string; tag: string; reader: string }[])
-      .filter(row => this.seenInChat(row.outbox_id, now));
+        .all(now - 7 * 86400000) as {
+        outbox_id: string;
+        endpoint: string;
+        user_id: string;
+        tag: string;
+        reader: string;
+      }[]
+    ).filter((row) => this.seenInChat(row.outbox_id, now));
   }
   markCleared(id: string, endpoint: string) {
     this.markDelivered(id, clearedEndpoint(endpoint));
@@ -241,35 +349,46 @@ export class NotificationRepository {
   /** Names the installation behind this person's own subscription. Another person's endpoint is left alone. */
   attachSubscriptionDevice(userId: string, endpoint: string, deviceId: string | undefined) {
     if (!this.hasSubscription(userId, endpoint)) return;
-    if (deviceId) this.db.prepare("INSERT INTO push_subscription_devices VALUES(?,?) ON CONFLICT(endpoint) DO UPDATE SET device_id=excluded.device_id").run(endpoint, deviceId);
+    if (deviceId)
+      this.db
+        .prepare(
+          "INSERT INTO push_subscription_devices VALUES(?,?) ON CONFLICT(endpoint) DO UPDATE SET device_id=excluded.device_id",
+        )
+        .run(endpoint, deviceId);
     else this.db.prepare("DELETE FROM push_subscription_devices WHERE endpoint=?").run(endpoint);
   }
   /** The installation behind each of this person's subscriptions, by endpoint, for those that named one. */
   subscriptionDevices(userId: string): Map<string, string> {
-    const rows = this.db.prepare("SELECT d.endpoint,d.device_id FROM push_subscription_devices d JOIN subscriptions s ON s.endpoint=d.endpoint WHERE s.user_id=?")
+    const rows = this.db
+      .prepare(
+        "SELECT d.endpoint,d.device_id FROM push_subscription_devices d JOIN subscriptions s ON s.endpoint=d.endpoint WHERE s.user_id=?",
+      )
       .all(userId) as { endpoint: string; device_id: string }[];
-    return new Map(rows.map(row => [row.endpoint, row.device_id]));
+    return new Map(rows.map((row) => [row.endpoint, row.device_id]));
   }
   // END device activity
   unsubscribe(userId: string, endpoint: string) {
-    const removed = this.db.prepare("DELETE FROM subscriptions WHERE user_id=? AND endpoint=?").run(userId, endpoint).changes;
-    if (removed) this.db.prepare("DELETE FROM push_subscription_devices WHERE endpoint=?").run(endpoint);
+    const removed = this.db
+      .prepare("DELETE FROM subscriptions WHERE user_id=? AND endpoint=?")
+      .run(userId, endpoint).changes;
+    if (removed)
+      this.db.prepare("DELETE FROM push_subscription_devices WHERE endpoint=?").run(endpoint);
   }
   hasSubscription(userId: string, endpoint: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM subscriptions WHERE user_id=? AND endpoint=?").get(userId, endpoint);
+    return !!this.db
+      .prepare("SELECT 1 FROM subscriptions WHERE user_id=? AND endpoint=?")
+      .get(userId, endpoint);
   }
   subscriptions(userId: string) {
     return (
-      this.db
-        .prepare("SELECT value FROM subscriptions WHERE user_id=?")
-        .all(userId) as { value: string }[]
+      this.db.prepare("SELECT value FROM subscriptions WHERE user_id=?").all(userId) as {
+        value: string;
+      }[]
     ).map((r) => JSON.parse(r.value));
   }
   outbox() {
     return this.db
-      .prepare(
-        "SELECT * FROM outbox WHERE state='pending' AND next_attempt<=? ORDER BY rowid",
-      )
+      .prepare("SELECT * FROM outbox WHERE state='pending' AND next_attempt<=? ORDER BY rowid")
       .all(Date.now()) as unknown as {
       id: string;
       user_id: string;
@@ -279,34 +398,74 @@ export class NotificationRepository {
   }
   deliveryGroups(now = Date.now()) {
     const ready = this.outbox();
-    const groups: {id: string; user_id: string; payload: string; items: typeof ready}[] = [];
+    const groups: { id: string; user_id: string; payload: string; items: typeof ready }[] = [];
     const seen = new Set<string>();
     for (const item of ready) {
       if (seen.has(item.id)) continue;
-      const existing = this.db.prepare("SELECT b.* FROM notification_batches b JOIN notification_batch_items i ON i.batch_id=b.id WHERE i.outbox_id=?").get(item.id) as {id: string;user_id: string;payload: string} | undefined;
+      const existing = this.db
+        .prepare(
+          "SELECT b.* FROM notification_batches b JOIN notification_batch_items i ON i.batch_id=b.id WHERE i.outbox_id=?",
+        )
+        .get(item.id) as { id: string; user_id: string; payload: string } | undefined;
       if (existing) {
-        const members = this.db.prepare("SELECT o.id FROM outbox o JOIN notification_batch_items i ON i.outbox_id=o.id WHERE i.batch_id=? AND o.state='pending'").all(existing.id) as {id: string}[];
-        const ids = new Set(members.map(row => row.id));
+        const members = this.db
+          .prepare(
+            "SELECT o.id FROM outbox o JOIN notification_batch_items i ON i.outbox_id=o.id WHERE i.batch_id=? AND o.state='pending'",
+          )
+          .all(existing.id) as { id: string }[];
+        const ids = new Set(members.map((row) => row.id));
         // A failed constituent's retry deadline applies to the entire frozen digest.
-        const items = ready.filter(row => ids.has(row.id));
-        items.forEach(row => seen.add(row.id));
-        if (items.length === ids.size) groups.push({...existing,items});
+        const items = ready.filter((row) => ids.has(row.id));
+        items.forEach((row) => seen.add(row.id));
+        if (items.length === ids.size) groups.push({ ...existing, items });
         continue;
       }
       const prefs = this.areas.personal.preferences(item.user_id).notifications;
       const payload = JSON.parse(item.payload);
-      const created = this.db.prepare("SELECT created_at FROM notification_events WHERE id=(SELECT event_id FROM outbox WHERE id=?)").get(item.id) as {created_at:number} | undefined;
+      const created = this.db
+        .prepare(
+          "SELECT created_at FROM notification_events WHERE id=(SELECT event_id FROM outbox WHERE id=?)",
+        )
+        .get(item.id) as { created_at: number } | undefined;
       const minutes = prefs?.batchMinutes ?? 0;
-      if (!minutes || !payload.kind || this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(item.id) || payload.kind === 'approval' || payload.kind === 'failed' || payload.kind === 'security') { groups.push({...item,items:[item]}); seen.add(item.id); continue; }
+      if (
+        !minutes ||
+        !payload.kind ||
+        this.db.prepare("SELECT 1 FROM delivered WHERE outbox_id=?").get(item.id) ||
+        payload.kind === "approval" ||
+        payload.kind === "failed" ||
+        payload.kind === "security"
+      ) {
+        groups.push({ ...item, items: [item] });
+        seen.add(item.id);
+        continue;
+      }
       if (now < (payload.queuedAt ?? created?.created_at ?? 0) + minutes * 60000) continue;
-      const items = ready.filter(row => row.user_id === item.user_id && !seen.has(row.id) && !this.db.prepare("SELECT 1 FROM notification_batch_items WHERE outbox_id=?").get(row.id) && !this.db.prepare('SELECT 1 FROM delivered WHERE outbox_id=?').get(row.id) && ['completed','activity','interrupted'].includes(JSON.parse(row.payload).kind));
+      const items = ready.filter(
+        (row) =>
+          row.user_id === item.user_id &&
+          !seen.has(row.id) &&
+          !this.db
+            .prepare("SELECT 1 FROM notification_batch_items WHERE outbox_id=?")
+            .get(row.id) &&
+          !this.db.prepare("SELECT 1 FROM delivered WHERE outbox_id=?").get(row.id) &&
+          ["completed", "activity", "interrupted"].includes(JSON.parse(row.payload).kind),
+      );
       const batchId = randomUUID();
-      const digest = JSON.stringify({...digestCopy(items.map(row=>JSON.parse(row.payload))),url:'/?view=today',tag:batchId});
-      this.database.transaction(() => {
-        this.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run(batchId,item.user_id,digest);
-        for (const row of items) this.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(row.id,batchId);
+      const digest = JSON.stringify({
+        ...digestCopy(items.map((row) => JSON.parse(row.payload))),
+        url: "/?view=today",
+        tag: batchId,
       });
-      items.forEach(row=>seen.add(row.id)); groups.push({id:batchId,user_id:item.user_id,payload:digest,items});
+      this.database.transaction(() => {
+        this.db
+          .prepare("INSERT INTO notification_batches VALUES(?,?,?)")
+          .run(batchId, item.user_id, digest);
+        for (const row of items)
+          this.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(row.id, batchId);
+      });
+      items.forEach((row) => seen.add(row.id));
+      groups.push({ id: batchId, user_id: item.user_id, payload: digest, items });
     }
     return groups;
   }
@@ -316,9 +475,7 @@ export class NotificationRepository {
       .get(id, endpoint);
   }
   markDelivered(id: string, endpoint: string) {
-    this.db
-      .prepare("INSERT OR IGNORE INTO delivered VALUES(?,?)")
-      .run(id, endpoint);
+    this.db.prepare("INSERT OR IGNORE INTO delivered VALUES(?,?)").run(id, endpoint);
   }
   finishDelivery(id: string, state: "delivered" | "suppressed" = "delivered") {
     this.db.prepare("UPDATE outbox SET state=? WHERE id=?").run(state, id);
@@ -340,8 +497,12 @@ export class NotificationRepository {
   expireNotifications(now = Date.now()) {
     // Matches the Web Push TTL: push services drop older messages anyway. Rows queued by an
     // older release have created_at 0 and no reliable age.
-    return Number(this.db
-      .prepare("UPDATE outbox SET state='expired' WHERE state='pending' AND created_at>0 AND created_at<?")
-      .run(now - 86400000).changes);
+    return Number(
+      this.db
+        .prepare(
+          "UPDATE outbox SET state='expired' WHERE state='pending' AND created_at>0 AND created_at<?",
+        )
+        .run(now - 86400000).changes,
+    );
   }
 }

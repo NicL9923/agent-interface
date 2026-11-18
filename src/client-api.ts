@@ -1,8 +1,22 @@
-import { routeParts, routeUrl, type ApiBody, type ApiParams, type ApiQuery, type ApiResponse, type ApiRoute } from "./shared/api";
+import {
+  routeParts,
+  routeUrl,
+  type ApiBody,
+  type ApiParams,
+  type ApiQuery,
+  type ApiResponse,
+  type ApiRoute,
+} from "./shared/api";
 import type { ErrorCode } from "./shared/errors";
 import type { Inflight, InflightDelta } from "./shared/types";
 import { dropStartupRead, takeStartupRead } from "./startup-read";
-import { AccountChanged, accountMark, accountStill, onAccountEnd, type AccountMark } from "./app/account-epoch";
+import {
+  AccountChanged,
+  accountMark,
+  accountStill,
+  onAccountEnd,
+  type AccountMark,
+} from "./app/account-epoch";
 export { AccountChanged };
 let csrf = "";
 export function setCsrf(value: string) {
@@ -17,8 +31,11 @@ export function hasSession() {
 // order, and the server saw the most when the latest-started one left.
 type Cached = { etag: string | null; text: string; data: unknown; started: number };
 const responses = new Map<string, Cached>();
-const MAX_RESPONSES = 64, MAX_CACHED_CHARS = 4_000_000;
-let cachedChars = 0, generation = 0, reads = 0;
+const MAX_RESPONSES = 64,
+  MAX_CACHED_CHARS = 4_000_000;
+let cachedChars = 0,
+  generation = 0,
+  reads = 0;
 /** The last body read for a GET path, to show while it is fetched again. */
 export function cachedResponse<T>(path: string) {
   return responses.get(path)?.data as T | undefined;
@@ -98,15 +115,17 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
   const get = !init.method || init.method === "GET";
   const timer = setTimeout(() => controller.abort(), get ? 20_000 : 60_000);
   const cached = get ? responses.get(path) : undefined;
-  const scope = generation, started = ++reads;
+  const scope = generation,
+    started = ++reads;
   if (cached?.etag) headers.set("If-None-Match", cached.etag);
-  const request = () => fetch(`/api${path}`, {
-    ...init,
-    headers,
-    signal: controller.signal,
-    credentials: "same-origin",
-    cache: "no-store",
-  });
+  const request = () =>
+    fetch(`/api${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+      credentials: "same-origin",
+      cache: "no-store",
+    });
   let early: ReturnType<typeof takeStartupRead>;
   try {
     // The page's first bootstrap may already be on its way, started by boot.js before this code loaded.
@@ -120,20 +139,33 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
       // Only a request carrying our validator can be answered from memory.
       headers.delete("If-None-Match");
       response = await request();
-      if (response.status === 304) throw new ApiError("The app returned an unreadable response. Check the connection before trying again.", 502, "INVALID_RESPONSE");
+      if (response.status === 304)
+        throw new ApiError(
+          "The app returned an unreadable response. Check the connection before trying again.",
+          502,
+          "INVALID_RESPONSE",
+        );
     }
     const body = await response.text();
     if (get && response.ok && cached?.text === body) {
-      if (scope === generation) remember(path, { ...cached, etag: response.headers.get("ETag"), started });
+      if (scope === generation)
+        remember(path, { ...cached, etag: response.headers.get("ETag"), started });
       return cached.data as T;
     }
     let data: Record<string, any> = {};
-    try { data = body ? JSON.parse(body) : {}; }
-    catch {
-      if (response.ok) throw new ApiError("The app returned an unreadable response. Check the connection before trying again.", 502, "INVALID_RESPONSE");
+    try {
+      data = body ? JSON.parse(body) : {};
+    } catch {
+      if (response.ok)
+        throw new ApiError(
+          "The app returned an unreadable response. Check the connection before trying again.",
+          502,
+          "INVALID_RESPONSE",
+        );
     }
     // An assistant turned private while this read ran; the server dropped it, so read again.
-    if (get && response.status === 503 && data?.code === "assistants_changed" && !retried) return api<T>(path, init, true);
+    if (get && response.status === 503 && data?.code === "assistants_changed" && !retried)
+      return api<T>(path, init, true);
     if (!response.ok)
       throw new ApiError(
         data?.detail || data?.error || `Request failed (${response.status})`,
@@ -142,15 +174,21 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
         data?.confirmRequired,
         data,
       );
-    if (get && scope === generation) remember(path, { etag: response.headers.get("ETag"), text: body, data, started });
+    if (get && scope === generation)
+      remember(path, { etag: response.headers.get("ETag"), text: body, data, started });
     return data as T;
   } catch (error) {
     if (error instanceof ApiError || init.signal?.aborted) throw error;
     // Only a write has a draft and a sent message to reassure about; a slow read just needs another try.
-    throw new ApiError(controller.signal.aborted
-      ? get ? "The app took too long to respond. Try again in a moment." : "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
-      : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
-    controller.signal.aborted ? 504 : 503, "CONNECTION_UNAVAILABLE");
+    throw new ApiError(
+      controller.signal.aborted
+        ? get
+          ? "The app took too long to respond. Try again in a moment."
+          : "The app took too long to respond. Your draft is kept; sent messages will be checked before retrying."
+        : "Can't reach the app. Your draft is kept. We'll reconnect automatically.",
+      controller.signal.aborted ? 504 : 503,
+      "CONNECTION_UNAVAILABLE",
+    );
   } finally {
     early?.release();
     clearTimeout(timer);
@@ -160,22 +198,40 @@ async function send<T>(path: string, init: RequestInit, retried: boolean): Promi
 export function write<T>(path: string, value: unknown, method = "POST", init?: RequestInit) {
   return api<T>(path, { ...init, method, body: JSON.stringify(value) });
 }
-type Fields<K extends ApiRoute> =
-  & (keyof ApiParams<K> extends never ? { params?: undefined } : { params: ApiParams<K> })
-  & (ApiBody<K> extends undefined ? { body?: undefined } : { body: ApiBody<K> })
-  & (ApiQuery<K> extends undefined ? { query?: undefined } : {} extends ApiQuery<K> ? { query?: ApiQuery<K> } : { query: ApiQuery<K> });
-export type RequestOptions<K extends ApiRoute> = Fields<K> & { signal?: AbortSignal; keepalive?: boolean };
+type Fields<K extends ApiRoute> = (keyof ApiParams<K> extends never
+  ? { params?: undefined }
+  : { params: ApiParams<K> }) &
+  (ApiBody<K> extends undefined ? { body?: undefined } : { body: ApiBody<K> }) &
+  (ApiQuery<K> extends undefined
+    ? { query?: undefined }
+    : {} extends ApiQuery<K>
+      ? { query?: ApiQuery<K> }
+      : { query: ApiQuery<K> });
+export type RequestOptions<K extends ApiRoute> = Fields<K> & {
+  signal?: AbortSignal;
+  keepalive?: boolean;
+};
 /**
  * Calls a route from the shared map, typed by its method and path: `request("GET /bots/:id/draft",
  * { params: { id } })` answers a SavedDraft or null. It reads and caches like api().
  */
-export function request<K extends ApiRoute>(route: K, ...[options]: {} extends RequestOptions<K> ? [RequestOptions<K>?] : [RequestOptions<K>]) {
-  const { params, body, query, signal, keepalive } = (options ?? {}) as { params?: ApiParams<K>; body?: unknown; query?: ApiQuery<K>; signal?: AbortSignal; keepalive?: boolean };
+export function request<K extends ApiRoute>(
+  route: K,
+  ...[options]: {} extends RequestOptions<K> ? [RequestOptions<K>?] : [RequestOptions<K>]
+) {
+  const { params, body, query, signal, keepalive } = (options ?? {}) as {
+    params?: ApiParams<K>;
+    body?: unknown;
+    query?: ApiQuery<K>;
+    signal?: AbortSignal;
+    keepalive?: boolean;
+  };
   const { method } = routeParts(route);
   return api<ApiResponse<K>>(routeUrl(route, params ?? ({} as ApiParams<K>), query), {
     ...(method === "GET" ? {} : { method }),
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    signal, keepalive,
+    signal,
+    keepalive,
   });
 }
 /**
@@ -184,7 +240,9 @@ export function request<K extends ApiRoute>(route: K, ...[options]: {} extends R
  */
 export function pollWhileVisible(refresh: () => void, intervalMs: number) {
   let timer: ReturnType<typeof setInterval> | undefined;
-  const start = () => { timer ??= setInterval(refresh, intervalMs); };
+  const start = () => {
+    timer ??= setInterval(refresh, intervalMs);
+  };
   const changed = () => {
     if (document.visibilityState === "hidden") {
       clearInterval(timer);
@@ -225,7 +283,7 @@ export const MAX_RETRY_MS = 5 * 60_000;
  */
 export function retryDelay(failures: number, random: () => number) {
   const ceiling = Math.min(RETRY_BASE_MS * 2 ** (failures - 1), MAX_RETRY_MS);
-  return ceiling / 2 + ceiling / 2 * random();
+  return ceiling / 2 + (ceiling / 2) * random();
 }
 /**
  * The least time between two forced attempts in one outage. A signal that the failures are stale, the
@@ -279,8 +337,14 @@ export type StreamOptions = {
  * far later than it was set for, as on waking from sleep, restarts the deadline once instead of
  * replacing the stream. A hidden page's watchdog replaces nothing; its owners suspend the stream anyway.
  */
-export function changeStream(path: string, onChange: () => void, onInflight?: (value: Inflight) => void, named: Record<string, (data: string) => void> = {},
-  onInflightDelta?: (value: InflightDelta) => boolean, options: StreamOptions = {}) {
+export function changeStream(
+  path: string,
+  onChange: () => void,
+  onInflight?: (value: Inflight) => void,
+  named: Record<string, (data: string) => void> = {},
+  onInflightDelta?: (value: InflightDelta) => boolean,
+  options: StreamOptions = {},
+) {
   const random = options.random ?? Math.random;
   let health: boolean | undefined;
   const report = (up: boolean | undefined) => {
@@ -291,16 +355,21 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   let source: EventSource | undefined;
   // When this connection opened (was created, until its headers arrive), the moment its silence counts
   // from, and the interval its pings name.
-  let openedAt = 0, since = 0, pingMs = DEFAULT_PING_MS;
+  let openedAt = 0,
+    since = 0,
+    pingMs = DEFAULT_PING_MS;
   // Whether this connection has proved itself, and whether its watchdog already forgave one late timer.
-  let recovered = false, graced = false;
-  let failures = 0, retryAt = 0;
+  let recovered = false,
+    graced = false;
+  let failures = 0,
+    retryAt = 0;
   // The earliest moment another forced attempt may start in this outage; 0 until the first one.
   let forcedNext = 0;
   // Whether a revival signal arrived while the stream was paused, to be answered when it opens again.
   let revived = false;
   // One timer per stream: the watchdog while a stream is open, the retry while none is.
-  let timer: ReturnType<typeof setTimeout> | undefined, due = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined,
+    due = 0;
   const deadline = () => since + streamSilence(pingMs);
   const arm = (at: number, run: () => void) => {
     clearTimeout(timer);
@@ -327,7 +396,10 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   const check = () => {
     timer = undefined;
     if (!source) return;
-    if (document.visibilityState === "hidden") { arm(Date.now() + streamSilence(pingMs), check); return; }
+    if (document.visibilityState === "hidden") {
+      arm(Date.now() + streamSilence(pingMs), check);
+      return;
+    }
     if (!graced && Date.now() - due > LATE_TIMER_MS) {
       graced = true;
       since = Date.now();
@@ -375,14 +447,20 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
    */
   const open = () => {
     if (typeof EventSource === "undefined" || source || timer) return;
-    if (revived) { reconnect(); return; }
-    if (Date.now() >= retryAt) { connect(); return; }
+    if (revived) {
+      reconnect();
+      return;
+    }
+    if (Date.now() >= retryAt) {
+      connect();
+      return;
+    }
     // Resumed mid-outage: down while it waits, as it would be had it connected and failed again.
     arm(retryAt, connect);
     report(false);
   };
   const force = () => {
-    forcedNext = Date.now() + FORCED_GAP_MS / 2 + FORCED_GAP_MS / 2 * random();
+    forcedNext = Date.now() + FORCED_GAP_MS / 2 + (FORCED_GAP_MS / 2) * random();
     connect();
   };
   const reconnect = () => {
@@ -404,7 +482,10 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     }
     // Later in the same outage: once the gap has passed it connects at once, and before then an attempt
     // set at least as soon answers it. A suspension cleared the retry's timer, so it is set again first.
-    if (Date.now() >= forcedNext) { force(); return; }
+    if (Date.now() >= forcedNext) {
+      force();
+      return;
+    }
     open();
     if (!source && due > forcedNext) arm(forcedNext, force);
   };
@@ -412,8 +493,12 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
     clearTimeout(timer);
     timer = undefined;
     let mark: AccountMark;
-    try { mark = accountMark(); } catch { return; }
-    const current = source = new EventSource(`/api${withPing(path)}`);
+    try {
+      mark = accountMark();
+    } catch {
+      return;
+    }
+    const current = (source = new EventSource(`/api${withPing(path)}`));
     openedAt = since = Date.now();
     // Learned again from this connection's first ping, which a `?ping=10` server sends at once.
     pingMs = DEFAULT_PING_MS;
@@ -429,7 +514,9 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       return false;
     };
     const on = (name: string, handle: (data: string) => void) =>
-      current.addEventListener(name, event => { if (speaks()) handle((event as MessageEvent).data); });
+      current.addEventListener(name, (event) => {
+        if (speaks()) handle((event as MessageEvent).data);
+      });
     current.onopen = () => {
       if (!speaks()) return;
       // A connection that took long to open has not proved itself by the time its greeting arrives.
@@ -437,28 +524,50 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
       onChange();
     };
     // A refusal, which EventSource never retries, or a drop, which it would retry on the server's 3 seconds.
-    current.onerror = () => { if (current === source) fail(); };
-    if (onInflight) on("inflight", data => {
-      alive();
-      try { onInflight(JSON.parse(data) as Inflight); } catch { onChange(); }
-    });
+    current.onerror = () => {
+      if (current === source) fail();
+    };
+    if (onInflight)
+      on("inflight", (data) => {
+        alive();
+        try {
+          onInflight(JSON.parse(data) as Inflight);
+        } catch {
+          onChange();
+        }
+      });
     // A growth notice the caller cannot apply means this stream and the caller disagree about the
     // live reply. Reload, and reconnect so the server starts again from a whole `inflight` event.
-    if (onInflightDelta) on("inflight-delta", data => {
+    if (onInflightDelta)
+      on("inflight-delta", (data) => {
+        alive();
+        let applied = false;
+        try {
+          applied = onInflightDelta(JSON.parse(data) as InflightDelta);
+        } catch {
+          /* Reloads below. */
+        }
+        if (applied) return;
+        onChange();
+        drop();
+        open();
+      });
+    on("roster", () => {
       alive();
-      let applied = false;
-      try { applied = onInflightDelta(JSON.parse(data) as InflightDelta); } catch { /* Reloads below. */ }
-      if (applied) return;
       onChange();
-      drop();
-      open();
     });
-    on("roster", () => { alive(); onChange(); });
-    for (const [name, handle] of Object.entries(named)) on(name, data => { alive(); handle(data); });
+    for (const [name, handle] of Object.entries(named))
+      on(name, (data) => {
+        alive();
+        handle(data);
+      });
     // A ping names its interval in seconds; an older server's says `ping` and keeps the default.
-    on("ping", data => {
+    on("ping", (data) => {
       const seconds = Number(data);
-      pingMs = Number.isFinite(seconds) && seconds >= 1 && seconds <= 60 ? seconds * 1000 : DEFAULT_PING_MS;
+      pingMs =
+        Number.isFinite(seconds) && seconds >= 1 && seconds <= 60
+          ? seconds * 1000
+          : DEFAULT_PING_MS;
       alive();
     });
     on("message", () => {
@@ -469,7 +578,11 @@ export function changeStream(path: string, onChange: () => void, onInflight?: (v
   return { open, suspend, close, reconnect };
 }
 // Fetch cannot report request progress, so attachments use XHR. A stall, not a slow link, times out.
-export function uploadFile<T>(path: string, file: File, { onProgress, signal }: { onProgress?: (sent: number) => void; signal?: AbortSignal } = {}) {
+export function uploadFile<T>(
+  path: string,
+  file: File,
+  { onProgress, signal }: { onProgress?: (sent: number) => void; signal?: AbortSignal } = {},
+) {
   return new Promise<T>((resolve, reject) => {
     const mark = accountMark();
     const request = new XMLHttpRequest();
@@ -477,7 +590,10 @@ export function uploadFile<T>(path: string, file: File, { onProgress, signal }: 
     let stalled = false;
     const watch = () => {
       clearTimeout(timer);
-      timer = setTimeout(() => { stalled = true; request.abort(); }, 60_000);
+      timer = setTimeout(() => {
+        stalled = true;
+        request.abort();
+      }, 60_000);
     };
     const finish = (settle: () => void) => {
       clearTimeout(timer);
@@ -487,22 +603,59 @@ export function uploadFile<T>(path: string, file: File, { onProgress, signal }: 
     const cancel = () => request.abort();
     request.open("POST", `/api${path}`);
     request.setRequestHeader("X-CSRF-Token", csrf);
-    request.upload.onprogress = event => { watch(); if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
-    request.onload = () => finish(() => {
-      // A file uploaded for an account this browser no longer acts for joins no draft.
-      if (!accountStill(mark)) return reject(new AccountChanged());
-      let data: Record<string, any> = {};
-      try { data = request.responseText ? JSON.parse(request.responseText) : {}; }
-      catch {
-        if (request.status < 300) return reject(new ApiError("The app returned an unreadable response. Try attaching the file again.", 502, "INVALID_RESPONSE"));
-      }
-      if (request.status >= 200 && request.status < 300) resolve(data as T);
-      else reject(new ApiError(data?.detail || data?.error || `Upload failed (${request.status})`, request.status, data?.code));
-    });
-    request.onerror = () => finish(() => reject(new ApiError("Can't reach the app. Check the connection and try again.", 503, "CONNECTION_UNAVAILABLE")));
-    request.onabort = () => finish(() => reject(stalled
-      ? new ApiError("The upload stopped making progress. Try again.", 504, "CONNECTION_UNAVAILABLE")
-      : new DOMException("Upload canceled", "AbortError")));
+    request.upload.onprogress = (event) => {
+      watch();
+      if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+    };
+    request.onload = () =>
+      finish(() => {
+        // A file uploaded for an account this browser no longer acts for joins no draft.
+        if (!accountStill(mark)) return reject(new AccountChanged());
+        let data: Record<string, any> = {};
+        try {
+          data = request.responseText ? JSON.parse(request.responseText) : {};
+        } catch {
+          if (request.status < 300)
+            return reject(
+              new ApiError(
+                "The app returned an unreadable response. Try attaching the file again.",
+                502,
+                "INVALID_RESPONSE",
+              ),
+            );
+        }
+        if (request.status >= 200 && request.status < 300) resolve(data as T);
+        else
+          reject(
+            new ApiError(
+              data?.detail || data?.error || `Upload failed (${request.status})`,
+              request.status,
+              data?.code,
+            ),
+          );
+      });
+    request.onerror = () =>
+      finish(() =>
+        reject(
+          new ApiError(
+            "Can't reach the app. Check the connection and try again.",
+            503,
+            "CONNECTION_UNAVAILABLE",
+          ),
+        ),
+      );
+    request.onabort = () =>
+      finish(() =>
+        reject(
+          stalled
+            ? new ApiError(
+                "The upload stopped making progress. Try again.",
+                504,
+                "CONNECTION_UNAVAILABLE",
+              )
+            : new DOMException("Upload canceled", "AbortError"),
+        ),
+      );
     if (signal?.aborted) return reject(new DOMException("Upload canceled", "AbortError"));
     signal?.addEventListener("abort", cancel, { once: true });
     const form = new FormData();

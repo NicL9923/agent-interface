@@ -5,27 +5,79 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ApnsError, createApnsSender } from "../src/server/apns.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { ARMED_MS, FINISHED_MS, LiveActivities, type LiveState } from "../src/server/live-activity.js";
+import {
+  ARMED_MS,
+  FINISHED_MS,
+  LiveActivities,
+  type LiveState,
+} from "../src/server/live-activity.js";
 import { Store } from "../src/server/store.js";
-import { defaultPreferences, type ActivityState, type Bot, type Conversation } from "../src/shared/types.js";
+import {
+  defaultPreferences,
+  type ActivityState,
+  type Bot,
+  type Conversation,
+} from "../src/shared/types.js";
 
-const apns = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" });
-type Push = { token: string; payload: { aps: { event: string; timestamp: number; "content-state": LiveState; "stale-date"?: number; "dismissal-date"?: number;
-  "attributes-type"?: string; attributes?: { scope: string }; alert?: { title: string; body: string }; "input-push-token"?: number } }; priority: number };
+const apns = (): NonNullable<Config["apns"]> => ({
+  teamId: "TEAM123456",
+  keyId: "KEY1234567",
+  topic: "test.agentinterface",
+  privateKeyFile: "unused",
+  environment: "sandbox",
+});
+type Push = {
+  token: string;
+  payload: {
+    aps: {
+      event: string;
+      timestamp: number;
+      "content-state": LiveState;
+      "stale-date"?: number;
+      "dismissal-date"?: number;
+      "attributes-type"?: string;
+      attributes?: { scope: string };
+      alert?: { title: string; body: string };
+      "input-push-token"?: number;
+    };
+  };
+  priority: number;
+};
 
 let clock: number, store: Store, pushes: Push[], failure: Error | undefined;
-let bots: Bot[], conversations: Record<string, Partial<Conversation["activity"]>>, approvals: Record<string, Conversation["approvals"]>, live: LiveActivities;
+let bots: Bot[],
+  conversations: Record<string, Partial<Conversation["activity"]>>,
+  approvals: Record<string, Conversation["approvals"]>,
+  live: LiveActivities;
 let duringSend: (() => void) | undefined;
-const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({ id, name: id[0].toUpperCase() + id.slice(1), shared: true, model: "test", activity, ...extra });
-const set = (id: string, state: ActivityState, extra: Partial<Conversation["activity"]> = {}, botExtra: Partial<Bot> = {}) => {
-  bots = bots.map(value => value.id === id ? { ...value, activity: state, ...botExtra } : value);
+const bot = (id: string, activity: ActivityState = "idle", extra: Partial<Bot> = {}): Bot => ({
+  id,
+  name: id[0].toUpperCase() + id.slice(1),
+  shared: true,
+  model: "test",
+  activity,
+  ...extra,
+});
+const set = (
+  id: string,
+  state: ActivityState,
+  extra: Partial<Conversation["activity"]> = {},
+  botExtra: Partial<Bot> = {},
+) => {
+  bots = bots.map((value) =>
+    value.id === id ? { ...value, activity: state, ...botExtra } : value,
+  );
   conversations[id] = { state, ...extra };
 };
 const register = (userId: string, armed: string[] = [], token = userId.repeat(32).slice(0, 64)) =>
   store.registerLiveActivity(userId, userId, `${userId}-device`, token, "sandbox", armed, clock);
-const tick = async (ms = 0) => { clock += ms; await live.tick(); };
+const tick = async (ms = 0) => {
+  clock += ms;
+  await live.tick();
+};
 const last = () => pushes.at(-1)!;
-const rows = (push = last()) => push.payload.aps["content-state"].rows.map(row => `${row.botId}:${row.phase}`);
+const rows = (push = last()) =>
+  push.payload.aps["content-state"].rows.map((row) => `${row.botId}:${row.phase}`);
 
 beforeEach(() => {
   clock = Date.parse("2026-10-16T12:00:00Z");
@@ -36,28 +88,50 @@ beforeEach(() => {
     store.nativeSession(id, id, Date.now() + 7 * 86400000);
   }
   bots = [bot("kitchen"), bot("garden"), bot("secret")];
-  conversations = {}; approvals = {};
-  pushes = []; failure = undefined; duringSend = undefined;
-  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apns();
+  conversations = {};
+  approvals = {};
+  pushes = [];
+  failure = undefined;
+  duringSend = undefined;
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+  config.apns = apns();
   const runtime = {
     listBots: async () => bots,
     conversation: async (botId: string) => {
       if (!(botId in conversations)) throw new Error(`Unconfigured conversation: ${botId}`);
-      return { botId, messages: [], approvals: approvals[botId] ?? [], files: [], activity: { state: "idle", ...conversations[botId] } } as Conversation;
+      return {
+        botId,
+        messages: [],
+        approvals: approvals[botId] ?? [],
+        files: [],
+        activity: { state: "idle", ...conversations[botId] },
+      } as Conversation;
     },
   };
-  live = new LiveActivities(store, runtime, config, async (target, payload, priority) => {
-    duringSend?.();
-    if (failure) throw failure;
-    pushes.push({ token: target.token, payload: payload as Push["payload"], priority });
-  }, undefined, () => clock);
+  live = new LiveActivities(
+    store,
+    runtime,
+    config,
+    async (target, payload, priority) => {
+      duringSend?.();
+      if (failure) throw failure;
+      pushes.push({ token: target.token, payload: payload as Push["payload"], priority });
+    },
+    undefined,
+    () => clock,
+  );
 });
 
 describe("aggregate Live Activity", () => {
   it("holds disconnected work through other rows and ends only after a fresh completion", async () => {
-    bots = ["barn", "a", "b", "c", "d"].map(id => bot(id));
-    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
-    set("barn", "working"); register("one"); await tick();
+    bots = ["barn", "a", "b", "c", "d"].map((id) => bot(id));
+    store.savePreferences("one", {
+      ...defaultPreferences,
+      followBots: bots.map((value) => value.id),
+    });
+    set("barn", "working");
+    register("one");
+    await tick();
     set("barn", "disconnected");
     const read = live["runtime"].conversation;
     live["runtime"].conversation = async (id, options) => {
@@ -73,31 +147,42 @@ describe("aggregate Live Activity", () => {
     expect(last().payload.aps.event).toBe("update");
     expect(rows()).toContain("barn:working");
     live["runtime"].conversation = read;
-    set("barn", "idle"); await tick(15_000);
+    set("barn", "idle");
+    await tick(15_000);
     expect(last().payload.aps.event).toBe("end");
     expect(rows()).toContain("barn:done");
   });
 
   it("holds work when a conversation read fails despite an idle roster", async () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
-    set("kitchen", "working"); register("one"); await tick();
+    set("kitchen", "working");
+    register("one");
+    await tick();
     set("kitchen", "idle");
-    live["runtime"].conversation = async () => { throw new Error("unreadable"); };
+    live["runtime"].conversation = async () => {
+      throw new Error("unreadable");
+    };
     await tick(15_000);
     expect(last().payload.aps.event).toBe("update");
     expect(rows()).toEqual(["kitchen:working"]);
     // The held row says it cannot be checked, and no heartbeat refreshes it, so its stale date lapses.
-    expect(last().payload.aps["content-state"].rows[0].detail).toBe("Can't check on this right now");
+    expect(last().payload.aps["content-state"].rows[0].detail).toBe(
+      "Can't check on this right now",
+    );
     const sent = pushes.length;
     await tick(30 * 60_000);
     expect(pushes.length).toBe(sent);
   });
 
   it("keeps the heartbeat while a running assistant past the fourth row is still fresh", async () => {
-    bots = ["a", "b", "c", "d", "fresh"].map(id => bot(id));
-    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    bots = ["a", "b", "c", "d", "fresh"].map((id) => bot(id));
+    store.savePreferences("one", {
+      ...defaultPreferences,
+      followBots: bots.map((value) => value.id),
+    });
     for (const id of ["a", "b", "c", "d", "fresh"]) set(id, "working");
-    register("one"); await tick();
+    register("one");
+    await tick();
     const read = live["runtime"].conversation;
     live["runtime"].conversation = async (id, options) => {
       if (id !== "fresh") throw new Error("offline");
@@ -112,8 +197,15 @@ describe("aggregate Live Activity", () => {
 
   it("does not claim an armed run finished when its conversation cannot be read", async () => {
     register("one", ["kitchen"]);
-    set("kitchen", "idle", {}, { lastMessage: { text: "Old result", at: new Date(clock + 1000).toISOString() } });
-    live["runtime"].conversation = async () => { throw new Error("unreadable"); };
+    set(
+      "kitchen",
+      "idle",
+      {},
+      { lastMessage: { text: "Old result", at: new Date(clock + 1000).toISOString() } },
+    );
+    live["runtime"].conversation = async () => {
+      throw new Error("unreadable");
+    };
     await tick(5_000);
     expect(last().payload.aps.event).toBe("update");
     expect(rows()).toEqual(["kitchen:starting"]);
@@ -121,8 +213,17 @@ describe("aggregate Live Activity", () => {
 
   it("drops a long unknown registration without sending a finished event", async () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
-    store.registerLiveActivityStart("one", "one", "one-device", "ef".repeat(32), "sandbox", "c2NvcGU");
-    set("kitchen", "working"); register("one"); await tick();
+    store.registerLiveActivityStart(
+      "one",
+      "one",
+      "one-device",
+      "ef".repeat(32),
+      "sandbox",
+      "c2NvcGU",
+    );
+    set("kitchen", "working");
+    register("one");
+    await tick();
     set("kitchen", "disconnected");
     const read = live["runtime"].conversation;
     live["runtime"].conversation = async (id, options) => {
@@ -136,25 +237,32 @@ describe("aggregate Live Activity", () => {
     const context = store.liveActivityContext("one", "one", "one-device")!;
     expect((await live.state("one", context, context.lastState)).title).toBe("Status unavailable");
     await tick();
-    expect(pushes.every(push => push.payload.aps.event !== "end")).toBe(true);
+    expect(pushes.every((push) => push.payload.aps.event !== "end")).toBe(true);
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
-    set("garden", "working"); await tick(5_000);
+    set("garden", "working");
+    await tick(5_000);
     expect(last().payload.aps.event).toBe("start");
   });
 
   it("does not resurrect expired unknown work while another assistant runs", async () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
-    set("kitchen", "working"); set("garden", "working"); register("one"); await tick();
+    set("kitchen", "working");
+    set("garden", "working");
+    register("one");
+    await tick();
     const read = live["runtime"].conversation;
     live["runtime"].conversation = async (id, options) => {
       if (id === "kitchen") throw new Error("offline");
       return read(id, options);
     };
-    await tick(15_000); await tick(8 * 60 * 60_000); await tick(15_000);
+    await tick(15_000);
+    await tick(8 * 60 * 60_000);
+    await tick(15_000);
     expect(rows()).toEqual(["garden:working"]);
-    set("garden", "idle"); await tick(15_000);
-    expect(pushes.every(push => push.payload.aps.event !== "end")).toBe(true);
+    set("garden", "idle");
+    await tick(15_000);
+    expect(pushes.every((push) => push.payload.aps.event !== "end")).toBe(true);
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
   });
 
@@ -162,8 +270,15 @@ describe("aggregate Live Activity", () => {
     register("one", ["kitchen"]);
     await tick();
     expect(rows()).toEqual(["kitchen:starting"]);
-    expect(last().payload.aps).toMatchObject({ event: "update", "stale-date": Math.floor(clock / 1000) + 900 });
-    expect(last().payload.aps["content-state"]).toMatchObject({ title: "Kitchen is starting", activeCount: 1, attentionCount: 0 });
+    expect(last().payload.aps).toMatchObject({
+      event: "update",
+      "stale-date": Math.floor(clock / 1000) + 900,
+    });
+    expect(last().payload.aps["content-state"]).toMatchObject({
+      title: "Kitchen is starting",
+      activeCount: 1,
+      attentionCount: 0,
+    });
     expect(last().priority).toBe(5);
 
     store.participate("run-1", "one");
@@ -172,24 +287,48 @@ describe("aggregate Live Activity", () => {
     expect(pushes).toHaveLength(1); // A plain phase change waits out the 15-second throttle.
     await tick(10_000);
     expect(rows()).toEqual(["kitchen:working"]);
-    expect(last().payload.aps["content-state"].rows[0]).toMatchObject({ status: "Working", detail: "Using web_search", since: Math.floor(clock / 1000) - 10 });
+    expect(last().payload.aps["content-state"].rows[0]).toMatchObject({
+      status: "Working",
+      detail: "Using web_search",
+      since: Math.floor(clock / 1000) - 10,
+    });
 
-    set("kitchen", "idle", {}, { lastMessage: { text: "Dinner is planned.", at: new Date(clock).toISOString() } });
+    set(
+      "kitchen",
+      "idle",
+      {},
+      { lastMessage: { text: "Dinner is planned.", at: new Date(clock).toISOString() } },
+    );
     await tick(ARMED_MS); // The grace period has passed, so finishing ends the activity.
-    expect(last().payload.aps).toMatchObject({ event: "end", "dismissal-date": Math.floor(clock / 1000) + 300 });
+    expect(last().payload.aps).toMatchObject({
+      event: "end",
+      "dismissal-date": Math.floor(clock / 1000) + 300,
+    });
     expect(last().priority).toBe(10);
-    expect(last().payload.aps["content-state"]).toMatchObject({ title: "Kitchen finished", activeCount: 0, rows: [{ phase: "done", detail: "Dinner is planned." }] });
+    expect(last().payload.aps["content-state"]).toMatchObject({
+      title: "Kitchen finished",
+      activeCount: 0,
+      rows: [{ phase: "done", detail: "Dinner is planned." }],
+    });
     expect(store.liveActivities("sandbox", clock)).toHaveLength(0);
   });
 
   it("shows a run that finished between two looks as done", async () => {
     register("one", ["kitchen"]);
     await tick();
-    set("kitchen", "idle", {}, { lastMessage: { text: "Quick answer", at: new Date(clock + 1000).toISOString() } });
+    set(
+      "kitchen",
+      "idle",
+      {},
+      { lastMessage: { text: "Quick answer", at: new Date(clock + 1000).toISOString() } },
+    );
     await tick(5_000);
     expect(last().payload.aps.event).toBe("end");
     expect(rows()).toEqual(["kitchen:done"]);
-    expect(last().payload.aps["content-state"]).toMatchObject({ title: "Kitchen finished", rows: [{ detail: "Quick answer" }] });
+    expect(last().payload.aps["content-state"]).toMatchObject({
+      title: "Kitchen finished",
+      rows: [{ detail: "Quick answer" }],
+    });
   });
 
   it("keeps a just-sent activity open through the grace period, then ends it empty", async () => {
@@ -197,9 +336,12 @@ describe("aggregate Live Activity", () => {
     register("one", ["kitchen"]);
     await tick();
     await tick(ARMED_MS - 1000);
-    expect(pushes.map(push => push.payload.aps.event)).toEqual(["update"]);
+    expect(pushes.map((push) => push.payload.aps.event)).toEqual(["update"]);
     await tick(1000);
-    expect(last().payload.aps).toMatchObject({ event: "end", "content-state": { title: "All caught up", rows: [] } });
+    expect(last().payload.aps).toMatchObject({
+      event: "end",
+      "content-state": { title: "All caught up", rows: [] },
+    });
   });
 
   it("puts waiting work first, raises its priority and keeps finished rows beside running work", async () => {
@@ -208,12 +350,18 @@ describe("aggregate Live Activity", () => {
     set("garden", "working");
     register("one");
     await tick();
-    expect(last().payload.aps["content-state"]).toMatchObject({ title: "2 assistants working", activeCount: 2 });
+    expect(last().payload.aps["content-state"]).toMatchObject({
+      title: "2 assistants working",
+      activeCount: 2,
+    });
     set("garden", "waiting");
     await tick(1000);
     expect(rows()).toEqual(["garden:waiting", "kitchen:working"]);
     expect(last().priority).toBe(10);
-    expect(last().payload.aps["content-state"]).toMatchObject({ title: "Garden needs you", attentionCount: 1 });
+    expect(last().payload.aps["content-state"]).toMatchObject({
+      title: "Garden needs you",
+      attentionCount: 1,
+    });
     set("kitchen", "failed");
     await tick(1000);
     expect(rows()).toEqual(["garden:waiting", "kitchen:failed"]);
@@ -231,20 +379,25 @@ describe("aggregate Live Activity", () => {
 
   it("names a waiting row's pending approval so the Lock Screen can decline it", async () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
-    approvals.kitchen = [{ id: "old", title: "Done", detail: "", status: "denied" }, { id: "request-7", title: "Run", detail: "secret", status: "pending" }];
+    approvals.kitchen = [
+      { id: "old", title: "Done", detail: "", status: "denied" },
+      { id: "request-7", title: "Run", detail: "secret", status: "pending" },
+    ];
     set("kitchen", "waiting");
     approvals.garden = [{ id: "x".repeat(201), title: "Run", detail: "", status: "pending" }];
     set("garden", "waiting");
     register("one");
     await tick();
     const shown = last().payload.aps["content-state"].rows;
-    expect(shown.find(row => row.botId === "kitchen")).toMatchObject({ approvalId: "request-7" });
+    expect(shown.find((row) => row.botId === "kitchen")).toMatchObject({ approvalId: "request-7" });
     // Never what it would run, and an ID that cannot travel intact gets no button.
     expect(JSON.stringify(shown)).not.toContain("secret");
-    expect(shown.find(row => row.botId === "garden")).not.toHaveProperty("approvalId");
+    expect(shown.find((row) => row.botId === "garden")).not.toHaveProperty("approvalId");
     set("kitchen", "working");
     await tick(15_000);
-    expect(last().payload.aps["content-state"].rows.find(row => row.botId === "kitchen")).not.toHaveProperty("approvalId");
+    expect(
+      last().payload.aps["content-state"].rows.find((row) => row.botId === "kitchen"),
+    ).not.toHaveProperty("approvalId");
   });
 
   it("shows only assistants this person sent to or follows, and a private one only to its owner", async () => {
@@ -255,9 +408,10 @@ describe("aggregate Live Activity", () => {
     set("secret", "working", { runId: "run-s" });
     set("garden", "thinking", { runId: "run-g" });
     store.savePreferences("two", { ...defaultPreferences, followBots: ["garden"] });
-    register("one"); register("two");
+    register("one");
+    register("two");
     await tick();
-    const byToken = (user: string) => pushes.filter(push => push.token.startsWith(user)).at(-1)!;
+    const byToken = (user: string) => pushes.filter((push) => push.token.startsWith(user)).at(-1)!;
     // One sent to the private assistant before it turned private; that no longer shows it.
     expect(byToken("one").payload.aps.event).toBe("end");
     expect(rows(byToken("two"))).toEqual(["kitchen:working", "garden:thinking"]);
@@ -288,22 +442,30 @@ describe("aggregate Live Activity", () => {
     await tick();
     register("one", [], "cd".repeat(32));
     await tick(1000);
-    expect(pushes.map(push => push.token)).toEqual(["ab".repeat(32), "cd".repeat(32)]);
+    expect(pushes.map((push) => push.token)).toEqual(["ab".repeat(32), "cd".repeat(32)]);
     expect(store.liveActivities("sandbox", clock)).toHaveLength(1);
   });
 
-  it.each([undefined, 410, 413, 400])("keeps a replacement token when old cleanup finishes with %s", async statusCode => {
-    const oldToken = "ab".repeat(32), replacement = "cd".repeat(32);
-    register("one", [], oldToken);
-    if (statusCode) failure = new ApnsError("Old activity rejected", statusCode, "BadDeviceToken");
-    duringSend = () => register("one", ["kitchen"], replacement);
-    await tick();
-    expect(store.liveActivities("sandbox", clock)).toMatchObject([{ token: replacement, armed: ["kitchen"], sentAt: 0 }]);
-    failure = undefined; duringSend = undefined;
-    await tick();
-    expect(last().token).toBe(replacement);
-    expect(rows()).toEqual(["kitchen:starting"]);
-  });
+  it.each([undefined, 410, 413, 400])(
+    "keeps a replacement token when old cleanup finishes with %s",
+    async (statusCode) => {
+      const oldToken = "ab".repeat(32),
+        replacement = "cd".repeat(32);
+      register("one", [], oldToken);
+      if (statusCode)
+        failure = new ApnsError("Old activity rejected", statusCode, "BadDeviceToken");
+      duringSend = () => register("one", ["kitchen"], replacement);
+      await tick();
+      expect(store.liveActivities("sandbox", clock)).toMatchObject([
+        { token: replacement, armed: ["kitchen"], sentAt: 0 },
+      ]);
+      failure = undefined;
+      duringSend = undefined;
+      await tick();
+      expect(last().token).toBe(replacement);
+      expect(rows()).toEqual(["kitchen:starting"]);
+    },
+  );
 
   it("preserves device grace and observed work across foreground re-registration", async () => {
     register("one", ["kitchen"]);
@@ -313,8 +475,15 @@ describe("aggregate Live Activity", () => {
     const remembered = store.liveActivities("sandbox", clock)[0];
     register("one");
     const context = store.liveActivityContext("one", "one", "one-device")!;
-    expect(context).toMatchObject({ armed: ["kitchen"], armedAt: initial.armedAt, lastState: remembered.lastState });
-    expect(await live.state("one", context, context.lastState)).toMatchObject({ activeCount: 1, rows: [{ phase: "starting", since: initial.armedAt / 1000 }] });
+    expect(context).toMatchObject({
+      armed: ["kitchen"],
+      armedAt: initial.armedAt,
+      lastState: remembered.lastState,
+    });
+    expect(await live.state("one", context, context.lastState)).toMatchObject({
+      activeCount: 1,
+      rows: [{ phase: "starting", since: initial.armedAt / 1000 }],
+    });
     expect(store.liveActivityContext("two", "two", "one-device")).toBeUndefined();
     expect(store.liveActivityContext("one", "another-session", "one-device")).toBeUndefined();
     store.participate("run", "one");
@@ -322,13 +491,29 @@ describe("aggregate Live Activity", () => {
     await tick(15_000);
     const working = store.liveActivities("sandbox", clock)[0];
     register("one");
-    expect(store.liveActivities("sandbox", clock)[0]).toMatchObject({ lastState: working.lastState, sentState: working.sentState, sentAt: working.sentAt, armed: [] });
+    expect(store.liveActivities("sandbox", clock)[0]).toMatchObject({
+      lastState: working.lastState,
+      sentState: working.sentState,
+      sentAt: working.sentAt,
+      armed: [],
+    });
   });
 
   it("bounds Unicode and escaped content before sending and drops permanent oversized-payload failures", async () => {
-    bots = Array.from({ length: 4 }, (_, i) => bot('x'.repeat(250) + i, "working", { name: '\u0000'.repeat(2000), avatar: { mode: "geometric", shape: "blob", eyes: "oval", accessory: "none", color: 'x'.repeat(8000) } }));
-    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(bot => bot.id) });
-    for (const bot of bots) conversations[bot.id] = { state: "working", detail: '🐎'.repeat(2000) };
+    bots = Array.from({ length: 4 }, (_, i) =>
+      bot("x".repeat(250) + i, "working", {
+        name: "\u0000".repeat(2000),
+        avatar: {
+          mode: "geometric",
+          shape: "blob",
+          eyes: "oval",
+          accessory: "none",
+          color: "x".repeat(8000),
+        },
+      }),
+    );
+    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map((bot) => bot.id) });
+    for (const bot of bots) conversations[bot.id] = { state: "working", detail: "🐎".repeat(2000) };
     register("one");
     await tick();
     expect(Buffer.byteLength(JSON.stringify(last().payload))).toBeLessThanOrEqual(4096);
@@ -342,16 +527,21 @@ describe("aggregate Live Activity", () => {
 
   it("starts a finished assistant again without discarding another assistant's running row", async () => {
     store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] });
-    set("kitchen", "working"); set("garden", "working");
-    register("one"); await tick();
-    set("kitchen", "idle"); await tick(15_000);
+    set("kitchen", "working");
+    set("garden", "working");
+    register("one");
+    await tick();
+    set("kitchen", "idle");
+    await tick(15_000);
     expect(rows()).toEqual(["garden:working", "kitchen:done"]);
     register("one", ["kitchen"]);
     const context = store.liveActivityContext("one", "one", "one-device")!;
     const current = await live.state("one", context, context.lastState);
     expect(current.activeCount).toBe(2);
-    expect(current.rows.map(row => `${row.botId}:${row.phase}`)).toContain("kitchen:starting");
-    expect(current.rows.find(row => row.botId === "garden")?.since).toBe(Date.parse("2026-10-16T12:00:00Z") / 1000);
+    expect(current.rows.map((row) => `${row.botId}:${row.phase}`)).toContain("kitchen:starting");
+    expect(current.rows.find((row) => row.botId === "garden")?.since).toBe(
+      Date.parse("2026-10-16T12:00:00Z") / 1000,
+    );
   });
 
   it("removes the registration with its native session", () => {
@@ -362,11 +552,19 @@ describe("aggregate Live Activity", () => {
 });
 
 describe("push-to-start", () => {
-  const startToken = "ef".repeat(32), scope = Buffer.from("https://wildbots.example|one").toString("base64url");
-  const registerStart = (token = startToken) => store.registerLiveActivityStart("one", "one", "one-device", token, "sandbox", scope);
-  const starts = () => pushes.filter(push => push.payload.aps.event === "start");
-  const covered = () => store.liveActivityStarts("sandbox", clock)[0].started.map(run => run.botId).sort();
-  beforeEach(() => store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] }));
+  const startToken = "ef".repeat(32),
+    scope = Buffer.from("https://wildbots.example|one").toString("base64url");
+  const registerStart = (token = startToken) =>
+    store.registerLiveActivityStart("one", "one", "one-device", token, "sandbox", scope);
+  const starts = () => pushes.filter((push) => push.payload.aps.event === "start");
+  const covered = () =>
+    store
+      .liveActivityStarts("sandbox", clock)[0]
+      .started.map((run) => run.botId)
+      .sort();
+  beforeEach(() =>
+    store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen", "garden"] }),
+  );
 
   it("starts the activity once when work begins away from the app, then updates it once the app registers it", async () => {
     registerStart();
@@ -375,9 +573,20 @@ describe("push-to-start", () => {
     set("kitchen", "working");
     await tick(5_000);
     expect(starts()).toHaveLength(1);
-    expect(last()).toMatchObject({ token: startToken, priority: 10, payload: { aps: {
-      event: "start", "attributes-type": "AssistantsActivityAttributes", attributes: { scope }, "input-push-token": 1,
-      alert: { title: "Kitchen is working", body: "Working" }, "stale-date": Math.floor(clock / 1000) + 900 } } });
+    expect(last()).toMatchObject({
+      token: startToken,
+      priority: 10,
+      payload: {
+        aps: {
+          event: "start",
+          "attributes-type": "AssistantsActivityAttributes",
+          attributes: { scope },
+          "input-push-token": 1,
+          alert: { title: "Kitchen is working", body: "Working" },
+          "stale-date": Math.floor(clock / 1000) + 900,
+        },
+      },
+    });
     expect(rows()).toEqual(["kitchen:working"]);
     await tick(5_000);
     expect(starts()).toHaveLength(1);
@@ -385,7 +594,10 @@ describe("push-to-start", () => {
     register("one");
     set("kitchen", "waiting");
     await tick(5_000);
-    expect(last()).toMatchObject({ token: "one".repeat(32).slice(0, 64), payload: { aps: { event: "update" } } });
+    expect(last()).toMatchObject({
+      token: "one".repeat(32).slice(0, 64),
+      payload: { aps: { event: "update" } },
+    });
     expect(starts()).toHaveLength(1);
   });
 
@@ -426,7 +638,9 @@ describe("push-to-start", () => {
     register("one", [], token);
     store.dismissLiveActivity("one", "one-device", token);
     const roster = live["runtime"].listBots;
-    live["runtime"].listBots = async () => { throw new Error("Hermes is restarting"); };
+    live["runtime"].listBots = async () => {
+      throw new Error("Hermes is restarting");
+    };
     await expect(tick(ARMED_MS)).rejects.toThrow("restarting");
     live["runtime"].listBots = roster;
     await tick(5_000);
@@ -458,7 +672,8 @@ describe("push-to-start", () => {
 
   it("starts again when a covered assistant finishes and begins a new run while another keeps working", async () => {
     registerStart();
-    set("kitchen", "working"); set("garden", "working");
+    set("kitchen", "working");
+    set("garden", "working");
     const token = "one".repeat(32).slice(0, 64);
     register("one", [], token);
     store.dismissLiveActivity("one", "one-device", token);
@@ -475,12 +690,15 @@ describe("push-to-start", () => {
 
   it("starts again when a covered assistant begins another run between two passes", async () => {
     registerStart();
-    set("kitchen", "working", { runId: "run-1" }); set("garden", "working", { runId: "run-g" });
+    set("kitchen", "working", { runId: "run-1" });
+    set("garden", "working", { runId: "run-g" });
     const token = "one".repeat(32).slice(0, 64);
     register("one", [], token);
     store.dismissLiveActivity("one", "one-device", token);
     await tick();
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(expect.arrayContaining([{ botId: "kitchen", runId: "run-1" }]));
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(
+      expect.arrayContaining([{ botId: "kitchen", runId: "run-1" }]),
+    );
     set("kitchen", "working", { runId: "run-2" });
     await tick(5_000);
     expect(starts()).toHaveLength(1);
@@ -499,7 +717,9 @@ describe("push-to-start", () => {
       return read(botId, options);
     };
     await tick(5_000);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([
+      { botId: "kitchen", runId: "run-1" },
+    ]);
     live["runtime"].conversation = read;
     set("kitchen", "working", { runId: "run-2" });
     await tick(5_000);
@@ -521,7 +741,9 @@ describe("push-to-start", () => {
       return read(botId, options);
     };
     await tick(5_000);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([
+      { botId: "kitchen", runId: "run-1" },
+    ]);
     live["runtime"].conversation = read;
     await tick(5_000);
     expect(starts()).toEqual([]);
@@ -570,9 +792,12 @@ describe("push-to-start", () => {
     live["runtime"].conversation = read;
     await tick(5_000);
     expect(starts()).toEqual([]);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(expect.arrayContaining([
-      { botId: "kitchen", runId: "run-k" }, { botId: "garden", runId: "run-g" },
-    ]));
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual(
+      expect.arrayContaining([
+        { botId: "kitchen", runId: "run-k" },
+        { botId: "garden", runId: "run-g" },
+      ]),
+    );
   });
 
   it("covers a run dismissed while its conversation could not be read once it can be", async () => {
@@ -592,7 +817,9 @@ describe("push-to-start", () => {
     live["runtime"].conversation = read;
     await tick(5_000);
     expect(starts()).toEqual([]);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([
+      { botId: "kitchen", runId: "run-1" },
+    ]);
   });
 
   it("treats a run Hermes names after it was covered as the same work", async () => {
@@ -605,7 +832,9 @@ describe("push-to-start", () => {
     set("kitchen", "working", { runId: "run-1" });
     await tick(5_000);
     expect(starts()).toEqual([]);
-    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([{ botId: "kitchen", runId: "run-1" }]);
+    expect(store.liveActivityStarts("sandbox", clock)[0].started).toEqual([
+      { botId: "kitchen", runId: "run-1" },
+    ]);
   });
 
   it("starts again for new work after everything finished", async () => {
@@ -650,9 +879,16 @@ describe("push-to-start", () => {
     registerStart();
     set("kitchen", "working");
     const roster = live["runtime"].listBots;
-    const during = (change: () => void) => { live["runtime"].listBots = async () => { change(); return roster(); }; };
+    const during = (change: () => void) => {
+      live["runtime"].listBots = async () => {
+        change();
+        return roster();
+      };
+    };
     // Another account signs in on this phone after an offline sign-out and takes the token over.
-    during(() => store.registerLiveActivityStart("two", "two", "two-device", startToken, "sandbox", "dHdv"));
+    during(() =>
+      store.registerLiveActivityStart("two", "two", "two-device", startToken, "sandbox", "dHdv"),
+    );
     await tick();
     expect(starts()).toEqual([]);
     store.deleteNativeSession("two");
@@ -667,8 +903,11 @@ describe("push-to-start", () => {
   });
 
   it("remembers every running assistant, not only the four rows that fit", async () => {
-    bots = ["a", "b", "c", "d", "e"].map(id => bot(id, "working"));
-    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
+    bots = ["a", "b", "c", "d", "e"].map((id) => bot(id, "working"));
+    store.savePreferences("one", {
+      ...defaultPreferences,
+      followBots: bots.map((value) => value.id),
+    });
     for (const value of bots) conversations[value.id] = { state: "working" };
     registerStart();
     await tick();
@@ -684,9 +923,15 @@ describe("push-to-start", () => {
   it("keeps a start with a long scope inside APNs' limit", async () => {
     const long = "A".repeat(1024);
     store.registerLiveActivityStart("one", "one", "one-device", startToken, "sandbox", long);
-    bots = Array.from({ length: 4 }, (_, i) => bot("y".repeat(250) + i, "working", { name: "🐎".repeat(80) }));
-    store.savePreferences("one", { ...defaultPreferences, followBots: bots.map(value => value.id) });
-    for (const value of bots) conversations[value.id] = { state: "working", detail: "🐎".repeat(2000) };
+    bots = Array.from({ length: 4 }, (_, i) =>
+      bot("y".repeat(250) + i, "working", { name: "🐎".repeat(80) }),
+    );
+    store.savePreferences("one", {
+      ...defaultPreferences,
+      followBots: bots.map((value) => value.id),
+    });
+    for (const value of bots)
+      conversations[value.id] = { state: "working", detail: "🐎".repeat(2000) };
     await tick();
     expect(last().payload.aps.attributes).toEqual({ scope: long });
     expect(Buffer.byteLength(JSON.stringify(last().payload))).toBeLessThanOrEqual(4096);
@@ -698,26 +943,53 @@ it("sends Live Activity pushes with their own topic, push type and priority", as
   const dir = mkdtempSync(join(tmpdir(), "apns-live-"));
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const config = { ...apns(), privateKeyFile: join(dir, "key.p8") };
-  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), {
+    mode: 0o600,
+  });
   const seen: { headers: Record<string, string>; body: string }[] = [];
-  const sender = createApnsSender(config, async (_origin, headers, body) => { seen.push({ headers, body }); return { statusCode: 200 }; })!;
+  const sender = createApnsSender(config, async (_origin, headers, body) => {
+    seen.push({ headers, body });
+    return { statusCode: 200 };
+  })!;
   try {
     const target = { token: "ab".repeat(32), environment: "sandbox" as const };
     await sender.liveActivity(target, { aps: { event: "update" } }, 5);
-    expect(seen[0].headers).toMatchObject({ ":path": `/3/device/${target.token}`, "apns-topic": "test.agentinterface.push-type.liveactivity", "apns-push-type": "liveactivity", "apns-priority": "5" });
+    expect(seen[0].headers).toMatchObject({
+      ":path": `/3/device/${target.token}`,
+      "apns-topic": "test.agentinterface.push-type.liveactivity",
+      "apns-push-type": "liveactivity",
+      "apns-priority": "5",
+    });
     expect(JSON.parse(seen[0].body)).toEqual({ aps: { event: "update" } });
-    await expect(sender.liveActivity({ ...target, environment: "production" }, {}, 10)).rejects.toThrow("environment");
-    await expect(sender.liveActivity(target, { detail: '🐎'.repeat(2000) }, 5)).rejects.toMatchObject({ apnsStatus: 413, reason: "PayloadTooLarge" });
+    await expect(
+      sender.liveActivity({ ...target, environment: "production" }, {}, 10),
+    ).rejects.toThrow("environment");
+    await expect(
+      sender.liveActivity(target, { detail: "🐎".repeat(2000) }, 5),
+    ).rejects.toMatchObject({ apnsStatus: 413, reason: "PayloadTooLarge" });
     expect(seen).toHaveLength(1);
-  } finally { sender.close(); rmSync(dir, { recursive: true }); }
+  } finally {
+    sender.close();
+    rmSync(dir, { recursive: true });
+  }
 });
 
 it("advertises a distributed iOS build only when both settings are valid", () => {
   expect(loadConfig({}).nativeApp).toBeUndefined();
-  expect(loadConfig({ IOS_APP_LATEST_BUILD: "12", IOS_APP_UPDATE_URL: "https://testflight.apple.com/join/ABCD" }).nativeApp)
-    .toEqual({ latestBuild: 12, updateUrl: "https://testflight.apple.com/join/ABCD" });
+  expect(
+    loadConfig({
+      IOS_APP_LATEST_BUILD: "12",
+      IOS_APP_UPDATE_URL: "https://testflight.apple.com/join/ABCD",
+    }).nativeApp,
+  ).toEqual({ latestBuild: 12, updateUrl: "https://testflight.apple.com/join/ABCD" });
   expect(() => loadConfig({ IOS_APP_LATEST_BUILD: "12" })).toThrow("together");
-  expect(() => loadConfig({ IOS_APP_LATEST_BUILD: "1.2", IOS_APP_UPDATE_URL: "https://example.test" })).toThrow("whole-number");
-  expect(() => loadConfig({ IOS_APP_LATEST_BUILD: "3", IOS_APP_UPDATE_URL: "http://example.test" })).toThrow("HTTPS");
-  expect(() => loadConfig({ IOS_APP_LATEST_BUILD: "3", IOS_APP_UPDATE_URL: "itms-beta://x" })).toThrow("HTTPS");
+  expect(() =>
+    loadConfig({ IOS_APP_LATEST_BUILD: "1.2", IOS_APP_UPDATE_URL: "https://example.test" }),
+  ).toThrow("whole-number");
+  expect(() =>
+    loadConfig({ IOS_APP_LATEST_BUILD: "3", IOS_APP_UPDATE_URL: "http://example.test" }),
+  ).toThrow("HTTPS");
+  expect(() =>
+    loadConfig({ IOS_APP_LATEST_BUILD: "3", IOS_APP_UPDATE_URL: "itms-beta://x" }),
+  ).toThrow("HTTPS");
 });

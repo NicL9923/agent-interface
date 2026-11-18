@@ -95,7 +95,14 @@ export class AvatarConductor {
    * is when this avatar entered the state, `entered` whether that was a change rather than a
    * mount, and `held` whether it holds a prop instead of spinning. Call once per frame.
    */
-  cue(owner: string, state: ActivityState, since: number, entered: boolean, held: boolean, now: number): Cue {
+  cue(
+    owner: string,
+    state: ActivityState,
+    since: number,
+    entered: boolean,
+    held: boolean,
+    now: number,
+  ): Cue {
     if (now - this.swept >= LEASE / 2) this.sweep(now);
     let states = this.tracks.get(owner);
     if (!states) this.tracks.set(owner, (states = new Map()));
@@ -133,7 +140,8 @@ export class AvatarConductor {
     switch (track.state) {
       case "idle":
         // A gesture every 6 to 12 s, the first after the arrival settles.
-        from = last ? last.start + IDLE_GESTURE * (0.67 + 0.66 * track.noise(1))
+        from = last
+          ? last.start + IDLE_GESTURE * (0.67 + 0.66 * track.noise(1))
           : Math.max(since + 2.5 + 4 * track.noise(1), now + 1 + 2 * track.noise(2));
         kinds = this.freshest(track);
         break;
@@ -163,12 +171,21 @@ export class AvatarConductor {
         return;
     }
     // A completion or failure answers an event, so it may move filler that has not started yet.
-    const turn = this.book(track, kinds, Math.max(from, now), latest, latest < Infinity ? now : undefined);
+    const turn = this.book(
+      track,
+      kinds,
+      Math.max(from, now),
+      latest,
+      latest < Infinity ? now : undefined,
+    );
     if (!turn) return;
     // Thinking sides alternate, so each loop starts where the last one looked.
-    const side = track.state === "thinking"
-      ? (hash(track.voice * 31 + 5) < 0.5 ? -1 : 1) * (track.count % 2 === 0 ? 1 : -1)
-      : track.noise(3) < 0.5 ? -1 : 1;
+    const side =
+      track.state === "thinking"
+        ? (hash(track.voice * 31 + 5) < 0.5 ? -1 : 1) * (track.count % 2 === 0 ? 1 : -1)
+        : track.noise(3) < 0.5
+          ? -1
+          : 1;
     track.count++;
     track.turn = turn;
     plan.previous = plan.gesture;
@@ -181,7 +198,8 @@ export class AvatarConductor {
       if (kind === track.turn?.kind) return Infinity;
       let latest = -Infinity;
       for (const turn of this.turns)
-        if (turn.track.owner !== track.owner && gestureLook[turn.kind] === gestureLook[kind]) latest = Math.max(latest, turn.end);
+        if (turn.track.owner !== track.owner && gestureLook[turn.kind] === gestureLook[kind])
+          latest = Math.max(latest, turn.end);
       return latest;
     };
     const rotate = Math.floor(track.noise(4) * idleKinds.length);
@@ -207,7 +225,9 @@ export class AvatarConductor {
     if (!best) return undefined;
     if (bumpAt !== undefined) {
       const taken = best;
-      const bumped = this.turns.filter((turn) => this.movable(turn, bumpAt) && this.clashes(turn, taken));
+      const bumped = this.turns.filter(
+        (turn) => this.movable(turn, bumpAt) && this.clashes(turn, taken),
+      );
       for (const turn of bumped) turn.track.bumped = true;
       if (bumped.length) this.turns = this.turns.filter((turn) => !bumped.includes(turn));
     }
@@ -217,8 +237,12 @@ export class AvatarConductor {
 
   /** Whether another bot's turn would show the same look within the gap of `taken`. */
   private clashes(turn: Turn, taken: Turn) {
-    return turn.track.owner !== taken.track.owner && gestureLook[turn.kind] === gestureLook[taken.kind] &&
-      taken.start < turn.end + TURN_GAP && taken.end + TURN_GAP > turn.start;
+    return (
+      turn.track.owner !== taken.track.owner &&
+      gestureLook[turn.kind] === gestureLook[taken.kind] &&
+      taken.start < turn.end + TURN_GAP &&
+      taken.end + TURN_GAP > turn.start
+    );
   }
   private movable(turn: Turn, at: number) {
     return turn.start > at && movable.has(turn.kind);
@@ -227,7 +251,8 @@ export class AvatarConductor {
   /** A bumped track books its gesture again, as soon as it fits after where it was. */
   private rebook(track: Track, now: number) {
     track.bumped = false;
-    const old = track.turn, gesture = track.plan.gesture;
+    const old = track.turn,
+      gesture = track.plan.gesture;
     if (!old || !gesture) return;
     const kinds = track.state === "idle" ? this.freshest(track) : [old.kind];
     const turn = this.book(track, kinds, Math.max(old.start, now), Infinity)!;
@@ -280,7 +305,8 @@ export class AvatarConductor {
       for (const [state, track] of states) {
         if (now - track.seen <= LEASE) continue;
         states.delete(state);
-        for (const turn of [track.turn, track.boop]) if (turn && turn.end > now) this.yieldTurn(turn, now);
+        for (const turn of [track.turn, track.boop])
+          if (turn && turn.end > now) this.yieldTurn(turn, now);
       }
       if (!states.size) {
         this.tracks.delete(owner);

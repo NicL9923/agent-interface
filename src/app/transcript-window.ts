@@ -1,9 +1,25 @@
 import { useRef } from "react";
 import type { FileRef, Message, MessageOrigin, ToolCall } from "../shared/types";
-import { continueOrigins, isActivityMessage, messageOrigin, withMessageOrigins } from "../shared/message-origin";
-import { conversationArtifacts, continueReplyArtifacts, finishReplyArtifacts, replyArtifacts, startReplyArtifacts,
-  type Artifact, type ReplyArtifactsState } from "../shared/artifacts";
-import { continueDraftRevisions, startDraftRevisions, type DraftRevisionsState } from "../shared/draft-diff";
+import {
+  continueOrigins,
+  isActivityMessage,
+  messageOrigin,
+  withMessageOrigins,
+} from "../shared/message-origin";
+import {
+  conversationArtifacts,
+  continueReplyArtifacts,
+  finishReplyArtifacts,
+  replyArtifacts,
+  startReplyArtifacts,
+  type Artifact,
+  type ReplyArtifactsState,
+} from "../shared/artifacts";
+import {
+  continueDraftRevisions,
+  startDraftRevisions,
+  type DraftRevisionsState,
+} from "../shared/draft-diff";
 import type { EarlierFiles } from "../shared/history";
 import { isAgentExchange } from "../components/AgentExchange";
 import { isLiveRow } from "./reply-keys";
@@ -29,7 +45,8 @@ export function useSettledWindow(messages: Message[]): { settled: Message[]; liv
   const held = useRef<{ settled: Message[]; live: Message[] }>({ settled: [], live: [] });
   const at = messages.findIndex(isLiveRow);
   const end = at < 0 ? messages.length : at;
-  const same = (kept: Message[], from: number, to: number) => kept.length === to - from && kept.every((message, index) => message === messages[from + index]);
+  const same = (kept: Message[], from: number, to: number) =>
+    kept.length === to - from && kept.every((message, index) => message === messages[from + index]);
   const previous = held.current;
   const settled = same(previous.settled, 0, end) ? previous.settled : messages.slice(0, end);
   const live = same(previous.live, end, messages.length) ? previous.live : messages.slice(end);
@@ -38,30 +55,70 @@ export function useSettledWindow(messages: Message[]): { settled: Message[]; liv
   return held.current;
 }
 
-export type Turn = { messages: Message[]; tools: Map<string, Message>; reasoning: string[]; order: string[]; replyAt?: string };
+export type Turn = {
+  messages: Message[];
+  tools: Map<string, Message>;
+  reasoning: string[];
+  order: string[];
+  replyAt?: string;
+};
 /** Turns over the settled messages: as the reading left them, to continue, and as shown. */
-export type SettledTurns = { read: Turn[]; shown: Turn[]; prompt?: MessageOrigin; advanced: boolean };
+export type SettledTurns = {
+  read: Turn[];
+  shown: Turn[];
+  prompt?: MessageOrigin;
+  advanced: boolean;
+};
 const blankTurn = (): Turn => ({ messages: [], tools: new Map(), reasoning: [], order: [] });
-const startsTurn = (message: Message) => isHumanMessage(message) || message.role === "user" && messageOrigin(message)?.kind === "scheduled";
+const startsTurn = (message: Message) =>
+  isHumanMessage(message) ||
+  (message.role === "user" && messageOrigin(message)?.kind === "scheduled");
 function visibleMessage(message: Message) {
-  return message.role !== "assistant" || isAgentExchange(message) || !!message.text.trim() || !!message.files?.length;
+  return (
+    message.role !== "assistant" ||
+    isAgentExchange(message) ||
+    !!message.text.trim() ||
+    !!message.files?.length
+  );
 }
-const running = (turn: Turn) => [...turn.tools.values()].some(message => message.toolCall?.status === "running");
+const running = (turn: Turn) =>
+  [...turn.tools.values()].some((message) => message.toolCall?.status === "running");
 /** `turns` writes only turns it owns; a turn it reuses is copied before its first change. */
 type Writable = (index: number) => Turn;
-function readTurns(turns: Turn[], messages: Message[], advanced: boolean, writable: Writable, own: (turn: Turn) => void) {
+function readTurns(
+  turns: Turn[],
+  messages: Message[],
+  advanced: boolean,
+  writable: Writable,
+  own: (turn: Turn) => void,
+) {
   for (const message of messages) {
     // A person's message or a scheduled prompt starts a turn. Subagent, process and agent rows that
     // Hermes files as user messages belong to the work of the turn they arrive in.
-    if (!turns.length || startsTurn(message)) { turns.push(blankTurn()); own(turns.at(-1)!); }
+    if (!turns.length || startsTurn(message)) {
+      turns.push(blankTurn());
+      own(turns.at(-1)!);
+    }
     const turn = writable(turns.length - 1);
     turn.order.push(message.id);
     // A turn's reasoning parts share one accordion instead of a block per reply row.
-    if (advanced && !isActivityMessage(message) && message.role === "assistant" && message.reasoning?.trim()) turn.reasoning.push(message.reasoning.trim());
+    if (
+      advanced &&
+      !isActivityMessage(message) &&
+      message.role === "assistant" &&
+      message.reasoning?.trim()
+    )
+      turn.reasoning.push(message.reasoning.trim());
     // A tool-call row with no reply text would render as an empty bubble.
     if (!isActivityMessage(message) && message.role !== "tool" && visibleMessage(message)) {
       // A progress line says what the assistant is about to do, so the work still ahead is not folded above it.
-      if (message.role !== "user" && !message.interim && turn.tools.size && turn.replyAt === undefined) turn.replyAt = message.id;
+      if (
+        message.role !== "user" &&
+        !message.interim &&
+        turn.tools.size &&
+        turn.replyAt === undefined
+      )
+        turn.replyAt = message.id;
       turn.messages.push(message);
     }
     if (isActivityMessage(message) || message.role === "tool" || message.toolCall) {
@@ -73,20 +130,39 @@ function readTurns(turns: Turn[], messages: Message[], advanced: boolean, writab
 export function settleTurns(settled: Message[], advanced: boolean): SettledTurns {
   const { messages, prompt } = continueOrigins(settled);
   const read: Turn[] = [];
-  readTurns(read, messages, advanced, index => read[index], () => {});
+  readTurns(
+    read,
+    messages,
+    advanced,
+    (index) => read[index],
+    () => {},
+  );
   // Live calls update receipts, but only saved row order establishes where the reply starts.
-  const shown = read.map(turn => running(turn) ? { ...turn, replyAt: undefined } : turn);
+  const shown = read.map((turn) => (running(turn) ? { ...turn, replyAt: undefined } : turn));
   return { read, shown, prompt, advanced };
 }
 /** The turns with the live rows and the running turn's calls. A turn neither changes keeps its object. */
-export function continueTurns(settled: SettledTurns, live: Message[], calls: ToolCall[] = []): Turn[] {
+export function continueTurns(
+  settled: SettledTurns,
+  live: Message[],
+  calls: ToolCall[] = [],
+): Turn[] {
   if (!live.length && !calls.length) return settled.shown;
-  const turns = settled.read.slice(), owned = new Set<Turn>();
-  const own = (turn: Turn) => { owned.add(turn); };
-  const writable: Writable = index => {
+  const turns = settled.read.slice(),
+    owned = new Set<Turn>();
+  const own = (turn: Turn) => {
+    owned.add(turn);
+  };
+  const writable: Writable = (index) => {
     if (!owned.has(turns[index])) {
       const turn = turns[index];
-      turns[index] = { messages: [...turn.messages], tools: new Map(turn.tools), reasoning: [...turn.reasoning], order: [...turn.order], replyAt: turn.replyAt };
+      turns[index] = {
+        messages: [...turn.messages],
+        tools: new Map(turn.tools),
+        reasoning: [...turn.reasoning],
+        order: [...turn.order],
+        replyAt: turn.replyAt,
+      };
       owned.add(turns[index]);
     }
     return turns[index];
@@ -94,14 +170,21 @@ export function continueTurns(settled: SettledTurns, live: Message[], calls: Too
   readTurns(turns, withMessageOrigins(live, settled.prompt), settled.advanced, writable, own);
   for (const call of calls) {
     // Native history can reuse a tool ID. Only a unique row is safe to reconcile.
-    const matches = turns.flatMap((turn, index) => [...turn.tools.values()].filter(message => message.toolCall?.id === call.id)
-      .map(message => ({ index, message })));
+    const matches = turns.flatMap((turn, index) =>
+      [...turn.tools.values()]
+        .filter((message) => message.toolCall?.id === call.id)
+        .map((message) => ({ index, message })),
+    );
     if (matches.length === 1) {
       const { index, message } = matches[0];
       writable(index).tools.set(message.id, { ...message, toolCall: call });
     } else {
-      if (!turns.length) { turns.push(blankTurn()); own(turns[0]); }
-      const turn = writable(turns.length - 1), id = `live-${call.id}`;
+      if (!turns.length) {
+        turns.push(blankTurn());
+        own(turns[0]);
+      }
+      const turn = writable(turns.length - 1),
+        id = `live-${call.id}`;
       if (!turn.tools.has(id)) turn.order.push(id);
       turn.tools.set(id, { id, role: "tool", text: "", toolCall: call });
     }
@@ -114,17 +197,32 @@ export function continueTurns(settled: SettledTurns, live: Message[], calls: Too
 }
 
 /** The reply file chips of the settled messages, ready to continue. See replyArtifacts. */
-export const settleChips = (settled: Message[], files: FileRef[] | undefined, earlier: EarlierFiles["messages"]): ReplyArtifactsState =>
-  continueReplyArtifacts(startReplyArtifacts(conversationArtifacts(settled, earlier, files), earlier), settled);
+export const settleChips = (
+  settled: Message[],
+  files: FileRef[] | undefined,
+  earlier: EarlierFiles["messages"],
+): ReplyArtifactsState =>
+  continueReplyArtifacts(
+    startReplyArtifacts(conversationArtifacts(settled, earlier, files), earlier),
+    settled,
+  );
 /**
  * The chips with the live rows after the settled ones. A live row's file would change which files
  * the conversation lists and their sources, so a live row with files reads the whole window again.
  */
-export function continueChips(state: ReplyArtifactsState, settled: Message[], live: Message[], files: FileRef[] | undefined,
-  earlier: EarlierFiles["messages"]): Map<string, Artifact[]> {
-  if (!live.some(message => message.files?.length)) return finishReplyArtifacts(live.length ? continueReplyArtifacts(state, live) : state);
+export function continueChips(
+  state: ReplyArtifactsState,
+  settled: Message[],
+  live: Message[],
+  files: FileRef[] | undefined,
+  earlier: EarlierFiles["messages"],
+): Map<string, Artifact[]> {
+  if (!live.some((message) => message.files?.length))
+    return finishReplyArtifacts(live.length ? continueReplyArtifacts(state, live) : state);
   const all = [...settled, ...live];
   return replyArtifacts(all, conversationArtifacts(all, earlier, files), earlier);
 }
 
-export const settleRevisions = (settled: { id: string; role: string; text: string }[]): DraftRevisionsState => continueDraftRevisions(startDraftRevisions(), settled);
+export const settleRevisions = (
+  settled: { id: string; role: string; text: string }[],
+): DraftRevisionsState => continueDraftRevisions(startDraftRevisions(), settled);

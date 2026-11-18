@@ -4,29 +4,64 @@ import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { retryRequestId } from "../src/shared/retry-id.js";
 import type { Runtime, Submission, SubmissionReceipt } from "../src/shared/types.js";
-import { botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
+import {
+  botFixture,
+  capabilitiesFixture,
+  conversationFixture,
+} from "./helpers/runtime-fixtures.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 // What Hermes's admission answer said about a send's turn lives on the receipt, wherever the server keeps or returns one.
 const origin = "http://127.0.0.1:3000";
-const capabilities = capabilitiesFixture({ chat: { supported: true }, steering: { supported: true }, idempotency: { supported: true } });
+const capabilities = capabilitiesFixture({
+  chat: { supported: true },
+  steering: { supported: true },
+  idempotency: { supported: true },
+});
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
-afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); });
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()));
+});
 const admitted = { turn: "queued", admittedVersion: "boot:0:7" } as const;
 
 async function installation(overrides: Partial<Runtime> = {}) {
-  const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> => ({ requestId: input.requestId, status: "accepted", runId: "run", ...admitted }));
+  const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> => ({
+    requestId: input.requestId,
+    status: "accepted",
+    runId: "run",
+    ...admitted,
+  }));
   const runtime = fakeRuntime({
-    listBots: async () => [botFixture()], capabilities: async () => capabilities, submit,
-    conversation: async botId => conversationFixture({ botId, messages: [{ id: "u1", role: "user", text: "Order more feed" }], activity: { state: "failed", runId: "run-1" } }),
-    close: async () => {}, ...overrides,
+    listBots: async () => [botFixture()],
+    capabilities: async () => capabilities,
+    submit,
+    conversation: async (botId) =>
+      conversationFixture({
+        botId,
+        messages: [{ id: "u1", role: "user", text: "Order more feed" }],
+        activity: { state: "failed", runId: "run-1" },
+      }),
+    close: async () => {},
+    ...overrides,
   });
-  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+  const result = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    runtime,
+    { background: false },
+  );
   apps.push(result.app);
   const headers = await localLogin(result.app, origin);
   const send = (payload: Record<string, unknown>) =>
-    result.app.inject({ method: "POST", url: "/api/bots/shared/messages", headers, payload: { attachments: [], ...payload } });
-  const check = async (requestId: string) => (await result.app.inject({ url: `/api/submissions/${requestId}`, headers })).json() as SubmissionReceipt;
+    result.app.inject({
+      method: "POST",
+      url: "/api/bots/shared/messages",
+      headers,
+      payload: { attachments: [], ...payload },
+    });
+  const check = async (requestId: string) =>
+    (
+      await result.app.inject({ url: `/api/submissions/${requestId}`, headers })
+    ).json() as SubmissionReceipt;
   return { ...result, submit, send, check, headers };
 }
 
@@ -34,19 +69,37 @@ describe("the admission's turn on a receipt", () => {
   it("answers a send with it, keeps it on the recorded receipt, and answers a repeat of the request from there", async () => {
     const { submit, send, store } = await installation();
     const requestId = randomUUID();
-    expect((await send({ requestId, text: "Hello" })).json()).toMatchObject({ status: "accepted", ...admitted });
+    expect((await send({ requestId, text: "Hello" })).json()).toMatchObject({
+      status: "accepted",
+      ...admitted,
+    });
     expect(store.submission(requestId)!.receipt).toMatchObject(admitted);
-    expect((await send({ requestId, text: "Hello" })).json()).toMatchObject({ status: "accepted", ...admitted });
+    expect((await send({ requestId, text: "Hello" })).json()).toMatchObject({
+      status: "accepted",
+      ...admitted,
+    });
     expect(submit).toHaveBeenCalledTimes(1);
   });
 
   // A lookup from an add-on that saved the answer before the field existed carries none, so the recorded receipt supplies it.
   it("checks a recorded receipt with the turn a lookup without one cannot carry, only while both say accepted", async () => {
     let looked: SubmissionReceipt["status"] = "accepted";
-    const { send, check } = await installation({ lookupSubmission: async requestId => ({ requestId, status: looked, runId: "run", steered: false }) });
+    const { send, check } = await installation({
+      lookupSubmission: async (requestId) => ({
+        requestId,
+        status: looked,
+        runId: "run",
+        steered: false,
+      }),
+    });
     const requestId = randomUUID();
     await send({ requestId, text: "Hello" });
-    expect(await check(requestId)).toMatchObject({ status: "accepted", steered: false, text: "Hello", ...admitted });
+    expect(await check(requestId)).toMatchObject({
+      status: "accepted",
+      steered: false,
+      text: "Hello",
+      ...admitted,
+    });
     // Hermes later settles the request otherwise; that is what the check reports, and a turn belongs only to an accepted one.
     looked = "interrupted";
     const settled = await check(requestId);
@@ -56,17 +109,28 @@ describe("the admission's turn on a receipt", () => {
   });
 
   it("answers a check with the turn the add-on saved, over the recorded one", async () => {
-    const { send, check } = await installation({ lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run", turn: "started" }) });
+    const { send, check } = await installation({
+      lookupSubmission: async (requestId) => ({
+        requestId,
+        status: "accepted",
+        runId: "run",
+        turn: "started",
+      }),
+    });
     const requestId = randomUUID();
     await send({ requestId, text: "Hello" });
     // The recorded receipt says queued; the version it was stamped with stays, since only this server saw the answer arrive.
-    expect(await check(requestId)).toMatchObject({ status: "accepted", turn: "started", admittedVersion: admitted.admittedVersion });
+    expect(await check(requestId)).toMatchObject({
+      status: "accepted",
+      turn: "started",
+      admittedVersion: admitted.admittedVersion,
+    });
   });
 
   it("does not take a turn from a receipt recorded before it was accepted", async () => {
     const { send, check } = await installation({
-      submit: async input => ({ requestId: input.requestId, status: "uncertain", ...admitted }),
-      lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run" }),
+      submit: async (input) => ({ requestId: input.requestId, status: "uncertain", ...admitted }),
+      lookupSubmission: async (requestId) => ({ requestId, status: "accepted", runId: "run" }),
     });
     const requestId = randomUUID();
     await send({ requestId, text: "Hello" });
@@ -82,53 +146,110 @@ describe("the admission's turn on a receipt", () => {
     { turn: "none", kept: true },
     { turn: "unknown", kept: false },
     { turn: undefined, kept: false },
-  ] as const)("keeps the sender's draft and its photo only when a typed stop admitted nothing (turn $turn)", async ({ turn, kept }) => {
-    const message = "Hermes ended its voice chat. Nothing was sent to the assistant.";
-    const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> =>
-      ({ requestId: input.requestId, status: "accepted", runId: "run", ...turn ? { turn, message } : {} }));
-    const { send, check, app, headers } = await installation({
-      submit, lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run" }),
-    });
-    const photo = { id: "cGhvdG8.c2ln", name: "gate.jpg", mime: "image/jpeg" };
-    const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Stop voice", attachments: [photo], baseRevision: 0 } });
-    expect(saved.json()).toMatchObject({ revision: 1, reason: "edit" });
-    const requestId = randomUUID();
-    const body = { requestId, text: "Stop voice", attachments: [photo], draftBaseRevision: 1 };
-    expect((await send(body)).json()).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
-    // The same request again, and a check of it, answer from the record and change nothing.
-    expect((await send(body)).json()).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
-    expect(await check(requestId)).toMatchObject({ status: "accepted", ...turn ? { turn } : {} });
-    expect(submit).toHaveBeenCalledTimes(1);
-    const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
-    expect(draft).toMatchObject(kept
-      ? { text: "Stop voice", attachments: [photo], revision: 1, reason: "edit", sentRevision: 0 }
-      : { text: "", attachments: [], revision: 2, reason: "sent", sentRevision: 2 });
-  });
+  ] as const)(
+    "keeps the sender's draft and its photo only when a typed stop admitted nothing (turn $turn)",
+    async ({ turn, kept }) => {
+      const message = "Hermes ended its voice chat. Nothing was sent to the assistant.";
+      const submit = vi.fn(async (input: Submission): Promise<SubmissionReceipt> => ({
+        requestId: input.requestId,
+        status: "accepted",
+        runId: "run",
+        ...(turn ? { turn, message } : {}),
+      }));
+      const { send, check, app, headers } = await installation({
+        submit,
+        lookupSubmission: async (requestId) => ({ requestId, status: "accepted", runId: "run" }),
+      });
+      const photo = { id: "cGhvdG8.c2ln", name: "gate.jpg", mime: "image/jpeg" };
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/bots/shared/draft",
+        headers,
+        payload: { text: "Stop voice", attachments: [photo], baseRevision: 0 },
+      });
+      expect(saved.json()).toMatchObject({ revision: 1, reason: "edit" });
+      const requestId = randomUUID();
+      const body = { requestId, text: "Stop voice", attachments: [photo], draftBaseRevision: 1 };
+      expect((await send(body)).json()).toMatchObject({
+        status: "accepted",
+        ...(turn ? { turn } : {}),
+      });
+      // The same request again, and a check of it, answer from the record and change nothing.
+      expect((await send(body)).json()).toMatchObject({
+        status: "accepted",
+        ...(turn ? { turn } : {}),
+      });
+      expect(await check(requestId)).toMatchObject({
+        status: "accepted",
+        ...(turn ? { turn } : {}),
+      });
+      expect(submit).toHaveBeenCalledTimes(1);
+      const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
+      expect(draft).toMatchObject(
+        kept
+          ? {
+              text: "Stop voice",
+              attachments: [photo],
+              revision: 1,
+              reason: "edit",
+              sentRevision: 0,
+            }
+          : { text: "", attachments: [], revision: 2, reason: "sent", sentRevision: 2 },
+      );
+    },
+  );
 
   // The answer was lost on its way to the server, so the first thing it learns is the lookup's.
   it.each([
     { saved: "none", kept: true },
     { saved: undefined, kept: false },
-  ] as const)("keeps a typed stop's draft when only the lookup says what happened (saved turn $saved)", async ({ saved, kept }) => {
-    const { send, check, app, headers } = await installation({
-      submit: async input => ({ requestId: input.requestId, status: "uncertain", message: "Hermes response lost. Review before retrying." }),
-      lookupSubmission: async requestId => ({ requestId, status: "accepted", runId: "run", ...saved ? { turn: saved, message: "Hermes ended its voice chat." } : {} }),
-    });
-    await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "Stop voice", attachments: [], baseRevision: 0 } });
-    const requestId = randomUUID();
-    expect((await send({ requestId, text: "Stop voice", attachments: [], draftBaseRevision: 1 })).json()).toMatchObject({ status: "uncertain" });
-    const checked = await check(requestId);
-    expect(checked).toMatchObject({ status: "accepted", ...saved ? { turn: saved } : {} });
-    const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
-    expect(draft).toMatchObject(kept ? { text: "Stop voice", revision: 1, reason: "edit" } : { text: "", reason: "sent" });
-  });
+  ] as const)(
+    "keeps a typed stop's draft when only the lookup says what happened (saved turn $saved)",
+    async ({ saved, kept }) => {
+      const { send, check, app, headers } = await installation({
+        submit: async (input) => ({
+          requestId: input.requestId,
+          status: "uncertain",
+          message: "Hermes response lost. Review before retrying.",
+        }),
+        lookupSubmission: async (requestId) => ({
+          requestId,
+          status: "accepted",
+          runId: "run",
+          ...(saved ? { turn: saved, message: "Hermes ended its voice chat." } : {}),
+        }),
+      });
+      await app.inject({
+        method: "PUT",
+        url: "/api/bots/shared/draft",
+        headers,
+        payload: { text: "Stop voice", attachments: [], baseRevision: 0 },
+      });
+      const requestId = randomUUID();
+      expect(
+        (
+          await send({ requestId, text: "Stop voice", attachments: [], draftBaseRevision: 1 })
+        ).json(),
+      ).toMatchObject({ status: "uncertain" });
+      const checked = await check(requestId);
+      expect(checked).toMatchObject({ status: "accepted", ...(saved ? { turn: saved } : {}) });
+      const draft = (await app.inject({ url: "/api/bots/shared/draft", headers })).json();
+      expect(draft).toMatchObject(
+        kept ? { text: "Stop voice", revision: 1, reason: "edit" } : { text: "", reason: "sent" },
+      );
+    },
+  );
 
   it("answers a later retry of the same failed turn with the first retry's recorded receipt, turn included", async () => {
     const { submit, send } = await installation();
     const requestId = await retryRequestId("shared", "u1", "run-1");
-    expect((await send({ requestId, text: "Order more feed", retryOf: "u1" })).json()).toMatchObject(admitted);
+    expect(
+      (await send({ requestId, text: "Order more feed", retryOf: "u1" })).json(),
+    ).toMatchObject(admitted);
     // Another device copied the text differently: it follows the first retry's receipt.
-    expect((await send({ requestId, text: "Order more feed ", retryOf: "u1" })).json()).toMatchObject({ requestId, ...admitted });
+    expect(
+      (await send({ requestId, text: "Order more feed ", retryOf: "u1" })).json(),
+    ).toMatchObject({ requestId, ...admitted });
     expect(submit).toHaveBeenCalledTimes(1);
   });
 });

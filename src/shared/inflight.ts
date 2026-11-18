@@ -6,14 +6,26 @@ import type { FileRef, Inflight, InflightDelta, Message, TurnEvent, TurnRows } f
  * differ, so the caller reloads instead of guessing. Lengths count UTF-16 code units, as
  * JavaScript's `String.length` does.
  */
-export function applyInflightDelta(held: Inflight | undefined, delta: InflightDelta): Inflight | undefined {
-  if (!held || held.botId !== delta.botId || held.message.id !== delta.messageId
-    || held.message.text.length !== delta.baseTextLength
-    || (held.message.reasoning ?? "").length !== delta.baseReasoningLength) return undefined;
+export function applyInflightDelta(
+  held: Inflight | undefined,
+  delta: InflightDelta,
+): Inflight | undefined {
+  if (
+    !held ||
+    held.botId !== delta.botId ||
+    held.message.id !== delta.messageId ||
+    held.message.text.length !== delta.baseTextLength ||
+    (held.message.reasoning ?? "").length !== delta.baseReasoningLength
+  )
+    return undefined;
   const reasoning = (held.message.reasoning ?? "") + (delta.appendReasoning ?? "");
   return {
     ...held,
-    message: { ...held.message, text: held.message.text + (delta.appendText ?? ""), ...(reasoning ? { reasoning } : {}) },
+    message: {
+      ...held.message,
+      text: held.message.text + (delta.appendText ?? ""),
+      ...(reasoning ? { reasoning } : {}),
+    },
     activity: delta.activity,
     toolCalls: delta.toolCalls ?? held.toolCalls,
   };
@@ -21,8 +33,11 @@ export function applyInflightDelta(held: Inflight | undefined, delta: InflightDe
 
 const parseVersion = (value: string | undefined) => {
   const parts = value?.split(":") ?? [];
-  const epoch = Number(parts[1]), generation = Number(parts[2]);
-  return parts.length === 3 && parts[0] && Number.isInteger(epoch) && Number.isInteger(generation) ? { boot: parts[0], epoch, generation } : undefined;
+  const epoch = Number(parts[1]),
+    generation = Number(parts[2]);
+  return parts.length === 3 && parts[0] && Number.isInteger(epoch) && Number.isInteger(generation)
+    ? { boot: parts[0], epoch, generation }
+    : undefined;
 };
 
 /** The server process a structural version came from, or undefined for a missing or malformed version. */
@@ -34,7 +49,8 @@ export const versionBoot = (version: string | undefined) => parseVersion(version
  * whose generations restart, so neither can be called older.
  */
 export function compareVersions(a: string | undefined, b: string | undefined): number | undefined {
-  const left = parseVersion(a), right = parseVersion(b);
+  const left = parseVersion(a),
+    right = parseVersion(b);
   if (!left || !right || left.boot !== right.boot) return undefined;
   return left.epoch - right.epoch || left.generation - right.generation;
 }
@@ -48,16 +64,19 @@ const isLive = (message: Message) => message.id.endsWith("-inflight");
  * turn is also in it, so the caller reads the conversation instead of guessing.
  */
 export function placeTurn(messages: Message[], turn: TurnRows): Message[] | undefined {
-  const saved = messages.filter(message => !isLive(message));
-  let end = turn.messages[0] ? saved.findIndex(message => message.id === turn.messages[0].id) : -1;
+  const saved = messages.filter((message) => !isLive(message));
+  let end = turn.messages[0]
+    ? saved.findIndex((message) => message.id === turn.messages[0].id)
+    : -1;
   if (end < 0 && typeof turn.after === "string") {
-    const after = saved.findIndex(message => message.id === turn.after);
+    const after = saved.findIndex((message) => message.id === turn.after);
     if (after >= 0) end = after + 1;
   }
   if (end < 0 && turn.after === null) end = 0;
   if (end < 0) return undefined;
-  const kept = saved.slice(0, end), ids = new Set(turn.messages.map(message => message.id));
-  if (kept.some(message => ids.has(message.id))) return undefined;
+  const kept = saved.slice(0, end),
+    ids = new Set(turn.messages.map((message) => message.id));
+  if (kept.some((message) => ids.has(message.id))) return undefined;
   return [...kept, ...turn.messages];
 }
 
@@ -67,14 +86,29 @@ export function placeTurn(messages: Message[], turn: TurnRows): Message[] | unde
  * The conversation's file list, which a read builds from the saved rows, gains the files the turn's rows carry,
  * so a file a tool made shows with its reply without a read.
  */
-export function withTurn<C extends { messages: Message[]; activity: Inflight["activity"]; toolCalls?: Inflight["toolCalls"]; version?: string; files?: FileRef[] }>(
-  conversation: C, turn: TurnEvent): C | undefined {
+export function withTurn<
+  C extends {
+    messages: Message[];
+    activity: Inflight["activity"];
+    toolCalls?: Inflight["toolCalls"];
+    version?: string;
+    files?: FileRef[];
+  },
+>(conversation: C, turn: TurnEvent): C | undefined {
   const order = compareVersions(turn.version, conversation.version);
   if (order !== undefined && order < 0) return conversation;
   const messages = placeTurn(conversation.messages, turn);
   if (!messages) return undefined;
-  const known = new Set(conversation.files?.map(file => file.id));
-  const added = turn.messages.flatMap(message => message.files ?? []).filter(file => !known.has(file.id) && known.add(file.id));
-  return { ...conversation, messages, version: turn.version, activity: turn.activity, toolCalls: turn.toolCalls,
-    ...conversation.files && added.length ? { files: [...conversation.files, ...added] } : {} };
+  const known = new Set(conversation.files?.map((file) => file.id));
+  const added = turn.messages
+    .flatMap((message) => message.files ?? [])
+    .filter((file) => !known.has(file.id) && known.add(file.id));
+  return {
+    ...conversation,
+    messages,
+    version: turn.version,
+    activity: turn.activity,
+    toolCalls: turn.toolCalls,
+    ...(conversation.files && added.length ? { files: [...conversation.files, ...added] } : {}),
+  };
 }

@@ -13,16 +13,26 @@
  * match src/app/storage.ts and src/startup-read.ts; tests/startup-read.test.ts runs this file against them.
  */
 (function () {
-  'use strict';
+  "use strict";
   function read(key) {
-    try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (error) { return null; }
+    try {
+      return JSON.parse(localStorage.getItem(key) || "null");
+    } catch (error) {
+      return null;
+    }
   }
   // The account this browser's sign-in last named, by linked-chat.ts's rule: a record that has not
   // lapsed, with its chat list, naming an account.
   function hintedUser() {
-    var hint = read('agent-interface:sign-in-hint');
-    if (!hint || typeof hint !== 'object' || typeof hint.until !== 'number' || !Array.isArray(hint.bots)) return null;
-    if (typeof hint.user !== 'string' || hint.until <= Date.now()) return null;
+    var hint = read("agent-interface:sign-in-hint");
+    if (
+      !hint ||
+      typeof hint !== "object" ||
+      typeof hint.until !== "number" ||
+      !Array.isArray(hint.bots)
+    )
+      return null;
+    if (typeof hint.user !== "string" || hint.until <= Date.now()) return null;
     return hint.user;
   }
   // The chat the address names, when linked-chat.ts's prefetchLinkedChat would read it as the bundle starts: a
@@ -31,46 +41,82 @@
   function linkedChat() {
     try {
       var query = new URLSearchParams(location.search);
-      var bot = query.get('bot'), view = query.get('view');
-      if (!bot || query.get('message') || view === 'today' || view === 'find' || view === 'group' && query.get('room')) return null;
-      if (document.visibilityState === 'hidden' || navigator.onLine === false) return null;
-      var hint = read('agent-interface:sign-in-hint');
+      var bot = query.get("bot"),
+        view = query.get("view");
+      if (
+        !bot ||
+        query.get("message") ||
+        view === "today" ||
+        view === "find" ||
+        (view === "group" && query.get("room"))
+      )
+        return null;
+      if (document.visibilityState === "hidden" || navigator.onLine === false) return null;
+      var hint = read("agent-interface:sign-in-hint");
       return hintedUser() && hint.bots.indexOf(bot) >= 0 ? bot : null;
-    } catch (error) { return null; /* The bundle reads the chat itself. */ }
+    } catch (error) {
+      return null; /* The bundle reads the chat itself. */
+    }
   }
   // An active account change, or a device-only sign-out whose server session is still live. A stale
   // change carrying logout still owes cleanup (account-epoch.ts). Only the bundle may do that under its auth lock.
   function accountPending() {
-    var record = read('agent-interface:auth-epoch');
-    return !!record && typeof record === 'object' && (
-      record.logout && (record.signedOut || record.changing) ||
-      record.changing === true && typeof record.at === 'number' && Date.now() - record.at < 65000);
+    var record = read("agent-interface:auth-epoch");
+    return (
+      !!record &&
+      typeof record === "object" &&
+      ((record.logout && (record.signedOut || record.changing)) ||
+        (record.changing === true &&
+          typeof record.at === "number" &&
+          Date.now() - record.at < 65000))
+    );
   }
   try {
     // While a change is on its way the app's first draw shows the system's theme too (src/App.tsx).
     var user = !accountPending() && hintedUser();
-    var saved = user && read('agent-interface:theme');
-    if (saved && saved.v === 1 && saved.user === user && (saved.theme === 'light' || saved.theme === 'dark' || saved.theme === 'system'))
-      document.documentElement.setAttribute('data-theme', saved.theme);
-  } catch (error) { /* The page's default theme stays until bootstrap answers. */ }
+    var saved = user && read("agent-interface:theme");
+    if (
+      saved &&
+      saved.v === 1 &&
+      saved.user === user &&
+      (saved.theme === "light" || saved.theme === "dark" || saved.theme === "system")
+    )
+      document.documentElement.setAttribute("data-theme", saved.theme);
+  } catch (error) {
+    /* The page's default theme stays until bootstrap answers. */
+  }
   try {
-    if (window.__wildbotsStartup !== undefined || typeof fetch !== 'function') return;
+    if (window.__wildbotsStartup !== undefined || typeof fetch !== "function") return;
     // The account record as text, compared whole by the app; none, or blocked storage, is ''.
-    var epoch = '';
-    try { epoch = localStorage.getItem('agent-interface:auth-epoch') || ''; } catch (error) { /* As the app reads it. */ }
+    var epoch = "";
+    try {
+      epoch = localStorage.getItem("agent-interface:auth-epoch") || "";
+    } catch (error) {
+      /* As the app reads it. */
+    }
     // The cookie this read would carry may be the last account's.
     if (accountPending()) return;
     // The same request the app's api() makes for its first GET: no validator, no CSRF token, the cookie.
     var start = function (path) {
-      var controller = typeof AbortController === 'function' ? new AbortController() : null;
-      var response = fetch('/api' + path, { credentials: 'same-origin', cache: 'no-store', signal: controller ? controller.signal : undefined });
+      var controller = typeof AbortController === "function" ? new AbortController() : null;
+      var response = fetch("/api" + path, {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller ? controller.signal : undefined,
+      });
       // A failure is the app's to handle once it takes the read; until then it is not an unhandled one.
       response.catch(function () {});
-      return { path: path, response: response, abort: function () { if (controller) controller.abort(); } };
+      return {
+        path: path,
+        response: response,
+        abort: function () {
+          if (controller) controller.abort();
+        },
+      };
     };
-    var reads = [start('/bootstrap?roster=lean')];
+    var reads = [start("/bootstrap?roster=lean")];
     var chat = linkedChat();
-    if (chat) reads.push(start('/bots/' + encodeURIComponent(chat) + '/conversation?turns=20'));
+    if (chat) reads.push(start("/bots/" + encodeURIComponent(chat) + "/conversation?turns=20"));
     var startup = { version: 3, epoch: epoch, reads: reads };
     window.__wildbotsStartup = startup;
     // A bundle that never asks for them, as from another release, lets them go.
@@ -79,5 +125,7 @@
       window.__wildbotsStartup = undefined;
       for (var index = 0; index < startup.reads.length; index++) startup.reads[index].abort();
     }, 60000);
-  } catch (error) { /* The app reads bootstrap itself, as it does without this file. */ }
+  } catch (error) {
+    /* The app reads bootstrap itself, as it does without this file. */
+  }
 })();

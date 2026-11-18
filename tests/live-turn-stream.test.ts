@@ -14,28 +14,52 @@ const origin = "http://127.0.0.1:3000";
 const apps: { close(): Promise<unknown>; server: { closeAllConnections(): void } }[] = [];
 afterEach(async () => {
   vi.useRealTimers();
-  for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
+  for (const app of apps.splice(0)) {
+    app.server.closeAllConnections();
+    await app.close();
+  }
   vi.unstubAllGlobals();
 });
 // The stream's throttles run on virtual time, as in conversation-events.test.ts; sockets stay real.
-const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = { toFake: ["setTimeout", "clearTimeout", "Date"] };
+const virtualClock: Parameters<typeof vi.useFakeTimers>[0] = {
+  toFake: ["setTimeout", "clearTimeout", "Date"],
+};
 
 async function setup() {
   const hermes = fakeHermes();
   hermes.profiles = ["shared", "hidden"];
-  const runtime = createHermesRuntime({ files: testFiles(), url: HERMES_URL, token: "isolated-contract-token" });
-  const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+  const runtime = createHermesRuntime({
+    files: testFiles(),
+    url: HERMES_URL,
+    token: "isolated-contract-token",
+  });
+  const { app, store } = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    runtime,
+    { background: false },
+  );
   apps.push(app);
   const base = await app.listen({ port: 0, host: "127.0.0.1" });
   const member = async (name: string) => {
-    const response = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: name }) });
+    const response = await fetch(`${base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: name }),
+    });
     return response.headers.getSetCookie()[0].split(";")[0];
   };
-  const one = await member("one"), two = await member("two");
+  const one = await member("one"),
+    two = await member("two");
   const get = async (cookie: string, query = "turns=20") => {
-    const response = await fetch(`${base}/api/bots/shared/conversation?${query}`, { headers: { cookie } });
+    const response = await fetch(`${base}/api/bots/shared/conversation?${query}`, {
+      headers: { cookie },
+    });
     expect(response.status).toBe(200);
-    return await response.json() as { messages: Message[]; version?: string; activity: TurnEvent["activity"] };
+    return (await response.json()) as {
+      messages: Message[];
+      version?: string;
+      activity: TurnEvent["activity"];
+    };
   };
   vi.useFakeTimers(virtualClock);
   return { hermes, runtime, store, base, one, two, get };
@@ -44,42 +68,77 @@ type Setup = Awaited<ReturnType<typeof setup>>;
 
 /** A stream's events as they arrive. Waiting moves virtual time too. */
 async function stream(s: Setup, cookie: string, mode = "3") {
-  const response = await fetch(`${s.base}/api/bots/shared/events?inflight=${mode}`, { headers: { cookie } });
+  const response = await fetch(`${s.base}/api/bots/shared/events?inflight=${mode}`, {
+    headers: { cookie },
+  });
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
-  let text = "", done = false;
+  let text = "",
+    done = false;
   const pump = (async () => {
     for (;;) {
       const chunk = await reader.read();
-      if (chunk.done) { done = true; return; }
+      if (chunk.done) {
+        done = true;
+        return;
+      }
       text += chunk.value;
     }
-  })().catch(() => { done = true; });
-  const events = () => text.split("\n\n").filter(frame => frame.startsWith("event:") || frame.startsWith("data:")).map(frame => {
-    if (frame.startsWith("data:")) return ["change", frame.slice(6)] as const;
-    const [event, data] = frame.split("\n");
-    return [event.slice(7), JSON.parse(data.slice(6))] as const;
+  })().catch(() => {
+    done = true;
   });
-  const of = <T,>(type: string) => events().filter(([name]) => name === type).map(([, data]) => data as T);
+  const events = () =>
+    text
+      .split("\n\n")
+      .filter((frame) => frame.startsWith("event:") || frame.startsWith("data:"))
+      .map((frame) => {
+        if (frame.startsWith("data:")) return ["change", frame.slice(6)] as const;
+        const [event, data] = frame.split("\n");
+        return [event.slice(7), JSON.parse(data.slice(6))] as const;
+      });
+  const of = <T>(type: string) =>
+    events()
+      .filter(([name]) => name === type)
+      .map(([, data]) => data as T);
   const until = async (ready: () => boolean, ms = 3000) => {
     const deadline = performance.now() + ms;
     while (!ready()) {
-      if (performance.now() > deadline) throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
+      if (performance.now() > deadline)
+        throw new Error(`Stream never got there: ${JSON.stringify(text)}`);
       await vi.advanceTimersByTimeAsync(10);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
     }
   };
   await until(() => text.includes("retry"));
-  return { events, turns: () => of<TurnEvent>("turn"), deltas: () => of<InflightDelta>("inflight-delta"), until,
-    get done() { return done; }, get text() { return text; }, close: () => reader.cancel().then(() => pump) };
+  return {
+    events,
+    turns: () => of<TurnEvent>("turn"),
+    deltas: () => of<InflightDelta>("inflight-delta"),
+    until,
+    get done() {
+      return done;
+    },
+    get text() {
+      return text;
+    },
+    close: () => reader.cancel().then(() => pump),
+  };
 }
 
-const opens = (s: Setup) => s.hermes.opens().map(call => call.params.window);
+const opens = (s: Setup) => s.hermes.opens().map((call) => call.params.window);
 function midTurn(s: Setup) {
-  s.hermes.history = [row(1, "user", "Fence?", { app_run_id: "run-1" }), row(2, "assistant", "Fixed.", { app_run_id: "run-1" }),
-    row(3, "user", "Check the barn", { app_request_id: "req-2", app_run_id: "run-2" })];
-  Object.assign(s.hermes, { running: true, runId: "run-2", inflight: { user: "Check the barn", assistant: "" } });
+  s.hermes.history = [
+    row(1, "user", "Fence?", { app_run_id: "run-1" }),
+    row(2, "assistant", "Fixed.", { app_run_id: "run-1" }),
+    row(3, "user", "Check the barn", { app_request_id: "req-2", app_run_id: "run-2" }),
+  ];
+  Object.assign(s.hermes, {
+    running: true,
+    runId: "run-2",
+    inflight: { user: "Check the barn", assistant: "" },
+  });
 }
-const saved = (messages: Message[]) => messages.filter(message => !message.id.endsWith("-inflight"));
+const saved = (messages: Message[]) =>
+  messages.filter((message) => !message.id.endsWith("-inflight"));
 
 /**
  * A `?inflight=1` or `?inflight=2` client through the reviewer's sequence: it reads on each change notice, as the
@@ -95,16 +154,17 @@ async function legacyRun(mode: "1" | "2", beside: boolean) {
   // Both runs go on from the same instant, so tool times match.
   vi.setSystemTime(new Date("2026-11-10T06:00:00Z"));
   const log: unknown[] = [];
-  let step = 0, logged = 0;
+  let step = 0,
+    logged = 0;
   const read = async () => {
     const { messages, activity } = await s.get(s.one);
-    log.push([step, "read", messages.map(message => [message.id, message.text]), activity.state]);
+    log.push([step, "read", messages.map((message) => [message.id, message.text]), activity.state]);
   };
   /** Runs `ms` of virtual time, logging what the legacy stream got and reading on each change notice. */
   const run = async (ms: number) => {
     for (let at = 0; at < ms; at += 10) {
       await vi.advanceTimersByTimeAsync(10);
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
       for (const [name, data] of legacy.events().slice(logged)) {
         logged++;
         log.push([step, name, data]);
@@ -132,7 +192,7 @@ async function legacyRun(mode: "1" | "2", beside: boolean) {
     await run(durations[index]);
   }
   // The turn stream did see the turn, so a run beside it really had the server reading turns.
-  if (turns) expect(turns.turns().map(turn => turn.message.text)).toContain("Found it.");
+  if (turns) expect(turns.turns().map((turn) => turn.message.text)).toContain("Found it.");
   await legacy.close();
   await turns?.close();
   return log;
@@ -147,7 +207,12 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("message.delta", { text: "Looking. " });
     await events.until(() => events.turns().length === 1);
     const [first] = events.turns();
-    expect(first).toMatchObject({ botId: "shared", messages: [{ id: "req-2" }], message: { text: "Looking. " }, activity: { runId: "run-2" } });
+    expect(first).toMatchObject({
+      botId: "shared",
+      messages: [{ id: "req-2" }],
+      message: { text: "Looking. " },
+      activity: { runId: "run-2" },
+    });
     s.hermes.frame("message.delta", { text: "One sec." });
     await events.until(() => events.deltas().length === 1);
     expect(events.deltas()[0]).toMatchObject({ baseTextLength: 9, appendText: "One sec." });
@@ -159,7 +224,10 @@ describe("?inflight=3 turn streams", () => {
     await events.until(() => events.turns().length === 2);
     const second = events.turns()[1];
     // The saved segment arrives as a row of the turn, and the live reply holds only what follows it.
-    expect(second.messages.map(message => message.text)).toEqual(["Check the barn", "Looking. One sec."]);
+    expect(second.messages.map((message) => message.text)).toEqual([
+      "Check the barn",
+      "Looking. One sec.",
+    ]);
     expect(second.message.text).toBe("Found it.");
     expect(compareVersions(second.version, first.version)).toBeGreaterThan(0);
     // The turn event carries the saved segment, the tool and the activity, so the tool's finish sends no change notice and the
@@ -172,7 +240,8 @@ describe("?inflight=3 turn streams", () => {
   });
 
   describe("the change notice beside a turn event", () => {
-    const changes = (events: Awaited<ReturnType<typeof stream>>) => events.events().filter(([name]) => name === "change").length;
+    const changes = (events: Awaited<ReturnType<typeof stream>>) =>
+      events.events().filter(([name]) => name === "change").length;
     async function toolFinished(s: Setup, events: Awaited<ReturnType<typeof stream>>) {
       s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }));
       s.hermes.inflight.assistant = "Looking.";
@@ -183,7 +252,9 @@ describe("?inflight=3 turn streams", () => {
     it("goes only to the streams that get no turn events, for a change a turn event carries", async () => {
       const s = await setup();
       midTurn(s);
-      const turns = await stream(s, s.one, "3"), whole = await stream(s, s.two, "1"), growth = await stream(s, s.two, "2");
+      const turns = await stream(s, s.one, "3"),
+        whole = await stream(s, s.two, "1"),
+        growth = await stream(s, s.two, "2");
       await s.get(s.one);
       await toolFinished(s, turns);
       s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
@@ -197,11 +268,14 @@ describe("?inflight=3 turn streams", () => {
 
     // Each of these changes something only a read carries, or has no turn event to carry it, so it sends its notice at once.
     it.each<[string, (s: Setup) => void]>([
-      ["an approval asked", s => s.hermes.request("approval", "ap-1", { command: "ls" })],
-      ["a request cancelled", s => s.hermes.frame("request.cancel", { id: "ap-1" })],
-      ["an error", s => s.hermes.frame("error", { message: "boom" })],
-      ["a turn starting, which a native turn may save the prompt of later", s => s.hermes.frame("message.start", {})],
-      ["a frame the runtime does not know", s => s.hermes.frame("session.info", {})],
+      ["an approval asked", (s) => s.hermes.request("approval", "ap-1", { command: "ls" })],
+      ["a request cancelled", (s) => s.hermes.frame("request.cancel", { id: "ap-1" })],
+      ["an error", (s) => s.hermes.frame("error", { message: "boom" })],
+      [
+        "a turn starting, which a native turn may save the prompt of later",
+        (s) => s.hermes.frame("message.start", {}),
+      ],
+      ["a frame the runtime does not know", (s) => s.hermes.frame("session.info", {})],
     ])("goes at once for %s", async (_, send) => {
       const s = await setup();
       midTurn(s);
@@ -244,16 +318,23 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("tool.complete", { tool_id: "t1", name: "terminal" });
     await events.until(() => s.hermes.held.length === 1);
     s.hermes.frame("message.delta", { text: "Found it." });
-    await events.until(() => events.deltas().some(delta => delta.appendText?.includes("Found")));
+    await events.until(() => events.deltas().some((delta) => delta.appendText?.includes("Found")));
     // Growth on the reply the client holds, which has no row for the segment yet, so what follows the tool starts a paragraph.
-    expect(events.deltas().map(delta => delta.appendText ?? "").join("")).toBe("\n\nFound it.");
-    expect(events.deltas().at(-1)!.toolCalls).toEqual([expect.objectContaining({ id: "t1", status: "completed" })]);
+    expect(
+      events
+        .deltas()
+        .map((delta) => delta.appendText ?? "")
+        .join(""),
+    ).toBe("\n\nFound it.");
+    expect(events.deltas().at(-1)!.toolCalls).toEqual([
+      expect.objectContaining({ id: "t1", status: "completed" }),
+    ]);
     expect(events.turns()).toHaveLength(1);
     s.hermes.held[0].release();
     await events.until(() => events.turns().length === 2);
     const second = events.turns()[1];
     expect(compareVersions(second.version, first.version)).toBeGreaterThan(0);
-    expect(second.messages.map(message => message.text)).toEqual(["Check the barn", "Looking."]);
+    expect(second.messages.map((message) => message.text)).toEqual(["Check the barn", "Looking."]);
     expect(second.message.text).toBe("Found it.");
     await events.close();
   });
@@ -266,9 +347,19 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("message.delta", { text: "Looking." });
     await events.until(() => events.turns().length === 1);
     // A write's own notice, with no change to the turn's structure: the reply goes on growing.
-    const csrf = await (await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.one } })).json() as { csrfToken: string };
-    const answer = await fetch(`${s.base}/api/bots/shared/steer`, { method: "POST", headers: { cookie: s.one, origin, "content-type": "application/json", "x-csrf-token": csrf.csrfToken },
-      body: JSON.stringify({ requestId: crypto.randomUUID(), text: "Also the loft" }) });
+    const csrf = (await (
+      await fetch(`${s.base}/api/bootstrap?roster=lean`, { headers: { cookie: s.one } })
+    ).json()) as { csrfToken: string };
+    const answer = await fetch(`${s.base}/api/bots/shared/steer`, {
+      method: "POST",
+      headers: {
+        cookie: s.one,
+        origin,
+        "content-type": "application/json",
+        "x-csrf-token": csrf.csrfToken,
+      },
+      body: JSON.stringify({ requestId: crypto.randomUUID(), text: "Also the loft" }),
+    });
     expect(answer.status).toBe(200);
     await events.until(() => events.events().some(([name]) => name === "change"));
     s.hermes.frame("message.delta", { text: " Still looking." });
@@ -285,8 +376,10 @@ describe("?inflight=3 turn streams", () => {
   it("serves two members with one turn read, and each places it on what it holds, scrolled back or not", async () => {
     const s = await setup();
     midTurn(s);
-    const one = await stream(s, s.one), two = await stream(s, s.two);
-    const latest = await s.get(s.one), back = await s.get(s.two, "start=1");
+    const one = await stream(s, s.one),
+      two = await stream(s, s.two);
+    const latest = await s.get(s.one),
+      back = await s.get(s.two, "start=1");
     s.hermes.history.push(row(4, "assistant", "Looking.", { app_run_id: "run-2" }));
     s.hermes.frame("tool.complete", { tool_id: "t1" });
     s.hermes.frame("message.delta", { text: "Looking. Found it." });
@@ -294,33 +387,87 @@ describe("?inflight=3 turn streams", () => {
     await two.until(() => two.turns().length === 1);
     expect(one.turns()[0]).toEqual(two.turns()[0]);
     const turn = one.turns()[0];
-    expect(placeTurn(latest.messages, turn)!.map(message => message.id)).toEqual(["1", "2", "req-2", "4"]);
-    expect(placeTurn(back.messages, turn)!.map(message => message.id)).toEqual(["1", "2", "req-2", "4"]);
+    expect(placeTurn(latest.messages, turn)!.map((message) => message.id)).toEqual([
+      "1",
+      "2",
+      "req-2",
+      "4",
+    ]);
+    expect(placeTurn(back.messages, turn)!.map((message) => message.id)).toEqual([
+      "1",
+      "2",
+      "req-2",
+      "4",
+    ]);
     expect(turn.message.text).toBe("Found it.");
     expect(opens(s)).toEqual([{ turns: 20 }, { start: "1" }, { start: "req-2" }]);
-    await one.close(); await two.close();
+    await one.close();
+    await two.close();
   });
 
   it("shows the turn's saved messages exactly as the conversation read shows them to the same member", async () => {
     const s = await setup();
     s.store.savePresentation("hidden", { shared: false, ownerId: "local-two" });
-    s.store.intent({ requestId: "steer-two", botId: "shared", senderId: "local-two", text: "Check the loft too", attachments: [] });
+    s.store.intent({
+      requestId: "steer-two",
+      botId: "shared",
+      senderId: "local-two",
+      text: "Check the loft too",
+      attachments: [],
+    });
     midTurn(s);
     s.hermes.history.push(
-      row(4, "assistant", "On it.\n\n```reply-card\n{\"type\":\"checklist\",\"title\":\"Barn\",\"items\":[{\"id\":\"a\",\"text\":\"Door\"}]}\n```", {
-        app_run_id: "run-2", display_commentary: ["Opening the barn camera."], app_artifacts: [{ path: "/workspace/out/barn.png", name: "barn.png" }] }),
-      row(5, "user", "Check the loft too", { app_request_id: "steer-two", app_run_id: "run-2", app_steering: true }),
-      { row_id: 6, role: "tool", name: "message_agent", content: "Asked", app_run_id: "run-2",
-        app_tool_call: { id: "call-6", name: "message_agent", arguments: JSON.stringify({ target: "hidden", text: "private" }), result: "private answer", status: "completed" } });
+      row(
+        4,
+        "assistant",
+        'On it.\n\n```reply-card\n{"type":"checklist","title":"Barn","items":[{"id":"a","text":"Door"}]}\n```',
+        {
+          app_run_id: "run-2",
+          display_commentary: ["Opening the barn camera."],
+          app_artifacts: [{ path: "/workspace/out/barn.png", name: "barn.png" }],
+        },
+      ),
+      row(5, "user", "Check the loft too", {
+        app_request_id: "steer-two",
+        app_run_id: "run-2",
+        app_steering: true,
+      }),
+      {
+        row_id: 6,
+        role: "tool",
+        name: "message_agent",
+        content: "Asked",
+        app_run_id: "run-2",
+        app_tool_call: {
+          id: "call-6",
+          name: "message_agent",
+          arguments: JSON.stringify({ target: "hidden", text: "private" }),
+          result: "private answer",
+          status: "completed",
+        },
+      },
+    );
     const events = await stream(s, s.one);
     const read = await s.get(s.one);
     s.hermes.frame("message.delta", { text: "Loft is dry." });
     await events.until(() => events.turns().length === 1);
     const turn = events.turns()[0];
-    const start = read.messages.findIndex(message => message.id === "req-2");
+    const start = read.messages.findIndex((message) => message.id === "req-2");
     expect(turn.messages).toEqual(saved(read.messages).slice(start));
-    expect(turn.messages.map(message => [message.id, message.sender?.id, message.interim ?? false, message.files?.length ?? 0])).toEqual([
-      ["req-2", undefined, false, 0], ["4-progress-0", undefined, true, 0], ["4", undefined, false, 1], ["steer-two", "local-two", false, 0], ["6", undefined, false, 0]]);
+    expect(
+      turn.messages.map((message) => [
+        message.id,
+        message.sender?.id,
+        message.interim ?? false,
+        message.files?.length ?? 0,
+      ]),
+    ).toEqual([
+      ["req-2", undefined, false, 0],
+      ["4-progress-0", undefined, true, 0],
+      ["4", undefined, false, 1],
+      ["steer-two", "local-two", false, 0],
+      ["6", undefined, false, 0],
+    ]);
     expect(JSON.stringify(turn)).not.toContain("private");
     await events.close();
   });
@@ -328,8 +475,19 @@ describe("?inflight=3 turn streams", () => {
   it("redacts a newly private assistant in the next turn, and ends the stream of a member who can no longer see the assistant", async () => {
     const s = await setup();
     midTurn(s);
-    s.hermes.history.push({ row_id: 4, role: "tool", name: "message_agent", content: "Asked", app_run_id: "run-2",
-      app_tool_call: { id: "call-4", name: "message_agent", arguments: JSON.stringify({ target: "hidden", text: "secret plan" }), status: "completed" } });
+    s.hermes.history.push({
+      row_id: 4,
+      role: "tool",
+      name: "message_agent",
+      content: "Asked",
+      app_run_id: "run-2",
+      app_tool_call: {
+        id: "call-4",
+        name: "message_agent",
+        arguments: JSON.stringify({ target: "hidden", text: "secret plan" }),
+        status: "completed",
+      },
+    });
     const events = await stream(s, s.one);
     await s.get(s.one);
     s.hermes.frame("message.delta", { text: "Asking." });
@@ -362,13 +520,17 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("message.delta", { text: "Looking. Found it." });
     await events.until(() => events.turns().length === 1);
     expect(events.deltas()).toEqual([]);
-    expect(events.turns()[0]).toMatchObject({ messages: [{ id: "req-2" }, { id: "4" }], message: { text: "Found it." } });
+    expect(events.turns()[0]).toMatchObject({
+      messages: [{ id: "req-2" }, { id: "4" }],
+      message: { text: "Found it." },
+    });
   });
 
   it("keeps ?inflight=1 and ?inflight=2 as they were: no turn events, no turn reads", async () => {
     const s = await setup();
     midTurn(s);
-    const whole = await stream(s, s.one, "1"), growth = await stream(s, s.two, "2");
+    const whole = await stream(s, s.one, "1"),
+      growth = await stream(s, s.two, "2");
     await s.get(s.one);
     s.hermes.frame("message.delta", { text: "Looking." });
     await whole.until(() => whole.events().some(([name]) => name === "inflight"));
@@ -379,7 +541,9 @@ describe("?inflight=3 turn streams", () => {
     expect(opens(s)).toEqual([{ turns: 20 }]);
     for (const events of [whole, growth]) {
       expect(events.turns()).toEqual([]);
-      expect(Object.keys(events.events().find(([name]) => name === "inflight")![1] as object)).toEqual(["botId", "message", "activity", "toolCalls"]);
+      expect(
+        Object.keys(events.events().find(([name]) => name === "inflight")![1] as object),
+      ).toEqual(["botId", "message", "activity", "toolCalls"]);
     }
   });
 
@@ -397,12 +561,16 @@ describe("?inflight=3 turn streams", () => {
     s.hermes.frame("message.complete", { text: "" });
     const deadline = performance.now() + 3000;
     while (events.turns().length < 2) {
-      if (performance.now() > deadline) throw new Error(`The saved reply waited for the tick: ${JSON.stringify(events.text)}`);
+      if (performance.now() > deadline)
+        throw new Error(`The saved reply waited for the tick: ${JSON.stringify(events.text)}`);
       // Runs only timers already due, so a reply held for the tick never goes.
       await vi.advanceTimersByTimeAsync(0);
       await realDelay(5);
     }
-    expect(saved(events.turns()[1].messages).map(message => message.text)).toEqual(["Check the barn", "Looking. All latched."]);
+    expect(saved(events.turns()[1].messages).map((message) => message.text)).toEqual([
+      "Check the barn",
+      "Looking. All latched.",
+    ]);
     await events.close();
   });
 
@@ -424,20 +592,28 @@ describe("?inflight=3 turn streams", () => {
 describe("?inflight=1 and ?inflight=2 beside a turn stream", () => {
   const reset = async () => {
     vi.useRealTimers();
-    for (const app of apps.splice(0)) { app.server.closeAllConnections(); await app.close(); }
+    for (const app of apps.splice(0)) {
+      app.server.closeAllConnections();
+      await app.close();
+    }
     vi.unstubAllGlobals();
   };
   // The iOS app in the field reads ?inflight=1 and cannot be updated in step, so the server's own turn reads
   // must never reach it: it gets a live reply only once its own read stored what the reply is built on.
-  it.each(["1", "2"] as const)("?inflight=%s gets the same events and reads, in the same steps, with a turn stream beside it", async mode => {
-    const alone = await legacyRun(mode, false);
-    await reset();
-    const beside = await legacyRun(mode, true);
-    expect(beside).toEqual(alone);
-    // After the tool, nothing live arrives before the change notice's read, which still shows the saved segment.
-    const afterTool = alone.filter(entry => (entry as unknown[])[0] === 3).map(entry => (entry as unknown[])[1]);
-    expect(afterTool.slice(0, 2)).toEqual(["change", "read"]);
-  });
+  it.each(["1", "2"] as const)(
+    "?inflight=%s gets the same events and reads, in the same steps, with a turn stream beside it",
+    async (mode) => {
+      const alone = await legacyRun(mode, false);
+      await reset();
+      const beside = await legacyRun(mode, true);
+      expect(beside).toEqual(alone);
+      // After the tool, nothing live arrives before the change notice's read, which still shows the saved segment.
+      const afterTool = alone
+        .filter((entry) => (entry as unknown[])[0] === 3)
+        .map((entry) => (entry as unknown[])[1]);
+      expect(afterTool.slice(0, 2)).toEqual(["change", "read"]);
+    },
+  );
 });
 
 describe("the native turn a live reply belongs to, after a steer or queued guidance", () => {
@@ -446,7 +622,10 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     let text = "";
     for (const [name, data] of events) {
       if (name === "inflight" || name === "turn") text = data.message.text;
-      if (name === "inflight-delta") { expect(data.baseTextLength).toBe(text.length); text += data.appendText ?? ""; }
+      if (name === "inflight-delta") {
+        expect(data.baseTextLength).toBe(text.length);
+        text += data.appendText ?? "";
+      }
     }
     return text;
   };
@@ -488,7 +667,12 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
    * The real app through `?inflight=MODE` and the conversation read, with Hermes's frames, saved rows and its snapshot of the
    * native turn (`inflight.user`, `inflight.assistant`) moving as Hermes moves them. The app run `run-2` spans every native turn.
    */
-  async function nativeTurns(mode: string, script: (turn: Native) => Promise<void>, prompt?: [Record<string, unknown>, string], marked = false) {
+  async function nativeTurns(
+    mode: string,
+    script: (turn: Native) => Promise<void>,
+    prompt?: [Record<string, unknown>, string],
+    marked = false,
+  ) {
     const s = await setup();
     midTurn(s);
     if (prompt) s.hermes.history[2] = prompt[0];
@@ -500,11 +684,18 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     let reported: number | undefined;
     if (marked) {
       const history = s.hermes.history;
-      s.hermes.history = history.map(saved => ({ ...saved, timestamp: ++now }));
+      s.hermes.history = history.map((saved) => ({ ...saved, timestamp: ++now }));
       const stamped = s.hermes.history;
       // Not enumerable, so the fake's structuredClone of the history still works.
-      Object.defineProperty(stamped, "push", { value: (...rows: typeof stamped) =>
-        Array.prototype.push.call(stamped, ...rows.map(saved => saved.timestamp === undefined ? { ...saved, timestamp: ++now } : saved)) });
+      Object.defineProperty(stamped, "push", {
+        value: (...rows: typeof stamped) =>
+          Array.prototype.push.call(
+            stamped,
+            ...rows.map((saved) =>
+              saved.timestamp === undefined ? { ...saved, timestamp: ++now } : saved,
+            ),
+          ),
+      });
     }
     const events = await stream(s, s.one, mode);
     await s.get(s.one);
@@ -518,45 +709,74 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         else await vi.advanceTimersByTimeAsync(500);
       },
       async structural(change, covered = false) {
-        const before = changes(), sentTurns = events.turns().length;
+        const before = changes(),
+          sentTurns = events.turns().length;
         change();
         // A `?inflight=3` stream gets a turn event in place of the change notice for a change that event carries whole.
-        if (covered && mode === "3") { await events.until(() => events.turns().length > sentTurns); return; }
+        if (covered && mode === "3") {
+          await events.until(() => events.turns().length > sentTurns);
+          return;
+        }
         await events.until(() => changes() > before);
         await s.get(s.one);
       },
-      begin: (prompt, startedAt = now + 0.5, snapshot = {}) => turn.structural(() => {
-        reported = startedAt;
-        s.hermes.inflight = { user: prompt, assistant: "", ...(marked ? { started_at: startedAt } : {}), ...snapshot };
-        s.hermes.frame("message.start", {});
-      }),
-      drain: (prompt, save, snapshot = {}) => turn.structural(() => {
-        save();
-        reported = now;
-        s.hermes.inflight = { user: prompt, assistant: "", ...(marked ? { started_at: now } : {}), ...snapshot };
-        s.hermes.frame("message.start", {});
-      }),
-      segment: (id, text, during) => turn.structural(() => {
-        s.hermes.history.push(row(id, "assistant", text, { app_run_id: "run-2" }));
-        s.hermes.frame("tool.start", { tool_id: `t${id}`, name: "terminal" });
-        during?.();
-        s.hermes.frame("tool.complete", { tool_id: `t${id}`, name: "terminal" });
-      }, true),
-      end: () => turn.structural(() => {
-        s.hermes.inflight = {};
-        s.hermes.frame("message.complete", { text: "" });
-      }),
+      begin: (prompt, startedAt = now + 0.5, snapshot = {}) =>
+        turn.structural(() => {
+          reported = startedAt;
+          s.hermes.inflight = {
+            user: prompt,
+            assistant: "",
+            ...(marked ? { started_at: startedAt } : {}),
+            ...snapshot,
+          };
+          s.hermes.frame("message.start", {});
+        }),
+      drain: (prompt, save, snapshot = {}) =>
+        turn.structural(() => {
+          save();
+          reported = now;
+          s.hermes.inflight = {
+            user: prompt,
+            assistant: "",
+            ...(marked ? { started_at: now } : {}),
+            ...snapshot,
+          };
+          s.hermes.frame("message.start", {});
+        }),
+      segment: (id, text, during) =>
+        turn.structural(() => {
+          s.hermes.history.push(row(id, "assistant", text, { app_run_id: "run-2" }));
+          s.hermes.frame("tool.start", { tool_id: `t${id}`, name: "terminal" });
+          during?.();
+          s.hermes.frame("tool.complete", { tool_id: `t${id}`, name: "terminal" });
+        }, true),
+      end: () =>
+        turn.structural(() => {
+          s.hermes.inflight = {};
+          s.hermes.frame("message.complete", { text: "" });
+        }),
       guidance(id, requestId, text) {
-        s.hermes.history.push(row(id, "user", text, { app_request_id: requestId, app_run_id: "run-2", app_steering: true }));
+        s.hermes.history.push(
+          row(id, "user", text, {
+            app_request_id: requestId,
+            app_run_id: "run-2",
+            app_steering: true,
+          }),
+        );
       },
       prompt(id, text, extra = {}) {
         s.hermes.history.push(row(id, "user", text, extra));
         s.hermes.runId = typeof extra.app_run_id === "string" ? extra.app_run_id : undefined;
       },
-      stop: snapshot => turn.structural(() => {
-        Object.assign(s.hermes, { running: false, runId: undefined, inflight: marked ? { ...snapshot, started_at: reported } : snapshot });
-        s.hermes.frame("message.complete", { text: "" });
-      }),
+      stop: (snapshot) =>
+        turn.structural(() => {
+          Object.assign(s.hermes, {
+            running: false,
+            runId: undefined,
+            inflight: marked ? { ...snapshot, started_at: reported } : snapshot,
+          });
+          s.hermes.frame("message.complete", { text: "" });
+        }),
     };
     // The first turn started between the settled turn's rows and its own prompt, which is the history's third row.
     await turn.begin(prompt?.[1] ?? "Check the barn", 2.5);
@@ -567,12 +787,21 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     return result;
   }
   /** Saved text the person sees, each saved row and the live row once, in order. */
-  const shown = (messages: Message[]) => messages.filter(message => message.role !== "tool").map(message => message.text);
+  const shown = (messages: Message[]) =>
+    messages.filter((message) => message.role !== "tool").map((message) => message.text);
   const pdf = { path: "/uploads/a.pdf", name: "a.pdf", mime: "application/pdf" };
   /** A hidden prompt Hermes saved for a native turn it started itself, such as a goal continuation. No read shows it. */
-  const hidden = (turn: Native, id = 5) => turn.s.hermes.history.push(row(id, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }));
+  const hidden = (turn: Native, id = 5) =>
+    turn.s.hermes.history.push(
+      row(id, "user", "Continue toward the goal.", { display_kind: "hidden", app_run_id: "run-2" }),
+    );
   const photo = { path: "/uploads/c.png", name: "c.png", mime: "image/png" };
-  const cases: { name: string; script: (turn: Native) => Promise<void>; live: string; turn: string[]; shown: string[];
+  const cases: {
+    name: string;
+    script: (turn: Native) => Promise<void>;
+    live: string;
+    turn: string[];
+    shown: string[];
     /**
      * The native turn stopped. Hermes's snapshot still holds its prompt and reply, but the stream sends no live text after the
      * stop: modes 1 and 2 send nothing and mode 3 a last turn with an empty reply. Every client takes the settled read over
@@ -584,7 +813,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     /** The add-on reports when each native turn started, as the add-on does now. Without it: an older add-on. */
     marked?: true;
     /** The live reply's origin, when the turn's prompt is not a shown message and Hermes's snapshot says where it came from. */
-    origin?: Record<string, unknown> }[] = [
+    origin?: Record<string, unknown>;
+  }[] = [
     {
       // The reviewer's order. Hermes queued the guidance instead of steering it in, so it started a native turn of its own
       // under the same app run, and that turn's live text holds only what it said.
@@ -599,8 +829,17 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(6, "Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Dry.", turn: ["steer-two", "6"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "Dry."],
+      live: "Dry.",
+      turn: ["steer-two", "6"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "Dry.",
+      ],
     },
     {
       // Round 1's order. Steered in place, the guidance joins the running native turn, whose live text still holds "Looking.".
@@ -608,18 +847,34 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       async script(turn) {
         await turn.say("Looking.");
         // Hermes saves the segment before the tool and the steered guidance after it. Its snapshot keeps the turn's prompt.
-        await turn.segment(4, "Looking.", () => turn.guidance(5, "steer-two", "Check the loft too"));
+        await turn.segment(4, "Looking.", () =>
+          turn.guidance(5, "steer-two", "Check the loft too"),
+        );
         await turn.say(" Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Loft checked. Dry.", turn: ["req-2", "4", "steer-two"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Looking.", "Check the loft too", "Loft checked. Dry."],
+      live: "Loft checked. Dry.",
+      turn: ["req-2", "4", "steer-two"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Looking.",
+        "Check the loft too",
+        "Loft checked. Dry.",
+      ],
     },
     {
       name: "guidance Hermes queued after the original turn saved nothing",
       async script(turn) {
         await turn.structural(() => {
-          turn.s.hermes.history.push({ row_id: 4, role: "tool", name: "terminal", content: "ok", app_run_id: "run-2" });
+          turn.s.hermes.history.push({
+            row_id: 4,
+            role: "tool",
+            name: "terminal",
+            content: "ok",
+            app_run_id: "run-2",
+          });
           turn.s.hermes.frame("tool.complete", { tool_id: "t4", name: "terminal" });
         }, true);
         await turn.end();
@@ -629,7 +884,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(6, "Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Dry.", turn: ["steer-two", "6"],
+      live: "Dry.",
+      turn: ["steer-two", "6"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Check the loft", "Loft checked.", "Dry."],
     },
     {
@@ -649,8 +905,19 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(8, "Gate shut.");
         await turn.say(" Latched.");
       },
-      live: "Latched.", turn: ["steer-three", "8"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "And the gate", "Gate shut.", "Latched."],
+      live: "Latched.",
+      turn: ["steer-three", "8"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "And the gate",
+        "Gate shut.",
+        "Latched.",
+      ],
     },
     {
       // Both native turns save "Checked." first. Only the boundary tells which one the live text's "Checked." is.
@@ -667,21 +934,39 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(7, "Loft dry.");
         await turn.say(" Done.");
       },
-      live: "Done.", turn: ["steer-two", "6", "7"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Check the loft", "Checked.", "Loft dry.", "Done."],
+      live: "Done.",
+      turn: ["steer-two", "6", "7"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Checked.",
+        "Check the loft",
+        "Checked.",
+        "Loft dry.",
+        "Done.",
+      ],
     },
     {
       // The reviewer's order. The app sent a newline and the reference, which the add-on leaves out of the saved prompt's
       // text. Hermes strips the whole prompt, so it reports only the reference, with no newline before it.
       name: "a file sent alone",
-      prompt: [row(3, "user", '\n@file:"/uploads/a.pdf"', { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [pdf] }),
-        '@file:"/uploads/a.pdf"'],
+      prompt: [
+        row(3, "user", '\n@file:"/uploads/a.pdf"', {
+          app_request_id: "req-2",
+          app_run_id: "run-2",
+          app_display_text: "",
+          app_attachments: [pdf],
+        }),
+        '@file:"/uploads/a.pdf"',
+      ],
       async script(turn) {
         await turn.say("Read it.");
         await turn.segment(4, "Read it.");
         await turn.say(" Two pages.");
       },
-      live: "Two pages.", turn: ["req-2", "4"],
+      live: "Two pages.",
+      turn: ["req-2", "4"],
       shown: ["Fence?", "Fixed.", "", "Read it.", "Two pages."],
     },
     {
@@ -699,7 +984,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(6, "Checked.");
         await turn.say(" Loft dry.");
       },
-      live: "Loft dry.", turn: ["req-2", "4", "6"],
+      live: "Loft dry.",
+      turn: ["req-2", "4", "6"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Checked.", "Loft dry."],
     },
     {
@@ -712,7 +998,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.begin("Continue toward the goal.");
         await turn.say("Loft dry.");
       },
-      live: "Loft dry.", turn: ["req-2", "4"],
+      live: "Loft dry.",
+      turn: ["req-2", "4"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Loft dry."],
     },
     {
@@ -726,7 +1013,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.begin("Check the loft");
         await turn.say("Loft dry.");
       },
-      live: "Loft dry.", turn: ["req-2", "4"],
+      live: "Loft dry.",
+      turn: ["req-2", "4"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Loft dry."],
     },
   ];
@@ -738,7 +1026,15 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
     {
       // Another client's image saves its own `@image:` text, so the app image's empty prompt is not the last one.
       name: "another client's uncaptioned image after an app image sent alone, both finished",
-      prompt: [row(3, "user", "@image:/uploads/c.png", { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [photo] }), ""],
+      prompt: [
+        row(3, "user", "@image:/uploads/c.png", {
+          app_request_id: "req-2",
+          app_run_id: "run-2",
+          app_display_text: "",
+          app_attachments: [photo],
+        }),
+        "",
+      ],
       async script(turn) {
         await turn.say("Read it.");
         turn.s.hermes.history.push(row(4, "assistant", "Read it.", { app_run_id: "run-2" }));
@@ -750,29 +1046,49 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         turn.s.hermes.history.push(row(6, "assistant", "A cow."));
         await turn.stop({ user: "", assistant: "A cow." });
       },
-      live: "", turn: ["5", "6"],
+      live: "",
+      turn: ["5", "6"],
       settled: true,
       shown: ["Fence?", "Fixed.", "", "Read it.", "@image:/uploads/d.png", "A cow."],
     },
     {
       // Hermes removes bracketed-paste markers from the prompt it reports, and the add-on keeps them in the saved row.
       name: "a failed pasted prompt whose reported text equals an older prompt",
-      prompt: [row(3, "user", "Check the gate", { app_request_id: "req-2", app_run_id: "run-2" }), "Check the gate"],
+      prompt: [
+        row(3, "user", "Check the gate", { app_request_id: "req-2", app_run_id: "run-2" }),
+        "Check the gate",
+      ],
       async script(turn) {
         await turn.say("Looking.");
         await turn.segment(4, "Looking.");
         await turn.say(" Gate shut.");
         turn.s.hermes.history.push(row(5, "assistant", "Gate shut.", { app_run_id: "run-2" }));
         await turn.end();
-        turn.prompt(6, "[200~Check the gate[201~", { app_request_id: "req-3", app_run_id: "run-3" });
+        turn.prompt(6, "[200~Check the gate[201~", {
+          app_request_id: "req-3",
+          app_run_id: "run-3",
+        });
         await turn.begin("Check the gate");
         await turn.say("Looking.");
         await turn.say(" Gate open.");
-        await turn.stop({ user: "Check the gate", assistant: "Looking. Gate open.", error: "boom" });
+        await turn.stop({
+          user: "Check the gate",
+          assistant: "Looking. Gate open.",
+          error: "boom",
+        });
       },
-      live: "Looking. Gate open.", turn: ["req-3"],
+      live: "Looking. Gate open.",
+      turn: ["req-3"],
       settled: true,
-      shown: ["Fence?", "Fixed.", "Check the gate", "Looking.", "Gate shut.", "[200~Check the gate[201~", "Looking. Gate open."],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the gate",
+        "Looking.",
+        "Gate shut.",
+        "[200~Check the gate[201~",
+        "Looking. Gate open.",
+      ],
     },
     {
       name: "a prompt not saved yet that repeats a prompt before the last one, interrupted",
@@ -790,11 +1106,24 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.begin("Check the barn");
         await turn.say("Barn checked.");
         await turn.say(" Door shut.");
-        await turn.stop({ user: "Check the barn", assistant: "Barn checked. Door shut.", interrupted: true });
+        await turn.stop({
+          user: "Check the barn",
+          assistant: "Barn checked. Door shut.",
+          interrupted: true,
+        });
       },
-      live: "Barn checked. Door shut.", turn: ["req-3", "6"],
+      live: "Barn checked. Door shut.",
+      turn: ["req-3", "6"],
       settled: true,
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Check the loft", "Loft checked.", "Barn checked. Door shut."],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn checked.",
+        "Check the loft",
+        "Loft checked.",
+        "Barn checked. Door shut.",
+      ],
     },
     {
       // Identical to main: the hidden prompt matches nothing, and the last shown prompt is the queued guidance.
@@ -814,19 +1143,38 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(8, "Checked.");
         await turn.say(" Loft dry.");
       },
-      live: "Loft dry.", turn: ["steer-two", "6", "8"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Checked.", "Checked.", "Loft dry."],
+      live: "Loft dry.",
+      turn: ["steer-two", "6", "8"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Checked.",
+        "Checked.",
+        "Loft dry.",
+      ],
     },
     {
       // Differs from main, which strips from the last prompt, the guidance, and so repeats "Read it.".
       name: "an image sent alone, then guidance steered into its turn",
-      prompt: [row(3, "user", "@image:/uploads/c.png", { app_request_id: "req-2", app_run_id: "run-2", app_display_text: "", app_attachments: [photo] }), ""],
+      prompt: [
+        row(3, "user", "@image:/uploads/c.png", {
+          app_request_id: "req-2",
+          app_run_id: "run-2",
+          app_display_text: "",
+          app_attachments: [photo],
+        }),
+        "",
+      ],
       async script(turn) {
         await turn.say("Read it.");
         await turn.segment(4, "Read it.", () => turn.guidance(5, "steer-two", "Summarize it"));
         await turn.say(" Two pages.");
       },
-      live: "Two pages.", turn: ["req-2", "4", "steer-two"],
+      live: "Two pages.",
+      turn: ["req-2", "4", "steer-two"],
       shown: ["Fence?", "Fixed.", "", "Read it.", "Summarize it", "Two pages."],
     },
     {
@@ -834,13 +1182,27 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
       name: "two guidance messages steered into the running native turn",
       async script(turn) {
         await turn.say("Looking.");
-        await turn.segment(4, "Looking.", () => turn.guidance(5, "steer-two", "Check the loft too"));
+        await turn.segment(4, "Looking.", () =>
+          turn.guidance(5, "steer-two", "Check the loft too"),
+        );
         await turn.say(" Loft checked.");
-        await turn.segment(6, "Loft checked.", () => turn.guidance(7, "steer-three", "And the gate"));
+        await turn.segment(6, "Loft checked.", () =>
+          turn.guidance(7, "steer-three", "And the gate"),
+        );
         await turn.say(" Gate shut.");
       },
-      live: "Gate shut.", turn: ["req-2", "4", "steer-two", "6", "steer-three"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Looking.", "Check the loft too", "Loft checked.", "And the gate", "Gate shut."],
+      live: "Gate shut.",
+      turn: ["req-2", "4", "steer-two", "6", "steer-three"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Looking.",
+        "Check the loft too",
+        "Loft checked.",
+        "And the gate",
+        "Gate shut.",
+      ],
     },
     {
       // Differs from main, which strips from the steered guidance and so repeats "Loft checked.".
@@ -852,11 +1214,23 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         turn.guidance(5, "steer-two", "Check the loft");
         await turn.begin("Check the loft");
         await turn.say("Loft checked.");
-        await turn.segment(6, "Loft checked.", () => turn.guidance(7, "steer-three", "And the gate"));
+        await turn.segment(6, "Loft checked.", () =>
+          turn.guidance(7, "steer-three", "And the gate"),
+        );
         await turn.say(" Gate shut.");
       },
-      live: "Gate shut.", turn: ["steer-two", "6", "steer-three"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "And the gate", "Gate shut."],
+      live: "Gate shut.",
+      turn: ["steer-two", "6", "steer-three"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "And the gate",
+        "Gate shut.",
+      ],
     },
     {
       // The accepted gap, pinned as the rule gives it. Queued guidance "Check the loft" started its own native turn, and Hermes
@@ -879,8 +1253,17 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn checked.", false);
         await turn.say(" Door shut.");
       },
-      live: "Door shut.", turn: ["req-2", "4", "steer-two", "6"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Check the loft", "Loft checked.", "Door shut."],
+      live: "Door shut.",
+      turn: ["req-2", "4", "steer-two", "6"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn checked.",
+        "Check the loft",
+        "Loft checked.",
+        "Door shut.",
+      ],
     },
   );
   // The same turns with the add-on reporting when each native turn started. The turn is then every row Hermes saved at or after
@@ -898,20 +1281,39 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.segment(6, "Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Dry.", turn: ["steer-two", "6"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "Dry."],
+      live: "Dry.",
+      turn: ["steer-two", "6"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "Dry.",
+      ],
     },
     {
       name: "marked: guidance steered into the running native turn",
       marked: true,
       async script(turn) {
         await turn.say("Looking.");
-        await turn.segment(4, "Looking.", () => turn.guidance(5, "steer-two", "Check the loft too"));
+        await turn.segment(4, "Looking.", () =>
+          turn.guidance(5, "steer-two", "Check the loft too"),
+        );
         await turn.say(" Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Loft checked. Dry.", turn: ["req-2", "4", "steer-two"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Looking.", "Check the loft too", "Loft checked. Dry."],
+      live: "Loft checked. Dry.",
+      turn: ["req-2", "4", "steer-two"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Looking.",
+        "Check the loft too",
+        "Loft checked. Dry.",
+      ],
     },
     {
       // Closes the first known gap. Without the start, the steered guidance is taken for the turn's prompt, and "Looking." shows
@@ -926,7 +1328,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.s.get(turn.s.one);
         await turn.say(" More.");
       },
-      live: "Dry. More.", turn: ["req-2", "4", "steer-two"],
+      live: "Dry. More.",
+      turn: ["req-2", "4", "steer-two"],
       shown: ["Fence?", "Fixed.", "Check the barn", "Looking.", "Check the barn", "Dry. More."],
     },
     {
@@ -945,8 +1348,17 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn checked.");
         await turn.say(" Door shut.");
       },
-      live: "Barn checked. Door shut.", turn: [],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Check the loft", "Loft checked.", "Barn checked. Door shut."],
+      live: "Barn checked. Door shut.",
+      turn: [],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn checked.",
+        "Check the loft",
+        "Loft checked.",
+        "Barn checked. Door shut.",
+      ],
     },
     {
       // The second known gap's lasting form: a hidden prompt is never shown, so words never found its turn's start.
@@ -957,13 +1369,16 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         turn.s.hermes.history.push(row(4, "assistant", "Barn checked.", { app_run_id: "run-2" }));
         await turn.end();
         await turn.begin("Check the barn", undefined, { display_kind: "auto_continue" });
-        turn.s.hermes.history.push(row(5, "user", "Check the barn", { display_kind: "hidden", app_run_id: "run-2" }));
+        turn.s.hermes.history.push(
+          row(5, "user", "Check the barn", { display_kind: "hidden", app_run_id: "run-2" }),
+        );
         await turn.say("Barn checked.");
       },
       // Hermes's snapshot says the hidden prompt is a resumed task's. Words found the person's saved prompt instead, so the
       // live reply showed with no origin and took the person's.
       origin: { kind: "process" },
-      live: "Barn checked.", turn: [],
+      live: "Barn checked.",
+      turn: [],
       shown: ["Fence?", "Fixed.", "Check the barn", "Barn checked.", "Barn checked."],
     },
     {
@@ -979,7 +1394,8 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Checked.");
         await turn.say(" Loft dry.");
       },
-      live: "Checked. Loft dry.", turn: [],
+      live: "Checked. Loft dry.",
+      turn: [],
       shown: ["Fence?", "Fixed.", "Check the barn", "Checked.", "Checked. Loft dry."],
     },
     {
@@ -991,13 +1407,24 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn is dry.");
         turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
         await turn.end();
-        await turn.drain("Check the loft", () => turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }));
+        await turn.drain("Check the loft", () =>
+          turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }),
+        );
         await turn.say("Loft checked.");
         await turn.segment(6, "Loft checked.");
         await turn.say(" Dry.");
       },
-      live: "Dry.", turn: ["req-3", "6"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "Dry."],
+      live: "Dry.",
+      turn: ["req-3", "6"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "Dry.",
+      ],
     },
     {
       // The same order for another client's queued prompt, which has no app run, and a turn that failed after its first segment.
@@ -1014,10 +1441,23 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Loft checked.");
         turn.s.hermes.history.push(row(6, "assistant", "Loft checked."));
         await turn.say(" And more.");
-        await turn.stop({ user: "Check the loft", assistant: "Loft checked. And more.", error: "boom" });
+        await turn.stop({
+          user: "Check the loft",
+          assistant: "Loft checked. And more.",
+          error: "boom",
+        });
       },
-      live: "And more.", turn: ["5", "6"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked.", "And more."],
+      live: "And more.",
+      turn: ["5", "6"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+        "And more.",
+      ],
     },
     {
       // Queued, saved nothing yet: its row is the turn's only saved message and its live text is all its own.
@@ -1027,25 +1467,51 @@ describe("the native turn a live reply belongs to, after a steer or queued guida
         await turn.say("Barn is dry.");
         turn.s.hermes.history.push(row(4, "assistant", "Barn is dry.", { app_run_id: "run-2" }));
         await turn.end();
-        await turn.drain("Check the loft", () => turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }));
+        await turn.drain("Check the loft", () =>
+          turn.prompt(5, "Check the loft", { app_request_id: "req-3", app_run_id: "run-2" }),
+        );
         await turn.say("Loft checked.");
       },
-      live: "Loft checked.", turn: ["req-3"],
-      shown: ["Fence?", "Fixed.", "Check the barn", "Barn is dry.", "Check the loft", "Loft checked."],
+      live: "Loft checked.",
+      turn: ["req-3"],
+      shown: [
+        "Fence?",
+        "Fixed.",
+        "Check the barn",
+        "Barn is dry.",
+        "Check the loft",
+        "Loft checked.",
+      ],
     },
   );
-  describe.each(cases)("$name", ({ script, live: expected, turn: ids, shown: texts, prompt, settled, marked, origin }) => {
-    it.each(["1", "2", "3"])("?inflight=%s and the conversation read show each saved segment once", async mode => {
-      const result = await nativeTurns(mode, script, prompt, marked);
-      if (!settled) expect(result.live).toBe(expected);
-      if (expected) expect(result.read.messages.at(-1)).toMatchObject({ id: "live-one-inflight", text: expected, ...(origin ? { origin } : {}) });
-      else expect(result.read.messages.map(message => message.id)).not.toContain("live-one-inflight");
-      expect(shown(result.read.messages)).toEqual(texts);
-      if (mode !== "3") return;
-      // The event starts at the native turn's prompt, and the client keeps every earlier row it holds above it.
-      expect(result.turn!.messages.map(message => message.id)).toEqual(ids);
-      const reply = expected ? [{ ...result.turn!.message, text: expected }] : [];
-      expect(shown([...placeTurn(saved(result.read.messages), result.turn!)!, ...reply])).toEqual(texts);
-    });
-  });
+  describe.each(cases)(
+    "$name",
+    ({ script, live: expected, turn: ids, shown: texts, prompt, settled, marked, origin }) => {
+      it.each(["1", "2", "3"])(
+        "?inflight=%s and the conversation read show each saved segment once",
+        async (mode) => {
+          const result = await nativeTurns(mode, script, prompt, marked);
+          if (!settled) expect(result.live).toBe(expected);
+          if (expected)
+            expect(result.read.messages.at(-1)).toMatchObject({
+              id: "live-one-inflight",
+              text: expected,
+              ...(origin ? { origin } : {}),
+            });
+          else
+            expect(result.read.messages.map((message) => message.id)).not.toContain(
+              "live-one-inflight",
+            );
+          expect(shown(result.read.messages)).toEqual(texts);
+          if (mode !== "3") return;
+          // The event starts at the native turn's prompt, and the client keeps every earlier row it holds above it.
+          expect(result.turn!.messages.map((message) => message.id)).toEqual(ids);
+          const reply = expected ? [{ ...result.turn!.message, text: expected }] : [];
+          expect(
+            shown([...placeTurn(saved(result.read.messages), result.turn!)!, ...reply]),
+          ).toEqual(texts);
+        },
+      );
+    },
+  );
 });

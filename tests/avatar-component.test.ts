@@ -4,15 +4,31 @@ import type { Root } from "react-dom/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { Avatar, motionOwner, silhouette } from "../src/components/Avatar";
-import { avatarShapes, mascotFamilies, type ActivityState, type Avatar as AvatarConfig } from "../src/shared/types";
-import { characterHeads, isCharacter, isSeasonal, seasonalAvatar } from "../src/components/character-avatars";
+import {
+  avatarShapes,
+  mascotFamilies,
+  type ActivityState,
+  type Avatar as AvatarConfig,
+} from "../src/shared/types";
+import {
+  characterHeads,
+  isCharacter,
+  isSeasonal,
+  seasonalAvatar,
+} from "../src/components/character-avatars";
 
 /** Every character drawn by the character module, in its everyday or seasonal colors. */
 const characters = mascotFamilies.filter(isCharacter).map((family) => ({
   family,
   avatar: isSeasonal(family)
     ? seasonalAvatar(family)
-    : { mode: "mascot", family, color: "#97683D", eyes: "round", accessory: "none" } as AvatarConfig,
+    : ({
+        mode: "mascot",
+        family,
+        color: "#97683D",
+        eyes: "round",
+        accessory: "none",
+      } as AvatarConfig),
 }));
 
 let container: HTMLDivElement;
@@ -24,7 +40,9 @@ let reduceMotion = false;
 let reportVisibility: (visible: boolean) => void = () => {};
 
 const render = (state: ActivityState, avatar?: AvatarConfig) =>
-  act(async () => root.render(createElement(Avatar, { state, avatar, size: 64, name: "Ranch hand" })));
+  act(async () =>
+    root.render(createElement(Avatar, { state, avatar, size: 64, name: "Ranch hand" })),
+  );
 /** Advances the controlled clock, running every frame callback that was queued. */
 const advance = async (seconds: number) => {
   for (let i = 0; i < Math.round(seconds * 60); i++) {
@@ -47,13 +65,16 @@ beforeEach(() => {
   });
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => frames.delete(handle));
   stubMatchMedia(() => reduceMotion);
-  vi.stubGlobal("IntersectionObserver", class {
-    constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
-      reportVisibility = (visible) => callback([{ isIntersecting: visible }]);
-    }
-    observe() {}
-    disconnect() {}
-  });
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+        reportVisibility = (visible) => callback([{ isIntersecting: visible }]);
+      }
+      observe() {}
+      disconnect() {}
+    },
+  );
   // jsdom has no SVG geometry; a flat path is enough to exercise the rig.
   Object.assign(SVGElement.prototype, {
     getTotalLength: () => 100,
@@ -83,18 +104,24 @@ describe("avatar animation loop", () => {
         frames = new Map();
         await act(async () => queued.forEach((callback) => callback(now)));
       };
-      await act(async () => root.render(createElement(Avatar, { state: "working", size: 40, name: "Ranch hand" })));
+      await act(async () =>
+        root.render(createElement(Avatar, { state: "working", size: 40, name: "Ranch hand" })),
+      );
       // Past the 280 ms silhouette transition, which has its own frames.
       await advance(0.5);
       expect(frames.size).toBe(0);
       const before = svg();
-      await act(async () => { vi.advanceTimersByTime(24); });
+      await act(async () => {
+        vi.advanceTimersByTime(24);
+      });
       expect(frames.size).toBe(1);
       await tick();
       expect(svg()).not.toBe(before);
       // Leaving the page must not leave a wake-up behind.
       act(() => root.unmount());
-      await act(async () => { vi.advanceTimersByTime(100); });
+      await act(async () => {
+        vi.advanceTimersByTime(100);
+      });
       expect(frames.size).toBe(0);
       await render("working");
       await advance(0.5);
@@ -106,66 +133,101 @@ describe("avatar animation loop", () => {
 
   it("samples a shape once however many avatars draw it", async () => {
     // Each sampling is 72 calls into the browser's path geometry, the main cost of a phone opening home.
-    const sample = vi.spyOn(SVGElement.prototype as unknown as { getPointAtLength: (length: number) => DOMPoint }, "getPointAtLength");
-    await act(async () => root.render(createElement("div", null,
-      ...Array.from({ length: 20 }, (_, index) => createElement(Avatar, { key: index, state: "idle", size: 40, name: "Hay shed" })))));
+    const sample = vi.spyOn(
+      SVGElement.prototype as unknown as { getPointAtLength: (length: number) => DOMPoint },
+      "getPointAtLength",
+    );
+    await act(async () =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          ...Array.from({ length: 20 }, (_, index) =>
+            createElement(Avatar, { key: index, state: "idle", size: 40, name: "Hay shed" }),
+          ),
+        ),
+      ),
+    );
     await advance(0.5);
     expect(sample.mock.calls.length).toBeLessThanOrEqual(72);
   });
 
   it("draws several working avatars from one frame callback", async () => {
-    await act(async () => root.render(createElement("div", null,
-      createElement(Avatar, { state: "working", size: 64, name: "Ranch hand" }),
-      createElement(Avatar, { state: "working", size: 64, name: "Foreman" }),
-      createElement(Avatar, { state: "working", size: 64, name: "Wrangler" }))));
+    await act(async () =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement(Avatar, { state: "working", size: 64, name: "Ranch hand" }),
+          createElement(Avatar, { state: "working", size: 64, name: "Foreman" }),
+          createElement(Avatar, { state: "working", size: 64, name: "Wrangler" }),
+        ),
+      ),
+    );
     // Past the silhouette transitions, which have their own frames.
     await advance(0.5);
-    const poses = [...container.querySelectorAll("svg")].map(node => node.innerHTML);
+    const poses = [...container.querySelectorAll("svg")].map((node) => node.innerHTML);
     expect(frames.size).toBe(1);
     await advance(0.5);
     expect(frames.size).toBe(1);
-    expect([...container.querySelectorAll("svg")].map(node => node.innerHTML)).not.toEqual(poses);
+    expect([...container.querySelectorAll("svg")].map((node) => node.innerHTML)).not.toEqual(poses);
   });
 
   it("sizes a portrait up front and loads it lazily, since list avatars are tiny copies of a large file", async () => {
     await render("idle", { mode: "portrait", src: "/api/files/portrait" } as AvatarConfig);
     const image = container.querySelector("img.avatar-portrait")!;
     expect([image.getAttribute("width"), image.getAttribute("height")]).toEqual(["64", "64"]);
-    expect([image.getAttribute("loading"), image.getAttribute("decoding")]).toEqual(["lazy", "async"]);
+    expect([image.getAttribute("loading"), image.getAttribute("decoding")]).toEqual([
+      "lazy",
+      "async",
+    ]);
   });
 
-  it.each(characters)("keeps the $family character visible and still under reduced motion", async ({ avatar }) => {
-    reduceMotion = true;
-    await render("thinking", avatar);
-    const before = svg();
-    await advance(1);
-    expect(svg()).toBe(before);
-    expect(container.querySelector("[data-character-feature]")).not.toBeNull();
-    expect(frames.size).toBe(0);
-    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Thinking");
-  });
+  it.each(characters)(
+    "keeps the $family character visible and still under reduced motion",
+    async ({ avatar }) => {
+      reduceMotion = true;
+      await render("thinking", avatar);
+      const before = svg();
+      await advance(1);
+      expect(svg()).toBe(before);
+      expect(container.querySelector("[data-character-feature]")).not.toBeNull();
+      expect(frames.size).toBe(0);
+      expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+        "Ranch hand: Thinking",
+      );
+    },
+  );
 
-  it.each<ActivityState>(["thinking", "working"])("keeps the avatar visible and animated while %s, then stops when unmounted", async (state) => {
-    await render(state);
-    const before = svg();
-    await advance(1);
-    expect(svg()).not.toBe(before);
-    expect(container.querySelector(".avatar-body")?.parentElement?.getAttribute("opacity")).toBe("1");
-    expect(frames.size).toBeGreaterThan(0);
-    act(() => root.unmount());
-    expect(frames.size).toBe(0);
-  });
+  it.each<ActivityState>(["thinking", "working"])(
+    "keeps the avatar visible and animated while %s, then stops when unmounted",
+    async (state) => {
+      await render(state);
+      const before = svg();
+      await advance(1);
+      expect(svg()).not.toBe(before);
+      expect(container.querySelector(".avatar-body")?.parentElement?.getAttribute("opacity")).toBe(
+        "1",
+      );
+      expect(frames.size).toBeGreaterThan(0);
+      act(() => root.unmount());
+      expect(frames.size).toBe(0);
+    },
+  );
 
-  it.each<ActivityState>(["disconnected", "interrupted"])("holds a %s avatar completely still", async (state) => {
-    await render("working");
-    await advance(0.5);
-    await render(state);
-    await advance(0.5);
-    const frozen = svg();
-    await advance(2);
-    expect(svg()).toBe(frozen);
-    expect(frames.size).toBe(0);
-  });
+  it.each<ActivityState>(["disconnected", "interrupted"])(
+    "holds a %s avatar completely still",
+    async (state) => {
+      await render("working");
+      await advance(0.5);
+      await render(state);
+      await advance(0.5);
+      const frozen = svg();
+      await advance(2);
+      expect(svg()).toBe(frozen);
+      expect(frames.size).toBe(0);
+    },
+  );
 
   it("stops after a failure settles", async () => {
     await render("failed");
@@ -194,7 +256,9 @@ describe("avatar animation loop", () => {
 
   it("names the assistant and its state for assistive technology", async () => {
     await render("blocked");
-    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("Ranch hand: Needs your help");
+    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe(
+      "Ranch hand: Needs your help",
+    );
   });
 });
 
@@ -216,33 +280,66 @@ describe("avatar silhouettes", () => {
 });
 
 describe("mascot characters", () => {
-  it.each(Object.entries(characterHeads))("outlines %s as one closed native-parseable path", (_family, d) => {
-    expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
-  });
+  it.each(Object.entries(characterHeads))(
+    "outlines %s as one closed native-parseable path",
+    (_family, d) => {
+      expect(d).toMatch(/^M[\d. -]+(?:[LHVQC][\d. -]+)+Z$/);
+    },
+  );
 
   it("edges very light heads so they hold their shape on the cream surface", async () => {
-    const edges = () => [...container.querySelectorAll("svg path[fill='none'][stroke-width='2.2']")];
+    const edges = () => [
+      ...container.querySelectorAll("svg path[fill='none'][stroke-width='2.2']"),
+    ];
     await render("idle", seasonalAvatar("ghost"));
     expect(edges()).toHaveLength(1);
-    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "none" });
+    await render("idle", {
+      mode: "mascot",
+      family: "panda",
+      color: "#292929",
+      eyes: "round",
+      accessory: "none",
+    });
     expect(edges()).toHaveLength(1);
     await render("idle", seasonalAvatar("pumpkin"));
     expect(edges()).toHaveLength(0);
   });
 
   it("draws a black panda's glasses dark against its white face while its eyes stay light on the patches", async () => {
-    await render("idle", { mode: "mascot", family: "panda", color: "#292929", eyes: "round", accessory: "glasses" });
+    await render("idle", {
+      mode: "mascot",
+      family: "panda",
+      color: "#292929",
+      eyes: "round",
+      accessory: "glasses",
+    });
     expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
-    const frames = [...container.querySelectorAll("ellipse[fill='none'][stroke-width='2.5'], path[fill='none'][stroke-width='2.5']")];
+    const frames = [
+      ...container.querySelectorAll(
+        "ellipse[fill='none'][stroke-width='2.5'], path[fill='none'][stroke-width='2.5']",
+      ),
+    ];
     expect(frames).toHaveLength(3);
     expect(frames.every((frame) => frame.getAttribute("stroke") === "#2b201b")).toBe(true);
   });
 
   it("gives each eye surround ink that contrasts with it", async () => {
-    await render("idle", { mode: "mascot", family: "raccoon", color: "#8C8F99", eyes: "round", accessory: "none" });
+    await render("idle", {
+      mode: "mascot",
+      family: "raccoon",
+      color: "#8C8F99",
+      eyes: "round",
+      accessory: "none",
+    });
     expect(container.querySelector("[data-character-feature='mask']")).not.toBeNull();
     expect(container.querySelector("g[fill='#fff3db']")).not.toBeNull();
-    await render("idle", { mode: "mascot", family: "owl", color: "#292929", eyes: "round", accessory: "none" });
+    await render("idle", {
+      mode: "mascot",
+      family: "owl",
+      color: "#292929",
+      eyes: "round",
+      accessory: "none",
+    });
     expect(container.querySelectorAll("[data-character-feature='facial-disc']")).toHaveLength(2);
     expect(container.querySelector("g[fill='#2b201b']")).not.toBeNull();
   });

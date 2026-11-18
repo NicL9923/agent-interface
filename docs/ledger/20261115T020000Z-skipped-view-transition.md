@@ -13,8 +13,8 @@ nothing handled. `ready`'s rejection is now caught.
 
 ## Red runs
 
-| Break | Test | Failure |
-| --- | --- | --- |
+| Break                      | Test                                                                      | Failure                                                                               |
+| -------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Remove the `ready` handler | `treats a transition a newer navigation skipped as done, not as an error` | Vitest reported `Unhandled Rejection: AbortError: Transition was skipped` and 1 error |
 
 The file was restored and `tests/motion-ui.test.ts` passed 9 of 9 with no errors.

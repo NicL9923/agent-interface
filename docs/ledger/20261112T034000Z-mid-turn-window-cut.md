@@ -34,9 +34,9 @@ context, so the server gives its replies the origin the whole history gives them
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_extension_journal_test.py`:
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                  | Result                                                                                         |
+| ------------------------- | ---------------------------------------------------------------------------------------------- |
 | refuse mid-turn cut again | failed: test_a_start_inside_a_turn_cuts_there_and_keeps_the_prompt_its_replies_answer (exit 1) |
-| drop the turn's prompt | failed: test_a_start_inside_a_turn_cuts_there_and_keeps_the_prompt_its_replies_answer (exit 1) |
+| drop the turn's prompt    | failed: test_a_start_inside_a_turn_cuts_there_and_keeps_the_prompt_its_replies_answer (exit 1) |
 
 Not exercised: real Hermes, release qualification, and a production measurement of turn reads.

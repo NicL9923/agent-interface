@@ -26,12 +26,12 @@ Other #362 files checked: `app-ui`, `background-polls-ui`, `bot-settings`, `coll
 Each red run waited in real time, through a timer captured before any fake timers, until 200 ms past the next
 minute, then continued the test. The scratch edits were reverted with `git checkout`.
 
-| Clock | Test | Result |
-| --- | --- | --- |
-| Unpinned | `re-renders only the live turn while a reply streams` | Stamp renders grew `[1, 0, 1, 1, 1]`, expected all 0; unwrapped `When` update |
-| Fake timers | same | Passed across the 22:41 UTC minute |
-| Unpinned | `says when the assistant last spoke and opens Find in its chat` | Unwrapped `When` update |
-| Unpinned | `marks unread chats until they are on screen or read through their latest message` | Unwrapped `ListDate` update |
-| `Date` stopped | both of the above | Passed across the 22:45 UTC minute |
+| Clock          | Test                                                                               | Result                                                                        |
+| -------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Unpinned       | `re-renders only the live turn while a reply streams`                              | Stamp renders grew `[1, 0, 1, 1, 1]`, expected all 0; unwrapped `When` update |
+| Fake timers    | same                                                                               | Passed across the 22:41 UTC minute                                            |
+| Unpinned       | `says when the assistant last spoke and opens Find in its chat`                    | Unwrapped `When` update                                                       |
+| Unpinned       | `marks unread chats until they are on screen or read through their latest message` | Unwrapped `ListDate` update                                                   |
+| `Date` stopped | both of the above                                                                  | Passed across the 22:45 UTC minute                                            |
 
 The bot-details red run held the avatar still with reduced motion, so the long wait reported only the clock.

@@ -30,44 +30,44 @@ Every prune test passes.
 
 TypeScript: each broke one line of `src/server/health.ts`, ran `tests/ops.test.ts`, then restored the file.
 
-| Break | Test that failed |
-| --- | --- |
-| warn at the floor, not below it | `warns below the worker's own floor on its stage root's filesystem, and alerts administrators` |
-| ignore the worker's minimumFreeBytes | same |
-| measure the app data directory, not the stage root | same |
-| stop walking up from a missing stage root | same |
-| drop the non-object guard | `warns with the default floor when the worker's configuration is not an object` |
-| drop the number guard on minimumFreeBytes | `... sets a floor that is not a number` |
-| an unreadable config stays ok | all four configuration cases |
-| a statfs error fails the check | `warns when it cannot measure free space, without failing readiness` |
-| leave disk out of readiness | every disk test and `reports detail only to direct loopback callers` |
+| Break                                              | Test that failed                                                                               |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| warn at the floor, not below it                    | `warns below the worker's own floor on its stage root's filesystem, and alerts administrators` |
+| ignore the worker's minimumFreeBytes               | same                                                                                           |
+| measure the app data directory, not the stage root | same                                                                                           |
+| stop walking up from a missing stage root          | same                                                                                           |
+| drop the non-object guard                          | `warns with the default floor when the worker's configuration is not an object`                |
+| drop the number guard on minimumFreeBytes          | `... sets a floor that is not a number`                                                        |
+| an unreadable config stays ok                      | all four configuration cases                                                                   |
+| a statfs error fails the check                     | `warns when it cannot measure free space, without failing readiness`                           |
+| leave disk out of readiness                        | every disk test and `reports detail only to direct loopback callers`                           |
 
 Python: `python3 .agents/tools/mutate-py.py --batch ... --baseline -- sh -c 'cd tests && python3 -B release_app_test.py -k prune'`.
 
-| Mutation | Result |
-| --- | --- |
-| keep only the newest, not live | failed: test_prune_keeps_the_newest_the_live_release_its_rollback_targets_and_releases_in_flight |
-| ignore releases this checkout has not settled | failed: same |
-| ignore the deploy config's rollback target | failed: same |
-| ignore previous-release.json | failed: same |
+| Mutation                                                   | Result                                                                                            |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| keep only the newest, not live                             | failed: test_prune_keeps_the_newest_the_live_release_its_rollback_targets_and_releases_in_flight  |
+| ignore releases this checkout has not settled              | failed: same                                                                                      |
+| ignore the deploy config's rollback target                 | failed: same                                                                                      |
+| ignore previous-release.json                               | failed: same                                                                                      |
 | keep every release with a stage marker, whatever its state | failed: test_prune_clears_archives_and_stage_checkouts_only_from_operations_whose_release_is_gone |
-| an unreadable stage marker does not protect | failed: test_prune_keeps_the_newest_... |
-| skip the still-qualifying check | failed: test_prune_keeps_the_newest_... |
-| keep twice as many newest | failed: test_prune_clears_archives_... |
-| stop after the first removal error | failed: test_prune_reports_a_release_it_cannot_remove_and_still_clears_the_rest |
-| plain rmtree for read-only stage directories | failed: test_prune_clears_archives_... |
-| strip an operation whose release exists | failed: test_prune_clears_archives_... |
-| strip a protected release's operation | failed: test_prune_clears_archives_... |
-| strip an operation without a deploy configuration | failed: test_prune_clears_archives_... |
-| strip continued-* operations too | survived |
-| keep the archive | failed: test_prune_clears_archives_... |
-| remove stage files too | failed: test_prune_clears_archives_... |
-| only the first qualification stage | failed: test_prune_clears_archives_... |
-| protect every manifest | failed: test_prune_protects_releases_this_checkout_has_not_settled |
-| drop the needs-review status | failed: same |
-| a malformed manifest stops the scan | failed: same |
-| send no protected names | failed: same |
-| swallow pruning errors silently | failed: same |
+| an unreadable stage marker does not protect                | failed: test_prune_keeps_the_newest_...                                                           |
+| skip the still-qualifying check                            | failed: test_prune_keeps_the_newest_...                                                           |
+| keep twice as many newest                                  | failed: test_prune_clears_archives_...                                                            |
+| stop after the first removal error                         | failed: test_prune_reports_a_release_it_cannot_remove_and_still_clears_the_rest                   |
+| plain rmtree for read-only stage directories               | failed: test_prune_clears_archives_...                                                            |
+| strip an operation whose release exists                    | failed: test_prune_clears_archives_...                                                            |
+| strip a protected release's operation                      | failed: test_prune_clears_archives_...                                                            |
+| strip an operation without a deploy configuration          | failed: test_prune_clears_archives_...                                                            |
+| strip continued-* operations too                           | survived                                                                                          |
+| keep the archive                                           | failed: test_prune_clears_archives_...                                                            |
+| remove stage files too                                     | failed: test_prune_clears_archives_...                                                            |
+| only the first qualification stage                         | failed: test_prune_clears_archives_...                                                            |
+| protect every manifest                                     | failed: test_prune_protects_releases_this_checkout_has_not_settled                                |
+| drop the needs-review status                               | failed: same                                                                                      |
+| a malformed manifest stops the scan                        | failed: same                                                                                      |
+| send no protected names                                    | failed: same                                                                                      |
+| swallow pruning errors silently                            | failed: same                                                                                      |
 
 The surviving mutant widens the `operations/release-*` glob. It is equivalent on every real host layout: only a
 release's own operation dir holds a `deploy-config.json`, and the strip step skips any dir without one. `continued-*`
@@ -92,37 +92,37 @@ needs-review. `REMOTE_LIVE` reports `releaseBuilt` for that.
 
 The final versions of the two tests that reproduce Sol's scenarios, run against `932748d8`'s `.agents/tools`:
 
-| Test | Result before the fix |
-| --- | --- |
-| `test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days` | failed: removed all eleven releases, expected only the activated and the abandoned one |
-| `test_prune_leaves_a_gone_release_s_operation_alone_while_its_qualification_runs_or_cannot_be_read` | failed: stripped the running and unreadable operations too |
+| Test                                                                                                | Result before the fix                                                                  |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days`          | failed: removed all eleven releases, expected only the activated and the abandoned one |
+| `test_prune_leaves_a_gone_release_s_operation_alone_while_its_qualification_runs_or_cannot_be_read` | failed: stripped the running and unreadable operations too                             |
 
 Both pass after the fix. Red runs:
 `python3 .agents/tools/mutate-py.py --batch ... --baseline -- sh -c 'cd tests && python3 -B release_app_test.py -k prune'`.
 
-| Mutation | Result |
-| --- | --- |
-| remove releases the host cannot prove settled (the earlier rule) | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days |
-| no activation proof, age only | failed: test_prune_clears_archives_and_stage_checkouts_only_from_operations_whose_release_is_gone |
-| no age-out, activation proof only | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_... |
-| a continued dir alone counts as activated | failed: same |
-| idle ignores the operation dir | failed: same |
-| idle ignores continued-<op> | failed: same |
-| hours, not days | failed: same |
-| a time it cannot read does not keep it | failed: same |
-| drop the config dict guard | failed: same |
-| drop the operationId string guard | failed: same, after its case moved from a null to a numeric `operationId`; null survived because it short-circuits before the guard |
-| an unparseable config stops the prune | failed: same |
-| strip an operation whose qualification runs or cannot be read | failed: test_prune_leaves_a_gone_release_s_operation_alone_... |
-| send a different window | failed: test_prune_protects_releases_this_checkout_has_not_settled |
+| Mutation                                                         | Result                                                                                                                              |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| remove releases the host cannot prove settled (the earlier rule) | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_until_it_has_been_idle_for_days                                    |
+| no activation proof, age only                                    | failed: test_prune_clears_archives_and_stage_checkouts_only_from_operations_whose_release_is_gone                                   |
+| no age-out, activation proof only                                | failed: test_prune_keeps_a_release_the_host_cannot_prove_settled_...                                                                |
+| a continued dir alone counts as activated                        | failed: same                                                                                                                        |
+| idle ignores the operation dir                                   | failed: same                                                                                                                        |
+| idle ignores continued-<op>                                      | failed: same                                                                                                                        |
+| hours, not days                                                  | failed: same                                                                                                                        |
+| a time it cannot read does not keep it                           | failed: same                                                                                                                        |
+| drop the config dict guard                                       | failed: same                                                                                                                        |
+| drop the operationId string guard                                | failed: same, after its case moved from a null to a numeric `operationId`; null survived because it short-circuits before the guard |
+| an unparseable config stops the prune                            | failed: same                                                                                                                        |
+| strip an operation whose qualification runs or cannot be read    | failed: test_prune_leaves_a_gone_release_s_operation_alone_...                                                                      |
+| send a different window                                          | failed: test_prune_protects_releases_this_checkout_has_not_settled                                                                  |
 
 `-k releaseBuilt -k pruned -k still_built`:
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                             | Result                                                                        |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
 | activate a stage whose build is gone | failed: test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable |
-| report every release as built | failed: test_live_facts_say_whether_the_release_is_still_built |
-| send no release to the live check | failed: test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable |
+| report every release as built        | failed: test_live_facts_say_whether_the_release_is_still_built                |
+| send no release to the live check    | failed: test_refuses_a_stage_whose_build_was_pruned_and_leaves_it_discardable |
 
 Checks on the fix merged with `origin/main` at `2144c0b8`, Node 24.22.2, Python 3.14.7:
 `.agents/tools/check-all --keep-going` passed typecheck, lint, ruff, build and e2e (55). Vitest failed only the three
@@ -171,38 +171,38 @@ markers are gone.
 
 New tests, each run against `9a783b53`'s `.agents/tools` in a temporary detached worktree:
 
-| Test | Result before the fix |
-| --- | --- |
-| `test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof` | failed: removed all ten releases, expected only `release-completed` |
-| `test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity` | failed: removed `release-rebuilt`, `release-retried` and `release-qualified` too |
+| Test                                                                                     | Result before the fix                                                                                                                                                              |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof`   | failed: removed all ten releases, expected only `release-completed`                                                                                                                |
+| `test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity`                 | failed: removed `release-rebuilt`, `release-retried` and `release-qualified` too                                                                                                   |
 | `test_prune_strips_a_gone_release_s_operation_only_once_every_stage_is_marked_completed` | failed: the prune exited with `AttributeError` on the list marker. Without that case it stripped the `{}`, unknown-state, other-stage, later-schema and marker-less operations too |
-| `test_prune_keeps_the_newest_...` with a new `{}` marker case | failed: removed `release-old-06` |
+| `test_prune_keeps_the_newest_...` with a new `{}` marker case                            | failed: removed `release-old-06`                                                                                                                                                   |
 
 All pass after the fix. Red runs:
 `python3 .agents/tools/mutate-py.py --batch ... --baseline -- sh -c 'cd tests && python3 -B release_app_test.py -k prune'`.
 
-| Mutation | Result |
-| --- | --- |
-| any result.json is proof (the earlier rule) | failed: test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof |
-| a result that does not parse counts | failed: same |
-| a result that is not an object counts | failed: same |
-| skip the build match | failed: same |
-| skip the revision match | failed: same |
-| a config without a build matches | failed: same |
-| a missing phase counts | failed: same |
-| any phase counts | failed: same |
-| another operation's phase counts | failed: same |
-| directory times only (the earlier rule) | failed: test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity |
-| no descent below the operation | failed: same |
-| descend into stage subdirectories | failed: same |
-| idle ignores continued-<op> | failed: same |
+| Mutation                                               | Result                                                                                         |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| any result.json is proof (the earlier rule)            | failed: test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof   |
+| a result that does not parse counts                    | failed: same                                                                                   |
+| a result that is not an object counts                  | failed: same                                                                                   |
+| skip the build match                                   | failed: same                                                                                   |
+| skip the revision match                                | failed: same                                                                                   |
+| a config without a build matches                       | failed: same                                                                                   |
+| a missing phase counts                                 | failed: same                                                                                   |
+| any phase counts                                       | failed: same                                                                                   |
+| another operation's phase counts                       | failed: same                                                                                   |
+| directory times only (the earlier rule)                | failed: test_prune_counts_a_rewritten_file_under_an_aged_operation_as_activity                 |
+| no descent below the operation                         | failed: same                                                                                   |
+| descend into stage subdirectories                      | failed: same                                                                                   |
+| idle ignores continued-<op>                            | failed: same                                                                                   |
 | only an active marker keeps a stage (the earlier rule) | failed: test_prune_strips_a_gone_release_s_operation_only_once_every_stage_is_marked_completed |
-| any state but active is done | failed: same |
-| skip the schema check | failed: same |
-| skip the stage identity check | failed: same |
-| a marker that is not an object stops the prune | failed: same |
-| a stage without a marker is done | failed: same |
-| only the first stage counts | failed: same |
+| any state but active is done                           | failed: same                                                                                   |
+| skip the schema check                                  | failed: same                                                                                   |
+| skip the stage identity check                          | failed: same                                                                                   |
+| a marker that is not an object stops the prune         | failed: same                                                                                   |
+| a stage without a marker is done                       | failed: same                                                                                   |
+| only the first stage counts                            | failed: same                                                                                   |
 
 No test covers the vanished-entry branch, because making a file disappear between `scandir` and `stat` needs a
 mocked filesystem call.
@@ -227,6 +227,6 @@ GPT-6.1 Sol found that activation proof accepted a missing Hermes revision when 
 result omitted it, or both held null: the comparison matched `None` to `None`, and a fresh release was deleted at once.
 Each compared field (`operationId`, `webBuild`, `hermesRevision`) must now be a non-empty string in the configuration.
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                       | Result                                                                                         |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Drop `hermesRevision` from the required fields | failed: `test_prune_takes_only_a_completed_activation_of_the_release_s_own_operation_as_proof` |

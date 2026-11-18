@@ -52,25 +52,46 @@ const active = (state: string) => ["thinking", "working", "waiting", "blocked"].
  * request ID. Other rows, such as image-only prompts, are matched by their words once it accepted them,
  * after the message that was last when it was sent. A row another member sent is never the copy.
  */
-function copyIndex(send: { requestId: string; messageId?: string; text: string; after?: string; senderId: string }, messages: Message[], skip?: ReadonlySet<string>) {
-  const named = messages.findIndex(message => (message.id === send.requestId || message.id === send.messageId) && !skip?.has(message.id));
+function copyIndex(
+  send: { requestId: string; messageId?: string; text: string; after?: string; senderId: string },
+  messages: Message[],
+  skip?: ReadonlySet<string>,
+) {
+  const named = messages.findIndex(
+    (message) =>
+      (message.id === send.requestId || message.id === send.messageId) && !skip?.has(message.id),
+  );
   if (named >= 0) return named;
   const text = send.text.trim();
   if (!text) return -1;
   // Without its anchor, an older message with the same words could pass for this one.
-  const start = send.after ? messages.findIndex(message => message.id === send.after) + 1 : 0;
+  const start = send.after ? messages.findIndex((message) => message.id === send.after) + 1 : 0;
   if (send.after && !start) return -1;
-  const found = messages.slice(start).findIndex(message => message.role === "user" && message.text.trim() === text && !skip?.has(message.id)
-    && (!message.sender || message.sender.id === send.senderId));
+  const found = messages
+    .slice(start)
+    .findIndex(
+      (message) =>
+        message.role === "user" &&
+        message.text.trim() === text &&
+        !skip?.has(message.id) &&
+        (!message.sender || message.sender.id === send.senderId),
+    );
   return found < 0 ? -1 : start + found;
 }
 /** Whether Hermes's own copy of the message is in the conversation. */
 export function echoShown(echo: SentEcho, conversation: SavedConversation) {
   const { request, messageId, sender, after } = echo;
   const { messages } = conversation;
-  if (messages.some(message => message.id === request.requestId || message.id === messageId)) return true;
+  if (messages.some((message) => message.id === request.requestId || message.id === messageId))
+    return true;
   // Only a message Hermes accepted is matched by its words.
-  return echo.status === "accepted" && copyIndex({ requestId: request.requestId, text: request.text, after, senderId: sender.id }, messages) >= 0;
+  return (
+    echo.status === "accepted" &&
+    copyIndex(
+      { requestId: request.requestId, text: request.text, after, senderId: sender.id },
+      messages,
+    ) >= 0
+  );
 }
 /**
  * A message this person sent and Hermes accepted, kept after its echo leaves. A steer and a send Hermes
@@ -82,7 +103,14 @@ export function echoShown(echo: SentEcho, conversation: SavedConversation) {
  * as for a send Hermes never saved under its own words, such as a steer joined with another into one row. Equal
  * words cannot tell two rows apart, so the label is a hint, not a binding.
  */
-export type OwnSend = { requestId: string; messageId?: string; botId: string; senderId: string; text: string; after?: string };
+export type OwnSend = {
+  requestId: string;
+  messageId?: string;
+  botId: string;
+  senderId: string;
+  text: string;
+  after?: string;
+};
 export const OWN_SENDS_KEPT = 20;
 /**
  * The saved rows that are this person's own sends, by the match the echo makes. Each send claims one row,
@@ -95,52 +123,93 @@ export function ownSentRows(sends: OwnSend[], conversation: SavedConversation | 
   for (const send of sends) {
     if (send.botId !== conversation.botId) continue;
     // Without its anchor, words could match an older row of another member's; only an ID is evidence.
-    const index = copyIndex(send.after ? send : { ...send, text: "" }, conversation.messages, claimed);
+    const index = copyIndex(
+      send.after ? send : { ...send, text: "" },
+      conversation.messages,
+      claimed,
+    );
     if (index >= 0) claimed.add(conversation.messages[index].id);
   }
   return claimed;
 }
 /** The echo after the submission, its receipt or the conversation changed. Null removes it. */
-export function nextEcho(echo: SentEcho | null, { pending, receipt, sending, conversation, sender, now }: {
-  pending: Pending | null;
-  receipt: SubmissionReceipt | null;
-  sending: boolean;
-  conversation: SavedConversation | null;
-  sender?: Pick<User, "id" | "name">;
-  now: number;
-}): SentEcho | null {
+export function nextEcho(
+  echo: SentEcho | null,
+  {
+    pending,
+    receipt,
+    sending,
+    conversation,
+    sender,
+    now,
+  }: {
+    pending: Pending | null;
+    receipt: SubmissionReceipt | null;
+    sending: boolean;
+    conversation: SavedConversation | null;
+    sender?: Pick<User, "id" | "name">;
+    now: number;
+  },
+): SentEcho | null {
   // Another person signed in: nothing of the last one's stays on screen.
   let next = echo && echo.sender.id === sender?.id ? echo : null;
   if (pending && pending.requestId !== next?.request.requestId) {
     if (!sender) return null;
     next = {
-      request: pending, sender, sentAt: new Date(now).toISOString(), status: "sending", sendingSince: now,
-      ...(conversation?.botId === pending.botId && active(conversation.activity.state) ? { duringWork: true } : {}),
+      request: pending,
+      sender,
+      sentAt: new Date(now).toISOString(),
+      status: "sending",
+      sendingSince: now,
+      ...(conversation?.botId === pending.botId && active(conversation.activity.state)
+        ? { duringWork: true }
+        : {}),
       // A live reply's row is replaced as it is saved, so it cannot anchor anything.
-      after: conversation?.botId === pending.botId
-        ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined,
+      after:
+        conversation?.botId === pending.botId
+          ? conversation.messages.findLast((message) => !message.id.endsWith("-inflight"))?.id
+          : undefined,
     };
   }
   if (!next) return null;
   if (pending?.requestId === next.request.requestId) {
     const status = sending ? "sending" : "unconfirmed";
     // A retry goes out again, so its bound starts over.
-    if (next.status !== status) next = { ...next, status, ...status === "sending" ? { sendingSince: now, slow: false } : {} };
-    if (status === "sending" && !next.slow && now - (next.sendingSince ?? now) >= SENDING_ROW_MS) next = { ...next, slow: true };
+    if (next.status !== status)
+      next = {
+        ...next,
+        status,
+        ...(status === "sending" ? { sendingSince: now, slow: false } : {}),
+      };
+    if (status === "sending" && !next.slow && now - (next.sendingSince ?? now) >= SENDING_ROW_MS)
+      next = { ...next, slow: true };
   } else if (next.status !== "accepted") {
     // A refused, interrupted or abandoned send leaves only the draft it came from.
     if (receipt?.requestId !== next.request.requestId || receipt.status !== "accepted") return null;
     // A typed stop phrase ended Hermes's voice chat and admitted nothing, so no copy is coming; the composer says why.
     if (receipt.turn === "none") return null;
-    next = { ...next, status: "accepted", messageId: receipt.messageId, acceptedAt: now, ...(receipt.steered ? { steered: true } : {}),
-      ...(receipt.turn ? { turn: receipt.turn } : {}), ...(receipt.admittedVersion ? { admittedVersion: receipt.admittedVersion } : {}) };
+    next = {
+      ...next,
+      status: "accepted",
+      messageId: receipt.messageId,
+      acceptedAt: now,
+      ...(receipt.steered ? { steered: true } : {}),
+      ...(receipt.turn ? { turn: receipt.turn } : {}),
+      ...(receipt.admittedVersion ? { admittedVersion: receipt.admittedVersion } : {}),
+    };
   }
   // The handoff's bound runs while another chat is open, so a return never finds the echo still standing for a turn.
   if (next.copiedAt !== undefined && now - next.copiedAt >= COPY_HANDOFF_MS) return null;
   if (conversation?.botId !== next.request.botId) return next;
   if (echoShown(next, conversation)) {
     if (!handingOff(next, conversation)) return null;
-    return next.copiedAt === undefined ? { ...next, copiedAt: now, ...conversation.version ? { copiedVersion: conversation.version } : {} } : next;
+    return next.copiedAt === undefined
+      ? {
+          ...next,
+          copiedAt: now,
+          ...(conversation.version ? { copiedVersion: conversation.version } : {}),
+        }
+      : next;
   }
   if (next.status !== "accepted") return next;
   // Some prompts are saved only when their run finishes, so the echo stands in until then.
@@ -155,16 +224,21 @@ type EchoInput = Parameters<typeof nextEcho>[1];
  */
 export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
   const { pending } = input;
-  const next = echoes.flatMap(echo => {
-    const advanced = nextEcho(echo, { ...input, pending: pending?.requestId === echo.request.requestId ? pending : null });
+  const next = echoes.flatMap((echo) => {
+    const advanced = nextEcho(echo, {
+      ...input,
+      pending: pending?.requestId === echo.request.requestId ? pending : null,
+    });
     return advanced ? [advanced] : [];
   });
   // A send gets one echo; once it leaves, the same pending submission never brings it back.
-  if (pending && !echoes.some(echo => echo.request.requestId === pending.requestId)) {
+  if (pending && !echoes.some((echo) => echo.request.requestId === pending.requestId)) {
     const created = nextEcho(null, input);
     if (created) next.push(created);
   }
-  return next.length === echoes.length && next.every((echo, index) => echo === echoes[index]) ? echoes : next;
+  return next.length === echoes.length && next.every((echo, index) => echo === echoes[index])
+    ? echoes
+    : next;
 }
 /**
  * Whether the open chat shows its assistant thinking before Hermes reports the turn. A message sent
@@ -179,12 +253,24 @@ export function nextEchoes(echoes: SentEcho[], input: EchoInput): SentEcho[] {
  * message sent then never adds one. Both bounds are read from `now`, so a render never shows a row whose bound
  * passed before its timer stepped the echo, as on returning from another chat.
  */
-export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation | null, now: number): boolean {
+export function awaitingTurn(
+  echoes: SentEcho[],
+  conversation: SavedConversation | null,
+  now: number,
+): boolean {
   if (!conversation || active(conversation.activity.state)) return false;
-  return echoes.some(echo => echo.request.botId === conversation.botId && !echo.duringWork && !joinedWork(echo) && !echo.ran
-    && (echo.status === "sending" ? !echo.slow && now - (echo.sendingSince ?? now) < SENDING_ROW_MS
-      : echo.status === "accepted" && (!echoShown(echo, conversation)
-        || handingOff(echo, conversation) && now - (echo.copiedAt ?? now) < COPY_HANDOFF_MS)));
+  return echoes.some(
+    (echo) =>
+      echo.request.botId === conversation.botId &&
+      !echo.duringWork &&
+      !joinedWork(echo) &&
+      !echo.ran &&
+      (echo.status === "sending"
+        ? !echo.slow && now - (echo.sendingSince ?? now) < SENDING_ROW_MS
+        : echo.status === "accepted" &&
+          (!echoShown(echo, conversation) ||
+            (handingOff(echo, conversation) && now - (echo.copiedAt ?? now) < COPY_HANDOFF_MS))),
+  );
 }
 /**
  * Hermes's copy of a message that starts a turn is in the chat, and the turn's report is not yet: they can
@@ -192,8 +278,15 @@ export function awaitingTurn(echoes: SentEcho[], conversation: SavedConversation
  * announced twice. It ends with the report, with a reply after the copy, or after COPY_HANDOFF_MS.
  */
 function handingOff(echo: SentEcho, conversation: SavedConversation) {
-  return echo.status === "accepted" && !echo.duringWork && !joinedWork(echo) && !echo.ran && !active(conversation.activity.state)
-    && conversation.messages.at(-1)?.role === "user" && !settledHere(echo, conversation);
+  return (
+    echo.status === "accepted" &&
+    !echo.duringWork &&
+    !joinedWork(echo) &&
+    !echo.ran &&
+    !active(conversation.activity.state) &&
+    conversation.messages.at(-1)?.role === "user" &&
+    !settledHere(echo, conversation)
+  );
 }
 /** Hermes put the message into work already running: steered by the add-on, or into the running turn by Hermes. */
 const joinedWork = (echo: SentEcho) => echo.steered || echo.turn === "joined";
@@ -221,13 +314,23 @@ const joinedWork = (echo: SentEcho) => echo.steered || echo.turn === "joined";
 function settledHere(echo: SentEcho, conversation: SavedConversation) {
   if (!["done", "failed", "interrupted"].includes(conversation.activity.state)) return false;
   if (echo.turn === "queued") return false;
-  const admitted = echo.turn === "started" ? compareVersions(conversation.version, echo.admittedVersion) : undefined;
+  const admitted =
+    echo.turn === "started"
+      ? compareVersions(conversation.version, echo.admittedVersion)
+      : undefined;
   if (admitted !== undefined) return admitted > 0;
   return (compareVersions(conversation.version, echo.copiedVersion) ?? 0) > 0;
 }
 /** The conversation with its echoes at the end, as the person's own messages. */
-export function withEchoes(conversation: SavedConversation | null, echoes: SentEcho[]): SavedConversation | null {
-  const shown = conversation ? echoes.filter(echo => echo.request.botId === conversation.botId && !echoShown(echo, conversation)) : [];
+export function withEchoes(
+  conversation: SavedConversation | null,
+  echoes: SentEcho[],
+): SavedConversation | null {
+  const shown = conversation
+    ? echoes.filter(
+        (echo) => echo.request.botId === conversation.botId && !echoShown(echo, conversation),
+      )
+    : [];
   if (!conversation || !shown.length) return conversation;
   const messages = shown.map((echo): Message => ({
     id: echo.request.requestId,
@@ -246,7 +349,13 @@ export function withEchoes(conversation: SavedConversation | null, echoes: SentE
  * draft is anything else, such as the server's cleared copy, the composer is free again.
  */
 export function sendingDraft(draft: Draft, pending: Pending | null, sending: boolean) {
-  return sending && !!pending && draft.botId === pending.botId && isSentCopy(draft) && sameDraft(draft, pending);
+  return (
+    sending &&
+    !!pending &&
+    draft.botId === pending.botId &&
+    isSentCopy(draft) &&
+    sameDraft(draft, pending)
+  );
 }
 /**
  * The draft after a send was refused: the sent text and files go back in front of anything that
@@ -254,7 +363,9 @@ export function sendingDraft(draft: Draft, pending: Pending | null, sending: boo
  * native client restores a discarded send the same way.
  */
 export function restoreSent(draft: Draft, request: Pick<Pending, "text" | "attachments">): Draft {
-  const missing = request.attachments.filter(file => !draft.attachments.some(kept => kept.id === file.id));
+  const missing = request.attachments.filter(
+    (file) => !draft.attachments.some((kept) => kept.id === file.id),
+  );
   const textKept = draft.text.includes(request.text);
   if (textKept && !missing.length) return draft;
   return {
@@ -273,25 +384,48 @@ export function restoreSent(draft: Draft, request: Pick<Pending, "text" | "attac
  * when nothing changed. A typed stop phrase admitted nothing, so it is never a send.
  * `before` and `after` are the echoes of the same change.
  */
-export function nextSends(sends: OwnSend[], before: SentEcho[], after: SentEcho[], { receipt, sender, conversation }: Pick<EchoInput, "receipt" | "sender" | "conversation">): OwnSend[] {
-  let next = sends.filter(send => send.senderId === sender?.id);
-  const echo = receipt?.status === "accepted" && receipt.turn !== "none" && sender
-    ? before.find(each => each.request.requestId === receipt.requestId && each.sender.id === sender.id) : undefined;
-  if (echo && receipt && !next.some(send => send.requestId === echo.request.requestId)) {
+export function nextSends(
+  sends: OwnSend[],
+  before: SentEcho[],
+  after: SentEcho[],
+  { receipt, sender, conversation }: Pick<EchoInput, "receipt" | "sender" | "conversation">,
+): OwnSend[] {
+  let next = sends.filter((send) => send.senderId === sender?.id);
+  const echo =
+    receipt?.status === "accepted" && receipt.turn !== "none" && sender
+      ? before.find(
+          (each) => each.request.requestId === receipt.requestId && each.sender.id === sender.id,
+        )
+      : undefined;
+  if (echo && receipt && !next.some((send) => send.requestId === echo.request.requestId)) {
     const { request, after: anchor } = echo;
     const messageId = echo.messageId ?? receipt.messageId;
-    next = [...next, { requestId: request.requestId, botId: request.botId, senderId: echo.sender.id, text: request.text, after: anchor, ...messageId ? { messageId } : {} }];
-    const ofChat = next.filter(send => send.botId === request.botId);
+    next = [
+      ...next,
+      {
+        requestId: request.requestId,
+        botId: request.botId,
+        senderId: echo.sender.id,
+        text: request.text,
+        after: anchor,
+        ...(messageId ? { messageId } : {}),
+      },
+    ];
+    const ofChat = next.filter((send) => send.botId === request.botId);
     const dropped = new Set(ofChat.slice(0, Math.max(0, ofChat.length - OWN_SENDS_KEPT)));
-    if (dropped.size) next = next.filter(send => !dropped.has(send));
+    if (dropped.size) next = next.filter((send) => !dropped.has(send));
   }
   if (conversation) {
-    const noCopyComing = (send: OwnSend) => conversation.botId === send.botId
-      && before.some(each => each.request.requestId === send.requestId) && !after.some(each => each.request.requestId === send.requestId)
-      && copyIndex(send, conversation.messages) < 0;
-    if (next.some(noCopyComing)) next = next.filter(send => !noCopyComing(send));
+    const noCopyComing = (send: OwnSend) =>
+      conversation.botId === send.botId &&
+      before.some((each) => each.request.requestId === send.requestId) &&
+      !after.some((each) => each.request.requestId === send.requestId) &&
+      copyIndex(send, conversation.messages) < 0;
+    if (next.some(noCopyComing)) next = next.filter((send) => !noCopyComing(send));
   }
-  return next.length === sends.length && next.every((send, index) => send === sends[index]) ? sends : next;
+  return next.length === sends.length && next.every((send, index) => send === sends[index])
+    ? sends
+    : next;
 }
 export type EchoState = { echoes: SentEcho[]; sends: OwnSend[] };
 /** Both lists after a change, together so a send ends in the same step as its echo. */
@@ -309,19 +443,46 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
   const [{ echoes, sends }, setState] = useState<EchoState>({ echoes: [], sends: [] });
   // Capture the anchor and account at the instant the form is sent, before its asynchronous ID or receipt.
   const beginFormSend = (botId: string, senderId: string, text: string) => {
-    const anchor = conversation?.botId === botId ? conversation.messages.findLast(message => !message.id.endsWith("-inflight"))?.id : undefined;
+    const anchor =
+      conversation?.botId === botId
+        ? conversation.messages.findLast((message) => !message.id.endsWith("-inflight"))?.id
+        : undefined;
     return (receipt: SubmissionReceipt) => {
-      if (receipt.status !== "accepted" || receipt.turn === "none" || receipt.text !== undefined && receipt.text !== text) return;
-      setState(current => {
-        const echo: SentEcho = { request: { requestId: receipt.requestId, botId, text, attachments: [], reviewedInterruption: false }, sender: { id: senderId, name: "" }, sentAt: "", status: "sending", after: anchor };
-        const next = nextSends(current.sends, [echo], [echo], { receipt, sender: { id: senderId, name: "" }, conversation: null });
+      if (
+        receipt.status !== "accepted" ||
+        receipt.turn === "none" ||
+        (receipt.text !== undefined && receipt.text !== text)
+      )
+        return;
+      setState((current) => {
+        const echo: SentEcho = {
+          request: {
+            requestId: receipt.requestId,
+            botId,
+            text,
+            attachments: [],
+            reviewedInterruption: false,
+          },
+          sender: { id: senderId, name: "" },
+          sentAt: "",
+          status: "sending",
+          after: anchor,
+        };
+        const next = nextSends(current.sends, [echo], [echo], {
+          receipt,
+          sender: { id: senderId, name: "" },
+          conversation: null,
+        });
         return next === current.sends ? current : { ...current, sends: next };
       });
     };
   };
-  const step = () => setState(current => advance(current, { pending, receipt, sending, conversation, sender, now: Date.now() }));
+  const step = () =>
+    setState((current) =>
+      advance(current, { pending, receipt, sending, conversation, sender, now: Date.now() }),
+    );
   useEffect(step, [pending, receipt, sending, conversation, sender?.id]);
-  const waiting = echoes.some(echo => echo.status === "accepted" && !echo.ran);
+  const waiting = echoes.some((echo) => echo.status === "accepted" && !echo.ran);
   // An accepted message that never shows is checked again once its patience runs out.
   useEffect(() => {
     if (!waiting) return;
@@ -329,8 +490,15 @@ export function useSentEchoes(input: Omit<EchoInput, "now">) {
     return () => clearTimeout(timer);
   }, [waiting, pending, receipt, sending, conversation, sender?.id]);
   // The early row's two bounds: a request still out, and Hermes's copy without the turn's report.
-  const deadline = Math.min(...echoes.map(echo => echo.status === "sending" && !echo.slow ? (echo.sendingSince ?? 0) + SENDING_ROW_MS
-    : echo.copiedAt !== undefined ? echo.copiedAt + COPY_HANDOFF_MS : Infinity));
+  const deadline = Math.min(
+    ...echoes.map((echo) =>
+      echo.status === "sending" && !echo.slow
+        ? (echo.sendingSince ?? 0) + SENDING_ROW_MS
+        : echo.copiedAt !== undefined
+          ? echo.copiedAt + COPY_HANDOFF_MS
+          : Infinity,
+    ),
+  );
   useEffect(() => {
     if (deadline === Infinity) return;
     const timer = setTimeout(step, Math.max(0, deadline - Date.now()));

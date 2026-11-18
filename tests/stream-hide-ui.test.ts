@@ -16,9 +16,13 @@ import { advance, mountRoot, reducedMotionOnly, stubMatchMedia, unmountAll } fro
 
 // Only the network is replaced; changeStream and its owners run for real. Every request a test did not
 // list fails loudly, and the owners swallow some, so `unexpected` is checked after each test.
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest({
-  ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
-}));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest({
+    ...(await original<typeof import("../src/client-api")>()),
+    api: vi.fn(),
+    write: vi.fn(),
+  }),
+);
 
 const START = Date.parse("2026-11-10T12:00:00Z");
 const CHAT = "/api/bots/shared/events?inflight=3&drafts=1&ping=10";
@@ -26,15 +30,49 @@ const HOUSEHOLD = "/api/events?ping=10";
 const ROOM = "/api/events?group=room&ping=10";
 let unexpected: string[];
 let visibility: DocumentVisibilityState;
-const boot = (): Bootstrap => ({
-  user: { id: "one", name: "One", email: "one@example.test" }, household: [],
-  preferences: { ...structuredClone(defaultPreferences), startPage: "assistant" },
-  bots: [{ id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" }, { id: "other", name: "Other", shared: true, model: "test", activity: "idle" }],
-  capabilities: Object.fromEntries(["chat", "steering", "approvals", "uploads", "generatedFiles", "botConfiguration", "tools", "skills", "routines", "durableEvents", "idempotency", "imageGeneration", "stop", "portraitGeneration", "avatarMetadata"].map(key => [key, { supported: true }])) as Bootstrap["capabilities"],
-  connection: { connected: true }, csrfToken: "csrf-one",
-} as Bootstrap);
-const conversation = (botId: string): Conversation => ({ botId, messages: [{ id: "one", role: "assistant", text: "Howdy" }], approvals: [], files: [], activity: { state: "idle" } });
-const room = { room_id: "room", name: "Weekend plans", members: [{ member_id: "shared", profile: "shared", handle: "shared", display_name: "Shared" }] };
+const boot = (): Bootstrap =>
+  ({
+    user: { id: "one", name: "One", email: "one@example.test" },
+    household: [],
+    preferences: { ...structuredClone(defaultPreferences), startPage: "assistant" },
+    bots: [
+      { id: "shared", name: "Shared", shared: true, model: "test", activity: "idle" },
+      { id: "other", name: "Other", shared: true, model: "test", activity: "idle" },
+    ],
+    capabilities: Object.fromEntries(
+      [
+        "chat",
+        "steering",
+        "approvals",
+        "uploads",
+        "generatedFiles",
+        "botConfiguration",
+        "tools",
+        "skills",
+        "routines",
+        "durableEvents",
+        "idempotency",
+        "imageGeneration",
+        "stop",
+        "portraitGeneration",
+        "avatarMetadata",
+      ].map((key) => [key, { supported: true }]),
+    ) as Bootstrap["capabilities"],
+    connection: { connected: true },
+    csrfToken: "csrf-one",
+  }) as Bootstrap;
+const conversation = (botId: string): Conversation => ({
+  botId,
+  messages: [{ id: "one", role: "assistant", text: "Howdy" }],
+  approvals: [],
+  files: [],
+  activity: { state: "idle" },
+});
+const room = {
+  room_id: "room",
+  name: "Weekend plans",
+  members: [{ member_id: "shared", profile: "shared", handle: "shared", display_name: "Shared" }],
+};
 /** The reads each owner makes, by path prefix. Anything else is unexpected. */
 const reads: [string, () => unknown][] = [
   ["/bootstrap?roster=lean", boot],
@@ -42,7 +80,10 @@ const reads: [string, () => unknown][] = [
   ["/bots/other/conversation?", () => conversation("other")],
   ["/bots/shared/draft", () => ({ text: "", attachments: [] })],
   ["/groups/room/log", () => ({ events: [], cursor: 0, has_more: false })],
-  ["/groups/room", () => ({ room, driver_status: { working: false, blocked: false, pending_actions: [] } })],
+  [
+    "/groups/room",
+    () => ({ room, driver_status: { working: false, blocked: false, pending_actions: [] } }),
+  ],
   ["/groups", () => ({ supported: true, canSend: true, rooms: [room] })],
   ["/bots/shared/routine-runs", () => ({ runs: [] })],
 ];
@@ -59,16 +100,20 @@ beforeEach(() => {
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
   unexpected = [];
-  vi.mocked(api).mockReset().mockImplementation(async <T>(path: string) => {
-    const read = reads.find(([prefix]) => path.startsWith(prefix));
-    if (read) return read[1]() as T;
-    unexpected.push(`GET ${path}`);
-    throw new Error(`This test serves no GET ${path}`);
-  });
-  vi.mocked(write).mockReset().mockImplementation(async (path: string, _body: unknown, method = "POST") => {
-    unexpected.push(`${method} ${path}`);
-    throw new Error(`This test serves no ${method} ${path}`);
-  });
+  vi.mocked(api)
+    .mockReset()
+    .mockImplementation(async <T>(path: string) => {
+      const read = reads.find(([prefix]) => path.startsWith(prefix));
+      if (read) return read[1]() as T;
+      unexpected.push(`GET ${path}`);
+      throw new Error(`This test serves no GET ${path}`);
+    });
+  vi.mocked(write)
+    .mockReset()
+    .mockImplementation(async (path: string, _body: unknown, method = "POST") => {
+      unexpected.push(`${method} ${path}`);
+      throw new Error(`This test serves no ${method} ${path}`);
+    });
 });
 afterEach(async () => {
   // Unmounted first, so a failed check below leaves no owner listening into the next test.
@@ -77,14 +122,20 @@ afterEach(async () => {
   expect(unexpected).toEqual([]);
 });
 
-const attempts = (url: string) => FakeEventSource.created.filter(created => created === url).length;
-const live = (url: string) => [...FakeEventSource.streams].filter(source => source.url === url).at(-1);
+const attempts = (url: string) =>
+  FakeEventSource.created.filter((created) => created === url).length;
+const live = (url: string) =>
+  [...FakeEventSource.streams].filter((source) => source.url === url).at(-1);
 /** Refuses each open stream at `urls`, as a server that is down answers at once. */
-const refuse = (...urls: string[]) => act(async () => { for (const url of urls) live(url)?.fail(); });
-const setVisibility = (state: DocumentVisibilityState) => act(async () => {
-  visibility = state;
-  document.dispatchEvent(new Event("visibilitychange"));
-});
+const refuse = (...urls: string[]) =>
+  act(async () => {
+    for (const url of urls) live(url)?.fail();
+  });
+const setVisibility = (state: DocumentVisibilityState) =>
+  act(async () => {
+    visibility = state;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
 const hide = () => setVisibility("hidden");
 const show = () => setVisibility("visible");
 /**
@@ -102,8 +153,17 @@ async function cycles(count: number, urls: string[], stepMs = 0) {
   }
 }
 
-const Chat = ({ botId = "shared" }: { botId?: string }) => { useConversation(botId, "one"); return null; };
-const Room = () => createElement(GroupRoomView, { bootstrap: boot(), roomId: "room", canSend: true, onChanged: () => {} });
+const Chat = ({ botId = "shared" }: { botId?: string }) => {
+  useConversation(botId, "one");
+  return null;
+};
+const Room = () =>
+  createElement(GroupRoomView, {
+    bootstrap: boot(),
+    roomId: "room",
+    canSend: true,
+    onChanged: () => {},
+  });
 
 describe("a stream hidden and shown during an outage keeps its retry budget", () => {
   it("makes no attempt beyond the opening for 100 hide and show cycles at a standing clock, on all three streams, before or after an online burst", async () => {
@@ -116,13 +176,21 @@ describe("a stream hidden and shown during an outage keeps its retry budget", ()
     expect([attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)]).toEqual([1, 1, 1]);
     await refuse(HOUSEHOLD, CHAT, ROOM);
     await cycles(100, [HOUSEHOLD, CHAT, ROOM]);
-    expect([attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)], "only the opening attempt").toEqual([1, 1, 1]);
+    expect(
+      [attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)],
+      "only the opening attempt",
+    ).toEqual([1, 1, 1]);
     // The reviewer's sequence: a burst of `online` events forces one attempt each, then 100 more cycles.
     for (let event = 0; event < 100; event++) {
-      await act(async () => { window.dispatchEvent(new Event("online")); });
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
       await refuse(HOUSEHOLD, CHAT, ROOM);
     }
-    expect([attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)], "the first signal's forced attempt").toEqual([2, 2, 2]);
+    expect(
+      [attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)],
+      "the first signal's forced attempt",
+    ).toEqual([2, 2, 2]);
     await cycles(100, [HOUSEHOLD, CHAT, ROOM]);
     expect([attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)]).toEqual([2, 2, 2]);
   });
@@ -191,8 +259,14 @@ describe("a stream hidden and shown during an outage keeps its retry budget", ()
     await renderRoom(createElement(Room));
     await refuse(HOUSEHOLD, CHAT, ROOM);
     await hide();
-    for (let event = 0; event < 100; event++) await act(async () => { window.dispatchEvent(new Event("online")); });
-    expect([attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)], "a hidden page attempts nothing").toEqual([1, 1, 1]);
+    for (let event = 0; event < 100; event++)
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
+    expect(
+      [attempts(HOUSEHOLD), attempts(CHAT), attempts(ROOM)],
+      "a hidden page attempts nothing",
+    ).toEqual([1, 1, 1]);
     // Shown 0.5 s after the refusal, before the first retry was due: the signal still connects at once.
     await advance(500);
     await show();
@@ -210,7 +284,9 @@ describe("a stream hidden and shown during an outage keeps its retry budget", ()
     await hide();
     await show();
     expect(attempts(CHAT)).toBe(1);
-    await act(async () => { window.dispatchEvent(new Event("online")); });
+    await act(async () => {
+      window.dispatchEvent(new Event("online"));
+    });
     expect(attempts(CHAT)).toBe(2);
   });
 });
@@ -223,7 +299,16 @@ describe("a healthy stream hidden and shown", () => {
     await renderRoom(createElement(Room));
     const urls = [HOUSEHOLD, CHAT, ROOM];
     // Each connection is accepted and pings at once, as a `?ping=10` server does.
-    const accept = () => act(async () => { for (const url of urls) { const source = live(url); if (source && source.readyState !== FakeEventSource.OPEN) { source.connect(); source.emit("ping", "10"); } } });
+    const accept = () =>
+      act(async () => {
+        for (const url of urls) {
+          const source = live(url);
+          if (source && source.readyState !== FakeEventSource.OPEN) {
+            source.connect();
+            source.emit("ping", "10");
+          }
+        }
+      });
     await accept();
     for (let cycle = 1; cycle <= 100; cycle++) {
       await hide();
@@ -236,7 +321,10 @@ describe("a healthy stream hidden and shown", () => {
   it("connects at once when shown after a forced attempt proved itself before the retry it beat", async () => {
     await mountRoot().render(createElement(Chat));
     await refuse(CHAT);
-    const online = () => act(async () => { window.dispatchEvent(new Event("online")); });
+    const online = () =>
+      act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
     // The first signal forces an attempt and starts a 3-second gap. Two more refusals put the ordinary
     // retry at 4.5 seconds.
     await online();
@@ -249,14 +337,16 @@ describe("a healthy stream hidden and shown", () => {
     expect(attempts(CHAT)).toBe(4);
     // A server pinging every 2 seconds proves it a second after its headers, at 4 seconds, before 4.5.
     const forced = live(CHAT)!;
-    await act(async () => { forced.connect(); forced.emit("ping", "2"); });
+    await act(async () => {
+      forced.connect();
+      forced.emit("ping", "2");
+    });
     await advance(1_000);
     await act(async () => forced.emit("ping", "2"));
     await hide();
     await show();
     expect(attempts(CHAT), "no retry deadline outlives the stream that proved itself").toBe(5);
   });
-
 });
 
 describe("a stream its owner is done with", () => {

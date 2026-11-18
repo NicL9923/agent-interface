@@ -5,15 +5,15 @@ Node 24.22.2. Web client, one measuring tool and `e2e/ports.ts`; no app server, 
 
 ## Every image the transcript renders, on main
 
-| Where | Element | Size known before load? | Shift on main |
-| --- | --- | --- | --- |
-| A person's attachments on a sent message, and its echo | `FileLink` `<img>`, `src/app/Conversation.tsx:609` | Only from a page-lifetime cache filled by an earlier load of the same file | Yes: 0 tall until loaded, then up to 400 px |
-| Files and generated images in a reply | Same `FileLink` | Same | Same |
-| Inline Markdown images | `img` renderer, `src/components/MessageMarkdown.tsx:128` | Not rendered as an image: an "Open image" link | None |
-| Activity, header and card avatars | `Avatar`, `src/components/Avatar.tsx:634` | Yes, the design's fixed size on the wrapper and `width`/`height` on the portrait | None |
-| Reply file chips | `src/app/ReplyFiles.tsx` | No images | None |
-| Composer attachment thumbnails | `src/app/AttachmentTray.tsx:72` | Fixed thumb box in `attachments.css`; outside the transcript | None in the transcript |
-| Computer peek | `src/components/ComputerPeek.tsx`, a canvas in a floating dock | Fixed | None in the flow |
+| Where                                                  | Element                                                        | Size known before load?                                                          | Shift on main                               |
+| ------------------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------- |
+| A person's attachments on a sent message, and its echo | `FileLink` `<img>`, `src/app/Conversation.tsx:609`             | Only from a page-lifetime cache filled by an earlier load of the same file       | Yes: 0 tall until loaded, then up to 400 px |
+| Files and generated images in a reply                  | Same `FileLink`                                                | Same                                                                             | Same                                        |
+| Inline Markdown images                                 | `img` renderer, `src/components/MessageMarkdown.tsx:128`       | Not rendered as an image: an "Open image" link                                   | None                                        |
+| Activity, header and card avatars                      | `Avatar`, `src/components/Avatar.tsx:634`                      | Yes, the design's fixed size on the wrapper and `width`/`height` on the portrait | None                                        |
+| Reply file chips                                       | `src/app/ReplyFiles.tsx`                                       | No images                                                                        | None                                        |
+| Composer attachment thumbnails                         | `src/app/AttachmentTray.tsx:72`                                | Fixed thumb box in `attachments.css`; outside the transcript                     | None in the transcript                      |
+| Computer peek                                          | `src/components/ComputerPeek.tsx`, a canvas in a floating dock | Fixed                                                                            | None in the flow                            |
 
 Hermes reports no image sizes: `FileRef` is `id`, `name`, `mime`, `size`, `url` (`src/shared/types.ts:224`), Hermes's
 artifact and attachment rows carry none, and the upload route does not read image headers. Sending sizes would take
@@ -40,13 +40,13 @@ port 4187, network emulated at 400 ms latency and 400 kbit/s, six images (4:3, 1
 1.2 to 2.45 s late, then a text reply. Each run is a fresh page, so no size is known in advance. Same three
 numbers in every run:
 
-| Scenario | `main` at `c2ee202` | This branch |
-| --- | --- | --- |
-| Open the chat from its link: CLS, shifts | 0.464, 6 | 0, 0 |
-| Open: last message's distance from the view's bottom | 0 px | 0 px |
+| Scenario                                                                                                | `main` at `c2ee202`                                                | This branch      |
+| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------- |
+| Open the chat from its link: CLS, shifts                                                                | 0.464, 6                                                           | 0, 0             |
+| Open: last message's distance from the view's bottom                                                    | 0 px                                                               | 0 px             |
 | Reader scrolled up 500 px with the wheel before images arrive: drift of the first message below the top | 0 px (the wheel reached `seed-1`, the images having no height yet) | 0 px (`photo-5`) |
-| Send a 16:9 image with text, image served 2 s late: sent message's move | 122 px up | 0 px |
-| Send: CLS, shifts | 0.0097, 2 | 0.0097, 2 |
+| Send a 16:9 image with text, image served 2 s late: sent message's move                                 | 122 px up                                                          | 0 px             |
+| Send: CLS, shifts                                                                                       | 0.0097, 2                                                          | 0.0097, 2        |
 
 The two small shifts in the send scenario are the same on both builds and come from the composer, not an image.
 The first batch of runs on this branch gave two send runs with the sent message 10,692 and 11,571 px above the
@@ -119,23 +119,23 @@ at 400 ms and 400 kbit/s, images served 1.2 to 2.45 s late. Each build's checkou
 branch's `e2e/ports.ts` for `E2E_PORT`). Runs repeated the same numbers unless noted. Mixed: 4:3, 16:9, 9:19.5, 1:1,
 3:4, 21:9. Far: 16:9, 9:19.5, 21:9, 1:1, 9:16, 3:1.
 
-| Scenario | `main` at `c2ee202` | Head `cbad862` | This change |
-| --- | --- | --- | --- |
-| Open, mixed: CLS | 0.464 | 0 | 0.067 |
-| Open, far: CLS | 0.419 | 0 | 0.068 |
-| Open: last message from the bottom | 0 px | 0 px | 0 px |
-| Reader, mixed, wheel up 300 / 900 / 1,500 px: reader's message moved | 325 / 0 / 0 px | 0 / 0 / 0 px | 0 / 0 / 0 px |
-| Reader, mixed: most any message in view moved | 1,344 / 955 / 955 px | 0 px | 0 px |
-| Reader, far: reader's message moved, most in view moved | 241 / 0 / 0, up to 1,200 px | 0, 0 px | 0, 0 px |
-| Reader, mixed: CLS | 0.115 / 0.067 / 0.067 | 0 | 0.074 / 0.029 / 0 |
-| Reader, far: CLS | 0.115 / 0.055 / 0.055 | 0 | 0.124 / 0.052 / 0.029 |
-| Send a 16:9 image: sent message moved, CLS | -122 px, 0.0097 | 0 px, 0.0097 | 0 px, 0.0097 |
-| Send while six images above load, mixed: moved, CLS | 0 px, 0.551 | 0 px, 0.0097 to 0.0106 | 0 px, 0.061 |
-| Send while six far images above load: moved, CLS | 0 px, 0.487 | 0 px, 0.0097 | 0 px, 0.061 |
-| A 404 image's link height, loading then failed | 56 then 58 px | 381 then 58 px | 378 then 378 px |
-| Failed scenario CLS | 0.346 | 0 | 0.045 |
-| Animated GIF 480 x 270 and PNG 8000 x 4500: link height loading, then loaded | 56, 297 px | 381, 381 px (letterboxed) | 378, 294 px |
-| The GIF's frame changes on screen | yes | yes | yes |
+| Scenario                                                                     | `main` at `c2ee202`         | Head `cbad862`            | This change           |
+| ---------------------------------------------------------------------------- | --------------------------- | ------------------------- | --------------------- |
+| Open, mixed: CLS                                                             | 0.464                       | 0                         | 0.067                 |
+| Open, far: CLS                                                               | 0.419                       | 0                         | 0.068                 |
+| Open: last message from the bottom                                           | 0 px                        | 0 px                      | 0 px                  |
+| Reader, mixed, wheel up 300 / 900 / 1,500 px: reader's message moved         | 325 / 0 / 0 px              | 0 / 0 / 0 px              | 0 / 0 / 0 px          |
+| Reader, mixed: most any message in view moved                                | 1,344 / 955 / 955 px        | 0 px                      | 0 px                  |
+| Reader, far: reader's message moved, most in view moved                      | 241 / 0 / 0, up to 1,200 px | 0, 0 px                   | 0, 0 px               |
+| Reader, mixed: CLS                                                           | 0.115 / 0.067 / 0.067       | 0                         | 0.074 / 0.029 / 0     |
+| Reader, far: CLS                                                             | 0.115 / 0.055 / 0.055       | 0                         | 0.124 / 0.052 / 0.029 |
+| Send a 16:9 image: sent message moved, CLS                                   | -122 px, 0.0097             | 0 px, 0.0097              | 0 px, 0.0097          |
+| Send while six images above load, mixed: moved, CLS                          | 0 px, 0.551                 | 0 px, 0.0097 to 0.0106    | 0 px, 0.061           |
+| Send while six far images above load: moved, CLS                             | 0 px, 0.487                 | 0 px, 0.0097              | 0 px, 0.061           |
+| A 404 image's link height, loading then failed                               | 56 then 58 px               | 381 then 58 px            | 378 then 378 px       |
+| Failed scenario CLS                                                          | 0.346                       | 0                         | 0.045                 |
+| Animated GIF 480 x 270 and PNG 8000 x 4500: link height loading, then loaded | 56, 297 px                  | 381, 381 px (letterboxed) | 378, 294 px           |
+| The GIF's frame changes on screen                                            | yes                         | yes                       | yes                   |
 
 On `main` the images have no height until they load, so the same wheel distance reaches different rows; the reader
 rows are comparable only within a build. Head's reader and open numbers are 0 because nothing ever reshapes; its price
@@ -157,16 +157,16 @@ Written first: the e2e "a transcript image that fails to load keeps the space it
 `cbad862` at 381 px against 58 px. New and changed UI tests in `tests/image-dimensions-ui.test.ts` (10) and
 `tests/app-ui.test.ts`. Each line broken by hand, red, restored:
 
-| Break | Red |
-| --- | --- |
-| `onError` ignored | "keeps the frame and says so when an image fails to load" |
-| The reshape never applied | "gives an image of unknown size its own shape once it loads far from 4:3", "takes the loaded shape when the size this page remembered…" |
-| `reshapes` compares only with 4:3 | "reshapes a frame only when the loaded shape is more than 10% from it, either way" |
-| No tolerance (factor 1) | the tolerance test, "…keeps that frame when it loads close to 4:3" |
-| One-sided tolerance | the tolerance test, the remembered-size test |
-| The zero-size guard removed | the tolerance test (640 x 0 gives an infinite ratio; it survived until that case was added) |
-| No eviction; no recency on a relearned size | "forgets the oldest sizes past its bound, and keeps one just used" |
-| `readerSees` always false; the at-end check dropped; the frame instead of its row checked; the frame observed instead of its row; the waiting shape never applied; applied while in view | "waits until the image's row leaves the view to reshape it…" |
+| Break                                                                                                                                                                                    | Red                                                                                                                                     |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `onError` ignored                                                                                                                                                                        | "keeps the frame and says so when an image fails to load"                                                                               |
+| The reshape never applied                                                                                                                                                                | "gives an image of unknown size its own shape once it loads far from 4:3", "takes the loaded shape when the size this page remembered…" |
+| `reshapes` compares only with 4:3                                                                                                                                                        | "reshapes a frame only when the loaded shape is more than 10% from it, either way"                                                      |
+| No tolerance (factor 1)                                                                                                                                                                  | the tolerance test, "…keeps that frame when it loads close to 4:3"                                                                      |
+| One-sided tolerance                                                                                                                                                                      | the tolerance test, the remembered-size test                                                                                            |
+| The zero-size guard removed                                                                                                                                                              | the tolerance test (640 x 0 gives an infinite ratio; it survived until that case was added)                                             |
+| No eviction; no recency on a relearned size                                                                                                                                              | "forgets the oldest sizes past its bound, and keeps one just used"                                                                      |
+| `readerSees` always false; the at-end check dropped; the frame instead of its row checked; the frame observed instead of its row; the waiting shape never applied; applied while in view | "waits until the image's row leaves the view to reshape it…"                                                                            |
 
 ### Checks
 
@@ -207,14 +207,14 @@ Grok 4.7 found no P1 and every check passing. Its findings and what changed:
 `node .agents/tools/measure-image-shift.mjs --runs 1 --only open --viewport 1280x800` and `--viewport 390x844`, the
 mixed shapes, natural size in the frame's box:
 
-| Image | 1280 x 800 | 390 x 844 |
-| --- | --- | --- |
-| 1600 x 1200 (4:3) | 448 x 336 | 333 x 250 |
-| 1920 x 1080 (16:9) | 448 x 252 | 333 x 187 |
-| 1170 x 2532 (tall screenshot) | 183 x 396 | 183 x 396 |
-| 1000 x 1000 | 398 x 398 | 333 x 333 |
-| 900 x 1200 (3:4) | 298 x 397 | 298 x 397 |
-| 2520 x 1080 (panorama) | 448 x 192 | 333 x 143 |
+| Image                         | 1280 x 800 | 390 x 844 |
+| ----------------------------- | ---------- | --------- |
+| 1600 x 1200 (4:3)             | 448 x 336  | 333 x 250 |
+| 1920 x 1080 (16:9)            | 448 x 252  | 333 x 187 |
+| 1170 x 2532 (tall screenshot) | 183 x 396  | 183 x 396 |
+| 1000 x 1000                   | 398 x 398  | 333 x 333 |
+| 900 x 1200 (3:4)              | 298 x 397  | 298 x 397 |
+| 2520 x 1080 (panorama)        | 448 x 192  | 333 x 143 |
 
 Every frame matches its image's ratio within rounding. The e2e test "a transcript image fills a frame of its own ratio
 within the caps" checks the tall screenshot, a panorama and a 3:2 photo at both widths: ratio within 1%, height at most
@@ -228,12 +228,12 @@ followed message every frame twice: in `requestAnimationFrame`, before that fram
 in that callback, which the browser calls after the app's own observers, just before paint. Largest step between two
 frames, about 185 frames per run:
 
-| Scenario | This branch, before layout | This branch, painted | Control: correction one frame late, painted | `origin/main` `caeeb7f`, painted |
-| --- | --- | --- | --- | --- |
-| Reader, wheel up 300 (photos 1 to 4 above) | -84 px | 0 px | -84 px | 325 px (205 to 530) |
-| Reader, wheel up 900 (photos 1 to 2 above) | -84 px | 0 px | -84 px | 0 px; 955 px for a row in view |
-| Reader, wheel up 1,500 (photo 1 above) | 0 px | 0 px | 0 px | 0 px; 955 px for a row in view |
-| Send while six images above load | 62 px | 0 px | 0 px (that path is not the one delayed) | 0 px (389 px before layout) |
+| Scenario                                   | This branch, before layout | This branch, painted | Control: correction one frame late, painted | `origin/main` `caeeb7f`, painted |
+| ------------------------------------------ | -------------------------- | -------------------- | ------------------------------------------- | -------------------------------- |
+| Reader, wheel up 300 (photos 1 to 4 above) | -84 px                     | 0 px                 | -84 px                                      | 325 px (205 to 530)              |
+| Reader, wheel up 900 (photos 1 to 2 above) | -84 px                     | 0 px                 | -84 px                                      | 0 px; 955 px for a row in view   |
+| Reader, wheel up 1,500 (photo 1 above)     | 0 px                       | 0 px                 | 0 px                                        | 0 px; 955 px for a row in view   |
+| Send while six images above load           | 62 px                      | 0 px                 | 0 px (that path is not the one delayed)     | 0 px (389 px before layout)      |
 
 The control build delayed `returnToPlace`'s scroll by one `requestAnimationFrame`, uncommitted, and was rebuilt
 without it after. The painted sample then read the same -84 px as the early one, so it does see a move that reaches the
@@ -253,16 +253,16 @@ between them; each test now has its own ID. In Chromium, "a transcript image fil
 caps, 1280 / 390 px wide" went red before the CSS change: the tall screenshot's frame ratio was 2.42 and 1.80 times
 the image's.
 
-| Break | Red |
-| --- | --- |
-| The wait ignores `neverLeaves` | "applies at once when the row can never leave the view" |
-| No scroll listener | "stays while a scroll leaves the row in view…", "applies once a scroll takes the row out of view…" |
-| No check when the wait starts | "applies at once when the row can never leave the view" |
-| `neverLeaves` always true | the earlier "waits until the image's row leaves the view…", "stays while a scroll…", both "waits when the row would leave the view" cases |
-| `neverLeaves` ignores the top end | "waits when the row would leave the view at the top" |
-| `neverLeaves` ignores the bottom end | "waits until the image's row leaves the view…", "stays while a scroll…", "waits when the row would leave the view at the end" |
-| `.file-image` width rule removed (Chromium) | both "fills a frame of its own ratio" tests, 1.42 and 0.80 off |
-| `--file-ratio` not set (Chromium) | both "fills a frame of its own ratio" tests, the same |
+| Break                                       | Red                                                                                                                                       |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| The wait ignores `neverLeaves`              | "applies at once when the row can never leave the view"                                                                                   |
+| No scroll listener                          | "stays while a scroll leaves the row in view…", "applies once a scroll takes the row out of view…"                                        |
+| No check when the wait starts               | "applies at once when the row can never leave the view"                                                                                   |
+| `neverLeaves` always true                   | the earlier "waits until the image's row leaves the view…", "stays while a scroll…", both "waits when the row would leave the view" cases |
+| `neverLeaves` ignores the top end           | "waits when the row would leave the view at the top"                                                                                      |
+| `neverLeaves` ignores the bottom end        | "waits until the image's row leaves the view…", "stays while a scroll…", "waits when the row would leave the view at the end"             |
+| `.file-image` width rule removed (Chromium) | both "fills a frame of its own ratio" tests, 1.42 and 0.80 off                                                                            |
+| `--file-ratio` not set (Chromium)           | both "fills a frame of its own ratio" tests, the same                                                                                     |
 
 Not run: the reviewer's short-thread reproduction in Chromium. The rule is covered in jsdom with the scroller's sizes
 set by hand.

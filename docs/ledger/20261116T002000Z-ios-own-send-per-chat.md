@@ -10,7 +10,6 @@ With the recovered source, `validate-ios.sh` ran NativeContractTests, OwnSendsTe
 
 After merging `origin/main` at `62ea8cb9`, native suites ran on merge commit `b532b0a9e4cf402d6bd473416cbccea7c6f9263c`: the regression passed, but 2 assertions failed in `testUploadFinishingWhileReturningDraftLoadsKeepsTheFile` (188 tests total). That test passed in the earlier run. Log: `/Volumes/DevSSD/scratch/own-send-merged-green.log`; result: `.private/ios-test-20261116T004638Z-21558.xcresult`. An isolated retry was canceled while queued so the shared checkout could be released for the parent task; it did not run.
 
-
 ## Coordinator follow-up: select outgoing status for the open chat
 
 Sol's re-check of the Claude implementation at f2ccbc02 found that the outgoing getter still
@@ -34,7 +33,6 @@ The original source was Claude-authored and Sol independently reviewed it. This 
 and outgoing filter are OpenAI-authored and still need eligible non-OpenAI independent review.
 No production deployment ran. A release is required after merge.
 
-
 ## Compiler correction after the Mac validation attempt
 
 At `bddec87639efd7c3f4b7b84f639f7998996159d2`, both requested native invocations
@@ -48,7 +46,6 @@ contain this closure. The previous baseline and isolated results do not validate
 A fresh exact-commit focused and complete three-suite run is required on the Mac.
 The queued Linux job prints the checked-out commit before execution; its scope cannot
 compile Swift and does not replace this required native check.
-
 
 ## Completed native validation at `80580e154aa1a26bdb14df8ca5445da1de00413b`
 
@@ -67,7 +64,6 @@ The Mac checkout was restored to its original clean state. No independent review
 The earlier upload/draft failure did not recur in this complete selection; its earlier
 cause remains unknown. Full Linux validation remains queued. The eligible independent
 review requirement and production release requirement remain unchanged.
-
 
 ## Completed Linux validation at `a4ed8769889e7b87bca4be0b0e39f246de82fbc8`
 

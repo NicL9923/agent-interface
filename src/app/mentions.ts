@@ -11,14 +11,23 @@ export function mentionAt(text: string, caret: number): { start: number; query: 
 export function matchMembers(members: readonly GroupMember[], query: string) {
   const q = query.toLowerCase();
   const name = (member: GroupMember) => (member.display_name || member.profile).toLowerCase();
-  const byHandle = members.filter(member => member.handle.toLowerCase().startsWith(q));
-  const byName = members.filter(member => !byHandle.includes(member)
-    && name(member).split(/\s+/).some(word => word.startsWith(q)));
+  const byHandle = members.filter((member) => member.handle.toLowerCase().startsWith(q));
+  const byName = members.filter(
+    (member) =>
+      !byHandle.includes(member) &&
+      name(member)
+        .split(/\s+/)
+        .some((word) => word.startsWith(q)),
+  );
   return [...byHandle, ...byName];
 }
 
 /** Replaces the typed `@partial` with the full handle and a space, and says where the caret goes. */
-export function insertMention(text: string, mention: { start: number; query: string }, handle: string) {
+export function insertMention(
+  text: string,
+  mention: { start: number; query: string },
+  handle: string,
+) {
   const end = mention.start + 1 + mention.query.length;
   const after = text.slice(end);
   const insert = `@${handle}${after.startsWith(" ") ? "" : " "}`;

@@ -55,17 +55,17 @@ known limit, a native client's identical words saved in the same turn after the 
 A scratch runner applied each replacement, deleted every `__pycache__`, ran the test file with `python3 -B` and
 `PYTHONDONTWRITEBYTECODE=1`, and restored it.
 
-| Broken | Red |
-| --- | --- |
-| Joined send never registered | queued/joined table, redirected-send test |
-| Registered while the session is idle | idle-answer test |
-| Registered for every accepted turn | two-members-behind-one-turn test |
-| Completion never keeps the rows | queued/joined table, redirected-send test |
-| Turn's own prompt row left in | undelivered-correction test |
-| Completion with no prompt row trusted | no-prompt-row test |
-| Completion with no rows trusted | unusable-rows test |
-| `bind_steers` ignores joined sends | queued/joined table, redirected-send test |
-| The mark ignores joined sends | redirected-send test |
+| Broken                                | Red                                       |
+| ------------------------------------- | ----------------------------------------- |
+| Joined send never registered          | queued/joined table, redirected-send test |
+| Registered while the session is idle  | idle-answer test                          |
+| Registered for every accepted turn    | two-members-behind-one-turn test          |
+| Completion never keeps the rows       | queued/joined table, redirected-send test |
+| Turn's own prompt row left in         | undelivered-correction test               |
+| Completion with no prompt row trusted | no-prompt-row test                        |
+| Completion with no rows trusted       | unusable-rows test                        |
+| `bind_steers` ignores joined sends    | queued/joined table, redirected-send test |
+| The mark ignores joined sends         | redirected-send test                      |
 
 Two breaks stayed green and the code was changed instead of the tests. A `turn_rows IS NULL` guard on the update could
 not matter, since the registry hands each send out once, and a second marking branch in `attribute` for non-integer row

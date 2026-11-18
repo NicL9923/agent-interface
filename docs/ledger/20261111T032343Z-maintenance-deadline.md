@@ -61,25 +61,25 @@ A scratch runner applied each replacement, deleted every `__pycache__`, ran the 
 `PYTHONDONTWRITEBYTECODE=1`, and restored it. A first pass left three breaks green, which showed a shared-state bug in
 my table test and two missing cases; the tests were fixed and those breaks rerun. Every break below went red.
 
-| Broken | Red |
-| --- | --- |
-| First look skips the other-operation check | refused-acquire test |
-| Final look skips the other-operation check | two-acquires test |
-| First look counts a compaction's running flag as work | own-hold, preempt-bound, status/release, boundary, two-acquires tests and the existing compaction test |
-| First look ignores any session a compaction owns | refused-acquire test |
-| First look ignores every `running` mark | refused-acquire test |
-| First look counts a compaction's reservation | own-hold and three more |
-| First look allows queued reservations | refused-acquire test |
-| First look skips the busy check | refused-acquire and work-arrives tests |
-| Final look skipped | preempt-bound, two-acquires, work-arrives tests |
-| Preempts run without regard to the deadline | passed-before-first-preempt test |
-| Preempt waits the full bound | deadline-passes-during-preempts test |
-| No deadline check before the write | boundary test |
-| Deadline boundary excluded (`>`) | boundary test |
-| Deadline counted from after the first look | lock-wait test |
-| Preempts run under `maintenance_lock` | status/release test and the existing compaction test |
-| Zero or negative, infinite, boolean, string deadline accepted (4 breaks) | refused-acquire test |
-| Capability not advertised | capability test |
+| Broken                                                                   | Red                                                                                                    |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| First look skips the other-operation check                               | refused-acquire test                                                                                   |
+| Final look skips the other-operation check                               | two-acquires test                                                                                      |
+| First look counts a compaction's running flag as work                    | own-hold, preempt-bound, status/release, boundary, two-acquires tests and the existing compaction test |
+| First look ignores any session a compaction owns                         | refused-acquire test                                                                                   |
+| First look ignores every `running` mark                                  | refused-acquire test                                                                                   |
+| First look counts a compaction's reservation                             | own-hold and three more                                                                                |
+| First look allows queued reservations                                    | refused-acquire test                                                                                   |
+| First look skips the busy check                                          | refused-acquire and work-arrives tests                                                                 |
+| Final look skipped                                                       | preempt-bound, two-acquires, work-arrives tests                                                        |
+| Preempts run without regard to the deadline                              | passed-before-first-preempt test                                                                       |
+| Preempt waits the full bound                                             | deadline-passes-during-preempts test                                                                   |
+| No deadline check before the write                                       | boundary test                                                                                          |
+| Deadline boundary excluded (`>`)                                         | boundary test                                                                                          |
+| Deadline counted from after the first look                               | lock-wait test                                                                                         |
+| Preempts run under `maintenance_lock`                                    | status/release test and the existing compaction test                                                   |
+| Zero or negative, infinite, boolean, string deadline accepted (4 breaks) | refused-acquire test                                                                                   |
+| Capability not advertised                                                | capability test                                                                                        |
 
 One break, measuring the deadline from after validation instead of arrival, is equivalent and was dropped.
 

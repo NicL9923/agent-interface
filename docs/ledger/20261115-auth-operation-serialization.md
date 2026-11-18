@@ -11,7 +11,6 @@ The initial Web Locks fake modeled exclusive queues, not browser process shutdow
 
 - On commit `231c85bb8d5f33400c104aaae2b6c5f2437dcade`, `~/.agents/tools/linux-heavy-lock.sh .agents/tools/check-all --keep-going` exited 75 after 7,200 seconds waiting for the machine-wide lock. No checks in that run started. The complete source and browser battery remains unverified and needs a subsequent run; the compatible WebKit container is available to the parent. Output: `/tmp/agent-auth-check-all.log` on NicolasLaptop.
 
-
 ## Required Web Locks and device-only sign-out
 
 Nicolas explicitly chose to require Web Locks for browser account changes, while preserving
@@ -83,7 +82,6 @@ eligible non-OpenAI independent review is still required before merge. No Apple 
 validation was needed for this web-only change. No production deployment ran; a release is needed
 after merge.
 
-
 ### CI correction for the simulated closed tab
 
 At `e545abd3ae047bae5d064b04fff307e3fec54565`, CI passed 4,101 tests and failed
@@ -108,7 +106,6 @@ account-transitions and saved-roster suites passed. Typecheck, lint and diff che
 Output: `.private/auth-closed-tab-account-green.log`. Application code is unchanged from
 e545abd3. The queued old-head full check was canceled before acquisition or any test execution;
 a final-head full check replaces it. Independent review remains incomplete.
-
 
 ## Completed full validation at `6574bfcb2f34436c5404f4a737a6db1304102fdc`
 

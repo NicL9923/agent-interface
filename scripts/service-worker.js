@@ -1,5 +1,5 @@
 /* Build placeholders are replaced by build-worker.mjs. No private data belongs in this cache. */
-const CACHE = 'agent-interface-__BUILD_ID__';
+const CACHE = "agent-interface-__BUILD_ID__";
 // What the app needs to open offline: the pages, and the code each page imports on load. Fetched
 // while installing, so it is kept to what the first visit loads anyway.
 const INSTALL_FILES = __PRECACHE__;
@@ -18,10 +18,13 @@ const HASHED_ASSET = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/;
 const WARM_CONNECTIONS = 3;
 
 // A retired chunk falls through to the app shell with a 200, which must never be kept as code.
-const usable = (response) => response.ok && !(response.headers.get('content-type') || '').startsWith('text/html');
+const usable = (response) =>
+  response.ok && !(response.headers.get("content-type") || "").startsWith("text/html");
 
 async function olderCaches() {
-  const keys = (await caches.keys()).filter((key) => key.startsWith('agent-interface-') && key !== CACHE);
+  const keys = (await caches.keys()).filter(
+    (key) => key.startsWith("agent-interface-") && key !== CACHE,
+  );
   return Promise.all(keys.map((key) => caches.open(key)));
 }
 
@@ -31,9 +34,14 @@ async function reuse(cache, older, path) {
   try {
     for (const previous of older) {
       const kept = await previous.match(path);
-      if (kept && usable(kept)) { await cache.put(path, kept); return true; }
+      if (kept && usable(kept)) {
+        await cache.put(path, kept);
+        return true;
+      }
     }
-  } catch { /* An unreadable old cache only means fetching the file. */ }
+  } catch {
+    /* An unreadable old cache only means fetching the file. */
+  }
   return false;
 }
 
@@ -41,7 +49,8 @@ async function reuse(cache, older, path) {
 // app shell, so an HTML body under assets/ is a chunk that is gone. Pages, icons and the manifest
 // keep their names across releases and only need to load; judging them by content type would let
 // one unexpected header block every install.
-const acceptable = (path, response) => path.startsWith('/assets/') ? usable(response) : response.ok;
+const acceptable = (path, response) =>
+  path.startsWith("/assets/") ? usable(response) : response.ok;
 
 async function install() {
   // A rollback while a newer worker waits can install this same release again, beside the worker
@@ -53,12 +62,22 @@ async function install() {
     // Each body is stored as soon as it arrives, as addAll does. A response held unread keeps its
     // connection busy, and over HTTP/1.1 the browser's few connections per host would all be held
     // while the rest of the list waited for one forever.
-    await Promise.all(INSTALL_FILES.map(async (path) => {
-      if (await reuse(cache, older, path)) return;
-      const response = await fetch(path);
-      if (!acceptable(path, response)) throw new Error('Cannot install ' + path + ': ' + response.status + ' ' + response.headers.get('content-type'));
-      await cache.put(path, response);
-    }));
+    await Promise.all(
+      INSTALL_FILES.map(async (path) => {
+        if (await reuse(cache, older, path)) return;
+        const response = await fetch(path);
+        if (!acceptable(path, response))
+          throw new Error(
+            "Cannot install " +
+              path +
+              ": " +
+              response.status +
+              " " +
+              response.headers.get("content-type"),
+          );
+        await cache.put(path, response);
+      }),
+    );
     // Lazy files the last release already holds cost nothing to keep.
     for (const path of [...WARM_FILES, ...ON_DEMAND_FILES]) await reuse(cache, older, path);
   } catch (error) {
@@ -78,9 +97,11 @@ async function fetchMissing() {
     for (let path = queue.shift(); path; path = queue.shift()) {
       try {
         if (await cache.match(path)) continue;
-        const response = await fetch(path, { priority: 'low' });
+        const response = await fetch(path, { priority: "low" });
         if (usable(response)) await cache.put(path, response);
-      } catch { /* Offline, or a newer release replaced the file. */ }
+      } catch {
+        /* Offline, or a newer release replaced the file. */
+      }
     }
   };
   await Promise.all(Array.from({ length: WARM_CONNECTIONS }, connection));
@@ -89,35 +110,45 @@ async function fetchMissing() {
 // Pages in several tabs ask at once; they share one run.
 let warming;
 function warm() {
-  return warming ??= fetchMissing().finally(() => { warming = undefined; });
+  return (warming ??= fetchMissing().finally(() => {
+    warming = undefined;
+  }));
 }
 
-self.addEventListener('install', (event) => {
+self.addEventListener("install", (event) => {
   event.waitUntil(install());
 });
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil((async () => {
-    for (const key of await caches.keys()) {
-      if (key.startsWith('agent-interface-') && key !== CACHE) await caches.delete(key);
-    }
-    await self.clients.claim();
-  })());
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      for (const key of await caches.keys()) {
+        if (key.startsWith("agent-interface-") && key !== CACHE) await caches.delete(key);
+      }
+      await self.clients.claim();
+    })(),
+  );
   // Warming does not start here: the browser may stop an idle worker once activation ends. It runs
   // under the WARM message below, which keeps the worker alive without delaying activation.
 });
 
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
-  if (event.data?.type === 'WARM') event.waitUntil(warm().catch(() => {}));
-  if (event.data?.type === 'ACCOUNT') event.waitUntil(setAccount(event.data.user));
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+  if (event.data?.type === "WARM") event.waitUntil(warm().catch(() => {}));
+  if (event.data?.type === "ACCOUNT") event.waitUntil(setAccount(event.data.user));
   // The page's app badge, ordered with its account words and the pushes (see setPageBadge). It answers on the
   // port the page sent once the step ended, so a page can tell this worker from one before this message existed.
   // A worker with no badge API can never write it, so it says so at once and the page writes it itself.
-  if (event.data?.type === 'BADGE') {
+  if (event.data?.type === "BADGE") {
     const answer = event.ports?.[0];
-    if (!self.navigator?.setAppBadge && !self.navigator?.clearAppBadge) answer?.postMessage({ badge: false });
-    else event.waitUntil(setPageBadge(event.data.user, event.data.count).then(() => answer?.postMessage({ badge: true })));
+    if (!self.navigator?.setAppBadge && !self.navigator?.clearAppBadge)
+      answer?.postMessage({ badge: false });
+    else
+      event.waitUntil(
+        setPageBadge(event.data.user, event.data.count).then(() =>
+          answer?.postMessage({ badge: true }),
+        ),
+      );
   }
 });
 
@@ -153,16 +184,20 @@ self.addEventListener('message', (event) => {
 // can write a word the new one already overtook, or close a notification the new one allows, until
 // the browser stops it. The page tells its word again whenever its account generation starts
 // (src/app/account-epoch.ts), which puts the newest word back in the cache.
-const ACCOUNT_CACHE = 'wildbots-account';
-const ACCOUNT_KEY = '/account';
+const ACCOUNT_CACHE = "wildbots-account";
+const ACCOUNT_KEY = "/account";
 let generation = 0;
 // What the cache holds, as this worker last read or wrote it.
 let saved;
-const readSaved = () => saved ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(ACCOUNT_KEY))
-  .then((found) => found ? found.json() : null).catch(() => null);
+const readSaved = () =>
+  (saved ??= caches
+    .open(ACCOUNT_CACHE)
+    .then((cache) => cache.match(ACCOUNT_KEY))
+    .then((found) => (found ? found.json() : null))
+    .catch(() => null));
 // The latest word: the saved one until a page says.
 let account;
-const loadAccount = () => account ??= readSaved();
+const loadAccount = () => (account ??= readSaved());
 // The latest word, for a read that a page's ACCOUNT message overtakes while it waits.
 async function readAccount() {
   for (;;) {
@@ -181,8 +216,13 @@ function serially(step) {
 }
 
 async function accountMarker(user) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('wildbots-account:' + user));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode("wildbots-account:" + user),
+  );
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 16);
 }
 
 // A push or notification is for the account signed in here: before any page said, as before; signed
@@ -190,16 +230,20 @@ async function accountMarker(user) {
 function mayShow(state, named) {
   if (!state) return true;
   if (state.signedOut) return false;
-  return typeof named !== 'string' || named === state.marker;
+  return typeof named !== "string" || named === state.marker;
 }
 
 // The account whose push, or whose page through a BADGE message, set the badge, as { named }, or null when
 // none set one that is still up. It is kept beside the account, so a worker started again knows whose badge
 // is on screen: it clears one the latest word does not allow, and leaves the latest account's alone.
-const BADGE_KEY = '/badge';
+const BADGE_KEY = "/badge";
 let badgeFor;
-const readBadge = () => badgeFor ??= caches.open(ACCOUNT_CACHE).then((cache) => cache.match(BADGE_KEY))
-  .then((found) => found ? found.json() : null).catch(() => null);
+const readBadge = () =>
+  (badgeFor ??= caches
+    .open(ACCOUNT_CACHE)
+    .then((cache) => cache.match(BADGE_KEY))
+    .then((found) => (found ? found.json() : null))
+    .catch(() => null));
 // Recorded once the badge changed, in the same step, so the next step reads the owner of the badge
 // on screen. The browser keeps the worker running until the step ends.
 async function keepBadgeFor(owner) {
@@ -214,7 +258,11 @@ function clearBadge() {
 
 function setAccount(user) {
   const at = ++generation;
-  account = (typeof user === 'string' && user ? accountMarker(user).then((marker) => ({ marker })) : Promise.resolve({ signedOut: true }))
+  account = (
+    typeof user === "string" && user
+      ? accountMarker(user).then((marker) => ({ marker }))
+      : Promise.resolve({ signedOut: true })
+  )
     // A browser that cannot hash keeps today's rule rather than dropping every notification.
     .catch(() => null);
   return serially(() => settleAccount(at));
@@ -238,17 +286,24 @@ async function settleAccount(at) {
       if (at !== generation) return;
       await cache.put(ACCOUNT_KEY, new Response(JSON.stringify(state)));
       saved = Promise.resolve(state);
-    } catch { /* Storage refused: close what must close, and let the next step write again. */ }
+    } catch {
+      /* Storage refused: close what must close, and let the next step write again. */
+    }
     if (at !== generation) return;
   }
   if (owner && !mayShow(state, owner.named)) {
-    try { await clearBadge(); } catch { /* The badge is clear; only its record was refused. */ }
+    try {
+      await clearBadge();
+    } catch {
+      /* The badge is clear; only its record was refused. */
+    }
     if (at !== generation) return;
   }
   const shown = await self.registration.getNotifications();
   if (at !== generation) return;
   // Notifications on screen for another account, or any once signed out, close.
-  for (const notification of shown) if (!mayShow(state, notification.data?.account)) notification.close();
+  for (const notification of shown)
+    if (!mayShow(state, notification.data?.account)) notification.close();
 }
 
 // A push whose notification is on screen, or failed to show, once every step queued before it has
@@ -279,8 +334,8 @@ function settlePush(named, count) {
 // A write that a newer word overtook, before or after it reached the front of the chain, does nothing: the
 // word's own step clears what it must, and the page of its account says its count again.
 function setPageBadge(user, count) {
-  const wanted = typeof user === 'string' && user ? user : null;
-  if (!Number.isInteger(count) || count < 0 || !wanted && count) return Promise.resolve();
+  const wanted = typeof user === "string" && user ? user : null;
+  if (!Number.isInteger(count) || count < 0 || (!wanted && count)) return Promise.resolve();
   // Judged by the word that was latest when it arrived: a page that said this before a newer word is a
   // generation that word ended, and its write is not the latest account's, even for the same account.
   const at = generation;
@@ -291,14 +346,19 @@ function setPageBadge(user, count) {
     if (at !== generation) return;
     if (count) {
       // A browser that cannot hash keeps today's rule: no word names an account to refuse it for.
-      if (state && (typeof named !== 'string' || !mayShow(state, named))) return;
+      if (state && (typeof named !== "string" || !mayShow(state, named))) return;
       // No await between the check above and the call.
       void self.navigator.setAppBadge(count).catch(() => {});
       return keepBadgeFor({ named });
     }
     // A legacy push names no account. Only the latest account's page may clear that unknown owner.
-    if (owner && mayShow(state, owner.named) && owner.named !== named
-      && (typeof owner.named === 'string' || state?.marker !== named)) return;
+    if (
+      owner &&
+      mayShow(state, owner.named) &&
+      owner.named !== named &&
+      (typeof owner.named === "string" || state?.marker !== named)
+    )
+      return;
     return clearBadge();
   });
 }
@@ -306,12 +366,16 @@ function setPageBadge(user, count) {
 // A note in this release's cache that the server now has another shell. It lives and dies with the
 // cache, so a stopped and restarted worker still sees it, and the next release starts without one.
 // No request is ever answered from it: the fetch handler serves only the files listed above.
-const OUTDATED = '/.shell-outdated';
+const OUTDATED = "/.shell-outdated";
 
 // Today's rule, and the rule once the cached shell is known to be out of date: the server's shell,
 // or this release's copy when the network fails.
 async function networkShell(request, cache) {
-  try { return await fetch(request); } catch { return (await cache.match('/index.html')) || Response.error(); }
+  try {
+    return await fetch(request);
+  } catch {
+    return (await cache.match("/index.html")) || Response.error();
+  }
 }
 
 // Compares the server's shell with this release's copy after the copy has answered. The server sends
@@ -322,11 +386,13 @@ async function networkShell(request, cache) {
 // release and changes nothing: no window reloads and the worker stays.
 async function revalidate(cache, copy) {
   try {
-    const response = await fetch('/index.html', { cache: 'no-store', redirect: 'manual' });
+    const response = await fetch("/index.html", { cache: "no-store", redirect: "manual" });
     if (!response.ok) return;
-    if (await response.text() === await copy.text()) return;
-    await cache.put(OUTDATED, new Response(''));
-  } catch { return; }
+    if ((await response.text()) === (await copy.text())) return;
+    await cache.put(OUTDATED, new Response(""));
+  } catch {
+    return;
+  }
   await self.registration.update().catch(() => {});
 }
 
@@ -336,14 +402,14 @@ async function revalidate(cache, copy) {
 // old release at most once after a deploy, even when the new worker never manages to install.
 async function openShell(event) {
   const cache = await caches.open(CACHE);
-  const cached = await cache.match('/index.html');
-  if (!cached || await cache.match(OUTDATED)) return networkShell(event.request, cache);
+  const cached = await cache.match("/index.html");
+  if (!cached || (await cache.match(OUTDATED))) return networkShell(event.request, cache);
   // Copied before the page reads the body, which can only be read once.
   event.waitUntil(revalidate(cache, cached.clone()));
   return cached;
 }
 
-const BOOT = '/boot.js';
+const BOOT = "/boot.js";
 // public/boot.js blocks the page's <head>, before any of the app's code or deadlines exist, so a
 // stalled download would leave a blank page until the browser gave up. This release's copy always
 // answers, at once, even after the shell is noted as out of date and opens from the network: a
@@ -354,13 +420,13 @@ async function openBoot(request) {
   return cached || fetch(request);
 }
 
-self.addEventListener('fetch', (event) => {
+self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
-  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (request.method !== "GET" || url.origin !== self.location.origin) return;
   // Never intercept authenticated endpoints, including streams and downloads.
-  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) return;
-  if (request.mode === 'navigate' && (url.pathname === '/' || url.pathname === '/index.html')) {
+  if (url.pathname === "/api" || url.pathname.startsWith("/api/")) return;
+  if (request.mode === "navigate" && (url.pathname === "/" || url.pathname === "/index.html")) {
     event.respondWith(openShell(event));
     return;
   }
@@ -369,34 +435,46 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (LAZY_PATHS.has(url.pathname)) {
-    event.respondWith((async () => {
-      const cache = await caches.open(CACHE);
-      const cached = await cache.match(url.pathname);
-      if (cached) return cached;
-      const response = await fetch(request);
-      if (usable(response)) event.waitUntil(cache.put(url.pathname, response.clone()));
-      return response;
-    })());
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(CACHE);
+        const cached = await cache.match(url.pathname);
+        if (cached) return cached;
+        const response = await fetch(request);
+        if (usable(response)) event.waitUntil(cache.put(url.pathname, response.clone()));
+        return response;
+      })(),
+    );
     return;
   }
-  if (!INSTALL_PATHS.has(url.pathname) || url.pathname === '/index.html') return;
-  event.respondWith((async () => {
-    const cache = await caches.open(CACHE);
-    return (await cache.match(url.pathname)) || fetch(request);
-  })());
+  if (!INSTALL_PATHS.has(url.pathname) || url.pathname === "/index.html") return;
+  event.respondWith(
+    (async () => {
+      const cache = await caches.open(CACHE);
+      return (await cache.match(url.pathname)) || fetch(request);
+    })(),
+  );
 });
 
 function conversationUrl(value) {
   try {
-    const url = new URL(value || '/', self.location.origin);
-    if (url.origin !== self.location.origin) return self.location.origin + '/';
-    if(url.pathname !== '/') return self.location.origin + '/';
-    if(url.searchParams.get('view') === 'today') return self.location.origin + '/?view=today';
-    const bot = url.searchParams.get('bot');
-    const routine = url.searchParams.get('routine');
-    return self.location.origin + '/' + (bot ? '?bot=' + encodeURIComponent(bot) + (routine ? '&routine=' + encodeURIComponent(routine) : '') : '');
+    const url = new URL(value || "/", self.location.origin);
+    if (url.origin !== self.location.origin) return self.location.origin + "/";
+    if (url.pathname !== "/") return self.location.origin + "/";
+    if (url.searchParams.get("view") === "today") return self.location.origin + "/?view=today";
+    const bot = url.searchParams.get("bot");
+    const routine = url.searchParams.get("routine");
+    return (
+      self.location.origin +
+      "/" +
+      (bot
+        ? "?bot=" +
+          encodeURIComponent(bot) +
+          (routine ? "&routine=" + encodeURIComponent(routine) : "")
+        : "")
+    );
   } catch {
-    return self.location.origin + '/';
+    return self.location.origin + "/";
   }
 }
 
@@ -408,26 +486,48 @@ function canAct() {
 
 // A push for an account that is not signed in here, which the server can send until it learns the
 // subscription is gone, shows nothing and leaves the badge alone.
-self.addEventListener('push', (event) => {
+self.addEventListener("push", (event) => {
   let data = {};
-  try { data = event.data?.json() || {}; } catch { /* A malformed payload still opens the app. */ }
+  try {
+    data = event.data?.json() || {};
+  } catch {
+    /* A malformed payload still opens the app. */
+  }
   const url = conversationUrl(data.url);
-  const declineToken = data.kind === 'approval' && typeof data.declineToken === 'string' && canAct() ? data.declineToken : undefined;
-  const named = typeof data.account === 'string' ? data.account : undefined;
-  event.waitUntil((async () => {
-    if (!mayShow(await readAccount(), named)) return;
-    try {
-      await self.registration.showNotification(String(data.title || 'WildBots').slice(0, 100), {
-        body: String(data.body || 'Your assistant has an update.').slice(0, 240),
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
-        tag: typeof data.tag === 'string' ? data.tag : undefined,
-        data: { url, ...(named ? { account: named } : {}), ...(declineToken ? { declineToken } : {}) },
-        ...(declineToken ? { actions: [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }] } : {}),
-      });
-    } catch { /* Nothing on screen, but the count still stands for the account it is for. */ }
-    await settlePush(named, data.badge);
-  })());
+  const declineToken =
+    data.kind === "approval" && typeof data.declineToken === "string" && canAct()
+      ? data.declineToken
+      : undefined;
+  const named = typeof data.account === "string" ? data.account : undefined;
+  event.waitUntil(
+    (async () => {
+      if (!mayShow(await readAccount(), named)) return;
+      try {
+        await self.registration.showNotification(String(data.title || "WildBots").slice(0, 100), {
+          body: String(data.body || "Your assistant has an update.").slice(0, 240),
+          icon: "/icon-192.png",
+          badge: "/icon-192.png",
+          tag: typeof data.tag === "string" ? data.tag : undefined,
+          data: {
+            url,
+            ...(named ? { account: named } : {}),
+            ...(declineToken ? { declineToken } : {}),
+          },
+          ...(declineToken
+            ? {
+                actions: [
+                  { action: "review", title: "Review" },
+                  { action: "decline", title: "Decline" },
+                ],
+              }
+            : {}),
+        });
+      } catch {
+        /* Nothing on screen, but the count still stands for the account it is for. */
+      }
+      await settlePush(named, data.badge);
+    })(),
+  );
 });
 
 // How long an open window has to say it switched to the chat. A live page answers within a few
@@ -443,10 +543,18 @@ const OPEN_ACK_MS = 250;
 function askToOpen(client, url) {
   return new Promise((resolve) => {
     const channel = new MessageChannel();
-    const done = (opened) => { clearTimeout(timer); channel.port1.close(); resolve(opened); };
+    const done = (opened) => {
+      clearTimeout(timer);
+      channel.port1.close();
+      resolve(opened);
+    };
     const timer = setTimeout(() => done(false), OPEN_ACK_MS);
     channel.port1.onmessage = () => done(true);
-    try { client.postMessage({ type: 'OPEN_CHAT', url }, [channel.port2]); } catch { done(false); }
+    try {
+      client.postMessage({ type: "OPEN_CHAT", url }, [channel.port2]);
+    } catch {
+      done(false);
+    }
   });
 }
 
@@ -486,13 +594,17 @@ function openChat(notification) {
   const current = attempts.get(url);
   if (current && !current.restoring) return current.done;
   const attempt = { restoring: false, done: undefined, replace: undefined };
-  const replaced = new Promise((resolve) => { attempt.replace = resolve; });
+  const replaced = new Promise((resolve) => {
+    attempt.replace = resolve;
+  });
   const run = reach(notification, url)
     // A way of opening that failed unexpectedly has not reached the person either.
     .catch(() => false)
     .then((inFront) => inFront || restore(notification, url, attempt));
   // A replaced attempt's display may settle before its replacement ends, and must not clear it.
-  attempt.done = Promise.race([run, replaced]).finally(() => { if (attempts.get(url) === attempt) attempts.delete(url); });
+  attempt.done = Promise.race([run, replaced]).finally(() => {
+    if (attempts.get(url) === attempt) attempts.delete(url);
+  });
   current?.replace(attempt.done);
   attempts.set(url, attempt);
   return attempt.done;
@@ -511,12 +623,17 @@ const RESTORE_MS = 10_000;
 async function restore(notification, url, attempt) {
   attempt.restoring = true;
   let timer;
-  const deadline = new Promise((resolve) => { timer = setTimeout(resolve, RESTORE_MS); });
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(resolve, RESTORE_MS);
+  });
   const account = notification.data?.account;
   const again = async () => {
     if (mayShow(await readAccount(), account)) await showAgain(notification, url);
   };
-  const shown = again().catch(again).catch(() => {}).then(() => settlePush(account));
+  const shown = again()
+    .catch(again)
+    .catch(() => {})
+    .then(() => settlePush(account));
   await Promise.race([shown, deadline]);
   clearTimeout(timer);
 }
@@ -524,47 +641,65 @@ async function restore(notification, url, attempt) {
 // Follows the table above. True when a window known to be in front shows the chat.
 async function reach(notification, url) {
   // Only a window this worker controls runs code that answers, and only such a window can be navigated.
-  const windows = await self.clients.matchAll({ type: 'window' });
-  const existing = windows.find((client) => client.focused) ?? windows.find((client) => client.visibilityState === 'visible') ?? windows[0];
+  const windows = await self.clients.matchAll({ type: "window" });
+  const existing =
+    windows.find((client) => client.focused) ??
+    windows.find((client) => client.visibilityState === "visible") ??
+    windows[0];
   if (!existing) return openNew(url);
   // Focused first, since the browser allows it only shortly after the tap.
-  const focusing = existing.focus().then(() => true, () => false);
+  const focusing = existing.focus().then(
+    () => true,
+    () => false,
+  );
   const answered = await askToOpen(existing, url);
-  const front = existing.focused || await focusing;
+  const front = existing.focused || (await focusing);
   if (answered) return front;
   if (!notification.data?.reshown) return false;
   try {
     await existing.navigate(url);
     return front;
-  } catch { /* Closed meanwhile, or no longer this worker's. */ }
+  } catch {
+    /* Closed meanwhile, or no longer this worker's. */
+  }
   return openNew(url);
 }
 
-const openNew = (url) => self.clients.openWindow(url).then(() => true, () => false);
+const openNew = (url) =>
+  self.clients.openWindow(url).then(
+    () => true,
+    () => false,
+  );
 
 async function decline(notification) {
   const url = conversationUrl(notification.data?.url);
   let declined = false;
   try {
-    const response = await fetch('/api/push/actions', {
-      method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' },
+    const response = await fetch("/api/push/actions", {
+      method: "POST",
+      credentials: "omit",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ token: notification.data.declineToken }),
     });
     declined = response.ok;
-  } catch { /* Offline: say so below. */ }
+  } catch {
+    /* Offline: say so below. */
+  }
   if (declined) return;
   // The notice is for the account whose approval this was, which may have left during the request.
   const account = notification.data?.account;
   if (!mayShow(await readAccount(), account)) return;
   try {
     await self.registration.showNotification("Couldn't decline", {
-      body: 'Open the chat to review the request.',
-      icon: '/icon-192.png',
-      badge: '/icon-192.png',
-      tag: (notification.tag || 'approval') + ':decline',
+      body: "Open the chat to review the request.",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: (notification.tag || "approval") + ":decline",
       data: { url, ...(account ? { account } : {}) },
     });
-  } catch { /* The browser refused to store it, as it can for any notification: nothing more to show. */ }
+  } catch {
+    /* The browser refused to store it, as it can for any notification: nothing more to show. */
+  }
   // The notice may have reached the screen after its account left.
   await settlePush(account);
 }
@@ -579,7 +714,7 @@ async function showAgain(notification, url) {
     body: notification.body,
     icon: notification.icon,
     badge: notification.badge,
-    tag: 'reshown:' + url,
+    tag: "reshown:" + url,
     actions: notification.actions,
     silent: true,
     data: { ...notification.data, reshown: true },
@@ -589,16 +724,20 @@ async function showAgain(notification, url) {
 // A notification for an account no longer signed in here acts for nobody: Decline sends nothing,
 // and a tap brings the app forward without opening that account's chat.
 async function openApp() {
-  const [existing] = await self.clients.matchAll({ type: 'window' });
+  const [existing] = await self.clients.matchAll({ type: "window" });
   if (existing) await existing.focus().catch(() => {});
-  else await self.clients.openWindow(self.location.origin + '/').catch(() => {});
+  else await self.clients.openWindow(self.location.origin + "/").catch(() => {});
 }
 
-self.addEventListener('notificationclick', (event) => {
+self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  event.waitUntil(readAccount().then((state) => {
-    if (!mayShow(state, event.notification.data?.account)) return event.action === 'decline' ? undefined : openApp();
-    if (event.action === 'decline' && event.notification.data?.declineToken) return decline(event.notification);
-    return openChat(event.notification);
-  }));
+  event.waitUntil(
+    readAccount().then((state) => {
+      if (!mayShow(state, event.notification.data?.account))
+        return event.action === "decline" ? undefined : openApp();
+      if (event.action === "decline" && event.notification.data?.declineToken)
+        return decline(event.notification);
+      return openChat(event.notification);
+    }),
+  );
 });

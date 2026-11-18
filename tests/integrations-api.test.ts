@@ -9,75 +9,206 @@ import { fakeRuntime, signIn } from "./helpers/server.js";
 
 const origin = "https://app.example.invalid";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
-afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
+afterEach(async () => {
+  for (const app of apps.splice(0)) await app.close();
+});
 async function setup() {
-  const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:",
-    GOOGLE_CLIENT_ID: "fixture-client", HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid",
-    HERMES_INTEGRATION_ADMINS: "admin@example.invalid" });
+  const config = loadConfig({
+    NODE_ENV: "production",
+    APP_ORIGIN: origin,
+    APP_DATABASE: ":memory:",
+    GOOGLE_CLIENT_ID: "fixture-client",
+    HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid",
+    HERMES_INTEGRATION_ADMINS: "admin@example.invalid",
+  });
   // Only the app's authenticated boundary is under test. Native behavior has its own probe.
-  const integrationRequest = vi.fn(async (request: IntegrationRequest) => request.operation === "list"
-    ? { profile: request.profile, connections: [], canManage: true }
-    : { kind: "connected" as const, status: "approved" as const, message: "Fixture operation completed" });
+  const integrationRequest = vi.fn(async (request: IntegrationRequest) =>
+    request.operation === "list"
+      ? { profile: request.profile, connections: [], canManage: true }
+      : {
+          kind: "connected" as const,
+          status: "approved" as const,
+          message: "Fixture operation completed",
+        },
+  );
   const runtime = fakeRuntime({ integrationRequest, close: async () => {} });
   const upgrades = new HermesUpgrades(config, runtime);
-  const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
-  return { ...result, runtime, integrationRequest, upgrades, admin: signIn(result.store, origin, "admin"), member: signIn(result.store, origin, "member") };
+  const result = await createApp(config, runtime, { background: false, upgrades });
+  apps.push(result.app);
+  return {
+    ...result,
+    runtime,
+    integrationRequest,
+    upgrades,
+    admin: signIn(result.store, origin, "admin"),
+    member: signIn(result.store, origin, "member"),
+  };
 }
 
 it("lets members inspect and check their profile, but reserves connection changes for administrators", async () => {
   const s = await setup();
-  expect((await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.member })).json()).toEqual({ profile: "ranch", connections: [], canManage: false });
-  expect((await s.app.inject({ method: "POST", url: "/api/integrations/google_workspace/check", headers: s.member, payload: { profile: "ranch" } })).statusCode).toBe(200);
-  expect(s.integrationRequest).toHaveBeenLastCalledWith(expect.objectContaining({ operation: "check", id: "google_workspace", profile: "ranch" }));
+  expect(
+    (await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.member })).json(),
+  ).toEqual({ profile: "ranch", connections: [], canManage: false });
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/integrations/google_workspace/check",
+        headers: s.member,
+        payload: { profile: "ranch" },
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(s.integrationRequest).toHaveBeenLastCalledWith(
+    expect.objectContaining({ operation: "check", id: "google_workspace", profile: "ranch" }),
+  );
   for (const operation of ["connect", "disconnect"])
-    expect((await s.app.inject({ method: "POST", url: `/api/integrations/google_workspace/${operation}`, headers: s.member, payload: { profile: "ranch" } })).statusCode).toBe(403);
-  expect((await s.app.inject({ url: `/api/integrations/flows/${"a".repeat(24)}?profile=ranch`, headers: s.member })).statusCode).toBe(403);
-  expect((await s.app.inject({ method: "POST", url: "/api/integrations/mcp", headers: s.member, payload: { profile: "ranch", name: "custom", url: "https://mcp.example.invalid", auth: "none" } })).statusCode).toBe(403);
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: `/api/integrations/google_workspace/${operation}`,
+          headers: s.member,
+          payload: { profile: "ranch" },
+        })
+      ).statusCode,
+    ).toBe(403);
+  expect(
+    (
+      await s.app.inject({
+        url: `/api/integrations/flows/${"a".repeat(24)}?profile=ranch`,
+        headers: s.member,
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/integrations/mcp",
+        headers: s.member,
+        payload: {
+          profile: "ranch",
+          name: "custom",
+          url: "https://mcp.example.invalid",
+          auth: "none",
+        },
+      })
+    ).statusCode,
+  ).toBe(403);
   expect(s.integrationRequest).toHaveBeenCalledTimes(2);
 });
 
 it("keeps integration writes behind browser Origin/CSRF and accepts a native administrator session", async () => {
-  const s = await setup(), request = { method: "POST" as const, url: "/api/integrations/google_workspace/connect", payload: { profile: "ranch" } };
+  const s = await setup(),
+    request = {
+      method: "POST" as const,
+      url: "/api/integrations/google_workspace/connect",
+      payload: { profile: "ranch" },
+    };
   expect((await s.app.inject(request)).statusCode).toBe(401);
-  for (const headers of [{ cookie: s.admin.cookie, origin }, { ...s.admin, origin: "https://other.invalid" }, { cookie: s.admin.cookie, "x-csrf-token": s.admin["x-csrf-token"] }])
+  for (const headers of [
+    { cookie: s.admin.cookie, origin },
+    { ...s.admin, origin: "https://other.invalid" },
+    { cookie: s.admin.cookie, "x-csrf-token": s.admin["x-csrf-token"] },
+  ])
     expect((await s.app.inject({ ...request, headers })).statusCode).toBe(403);
-  const token = randomBytes(32).toString("base64url"); s.store.nativeSession(hash(token), "admin", Date.now() + 60000);
-  expect((await s.app.inject({ ...request, headers: { authorization: `Bearer ${token}`, origin } })).statusCode).toBe(403);
-  expect((await s.app.inject({ ...request, headers: { authorization: `Bearer ${token}` } })).statusCode).toBe(200);
+  const token = randomBytes(32).toString("base64url");
+  s.store.nativeSession(hash(token), "admin", Date.now() + 60000);
+  expect(
+    (await s.app.inject({ ...request, headers: { authorization: `Bearer ${token}`, origin } }))
+      .statusCode,
+  ).toBe(403);
+  expect(
+    (await s.app.inject({ ...request, headers: { authorization: `Bearer ${token}` } })).statusCode,
+  ).toBe(200);
   expect(s.integrationRequest).toHaveBeenCalledTimes(1);
 });
 
 it("rejects traversal, extra commands and client-controlled callback origins before native dispatch", async () => {
   const s = await setup();
-  for (const payload of [{ profile: "../other" }, { profile: "ranch", command: "arbitrary" }, { profile: "ranch", redirectUri: "https://other.invalid" }])
-    expect((await s.app.inject({ method: "POST", url: "/api/integrations/google_workspace/connect", headers: s.admin, payload })).statusCode).toBe(400);
+  for (const payload of [
+    { profile: "../other" },
+    { profile: "ranch", command: "arbitrary" },
+    { profile: "ranch", redirectUri: "https://other.invalid" },
+  ])
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/integrations/google_workspace/connect",
+          headers: s.admin,
+          payload,
+        })
+      ).statusCode,
+    ).toBe(400);
   expect(s.integrationRequest).not.toHaveBeenCalled();
-  expect((await s.app.inject({ method: "POST", url: "/api/integrations/google_workspace/connect", headers: { ...s.admin, "x-forwarded-host": "other.invalid" }, payload: { profile: "ranch" } })).statusCode).toBe(200);
-  expect(s.integrationRequest).toHaveBeenLastCalledWith({ operation: "connect", profile: "ranch", id: "google_workspace", redirectUri: `${origin}/integrations/google/callback` });
+  expect(
+    (
+      await s.app.inject({
+        method: "POST",
+        url: "/api/integrations/google_workspace/connect",
+        headers: { ...s.admin, "x-forwarded-host": "other.invalid" },
+        payload: { profile: "ranch" },
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(s.integrationRequest).toHaveBeenLastCalledWith({
+    operation: "connect",
+    profile: "ranch",
+    id: "google_workspace",
+    redirectUri: `${origin}/integrations/google/callback`,
+  });
 });
 
 it("accepts the public Google return only as a fixed-origin callback and never echoes its authorization code", async () => {
-  const s = await setup(), state = "s".repeat(24);
-  const response = await s.app.inject({ url: `/integrations/google/callback?state=${state}&code=fixture-private-code&redirect=https%3A%2F%2Fother.invalid` });
+  const s = await setup(),
+    state = "s".repeat(24);
+  const response = await s.app.inject({
+    url: `/integrations/google/callback?state=${state}&code=fixture-private-code&redirect=https%3A%2F%2Fother.invalid`,
+  });
   expect(response.statusCode).toBe(200);
   expect(response.headers["cache-control"]).toBe("no-store");
   expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
   expect(response.body).not.toContain("fixture-private-code");
-  expect(s.integrationRequest).toHaveBeenLastCalledWith({ operation: "callback", profile: "default", callbackUrl: `${origin}/integrations/google/callback?state=${state}&code=fixture-private-code` });
-  s.integrationRequest.mockRejectedValueOnce(Object.assign(new Error("Expired state"), { statusCode: 400 }));
-  expect((await s.app.inject({ url: `/integrations/google/callback?state=${state}&code=fixture-private-code` })).statusCode).toBe(400);
+  expect(s.integrationRequest).toHaveBeenLastCalledWith({
+    operation: "callback",
+    profile: "default",
+    callbackUrl: `${origin}/integrations/google/callback?state=${state}&code=fixture-private-code`,
+  });
+  s.integrationRequest.mockRejectedValueOnce(
+    Object.assign(new Error("Expired state"), { statusCode: 400 }),
+  );
+  expect(
+    (
+      await s.app.inject({
+        url: `/integrations/google/callback?state=${state}&code=fixture-private-code`,
+      })
+    ).statusCode,
+  ).toBe(400);
 });
 
 it("keeps inventory readable during updates while stopping connection changes before dispatch", async () => {
-  const s = await setup(); vi.spyOn(s.upgrades, "maintenance").mockReturnValue(true);
-  expect((await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.admin })).statusCode).toBe(200);
-  const response = await s.app.inject({ method: "POST", url: "/api/integrations/google_workspace/disconnect", headers: s.admin, payload: { profile: "ranch" } });
-  expect(response.statusCode).toBe(409); expect(response.json().code).toBe("hermes_maintenance");
+  const s = await setup();
+  vi.spyOn(s.upgrades, "maintenance").mockReturnValue(true);
+  expect(
+    (await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.admin })).statusCode,
+  ).toBe(200);
+  const response = await s.app.inject({
+    method: "POST",
+    url: "/api/integrations/google_workspace/disconnect",
+    headers: s.admin,
+    payload: { profile: "ranch" },
+  });
+  expect(response.statusCode).toBe(409);
+  expect(response.json().code).toBe("hermes_maintenance");
   expect(s.integrationRequest).toHaveBeenCalledTimes(1);
 });
 
 it("explains a missing integration add-on without attempting a connection change", async () => {
-  const s = await setup(); delete s.runtime.integrationRequest;
+  const s = await setup();
+  delete s.runtime.integrationRequest;
   const response = await s.app.inject({ url: "/api/integrations?profile=ranch", headers: s.admin });
   expect(response.statusCode).toBe(409);
   expect(response.json().error).toContain("installed Hermes add-on");
@@ -86,59 +217,154 @@ it("explains a missing integration add-on without attempting a connection change
 
 describe("assistant connection requests", () => {
   async function setupRequests(status: "not_connected" | "configured" = "not_connected") {
-    const config = loadConfig({ NODE_ENV: "production", APP_ORIGIN: origin, APP_DATABASE: ":memory:", GOOGLE_CLIENT_ID: "fixture-client",
-      HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid", HERMES_INTEGRATION_ADMINS: "admin@example.invalid" });
-    const integrationRequest = vi.fn(async (request: IntegrationRequest) => ({ profile: request.profile, canManage: true,
-      connections: [{ id: "key:brave", name: "Brave Search", status }] }) as never);
+    const config = loadConfig({
+      NODE_ENV: "production",
+      APP_ORIGIN: origin,
+      APP_DATABASE: ":memory:",
+      GOOGLE_CLIENT_ID: "fixture-client",
+      HOUSEHOLD_EMAILS: "admin@example.invalid,member@example.invalid",
+      HERMES_INTEGRATION_ADMINS: "admin@example.invalid",
+    });
+    const integrationRequest = vi.fn(
+      async (request: IntegrationRequest) =>
+        ({
+          profile: request.profile,
+          canManage: true,
+          connections: [{ id: "key:brave", name: "Brave Search", status }],
+        }) as never,
+    );
     const connectionRequest = vi.fn(async () => ({ status: "ok" as const }));
-    const runtime = fakeRuntime({ integrationRequest, connectionRequest, close: async () => {},
-      listBots: async () => [{ id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" }] });
+    const runtime = fakeRuntime({
+      integrationRequest,
+      connectionRequest,
+      close: async () => {},
+      listBots: async () => [
+        { id: "ranch", name: "Ranch hand", shared: true, model: "test", activity: "idle" },
+      ],
+    });
     const upgrades = new HermesUpgrades(config, runtime);
-    const result = await createApp(config, runtime, { background: false, upgrades }); apps.push(result.app);
-    return { ...result, integrationRequest, connectionRequest, member: signIn(result.store, origin, "member") };
+    const result = await createApp(config, runtime, { background: false, upgrades });
+    apps.push(result.app);
+    return {
+      ...result,
+      integrationRequest,
+      connectionRequest,
+      member: signIn(result.store, origin, "member"),
+    };
   }
-  const body = (decision: string, extra: Record<string, unknown> = {}) => ({ decision, epoch: "epoch", sessionId: "session", connection: "key:brave", ...extra });
+  const body = (decision: string, extra: Record<string, unknown> = {}) => ({
+    decision,
+    epoch: "epoch",
+    sessionId: "session",
+    connection: "key:brave",
+    ...extra,
+  });
   const url = "/api/bots/ranch/connection-requests/srq-conn";
 
   it("lets any member decline, and forwards the binding Hermes checks", async () => {
     const s = await setupRequests();
-    const response = await s.app.inject({ method: "POST", url, headers: s.member, payload: body("decline") });
+    const response = await s.app.inject({
+      method: "POST",
+      url,
+      headers: s.member,
+      payload: body("decline"),
+    });
     expect([response.statusCode, response.json()]).toEqual([200, { status: "ok" }]);
-    expect(s.connectionRequest).toHaveBeenCalledExactlyOnceWith({ ...body("decline"), profile: "ranch", requestId: "srq-conn" });
+    expect(s.connectionRequest).toHaveBeenCalledExactlyOnceWith({
+      ...body("decline"),
+      profile: "ranch",
+      requestId: "srq-conn",
+    });
     expect(s.integrationRequest).not.toHaveBeenCalled();
   });
 
   it("continues only once the catalog reads the connection as set up", async () => {
     const waiting = await setupRequests("not_connected");
-    const refused = await waiting.app.inject({ method: "POST", url, headers: waiting.member, payload: body("connected") });
-    expect([refused.statusCode, refused.json().error]).toEqual([409, "Brave Search isn't set up yet. Finish connecting it, then press Continue."]);
+    const refused = await waiting.app.inject({
+      method: "POST",
+      url,
+      headers: waiting.member,
+      payload: body("connected"),
+    });
+    expect([refused.statusCode, refused.json().error]).toEqual([
+      409,
+      "Brave Search isn't set up yet. Finish connecting it, then press Continue.",
+    ]);
     expect(waiting.connectionRequest).not.toHaveBeenCalled();
-    const unknown = await waiting.app.inject({ method: "POST", url, headers: waiting.member, payload: body("connected", { connection: "github" }) });
+    const unknown = await waiting.app.inject({
+      method: "POST",
+      url,
+      headers: waiting.member,
+      payload: body("connected", { connection: "github" }),
+    });
     expect(unknown.statusCode).toBe(409);
     const ready = await setupRequests("configured");
-    expect((await ready.app.inject({ method: "POST", url, headers: ready.member, payload: body("connected") })).statusCode).toBe(200);
+    expect(
+      (
+        await ready.app.inject({
+          method: "POST",
+          url,
+          headers: ready.member,
+          payload: body("connected"),
+        })
+      ).statusCode,
+    ).toBe(200);
     expect(ready.integrationRequest).toHaveBeenCalledWith({ operation: "list", profile: "ranch" });
     expect(ready.connectionRequest).toHaveBeenCalledOnce();
   });
 
   it("refuses connections an assistant may not ask for and unknown assistants before Hermes", async () => {
     const s = await setupRequests("configured");
-    for (const payload of [body("connected", { connection: "apple" }), body("take"), { ...body("decline"), extra: true }])
-      expect((await s.app.inject({ method: "POST", url, headers: s.member, payload })).statusCode).toBe(400);
-    expect((await s.app.inject({ method: "POST", url: "/api/bots/elsewhere/connection-requests/srq-conn", headers: s.member, payload: body("decline") })).statusCode).toBe(404);
+    for (const payload of [
+      body("connected", { connection: "apple" }),
+      body("take"),
+      { ...body("decline"), extra: true },
+    ])
+      expect(
+        (await s.app.inject({ method: "POST", url, headers: s.member, payload })).statusCode,
+      ).toBe(400);
+    expect(
+      (
+        await s.app.inject({
+          method: "POST",
+          url: "/api/bots/elsewhere/connection-requests/srq-conn",
+          headers: s.member,
+          payload: body("decline"),
+        })
+      ).statusCode,
+    ).toBe(404);
     expect(s.connectionRequest).not.toHaveBeenCalled();
   });
 
   it("matches the Hermes add-on's method and requestable IDs, and keeps the ask open", async () => {
     const { readFile } = await import("node:fs/promises");
-    const { connectionRequestMethod, requestableConnectionId } = await import("../src/shared/integrations.js");
-    const source = await readFile(new URL("../src/hermes/integrations.py", import.meta.url), "utf8");
+    const { connectionRequestMethod, requestableConnectionId } =
+      await import("../src/shared/integrations.js");
+    const source = await readFile(
+      new URL("../src/hermes/integrations.py", import.meta.url),
+      "utf8",
+    );
     expect(source).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
-    expect(source).toContain(`REQUESTABLE = re.compile(r"${requestableConnectionId.source.slice(1, -1)}")`);
-    expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(`CONNECTION_REQUEST = "${connectionRequestMethod}"`);
+    expect(source).toContain(
+      `REQUESTABLE = re.compile(r"${requestableConnectionId.source.slice(1, -1)}")`,
+    );
+    expect(await readFile(new URL("../src/hermes/vault.py", import.meta.url), "utf8")).toContain(
+      `CONNECTION_REQUEST = "${connectionRequestMethod}"`,
+    );
     const { applyFrame, emptyLiveState } = await import("../src/server/hermes-mapping.js");
     const state = emptyLiveState();
-    expect(applyFrame(state, { jsonrpc: "2.0", id: "srq-conn", method: connectionRequestMethod, params: { session_id: "s", connection: "github", reason: "r" } }, 1)).toBe(true);
+    expect(
+      applyFrame(
+        state,
+        {
+          jsonrpc: "2.0",
+          id: "srq-conn",
+          method: connectionRequestMethod,
+          params: { session_id: "s", connection: "github", reason: "r" },
+        },
+        1,
+      ),
+    ).toBe(true);
     expect(state.state).toBe("blocked");
   });
 });

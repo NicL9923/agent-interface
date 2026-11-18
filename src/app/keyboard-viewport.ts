@@ -27,7 +27,10 @@
  * zoom does not resize the shell; the next event at normal scale sets it right. A scale within
  * UNZOOMED of 1 counts as normal, so a zoom that slight is treated as a keyboard would be.
  */
-export type ViewportLike = Pick<VisualViewport, "height" | "scale" | "pageTop" | "addEventListener" | "removeEventListener">;
+export type ViewportLike = Pick<
+  VisualViewport,
+  "height" | "scale" | "pageTop" | "addEventListener" | "removeEventListener"
+>;
 type Host = Pick<Window, "scrollY" | "addEventListener" | "removeEventListener"> & {
   visualViewport?: ViewportLike | null;
   document: Pick<Document, "documentElement">;
@@ -46,12 +49,19 @@ const UNZOOMED = 0.01;
 const LEAST_FRAME = 112;
 
 /** The visible frame the shell should fill, null for the layout viewport, undefined to leave it as it is. */
-export function keyboardFrame(layoutHeight: number, viewport: Pick<ViewportLike, "height" | "scale" | "pageTop">, scrollY = 0) {
+export function keyboardFrame(
+  layoutHeight: number,
+  viewport: Pick<ViewportLike, "height" | "scale" | "pageTop">,
+  scrollY = 0,
+) {
   if (Math.abs(viewport.scale - 1) > UNZOOMED) return undefined;
   if (layoutHeight - viewport.height <= SLACK || viewport.height < LEAST_FRAME) return null;
   const top = Math.max(viewport.pageTop, scrollY);
   // Safari can pan the visual viewport past the page's end; a shell placed there would make the page taller.
-  return { height: viewport.height, top: Math.max(0, Math.min(top, layoutHeight - viewport.height)) };
+  return {
+    height: viewport.height,
+    top: Math.max(0, Math.min(top, layoutHeight - viewport.height)),
+  };
 }
 
 /** Follows the visual viewport until the returned function is called. Without one it does nothing. */

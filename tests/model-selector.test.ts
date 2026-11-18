@@ -7,17 +7,35 @@ import { api, write } from "../src/client-api";
 import type { ModelCatalog } from "../src/shared/types";
 import { mountRoot, typeInto } from "./ui-harness";
 
-vi.mock("../src/client-api", async () => (await import("./helpers/request-mock")).withRequest({ api: vi.fn(), write: vi.fn() }));
-const catalog: ModelCatalog = { provider: "custom:house", model: "saved-model", providers: [
-  { id: "house", name: "House provider", aliases: ["custom:house"], authenticated: true, models: [
-    { id: "saved-model", name: "Saved model", available: true },
-    { id: "new-model", name: "New model", available: true },
-  ] },
-  { id: "offline", name: "Offline provider", authenticated: false, models: [{ id: "offline-model", name: "Offline model", available: false }] },
-] };
+vi.mock("../src/client-api", async () =>
+  (await import("./helpers/request-mock")).withRequest({ api: vi.fn(), write: vi.fn() }),
+);
+const catalog: ModelCatalog = {
+  provider: "custom:house",
+  model: "saved-model",
+  providers: [
+    {
+      id: "house",
+      name: "House provider",
+      aliases: ["custom:house"],
+      authenticated: true,
+      models: [
+        { id: "saved-model", name: "Saved model", available: true },
+        { id: "new-model", name: "New model", available: true },
+      ],
+    },
+    {
+      id: "offline",
+      name: "Offline provider",
+      authenticated: false,
+      models: [{ id: "offline-model", name: "Offline model", available: false }],
+    },
+  ],
+};
 let container: HTMLDivElement;
 let root: Root;
-const onChange = vi.fn(), onFavoritesSaved = vi.fn();
+const onChange = vi.fn(),
+  onFavoritesSaved = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api).mockReset().mockResolvedValue(catalog);
@@ -25,14 +43,30 @@ beforeEach(() => {
   ({ container, root } = mountRoot());
 });
 const render = async (model = "saved-model") => {
-  await act(async () => root.render(createElement(ModelSelector, { value: { provider: "custom:house", model }, profile: "shared",
-    favorites: [], disabled: false, onChange, onFavoritesSaved })));
+  await act(async () =>
+    root.render(
+      createElement(ModelSelector, {
+        value: { provider: "custom:house", model },
+        profile: "shared",
+        favorites: [],
+        disabled: false,
+        onChange,
+        onFavoritesSaved,
+      }),
+    ),
+  );
 };
-const button = (label: string) => Array.from(container.querySelectorAll("button")).find((b) => (b.getAttribute("aria-label") || b.textContent?.trim()) === label)!;
+const button = (label: string) =>
+  Array.from(container.querySelectorAll("button")).find(
+    (b) => (b.getAttribute("aria-label") || b.textContent?.trim()) === label,
+  )!;
 
 it("loads actual profile models, uses provider disclosures, preserves aliases and chooses available options", async () => {
   await render();
-  expect(api).toHaveBeenCalledWith("/models?botId=shared", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  expect(api).toHaveBeenCalledWith(
+    "/models?botId=shared",
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
   expect(container.querySelectorAll("details.model-provider")).toHaveLength(2);
   const groups = container.querySelectorAll<HTMLDetailsElement>("details.model-provider");
   expect(groups[0].open).toBe(true);
@@ -48,12 +82,31 @@ it("refreshes a loaded catalog without changing the saved choice or reopening a 
   const selected = container.querySelector<HTMLDetailsElement>("details.model-provider")!;
   selected.open = false;
   let finish!: (value: ModelCatalog) => void;
-  vi.mocked(api).mockImplementationOnce(() => new Promise<ModelCatalog>((resolve) => { finish = resolve; }));
+  vi.mocked(api).mockImplementationOnce(
+    () =>
+      new Promise<ModelCatalog>((resolve) => {
+        finish = resolve;
+      }),
+  );
   await act(async () => button("Refresh models").click());
   expect(button("Refresh models").disabled).toBe(true);
   expect(container.textContent).toContain("Loading models from Hermes");
-  await act(async () => finish({ ...catalog, providers: catalog.providers.map((provider) => provider.id === "house"
-    ? { ...provider, models: [...provider.models, { id: "fresh-model", name: "Fresh model", available: true }] } : provider) }));
+  await act(async () =>
+    finish({
+      ...catalog,
+      providers: catalog.providers.map((provider) =>
+        provider.id === "house"
+          ? {
+              ...provider,
+              models: [
+                ...provider.models,
+                { id: "fresh-model", name: "Fresh model", available: true },
+              ],
+            }
+          : provider,
+      ),
+    }),
+  );
   expect(button("Fresh model")).toBeDefined();
   expect(selected.open).toBe(false);
   expect(button("Refresh models").disabled).toBe(false);
@@ -63,35 +116,60 @@ it("refreshes a loaded catalog without changing the saved choice or reopening a 
 
 it("persists favorites separately from household preferences and reports failed writes without changing the favorite", async () => {
   await render();
-  const favorite = container.querySelector<HTMLButtonElement>('[aria-label="Add New model to favorites"]')!;
+  const favorite = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add New model to favorites"]',
+  )!;
   vi.mocked(write).mockRejectedValueOnce(new Error("Connection lost"));
   await act(async () => favorite.click());
   expect(favorite.getAttribute("aria-label")).toBe("Add New model to favorites");
   expect(container.textContent).toContain("Connection lost");
   expect(onFavoritesSaved).not.toHaveBeenCalled();
-  vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [{ provider: "house", model: "new-model" }] });
+  vi.mocked(write).mockResolvedValueOnce({
+    modelFavorites: [{ provider: "house", model: "new-model" }],
+  });
   await act(async () => favorite.click());
-  expect(write).toHaveBeenLastCalledWith("/preferences/models", { modelFavorites: [{ provider: "house", model: "new-model" }] }, "PUT");
+  expect(write).toHaveBeenLastCalledWith(
+    "/preferences/models",
+    { modelFavorites: [{ provider: "house", model: "new-model" }] },
+    "PUT",
+  );
   expect(container.textContent).toContain("Favorites");
   expect(onFavoritesSaved).toHaveBeenCalledOnce();
-  const remove = container.querySelector<HTMLButtonElement>('[aria-label="Remove New model from favorites"]')!;
+  const remove = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Remove New model from favorites"]',
+  )!;
   vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [] });
   await act(async () => remove.click());
   expect(write).toHaveBeenLastCalledWith("/preferences/models", { modelFavorites: [] }, "PUT");
 });
 
 it("marks an alias favorite selected after choosing the canonical provider", async () => {
-  await act(async () => root.render(createElement(ModelSelector, {
-    value: { provider: "house", model: "saved-model" }, profile: "shared",
-    favorites: [{ provider: "custom:house", model: "saved-model" }], disabled: false,
-    onChange, onFavoritesSaved,
-  })));
+  await act(async () =>
+    root.render(
+      createElement(ModelSelector, {
+        value: { provider: "house", model: "saved-model" },
+        profile: "shared",
+        favorites: [{ provider: "custom:house", model: "saved-model" }],
+        disabled: false,
+        onChange,
+        onFavoritesSaved,
+      }),
+    ),
+  );
   const selected = container.querySelectorAll('.model-choice[aria-pressed="true"]');
   expect(selected).toHaveLength(2);
-  expect([...selected].every(row => row.textContent?.includes("Saved model"))).toBe(true);
+  expect([...selected].every((row) => row.textContent?.includes("Saved model"))).toBe(true);
   vi.mocked(write).mockResolvedValueOnce({ modelFavorites: [] });
-  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove Saved model from favorites"]')!.click());
-  expect(write).toHaveBeenCalledExactlyOnceWith("/preferences/models", { modelFavorites: [] }, "PUT");
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Remove Saved model from favorites"]')!
+      .click(),
+  );
+  expect(write).toHaveBeenCalledExactlyOnceWith(
+    "/preferences/models",
+    { modelFavorites: [] },
+    "PUT",
+  );
   expect(onChange).not.toHaveBeenCalled();
 });
 

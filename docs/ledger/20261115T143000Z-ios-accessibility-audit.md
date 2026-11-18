@@ -2,25 +2,25 @@
 
 The focused audit ran on iPhone 18 Pro, iOS 27.0, with accessibility XL text, against uncommitted changes based on `834ef2f9ab4a943b702bd6be9437c828f0711cbc`. Frames are in simulator points. Empty identifiers are shown as none. XCTest reported no element for four findings.
 
-| Screen | XCUIAccessibilityAuditType | Label | Identifier | Frame | Compact description |
-| --- | --- | --- | --- | --- | --- |
-| home | `dynamicType` | LT | none | (26.0, 64.0, 40.0, 40.0) | Dynamic Type font sizes are unsupported |
-| home | `textClipped` | The north gate battery needs replacing. | none | (90.0, 687.3333333333334, 233.0, 129.0) | Text clipped |
-| settings | `contrast` | Close | none | (20.0, 82.0, 76.33333333333333, 36.0) | Contrast failed |
-| settings | `elementDetection` | nil | nil | nil | Potentially inaccessible text |
-| settings | `dynamicType` | Close | none | (20.0, 82.0, 76.33333333333333, 36.0) | Dynamic Type font sizes are partially unsupported |
-| settings | `sufficientElementDescription` | test@localhost.invalid | none | (98.0, 267.0, 177.66666666666663, 86.0) | Label not human-readable |
-| today | `dynamicType` | Today | none | (172.00000000000003, 61.83333333333334, 57.66666666666663, 25.33333333333333) | Dynamic Type font sizes are partially unsupported |
-| today | `dynamicType` | Your assistants, at a glance | none | (110.6666666666667, 88.16666666666667, 180.33333333333331, 18.0) | Dynamic Type font sizes are partially unsupported |
-| today | `dynamicType` | More results are waiting. Mark this page caught up to see them. | none | (16.0, 749.6666666666666, 370.0, 146.33333333333337) | Dynamic Type font sizes are partially unsupported |
-| today | `textClipped` | SINCE YOU WERE AWAY | none | (32.0, 412.3333333333333, 192.0, 77.33333333333337) | Text clipped |
-| chat | `dynamicType` | Ranch hand | none | (161.66666666666666, 95.5, 78.33333333333334, 17.0) | Dynamic Type font sizes are partially unsupported |
-| chat | `dynamicType` | Sep 30, 07:30 | none | (16.0, 601.6666666666665, 179.33333333333334, 34.666666666666515) | Dynamic Type font sizes are partially unsupported |
-| details | `contrast` | Done | closeBotProfile | (307.0, 82.0, 75.0, 36.0) | Contrast failed |
-| details | `dynamicType` | Done | closeBotProfile | (307.0, 82.0, 75.0, 36.0) | Dynamic Type font sizes are partially unsupported |
-| details | `textClipped` | nil | nil | nil | Text clipped |
-| details | `textClipped` | nil | nil | nil | Text clipped |
-| details | `textClipped` | nil | nil | nil | Text clipped |
+| Screen   | XCUIAccessibilityAuditType     | Label                                                           | Identifier      | Frame                                                                         | Compact description                               |
+| -------- | ------------------------------ | --------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------- | ------------------------------------------------- |
+| home     | `dynamicType`                  | LT                                                              | none            | (26.0, 64.0, 40.0, 40.0)                                                      | Dynamic Type font sizes are unsupported           |
+| home     | `textClipped`                  | The north gate battery needs replacing.                         | none            | (90.0, 687.3333333333334, 233.0, 129.0)                                       | Text clipped                                      |
+| settings | `contrast`                     | Close                                                           | none            | (20.0, 82.0, 76.33333333333333, 36.0)                                         | Contrast failed                                   |
+| settings | `elementDetection`             | nil                                                             | nil             | nil                                                                           | Potentially inaccessible text                     |
+| settings | `dynamicType`                  | Close                                                           | none            | (20.0, 82.0, 76.33333333333333, 36.0)                                         | Dynamic Type font sizes are partially unsupported |
+| settings | `sufficientElementDescription` | test@localhost.invalid                                          | none            | (98.0, 267.0, 177.66666666666663, 86.0)                                       | Label not human-readable                          |
+| today    | `dynamicType`                  | Today                                                           | none            | (172.00000000000003, 61.83333333333334, 57.66666666666663, 25.33333333333333) | Dynamic Type font sizes are partially unsupported |
+| today    | `dynamicType`                  | Your assistants, at a glance                                    | none            | (110.6666666666667, 88.16666666666667, 180.33333333333331, 18.0)              | Dynamic Type font sizes are partially unsupported |
+| today    | `dynamicType`                  | More results are waiting. Mark this page caught up to see them. | none            | (16.0, 749.6666666666666, 370.0, 146.33333333333337)                          | Dynamic Type font sizes are partially unsupported |
+| today    | `textClipped`                  | SINCE YOU WERE AWAY                                             | none            | (32.0, 412.3333333333333, 192.0, 77.33333333333337)                           | Text clipped                                      |
+| chat     | `dynamicType`                  | Ranch hand                                                      | none            | (161.66666666666666, 95.5, 78.33333333333334, 17.0)                           | Dynamic Type font sizes are partially unsupported |
+| chat     | `dynamicType`                  | Sep 30, 07:30                                                   | none            | (16.0, 601.6666666666665, 179.33333333333334, 34.666666666666515)             | Dynamic Type font sizes are partially unsupported |
+| details  | `contrast`                     | Done                                                            | closeBotProfile | (307.0, 82.0, 75.0, 36.0)                                                     | Contrast failed                                   |
+| details  | `dynamicType`                  | Done                                                            | closeBotProfile | (307.0, 82.0, 75.0, 36.0)                                                     | Dynamic Type font sizes are partially unsupported |
+| details  | `textClipped`                  | nil                                                             | nil             | nil                                                                           | Text clipped                                      |
+| details  | `textClipped`                  | nil                                                             | nil             | nil                                                                           | Text clipped                                      |
+| details  | `textClipped`                  | nil                                                             | nil             | nil                                                                           | Text clipped                                      |
 
 The unfiltered run failed with 15 unhandled findings. The two home findings were already filtered in that exploratory run.
 

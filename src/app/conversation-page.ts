@@ -5,7 +5,8 @@ import { HISTORY_PAGE_TURNS } from "../shared/history";
 export type PageQuery = ApiQuery<"GET /bots/:id/conversation">;
 export const firstQuery: PageQuery = { turns: HISTORY_PAGE_TURNS };
 /** The cache key of the page an opened conversation reads first. */
-export const firstPage = (botId: string) => routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
+export const firstPage = (botId: string) =>
+  routeUrl("GET /bots/:id/conversation", { id: botId }, firstQuery);
 
 type Page = ApiResponse<"GET /bots/:id/conversation">;
 
@@ -14,12 +15,20 @@ type Page = ApiResponse<"GET /bots/:id/conversation">;
  * that message. Only the page's messages, files and earlier counts are taken: everything else, such as live state, the
  * version and the draft, stays as the view's own reads left it. Files keep conversation order, each once.
  */
-export function prependPage<V extends Pick<Page, "messages" | "files" | "earlier" | "earlierFiles">>(view: V, page: Page, before: string): V | undefined {
-  const at = view.messages.findIndex(message => message.id === before);
+export function prependPage<
+  V extends Pick<Page, "messages" | "files" | "earlier" | "earlierFiles">,
+>(view: V, page: Page, before: string): V | undefined {
+  const at = view.messages.findIndex((message) => message.id === before);
   if (at < 0) return undefined;
-  const known = new Set(view.files.map(file => file.id));
-  const files = [...page.files.filter(file => !known.has(file.id)), ...view.files];
-  return { ...view, messages: [...page.messages, ...view.messages.slice(at)], files, earlier: page.earlier, earlierFiles: page.earlierFiles };
+  const known = new Set(view.files.map((file) => file.id));
+  const files = [...page.files.filter((file) => !known.has(file.id)), ...view.files];
+  return {
+    ...view,
+    messages: [...page.messages, ...view.messages.slice(at)],
+    files,
+    earlier: page.earlier,
+    earlierFiles: page.earlierFiles,
+  };
 }
 /** A page read this recently is as good as a new one for the click that follows the hover. */
 const FRESH_MS = 5_000;
@@ -81,6 +90,14 @@ export function prefetchFirstPage(botId: string) {
   inflight.set(path, read);
   const made = scope;
   // A read that finishes after a sign-out leaves the next account's state alone.
-  void read.then(() => { if (made === responseScope()) readAt.set(path, Date.now()); }, () => {})
-    .finally(() => { if (inflight.get(path) === read) inflight.delete(path); });
+  void read
+    .then(
+      () => {
+        if (made === responseScope()) readAt.set(path, Date.now());
+      },
+      () => {},
+    )
+    .finally(() => {
+      if (inflight.get(path) === read) inflight.delete(path);
+    });
 }

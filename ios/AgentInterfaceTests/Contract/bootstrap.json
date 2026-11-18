@@ -24,9 +24,7 @@
     "preferences": {
       "presentation": "advanced",
       "theme": "dark",
-      "favorites": [
-        "household"
-      ],
+      "favorites": ["household"],
       "modelFavorites": [
         {
           "provider": "anthropic",
@@ -38,15 +36,10 @@
         {
           "id": "home",
           "name": "Home",
-          "botIds": [
-            "household",
-            "garden"
-          ]
+          "botIds": ["household", "garden"]
         }
       ],
-      "followBots": [
-        "household"
-      ],
+      "followBots": ["household"],
       "startPage": "today",
       "notifications": {
         "timezone": "America/Chicago",

@@ -39,12 +39,12 @@ The Swift compiled as written. None of the parts flagged as unsure needed a chan
 literals, the labeled tuple array, and the `[String?]?` comparison all compiled with no warning
 in a changed file.
 
-| Command | Result | Queued | Run |
-| --- | --- | --- | --- |
-| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests/InflightDeltaTests -only-testing:AgentInterfaceTests/NativeContractTests` | 141 unit tests passed, 0 failed, including all four new tests | 0.17 s | 111 s |
-| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests` | 745 unit tests: 743 passed, 2 skipped (the two evidence renderers), 0 failed | 0.17 s | 76 s |
-| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceUITests/ShellFlowTests` | 13 UI tests: 11 passed, 2 failed, both on base too | 0.16 s | 263 s |
-| The two failures above on a detached `114c4b4` worktree with its own `IOS_DERIVED_DATA` | Both failed the same way on base | 0.18 s | 124 s |
+| Command                                                                                                                                                                                   | Result                                                                       | Queued | Run   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------ | ----- |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests/InflightDeltaTests -only-testing:AgentInterfaceTests/NativeContractTests` | 141 unit tests passed, 0 failed, including all four new tests                | 0.17 s | 111 s |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests`                                                                          | 745 unit tests: 743 passed, 2 skipped (the two evidence renderers), 0 failed | 0.17 s | 76 s  |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceUITests/ShellFlowTests`                                                         | 13 UI tests: 11 passed, 2 failed, both on base too                           | 0.16 s | 263 s |
+| The two failures above on a detached `114c4b4` worktree with its own `IOS_DERIVED_DATA`                                                                                                   | Both failed the same way on base                                             | 0.18 s | 124 s |
 
 The new tests and their run times on the simulator:
 
@@ -68,15 +68,15 @@ Each line was broken by hand, its tests were run with `IOS_VALIDATION_FRESH=1` a
 selector form as above, and the line was restored with `git checkout`. Queued time was
 0.15 to 0.18 s for every run.
 
-| Line broken | Tests run | Result | Run |
-| --- | --- | --- | --- |
-| `Models.swift` `Inflight.extended`: `message.text.utf16.count` changed to `message.text.count` | vectors test, extend test | Red. The vectors failed for 5 cases: the emoji refusal and emoji, combining accent, CJK and joined emoji growth. The extend test timed out waiting for the growth, read the conversation 2 more times and opened 3 streams instead of 1. | 52 s |
-| `Models.swift` `Inflight.extended`: `if let toolCalls = delta.toolCalls { ... }` removed | vectors test, extend test | Red. Vectors "replaces tool calls when the notice carries them" and "an empty tool call list replaces them too" failed, and the extend test got `[nil]` for the tool call results instead of `["3 results"]`. | 38 s |
-| `Models.swift` `Inflight.extended`: `botId == delta.botId` removed from the guard | vectors test, refusal test | Red. Vector "refuses a notice for another assistant" failed, and so did the refusal test's "another assistant" case: no reload, no reconnect, and the reply was kept. | 38 s |
-| `AppStore+Polling.swift`: `?inflight=2` changed back to `?inflight=1` | extend test | Red: the query was `inflight=1`, not `inflight=2`. | 26 s |
-| `AppStore+Polling.swift`: the refusal branch's `else { ... }` body replaced with `event = ""; continue reading` | refusal test | Red for all five cases. Each timed out waiting for the reconnect and had 1 stream, not 2. The four cases that held a reply still showed it, and no case reloaded. | 79 s |
-| `AppStore+Polling.swift`: `stream.task.cancel()` removed | refusal test | **Stayed green.** URLSession closes the connection when the `URLSession.AsyncBytes` is released at the end of the `do` block. Experiment: the same change plus every opened byte stream kept alive in an array went red, timing out on the old stream's `stopped` in all five cases. With the cancel restored and the streams still kept alive, it passed. So the test catches a connection left open, and the explicit cancel closes it on its own. | 28 s; experiments 79 s and 28 s |
-| `AppStore+Polling.swift`: `self.latestInflight = nil` in the change notice branch removed | change notice test | Red. The read after the change was still overlaid with "Howdy", no reconnect followed the stale growth, and "Howdy partner" was applied. | 36 s |
+| Line broken                                                                                                     | Tests run                  | Result                                                                                                                                                                                                                                                                                                                                                                                                                                               | Run                             |
+| --------------------------------------------------------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| `Models.swift` `Inflight.extended`: `message.text.utf16.count` changed to `message.text.count`                  | vectors test, extend test  | Red. The vectors failed for 5 cases: the emoji refusal and emoji, combining accent, CJK and joined emoji growth. The extend test timed out waiting for the growth, read the conversation 2 more times and opened 3 streams instead of 1.                                                                                                                                                                                                             | 52 s                            |
+| `Models.swift` `Inflight.extended`: `if let toolCalls = delta.toolCalls { ... }` removed                        | vectors test, extend test  | Red. Vectors "replaces tool calls when the notice carries them" and "an empty tool call list replaces them too" failed, and the extend test got `[nil]` for the tool call results instead of `["3 results"]`.                                                                                                                                                                                                                                        | 38 s                            |
+| `Models.swift` `Inflight.extended`: `botId == delta.botId` removed from the guard                               | vectors test, refusal test | Red. Vector "refuses a notice for another assistant" failed, and so did the refusal test's "another assistant" case: no reload, no reconnect, and the reply was kept.                                                                                                                                                                                                                                                                                | 38 s                            |
+| `AppStore+Polling.swift`: `?inflight=2` changed back to `?inflight=1`                                           | extend test                | Red: the query was `inflight=1`, not `inflight=2`.                                                                                                                                                                                                                                                                                                                                                                                                   | 26 s                            |
+| `AppStore+Polling.swift`: the refusal branch's `else { ... }` body replaced with `event = ""; continue reading` | refusal test               | Red for all five cases. Each timed out waiting for the reconnect and had 1 stream, not 2. The four cases that held a reply still showed it, and no case reloaded.                                                                                                                                                                                                                                                                                    | 79 s                            |
+| `AppStore+Polling.swift`: `stream.task.cancel()` removed                                                        | refusal test               | **Stayed green.** URLSession closes the connection when the `URLSession.AsyncBytes` is released at the end of the `do` block. Experiment: the same change plus every opened byte stream kept alive in an array went red, timing out on the old stream's `stopped` in all five cases. With the cancel restored and the streams still kept alive, it passed. So the test catches a connection left open, and the explicit cancel closes it on its own. | 28 s; experiments 79 s and 28 s |
+| `AppStore+Polling.swift`: `self.latestInflight = nil` in the change notice branch removed                       | change notice test         | Red. The read after the change was still overlaid with "Howdy", no reconnect followed the stale growth, and "Howdy partner" was applied.                                                                                                                                                                                                                                                                                                             | 36 s                            |
 
 ## Not exercised
 
@@ -122,25 +122,25 @@ Each line in `AppStore+Polling.swift` was broken by script, the one test that pr
 `IOS_VALIDATION_FRESH=1`, and the file was restored with `git checkout`. Every build compiled, and
 every failure was an assertion, not a build error.
 
-| Line broken | Test | Result | Queued | Run |
-| --- | --- | --- | --- | --- |
-| Delta decode split into its own `guard` that skips an unreadable notice | unreadable or foreign | Red, unreadable growth case: no reconnect, "Howdy" kept, 1 stream, 2 reads | 0.18 s | 39 s |
-| Whole-reply `else` changed to `else if patch != nil` | unreadable or foreign | Red, unreadable whole case only: "Howdy partner" applied, no reconnect | 0.17 s | 45 s |
-| Whole-reply `else` changed to `else if patch == nil` | unreadable or foreign | Red, other assistant case only: "Howdy partner" applied, no reconnect | 0.17 s | 39 s |
-| `if refused > 1` changed to `if refused > 0` | backoff | Red: the first refusal waited 0 s, and the waits after a reset were `[0, 3]` | 0.17 s | 28 s |
-| `min(30, ...)` removed | backoff | Red: the twelfth refusal waited 33 s | 0.17 s | 28 s |
-| `refused = 0` on an applied notice removed | backoff | Red: the refusals after an applied notice waited 30 s and 30 s | 0.16 s | 28 s |
-| `self.streamHeardAt = nil` before the resync branch removed | poll and switch | Red: the poll during the wait read nothing | 0.17 s | 29 s |
-| `while !Task.isCancelled` of the stream loop changed to `while true` | poll and switch | Red: the left chat opened a third stream after the cancelled wait | 0.18 s | 28 s |
+| Line broken                                                             | Test                  | Result                                                                       | Queued | Run  |
+| ----------------------------------------------------------------------- | --------------------- | ---------------------------------------------------------------------------- | ------ | ---- |
+| Delta decode split into its own `guard` that skips an unreadable notice | unreadable or foreign | Red, unreadable growth case: no reconnect, "Howdy" kept, 1 stream, 2 reads   | 0.18 s | 39 s |
+| Whole-reply `else` changed to `else if patch != nil`                    | unreadable or foreign | Red, unreadable whole case only: "Howdy partner" applied, no reconnect       | 0.17 s | 45 s |
+| Whole-reply `else` changed to `else if patch == nil`                    | unreadable or foreign | Red, other assistant case only: "Howdy partner" applied, no reconnect        | 0.17 s | 39 s |
+| `if refused > 1` changed to `if refused > 0`                            | backoff               | Red: the first refusal waited 0 s, and the waits after a reset were `[0, 3]` | 0.17 s | 28 s |
+| `min(30, ...)` removed                                                  | backoff               | Red: the twelfth refusal waited 33 s                                         | 0.17 s | 28 s |
+| `refused = 0` on an applied notice removed                              | backoff               | Red: the refusals after an applied notice waited 30 s and 30 s               | 0.16 s | 28 s |
+| `self.streamHeardAt = nil` before the resync branch removed             | poll and switch       | Red: the poll during the wait read nothing                                   | 0.17 s | 29 s |
+| `while !Task.isCancelled` of the stream loop changed to `while true`    | poll and switch       | Red: the left chat opened a third stream after the cancelled wait            | 0.18 s | 28 s |
 
 ### Mac validation
 
 Same Mac, Xcode, simulator and lock as above. Source state `5c3482e`.
 
-| Command | Result | Queued | Run |
-| --- | --- | --- | --- |
-| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test` with the three new tests and `FixedWaitRuleTests` | 5 unit tests passed, 0 failed | 0.17 s | 31 s |
-| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests` | 748 unit tests: 746 passed, 2 skipped (the two evidence renderers), 0 failed | 0.16 s | 80 s |
+| Command                                                                                                                          | Result                                                                       | Queued | Run  |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ------ | ---- |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test` with the three new tests and `FixedWaitRuleTests` | 5 unit tests passed, 0 failed                                                | 0.17 s | 31 s |
+| `bash .agents/tools/validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests`                 | 748 unit tests: 746 passed, 2 skipped (the two evidence renderers), 0 failed | 0.16 s | 80 s |
 
 An earlier run with the existing refusal test also selected passed it. The UI target was not run
 again; its two `ShellFlowTests` failures also fail on `main`.

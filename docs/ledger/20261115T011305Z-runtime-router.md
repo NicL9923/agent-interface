@@ -25,24 +25,24 @@ reverted.
 
 Each line was broken by hand, the named test ran and failed, and the file was restored.
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| `on()` always returns the default runtime | `sends each call that names an assistant to that assistant's runtime` | 1 failed |
-| `capabilities` always asks the default runtime | `answers calls that name no assistant from the default runtime` | 1 failed |
-| `byId` no longer refuses an unregistered runtime | `refuses to start without its default runtime` | 1 failed |
-| The fan-out stops filtering rows by the runtime they run on | `lists each assistant and routine once` | 1 failed |
-| Optional members are always present | `offers an optional member while any runtime has it` | 1 failed |
-| A missing member no longer refuses | `offers an optional member while any runtime has it` | 1 failed |
-| A lookup without an assistant throws the first runtime's failure | `looks a receipt up on the assistant's runtime` | 1 failed |
-| A lookup that only failed answers none | `looks a receipt up on the assistant's runtime` | 1 failed |
-| `download` ignores the ID's signature | `downloads a file from the runtime its signature names` | 1 failed |
-| Discovery skips the durable-events check | `reads each runtime's events from its own source` | 1 failed |
-| The worker's discovery stops at the first failing runtime | `keeps each runtime's cursor` | 1 failed |
-| The worker records every runtime's cursor as Hermes's | `keeps each runtime's cursor` | 1 failed |
-| `requireCapability` ignores the assistant | `refuses steering only for an assistant whose runtime cannot steer` | 1 failed |
-| The steering check names no assistant | `refuses steering only for an assistant whose runtime cannot steer` | 1 failed |
-| Hermes's cursor moves to `event_cursor:hermes` | `keeps the event cursor from before per-runtime cursors as Hermes's` | 1 failed |
-| Every runtime reads the `event_cursor` row | `keeps the event cursor from before per-runtime cursors as Hermes's` | 1 failed |
+| Break                                                            | Test                                                                  | Failure  |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------- | -------- |
+| `on()` always returns the default runtime                        | `sends each call that names an assistant to that assistant's runtime` | 1 failed |
+| `capabilities` always asks the default runtime                   | `answers calls that name no assistant from the default runtime`       | 1 failed |
+| `byId` no longer refuses an unregistered runtime                 | `refuses to start without its default runtime`                        | 1 failed |
+| The fan-out stops filtering rows by the runtime they run on      | `lists each assistant and routine once`                               | 1 failed |
+| Optional members are always present                              | `offers an optional member while any runtime has it`                  | 1 failed |
+| A missing member no longer refuses                               | `offers an optional member while any runtime has it`                  | 1 failed |
+| A lookup without an assistant throws the first runtime's failure | `looks a receipt up on the assistant's runtime`                       | 1 failed |
+| A lookup that only failed answers none                           | `looks a receipt up on the assistant's runtime`                       | 1 failed |
+| `download` ignores the ID's signature                            | `downloads a file from the runtime its signature names`               | 1 failed |
+| Discovery skips the durable-events check                         | `reads each runtime's events from its own source`                     | 1 failed |
+| The worker's discovery stops at the first failing runtime        | `keeps each runtime's cursor`                                         | 1 failed |
+| The worker records every runtime's cursor as Hermes's            | `keeps each runtime's cursor`                                         | 1 failed |
+| `requireCapability` ignores the assistant                        | `refuses steering only for an assistant whose runtime cannot steer`   | 1 failed |
+| The steering check names no assistant                            | `refuses steering only for an assistant whose runtime cannot steer`   | 1 failed |
+| Hermes's cursor moves to `event_cursor:hermes`                   | `keeps the event cursor from before per-runtime cursors as Hermes's`  | 1 failed |
+| Every runtime reads the `event_cursor` row                       | `keeps the event cursor from before per-runtime cursors as Hermes's`  | 1 failed |
 
 Two compile-time guards were broken the same way, with `npm run typecheck` as the test: dropping `watchTurns` from the
 router's list of optional members failed it on `everyOptionalListed`, and adding an optional member to `Runtime` failed
@@ -70,18 +70,18 @@ anything a test did not configure.
 
 ## Review fix red runs
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| The worker checks the default runtime's durable events before the loop, as before the fix | `still reads every other runtime's events` | 1 failed |
-| The worker never asks a lone runtime about durable events | `asks that runtime whether it has durable events` | 1 failed |
-| A runtime with no roster to keep answers none | `keeps a failed runtime's last roster` | 1 failed |
-| An older read's roster replaces a newer one | `keeps the roster of the read that started last` | 1 failed |
-| A kept roster is not marked disconnected | `lists every assistant, the failed runtime's as disconnected` | 1 failed |
-| The routine fan-out drops a failed runtime's routines | `fails the routine inventory whole` | 1 failed |
-| The routine fan-out drops a failed runtime's routines | `removes no tracked check-in while one runtime's routines cannot be read` | 1 failed |
-| A refused registration leaves earlier watchers registered | `undoes every watcher already registered` | 1 failed |
-| A stop that throws skips the stops after it | `tries every stop when one throws` | 1 failed |
-| A stop that throws is swallowed | `tries every stop when one throws` | 1 failed |
+| Break                                                                                     | Test                                                                      | Failure  |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------- |
+| The worker checks the default runtime's durable events before the loop, as before the fix | `still reads every other runtime's events`                                | 1 failed |
+| The worker never asks a lone runtime about durable events                                 | `asks that runtime whether it has durable events`                         | 1 failed |
+| A runtime with no roster to keep answers none                                             | `keeps a failed runtime's last roster`                                    | 1 failed |
+| An older read's roster replaces a newer one                                               | `keeps the roster of the read that started last`                          | 1 failed |
+| A kept roster is not marked disconnected                                                  | `lists every assistant, the failed runtime's as disconnected`             | 1 failed |
+| The routine fan-out drops a failed runtime's routines                                     | `fails the routine inventory whole`                                       | 1 failed |
+| The routine fan-out drops a failed runtime's routines                                     | `removes no tracked check-in while one runtime's routines cannot be read` | 1 failed |
+| A refused registration leaves earlier watchers registered                                 | `undoes every watcher already registered`                                 | 1 failed |
+| A stop that throws skips the stops after it                                               | `tries every stop when one throws`                                        | 1 failed |
+| A stop that throws is swallowed                                                           | `tries every stop when one throws`                                        | 1 failed |
 
 One break was discarded: limiting the worker's own check to the default source left the router's per-source check in
 place, so it did not recreate the defect and its test passed. The first row is the break that does.
@@ -104,16 +104,16 @@ GPT-6.1 Sol reproduced two more defects at `42918f2`. The code state for this se
 
 Every `listBots()` consumer, classified:
 
-| Consumer | Kind | Handling |
-| --- | --- | --- |
-| `GET /bots`, `visibleBots`, bootstrap snapshot, roster watcher and its notices, group catalog notice, widget refresh, badges | Display | Lists what can be shown. The bootstrap snapshot is never kept while incomplete. |
-| Notification titles (`BackgroundWorker`) | Display | Merges with the previous names, so a missing assistant keeps its name. |
-| Live Activities | Display that ends activities | Keeps rows it cannot confirm finished. |
-| `Roster.note`, `exists`, `has` (the access gate) | Privacy gate | `exists` lets through an ID the incomplete roster lacks only if this server has stored a name for it. `has` refuses. |
-| `MainAssistants.roster` (check-in reconciliation, main-assistant clearing) | Reconcile | `completeRoster`. An incomplete roster skips the pass. |
-| `presentations` (sharing change room check, routine delivery and room saves) | Privacy decision | `completeRoster`. A missing member would make a room look closed. |
-| Hermes upgrade busy check | Gate | `completeRoster`. An incomplete roster counts as busy. |
-| Lookups by ID: talk, vault, voice, push test, experience, starters, `GET /bots/:id`, avatar, voice, main-assistant picker | Existence check | `rosterBot`. 503 instead of 404 when the incomplete roster lacks the ID. |
+| Consumer                                                                                                                     | Kind                         | Handling                                                                                                             |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GET /bots`, `visibleBots`, bootstrap snapshot, roster watcher and its notices, group catalog notice, widget refresh, badges | Display                      | Lists what can be shown. The bootstrap snapshot is never kept while incomplete.                                      |
+| Notification titles (`BackgroundWorker`)                                                                                     | Display                      | Merges with the previous names, so a missing assistant keeps its name.                                               |
+| Live Activities                                                                                                              | Display that ends activities | Keeps rows it cannot confirm finished.                                                                               |
+| `Roster.note`, `exists`, `has` (the access gate)                                                                             | Privacy gate                 | `exists` lets through an ID the incomplete roster lacks only if this server has stored a name for it. `has` refuses. |
+| `MainAssistants.roster` (check-in reconciliation, main-assistant clearing)                                                   | Reconcile                    | `completeRoster`. An incomplete roster skips the pass.                                                               |
+| `presentations` (sharing change room check, routine delivery and room saves)                                                 | Privacy decision             | `completeRoster`. A missing member would make a room look closed.                                                    |
+| Hermes upgrade busy check                                                                                                    | Gate                         | `completeRoster`. An incomplete roster counts as busy.                                                               |
+| Lookups by ID: talk, vault, voice, push test, experience, starters, `GET /bots/:id`, avatar, voice, main-assistant picker    | Existence check              | `rosterBot`. 503 instead of 404 when the incomplete roster lacks the ID.                                             |
 
 Privacy versioning (`assistants_changed`) reads the store, not the roster. Delivery pruning (`pruneRetention`) does
 not read the roster.
@@ -122,43 +122,43 @@ not read the roster.
 
 These are the new tests run on `42918f2` merged with `origin/main`, with this change's `src/` reverted.
 
-| Test | Failure on the head |
-| --- | --- |
-| `lists the other runtimes' assistants when one has not answered since the server started` | `/api/bots` answered a non-array error body |
-| `keeps a running assistant as it was while Hermes is down` (Hermes only, also run on `origin/main`) | Sent events `["update", "end"]` |
-| `keeps a run whose runtime went down as it was` | Sent events `["update", "end"]` |
-| `clears no main assistant while one runtime has not answered` | Rejected with the raw `Codex is unreachable`, not `ReconcileError` |
-| `lets a known assistant past the access check` | A never-seen ID passed the gate |
-| `lists the assistants that can be shown while one runtime is down` | The listing rejected |
-| `passes a runtime's own incomplete roster on as incomplete` | No marker |
-| `keeps the successful bot roster visible and disconnected during an outage` (Hermes adapter) | No marker |
-| `keeps the row of an assistant a restarted server cannot list yet` | The pass rejected with `Codex is unreachable` |
+| Test                                                                                                | Failure on the head                                                |
+| --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `lists the other runtimes' assistants when one has not answered since the server started`           | `/api/bots` answered a non-array error body                        |
+| `keeps a running assistant as it was while Hermes is down` (Hermes only, also run on `origin/main`) | Sent events `["update", "end"]`                                    |
+| `keeps a run whose runtime went down as it was`                                                     | Sent events `["update", "end"]`                                    |
+| `clears no main assistant while one runtime has not answered`                                       | Rejected with the raw `Codex is unreachable`, not `ReconcileError` |
+| `lets a known assistant past the access check`                                                      | A never-seen ID passed the gate                                    |
+| `lists the assistants that can be shown while one runtime is down`                                  | The listing rejected                                               |
+| `passes a runtime's own incomplete roster on as incomplete`                                         | No marker                                                          |
+| `keeps the successful bot roster visible and disconnected during an outage` (Hermes adapter)        | No marker                                                          |
+| `keeps the row of an assistant a restarted server cannot list yet`                                  | The pass rejected with `Codex is unreachable`                      |
 
 ### Red runs with one line broken
 
 `mutate.py` in the session scratchpad replaced one exact string, ran the named tests, and restored the file. Every
 break went red.
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| The router ignores a runtime's own `incomplete` marker | `passes a runtime's own incomplete roster on as incomplete` | 1 failed |
-| The router keeps an incomplete answer as the last complete roster | same | 1 failed |
-| The router does not mark a failed runtime's listing incomplete | `lists the assistants that can be shown while one runtime is down` | 1 failed |
-| A never-answered runtime fails the listing, as on the head | `lists the other runtimes' assistants when one has not answered` | 1 failed |
-| Hermes's stale roster carries no marker | `keeps the successful bot roster visible and disconnected during an outage` | 1 failed |
-| `completeRoster` accepts an incomplete listing | `clears no main assistant`, `refuses a sharing change it cannot check`, `answers a lookup by ID with a refusal` | 3 failed |
-| `rosterBot` answers not found on an incomplete listing | `answers a lookup by ID with a refusal` | 1 failed |
-| `Roster.exists` refuses a known ID on an incomplete roster | `lets a known assistant past the access check` | 1 failed |
-| `Roster.exists` admits a never-seen ID on an incomplete roster | same | 1 failed |
-| `Roster.has` answers false on an incomplete roster | same | 1 failed |
-| `presentations` reads the partial roster | `refuses a sharing change it cannot check` | 1 failed |
-| Main-assistant reconciliation reads the partial roster | `clears no main assistant` | 1 failed |
-| The upgrade busy check reads the partial roster | `counts an incomplete roster as busy` | 1 failed |
-| Notification names are replaced, not merged | `keeps the names of those it leaves out` | 1 failed |
-| The bootstrap snapshot is kept while incomplete | `never serves a bootstrap from memory while the roster is incomplete` | 1 failed |
-| A disconnected state ends the run as done | both Live Activity outage tests | 2 failed |
-| An incomplete roster drops the rows it leaves out | `keeps the row of an assistant a restarted server cannot list yet` | 1 failed |
-| A held row still gets a heartbeat | all three Live Activity outage tests | 3 failed |
+| Break                                                             | Test                                                                                                            | Failure  |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
+| The router ignores a runtime's own `incomplete` marker            | `passes a runtime's own incomplete roster on as incomplete`                                                     | 1 failed |
+| The router keeps an incomplete answer as the last complete roster | same                                                                                                            | 1 failed |
+| The router does not mark a failed runtime's listing incomplete    | `lists the assistants that can be shown while one runtime is down`                                              | 1 failed |
+| A never-answered runtime fails the listing, as on the head        | `lists the other runtimes' assistants when one has not answered`                                                | 1 failed |
+| Hermes's stale roster carries no marker                           | `keeps the successful bot roster visible and disconnected during an outage`                                     | 1 failed |
+| `completeRoster` accepts an incomplete listing                    | `clears no main assistant`, `refuses a sharing change it cannot check`, `answers a lookup by ID with a refusal` | 3 failed |
+| `rosterBot` answers not found on an incomplete listing            | `answers a lookup by ID with a refusal`                                                                         | 1 failed |
+| `Roster.exists` refuses a known ID on an incomplete roster        | `lets a known assistant past the access check`                                                                  | 1 failed |
+| `Roster.exists` admits a never-seen ID on an incomplete roster    | same                                                                                                            | 1 failed |
+| `Roster.has` answers false on an incomplete roster                | same                                                                                                            | 1 failed |
+| `presentations` reads the partial roster                          | `refuses a sharing change it cannot check`                                                                      | 1 failed |
+| Main-assistant reconciliation reads the partial roster            | `clears no main assistant`                                                                                      | 1 failed |
+| The upgrade busy check reads the partial roster                   | `counts an incomplete roster as busy`                                                                           | 1 failed |
+| Notification names are replaced, not merged                       | `keeps the names of those it leaves out`                                                                        | 1 failed |
+| The bootstrap snapshot is kept while incomplete                   | `never serves a bootstrap from memory while the roster is incomplete`                                           | 1 failed |
+| A disconnected state ends the run as done                         | both Live Activity outage tests                                                                                 | 2 failed |
+| An incomplete roster drops the rows it leaves out                 | `keeps the row of an assistant a restarted server cannot list yet`                                              | 1 failed |
+| A held row still gets a heartbeat                                 | all three Live Activity outage tests                                                                            | 3 failed |
 
 ## Checks
 
@@ -187,6 +187,6 @@ runtime's own failure boundary, a refused watcher undoes the ones already regist
 
 The red runs in the previous section are kept as a record; their tests left with the code they covered.
 
-| Break | Test | Failure |
-| --- | --- | --- |
+| Break                                                                      | Test                                                                      | Failure  |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------- |
 | The router's `listBots` drops a failed runtime's answer instead of failing | `fails the roster and the routine inventory whole when one runtime fails` | 1 failed |

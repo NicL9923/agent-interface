@@ -128,6 +128,7 @@ gap: suspend could recreate an expiring session snapshot. The suggested save gua
 and a focused expiry regression now cover it. The unused root size-class binding
 was also removed. Fresh isolated native qualification is required before activation
 because the integration changed.
+
 ## October 20 tsrs command-line adoption
 
 Validated on Nicolass-Mini, macOS arm64, Node 26.10.0, npm 11.19.1 and Python
@@ -139,10 +140,10 @@ TypeScript 7.0.2 and tsrs `0.18.0-ts7.1.0-dev.20260929` both exited 0 with no
 diagnostics on that same source and `tsconfig.json`, using `--noEmit --pretty false`.
 `/usr/bin/time -l` measured one invocation each, with no incremental compiler cache:
 
-| Compiler | Elapsed execution | macOS peak RSS |
-| --- | --- | --- |
-| TypeScript 7.0.2 | 1.03 s | 781,041,664 bytes |
-| tsrs | 0.29 s | 238,206,976 bytes |
+| Compiler         | Elapsed execution | macOS peak RSS    |
+| ---------------- | ----------------- | ----------------- |
+| TypeScript 7.0.2 | 1.03 s            | 781,041,664 bytes |
+| tsrs             | 0.29 s            | 238,206,976 bytes |
 
 These are single-run observations with OS caches uncontrolled. Queue waits of
 93.14 s and 60.62 s respectively are excluded. tsrs reports upstream TypeScript
@@ -646,6 +647,7 @@ and guarded activation/rollback are in
 [SharedComputer.md](SharedComputer.md#profile-authorization-for-local-networks).
 Final source fingerprint, excluding this ledger:
 `sha256:98f5d6deaf4898d45e0442efc107af9910bcf6c77744f10a0a72166dc558d599`.
+
 ## October 18 Hermes chat efficiency, pre-release
 
 Based on `4c2aeed`. GPT-6.1 Sol implemented
@@ -680,7 +682,7 @@ Checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
   `python3 tests/hermes_extension_journal_test.py` passed all 17 tests again
   after the final cache change.
 - `IOS_DERIVED_DATA=.private/ios-build-efficiency bash .agents/tools/validate-ios.sh
-  39F5329D-FA70-4259-9B8A-6AECECDE2227 test` passed and exited 0 on iPhone 18 Pro:
+39F5329D-FA70-4259-9B8A-6AECECDE2227 test` passed and exited 0 on iPhone 18 Pro:
   249 unit tests and 43 UI tests, no failures. Two unit evidence tests and the
   screenshot tour skipped without output paths; the iPad-only test skipped on
   this iPhone. Xcode 27.1 used the iOS 27.0 runtime. The task booted one simulator
@@ -733,7 +735,7 @@ Round 2 checks on the Mac mini, Node 26.10.0 and Python 3.14.7:
   of `tests/hermes_extension_journal_test.py` also passed all 19 add-on tests.
 
 - `IOS_DERIVED_DATA=.private/ios-build-efficiency-r2 bash .agents/tools/validate-ios.sh
-  B80F29A1-2C7A-4F0A-A801-4F498ABC9037 test` exited 0 with `TEST SUCCEEDED`.
+B80F29A1-2C7A-4F0A-A801-4F498ABC9037 test` exited 0 with `TEST SUCCEEDED`.
   Xcode 27.1 used the iPhone 17 simulator named AgentInterfaceValidation on
   iOS 27.0. The result bundle reports 293 tests: 289 passed, four skipped,
   zero failed. The unit suite had 250 tests with two evidence-output skips;
@@ -1189,8 +1191,7 @@ IN_BETA_TESTING in the explicit-build internal Household group with exactly the
 two configured testers. No public App Store submission was made. The app record
 is **WildBots Household**, ID `6823644380`, bundle `dev.agentinterface.ios`.
 Its [TestFlight link](https://testflight.apple.com/v1/app/6823644380) was checked
-against Apple's landing page and association file. The beta expires January 14,
-2027. [Distribution receipt](evidence/2026-10-16-household-testflight.json).
+against Apple's landing page and association file. The beta expires January 14, 2027. [Distribution receipt](evidence/2026-10-16-household-testflight.json).
 
 Fresh disposable Hermes qualification for merge `6e6ea924c8d3` passed against
 production revision
@@ -2244,7 +2245,6 @@ The independent GPT-6.1 Sol review found historical tool-ID collisions, model
 confirmation during an inference save, and pending Stop state leaking between
 assistants. All three were fixed and covered by regressions. The reviewer
 verified the corrections and native Hermes configuration contracts.
-
 
 ## October 5 app release f8dac19
 
@@ -3625,29 +3625,29 @@ was not changed.
 
 ## Acceptance record
 
-| Requirement | Evidence | Status |
-| --- | --- | --- |
-| Canonical bots, persistent conversations, shared model and instructions | App probe and browser round trips | Passing |
-| Answers and actual tools | Native probe and canonical browser replies | Passing with fixture provider |
-| Streaming and exposed reasoning | Native streaming probe; adapter tests for exposed string fields | Passing transport; no live reasoning model tested |
-| Steering, attribution, approvals and stale requests | Application tests; native and authenticated app probes | Passing |
-| Browser close, reconnect and app-server restart | App probe with active work | Passing |
-| Executor interruption and explicit review without replay | Actual executor kill, provider-execution log and app gate | Passing |
-| Uncertain submission recovery without duplicate execution | Durable receipts, native duplicate proof and application tests | Passing |
-| Image, PDF and text upload with authenticated download | App probe | Passing |
-| Generated-file provenance and download | Native tool and authenticated app probes; browser download | Passing |
-| Bot, tool, skill and routine configuration | App probe | Passing; Hermes-required skills stay enabled |
-| Routine execution, canonical delivery and durable discovery | Native scheduler provider and app recipient-only outbox | Passing; immediate native trigger, not calendar timer |
-| Google verification, household allowlist and authenticated same-origin API | Application tests with identity verifier double | Passing; live Google sign-in not exercised |
-| Per-person preferences, drafts, read positions and default bot | Application tests and browser checks | Passing |
-| Durable notifications, task participants, followers and routine recipients | Application tests | Passing; push transport simulated |
-| PWA static caching, updates and conversation deep links | Worker tests and browser cache inspection | Passing |
-| Installed-phone push with app closed | Physical phone | Requires device acceptance |
-| Geometric shapes, eye controls, transitions and state animation | Reference inventory, specimen review and browser | Passing visual review; original approximation |
-| Mascot family and uploaded portraits | Browser configuration round trips | Passing |
-| Generated portraits and live image generation | Native capability probe; UI handles unavailable backend | Requires configured image provider |
-| Backend-driven states and reduced motion | Browser specimen, reconnect and task-settlement regressions | Passing |
-| Phone and desktop layouts in light and dark | T3 browser, 390 × 844 and 1280 × 800 | Passing |
+| Requirement                                                                | Evidence                                                        | Status                                                |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
+| Canonical bots, persistent conversations, shared model and instructions    | App probe and browser round trips                               | Passing                                               |
+| Answers and actual tools                                                   | Native probe and canonical browser replies                      | Passing with fixture provider                         |
+| Streaming and exposed reasoning                                            | Native streaming probe; adapter tests for exposed string fields | Passing transport; no live reasoning model tested     |
+| Steering, attribution, approvals and stale requests                        | Application tests; native and authenticated app probes          | Passing                                               |
+| Browser close, reconnect and app-server restart                            | App probe with active work                                      | Passing                                               |
+| Executor interruption and explicit review without replay                   | Actual executor kill, provider-execution log and app gate       | Passing                                               |
+| Uncertain submission recovery without duplicate execution                  | Durable receipts, native duplicate proof and application tests  | Passing                                               |
+| Image, PDF and text upload with authenticated download                     | App probe                                                       | Passing                                               |
+| Generated-file provenance and download                                     | Native tool and authenticated app probes; browser download      | Passing                                               |
+| Bot, tool, skill and routine configuration                                 | App probe                                                       | Passing; Hermes-required skills stay enabled          |
+| Routine execution, canonical delivery and durable discovery                | Native scheduler provider and app recipient-only outbox         | Passing; immediate native trigger, not calendar timer |
+| Google verification, household allowlist and authenticated same-origin API | Application tests with identity verifier double                 | Passing; live Google sign-in not exercised            |
+| Per-person preferences, drafts, read positions and default bot             | Application tests and browser checks                            | Passing                                               |
+| Durable notifications, task participants, followers and routine recipients | Application tests                                               | Passing; push transport simulated                     |
+| PWA static caching, updates and conversation deep links                    | Worker tests and browser cache inspection                       | Passing                                               |
+| Installed-phone push with app closed                                       | Physical phone                                                  | Requires device acceptance                            |
+| Geometric shapes, eye controls, transitions and state animation            | Reference inventory, specimen review and browser                | Passing visual review; original approximation         |
+| Mascot family and uploaded portraits                                       | Browser configuration round trips                               | Passing                                               |
+| Generated portraits and live image generation                              | Native capability probe; UI handles unavailable backend         | Requires configured image provider                    |
+| Backend-driven states and reduced motion                                   | Browser specimen, reconnect and task-settlement regressions     | Passing                                               |
+| Phone and desktop layouts in light and dark                                | T3 browser, 390 × 844 and 1280 × 800                            | Passing                                               |
 
 ## Application checks
 

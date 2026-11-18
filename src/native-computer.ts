@@ -15,7 +15,9 @@ import { attachDesktopTouch, type DesktopTouch } from "./lib/desktop-touch";
  * only shares with a viewer that has control, or null. `desktopView("recenter" | "resetZoom")`
  * moves the trackpad pointer back on screen or zooms out.
  */
-type Report = { type: "connected" | "disconnected" | "failed"; reason?: string } | { type: "zoom"; zoomed: boolean };
+type Report =
+  | { type: "connected" | "disconnected" | "failed"; reason?: string }
+  | { type: "zoom"; zoomed: boolean };
 type Input = { text?: unknown; key?: unknown; control?: unknown };
 declare global {
   interface Window {
@@ -27,9 +29,16 @@ declare global {
   }
 }
 const ticketPath = /^\/api\/computer\/desktop\/ws\?ticket=[A-Za-z0-9_-]{43}$/;
-const screen = document.getElementById("screen")!, status = document.getElementById("status")!;
-let client: RFB | undefined, path = "", controlling = false, connected = false, trackpad = false;
-let touch: DesktopTouch | null = null, copied: string | null = null, zoomed = false;
+const screen = document.getElementById("screen")!,
+  status = document.getElementById("status")!;
+let client: RFB | undefined,
+  path = "",
+  controlling = false,
+  connected = false,
+  trackpad = false;
+let touch: DesktopTouch | null = null,
+  copied: string | null = null,
+  zoomed = false;
 
 function report(value: Report, text: string) {
   document.documentElement.dataset.state = value.type;
@@ -43,7 +52,11 @@ function zoom(next: boolean) {
 }
 function read() {
   const hash = new URLSearchParams(location.hash.slice(1));
-  return { path: hash.get("path") ?? "", control: hash.get("control") === "1", trackpad: hash.get("trackpad") === "1" };
+  return {
+    path: hash.get("path") ?? "",
+    control: hash.get("control") === "1",
+    trackpad: hash.get("trackpad") === "1",
+  };
 }
 function setControl(next: boolean) {
   controlling = next;
@@ -61,10 +74,17 @@ async function connect(next: string) {
   touch = null;
   zoom(false);
   previous?.disconnect();
-  if (!ticketPath.test(next)) { report({ type: "failed", reason: "invalid_ticket" }, "The desktop address is not valid."); return; }
+  if (!ticketPath.test(next)) {
+    report({ type: "failed", reason: "invalid_ticket" }, "The desktop address is not valid.");
+    return;
+  }
   let RemoteFrameBuffer: typeof RFB;
-  try { ({ default: RemoteFrameBuffer } = await import("@novnc/novnc")); }
-  catch { report({ type: "failed", reason: "viewer_unavailable" }, "The desktop viewer could not load."); return; }
+  try {
+    ({ default: RemoteFrameBuffer } = await import("@novnc/novnc"));
+  } catch {
+    report({ type: "failed", reason: "viewer_unavailable" }, "The desktop viewer could not load.");
+    return;
+  }
   // Another hash change replaced this ticket while the viewer loaded.
   if (path !== next) return;
   const url = new URL(next, location.href);
@@ -76,7 +96,7 @@ async function connect(next: string) {
   rfb.resizeSession = false;
   touch = attachDesktopTouch(rfb, screen, { onZoom: zoom });
   touch?.setTrackpad(trackpad);
-  rfb.addEventListener("clipboard", event => {
+  rfb.addEventListener("clipboard", (event) => {
     const text = (event as CustomEvent<{ text?: unknown }>).detail?.text;
     if (client === rfb && typeof text === "string") copied = text;
   });
@@ -85,7 +105,7 @@ async function connect(next: string) {
     connected = true;
     report({ type: "connected" }, "Connected to the desktop.");
   });
-  rfb.addEventListener("disconnect", event => {
+  rfb.addEventListener("disconnect", (event) => {
     if (client !== rfb) return;
     client = undefined;
     connected = false;
@@ -94,15 +114,24 @@ async function connect(next: string) {
     touch = null;
     zoom(false);
     const clean = (event as CustomEvent<{ clean?: boolean }>).detail?.clean === true;
-    report({ type: "disconnected", reason: clean ? "closed" : "lost" }, "The desktop disconnected.");
+    report(
+      { type: "disconnected", reason: clean ? "closed" : "lost" },
+      "The desktop disconnected.",
+    );
   });
   rfb.addEventListener("securityfailure", () => {
-    if (client === rfb) report({ type: "failed", reason: "rejected" }, "The desktop refused the connection.");
+    if (client === rfb)
+      report({ type: "failed", reason: "rejected" }, "The desktop refused the connection.");
   });
 }
 function input({ text, key, control }: Input) {
   if (!client || !connected || !controlling) return false;
-  const keys = typeof text === "string" ? keysymsFor(limitPaste(text).text) : isDesktopKey(key) ? [desktopKeys[key]] : [];
+  const keys =
+    typeof text === "string"
+      ? keysymsFor(limitPaste(text).text)
+      : isDesktopKey(key)
+        ? [desktopKeys[key]]
+        : [];
   if (!keys.length) return false;
   const rfb = client;
   if (control === true) rfb.sendKey(controlKey, "ControlLeft", true);
@@ -111,14 +140,14 @@ function input({ text, key, control }: Input) {
   return true;
 }
 window.desktopInput = input;
-window.desktopPaste = text => {
+window.desktopPaste = (text) => {
   if (typeof text !== "string" || !text || !client || !connected || !controlling) return false;
   const limited = limitPaste(text).text;
   client.clipboardPasteFrom(limited);
   return input({ text: limited });
 };
-window.desktopCopied = () => client && connected && controlling ? copied : null;
-window.desktopView = command => {
+window.desktopCopied = () => (client && connected && controlling ? copied : null);
+window.desktopView = (command) => {
   if (!touch) return false;
   if (command === "recenter") touch.recenter();
   else if (command === "resetZoom") touch.resetZoom();

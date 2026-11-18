@@ -149,13 +149,13 @@ ran again: 19 passed.
 1. iOS reused an earlier-files page whose start was anywhere in an expanded window. It now
    takes only the page for the window's exact first message. The web cache was already keyed by
    the window's first message, so it had no such flaw.
-2, 3. Device ownership is now session-bound only: the account whose live session last reported
+   2, 3. Device ownership is now session-bound only: the account whose live session last reported
    the device. Push registrations name a device but never hold one, so another member's label
    cannot lock out its owner, and an expired session frees a shared browser.
-4. Any finished iOS earlier-files read, including one for an assistant left midway, now looks
+2. Any finished iOS earlier-files read, including one for an assistant left midway, now looks
    at the window on screen again, so that window's own read is no longer lost. The web keeps
    one cache entry and one listener set per window, so it had no such race.
-5. The guidance gives the 80-character id budget and its fallback, a new short id without
+3. The guidance gives the 80-character id budget and its fallback, a new short id without
    lineage. Shared `budget` vectors pin 80 accepted, 81 refused, by the current parser on both
    clients and the released parser.
 

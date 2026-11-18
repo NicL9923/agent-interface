@@ -3,29 +3,49 @@ import { markdownPlain, replyTitle, snippetPlain } from "../src/shared/plain-tex
 import { cpuMs } from "./helpers/cpu-time";
 
 it("reads Markdown as the words a person sees", () => {
-  expect(markdownPlain("## Grocery Demo\n\n| Item | Aisle |\n|---|---|\n| Milk | Dairy |\n\nSaved to [notes.md](/home/nicolas/notes.md).")).toBe("Grocery Demo Item · Aisle · Milk · Dairy Saved to notes.md.");
-  expect(markdownPlain("- **Check** the gate\n- then the *fence*")).toBe("Check the gate then the fence");
-  expect(markdownPlain("Done.\n\n```agent-ui\n{\"version\":1}\n```")).toBe("Done.");
+  expect(
+    markdownPlain(
+      "## Grocery Demo\n\n| Item | Aisle |\n|---|---|\n| Milk | Dairy |\n\nSaved to [notes.md](/home/nicolas/notes.md).",
+    ),
+  ).toBe("Grocery Demo Item · Aisle · Milk · Dairy Saved to notes.md.");
+  expect(markdownPlain("- **Check** the gate\n- then the *fence*")).toBe(
+    "Check the gate then the fence",
+  );
+  expect(markdownPlain('Done.\n\n```agent-ui\n{"version":1}\n```')).toBe("Done.");
   // A message of only code keeps that code rather than reading as empty.
   expect(markdownPlain("```\nls -la\n```")).toBe("ls -la");
 });
 
 it("keeps code, identifiers and literal punctuation exactly as written", () => {
   expect(markdownPlain("Call ``__init__`` and ``**kwargs``.")).toBe("Call __init__ and **kwargs.");
-  expect(markdownPlain("Use `[docs](https://example.test)` and `|---|` literally.")).toBe("Use [docs](https://example.test) and |---| literally.");
-  expect(markdownPlain("Use # for comments and ## for token pasting.")).toBe("Use # for comments and ## for token pasting.");
-  expect(markdownPlain("Call café__init__ and foo__bar today.")).toBe("Call café__init__ and foo__bar today.");
-  expect(markdownPlain("Run ls | sort, then see issue #42.")).toBe("Run ls | sort, then see issue #42.");
+  expect(markdownPlain("Use `[docs](https://example.test)` and `|---|` literally.")).toBe(
+    "Use [docs](https://example.test) and |---| literally.",
+  );
+  expect(markdownPlain("Use # for comments and ## for token pasting.")).toBe(
+    "Use # for comments and ## for token pasting.",
+  );
+  expect(markdownPlain("Call café__init__ and foo__bar today.")).toBe(
+    "Call café__init__ and foo__bar today.",
+  );
+  expect(markdownPlain("Run ls | sort, then see issue #42.")).toBe(
+    "Run ls | sort, then see issue #42.",
+  );
 });
 
 it("reads links by their words, whatever their destination holds", () => {
   expect(markdownPlain("See [docs](https://example.test/foo_(bar)) now.")).toBe("See docs now.");
   expect(markdownPlain(`[Docs](https://example.test "Reference")`)).toBe("Docs");
   // A paragraph the read limit would cut mid-link is left out rather than shown as raw Markdown.
-  expect(markdownPlain(`Summary first.\n\n[Docs](https://example.test "${"x".repeat(4000)}")`)).toBe("Summary first.");
+  expect(
+    markdownPlain(`Summary first.\n\n[Docs](https://example.test "${"x".repeat(4000)}")`),
+  ).toBe("Summary first.");
   // CRLF and whitespace-only blank lines count as paragraph breaks too.
-  expect(markdownPlain(`First.\r\n\r\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
-  expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
+  expect(markdownPlain(`First.\r\n\r\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe(
+    "First.",
+  );
+  expect(markdownPlain(`First.\n  \n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe(
+    "First.",
+  );
 });
 
 it("reads the first 1,000 characters, so code that fills them previews as code", () => {
@@ -57,11 +77,19 @@ it("keeps search markers through flattening, and escaped line breaks become spac
   expect(snippetPlain("\uE000literal\uE001 and >>>real<<<")).toBe("literal and >>>real<<<");
   expect(snippetPlain("&#xE000;literal&#xE001; and &#57344;more&#57345;")).toBe("literal and more");
   // Markers shrink a long snippet, but it was still cut, so its half-read last block stays out.
-  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${">>>x<<<".repeat(1500)}")`)).toBe("First.");
-  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe("First.");
-  expect(snippetPlain("## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons")).toBe(">>>Grocery<<< Demo Free >>>Grocery<<< Coupons");
+  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${">>>x<<<".repeat(1500)}")`)).toBe(
+    "First.",
+  );
+  expect(snippetPlain(`First.\n\n[Docs](https://example.test "${"x".repeat(3000)}")`)).toBe(
+    "First.",
+  );
+  expect(snippetPlain("## >>>Grocery<<< Demo\\n* Free >>>Grocery<<< Coupons")).toBe(
+    ">>>Grocery<<< Demo Free >>>Grocery<<< Coupons",
+  );
   // A match at the start of a line is never read as a quote.
-  expect(snippetPlain(">>>Gate<<< battery\n>>>gate<<< code")).toBe(">>>Gate<<< battery >>>gate<<< code");
+  expect(snippetPlain(">>>Gate<<< battery\n>>>gate<<< code")).toBe(
+    ">>>Gate<<< battery >>>gate<<< code",
+  );
 });
 
 /** The parser reads at most this many characters of any input (READ_CHARS times two in plain-text.ts). */
@@ -70,12 +98,31 @@ const WINDOW = 2000;
 it("reads adversarial text in one pass", () => {
   // The nested list's leaf sits inside the read window, so it is really parsed that deep. Nesting grows the parse's cost with its square,
   // so these are 120 deep, not the 498 that fills the window: the test is about where reading stops, and a deeper list only makes it slower.
-  const texts = [("- ".repeat(120) + "x\n").padEnd(50_000, "x"), ("> ".repeat(120) + "x\n").padEnd(50_000, "x"), "> ".repeat(25_000), "-".repeat(50_000) + " status", "|".repeat(50_000), "*_".repeat(25_000), "#".repeat(50_000), "`".repeat(50_000), "[".repeat(50_000), "](".repeat(25_000), " ".repeat(50_000) + "x"];
-  const read = (all: string[]) => () => { for (const text of all) { markdownPlain(text); replyTitle(text); } snippetPlain("\\".repeat(all[0].length) + "!"); };
+  const texts = [
+    ("- ".repeat(120) + "x\n").padEnd(50_000, "x"),
+    ("> ".repeat(120) + "x\n").padEnd(50_000, "x"),
+    "> ".repeat(25_000),
+    "-".repeat(50_000) + " status",
+    "|".repeat(50_000),
+    "*_".repeat(25_000),
+    "#".repeat(50_000),
+    "`".repeat(50_000),
+    "[".repeat(50_000),
+    "](".repeat(25_000),
+    " ".repeat(50_000) + "x",
+  ];
+  const read = (all: string[]) => () => {
+    for (const text of all) {
+      markdownPlain(text);
+      replyTitle(text);
+    }
+    snippetPlain("\\".repeat(all[0].length) + "!");
+  };
   // The work must stop at the window, so 50,000 characters cost what the first 2,000 do. The budget is that ratio, which a slow
   // machine leaves alone, rather than a number of seconds. A parser handed the whole text is quadratic on these and costs far more.
   // Three runs of each size are enough to find the least CPU time.
-  const whole = cpuMs(read(texts), 3), window = cpuMs(read(texts.map(text => text.slice(0, WINDOW))), 3);
+  const whole = cpuMs(read(texts), 3),
+    window = cpuMs(read(texts.map((text) => text.slice(0, WINDOW))), 3);
   expect(whole).toBeLessThan(window * 4);
 });
 
@@ -90,27 +137,34 @@ it("skips a horizontal rule when titling a reply", () => {
   expect(replyTitle("---\nActual summary.")).toBe("Actual summary.");
 });
 
-it('makes readable saved titles without changing identifiers inside them',()=>{
-  expect(replyTitle('## **Gate**')).toBe('Gate');
-  expect(replyTitle('`binary_sensor.north_gate`')).toBe('binary_sensor.north_gate');
-  expect(replyTitle('```\nls\n```')).toBe('Saved reply');expect(replyTitle('a'.repeat(200))).toHaveLength(80);
+it("makes readable saved titles without changing identifiers inside them", () => {
+  expect(replyTitle("## **Gate**")).toBe("Gate");
+  expect(replyTitle("`binary_sensor.north_gate`")).toBe("binary_sensor.north_gate");
+  expect(replyTitle("```\nls\n```")).toBe("Saved reply");
+  expect(replyTitle("a".repeat(200))).toHaveLength(80);
 });
 
-it('makes saved reply titles from the first line without markdown or broken words',()=>{
-  expect(replyTitle('\n - **Check** `binary_sensor.north_gate`.\n- A second item')).toBe('Check binary_sensor.north_gate.');
-  expect(replyTitle('1. `freezer_door` is ready\nNext steps')).toBe('freezer_door is ready');
-  const title = replyTitle('A useful gate maintenance plan '.repeat(8));
-  expect(title.length).toBeLessThanOrEqual(80);expect(title).toMatch(/(?:plan|gate|maintenance|useful|A)…$/);
+it("makes saved reply titles from the first line without markdown or broken words", () => {
+  expect(replyTitle("\n - **Check** `binary_sensor.north_gate`.\n- A second item")).toBe(
+    "Check binary_sensor.north_gate.",
+  );
+  expect(replyTitle("1. `freezer_door` is ready\nNext steps")).toBe("freezer_door is ready");
+  const title = replyTitle("A useful gate maintenance plan ".repeat(8));
+  expect(title.length).toBeLessThanOrEqual(80);
+  expect(title).toMatch(/(?:plan|gate|maintenance|useful|A)…$/);
 });
 
-it('titles a saved reply by the words a person reads first, never a code fence or a table divider',()=>{
-  expect(replyTitle('```agent-ui\n{"version":1}\n```\nGrocery run is ready.')).toBe('Grocery run is ready.');
-  expect(replyTitle('| Item | Aisle |\n|---|---|\n| Milk | Dairy |')).toBe('Item · Aisle');
-  expect(replyTitle('Call `__init__` first')).toBe('Call __init__ first');
+it("titles a saved reply by the words a person reads first, never a code fence or a table divider", () => {
+  expect(replyTitle('```agent-ui\n{"version":1}\n```\nGrocery run is ready.')).toBe(
+    "Grocery run is ready.",
+  );
+  expect(replyTitle("| Item | Aisle |\n|---|---|\n| Milk | Dairy |")).toBe("Item · Aisle");
+  expect(replyTitle("Call `__init__` first")).toBe("Call __init__ first");
   // A long line of dashes is read once.
-  const line = '-'.repeat(5_000) + ' status';
+  const line = "-".repeat(5_000) + " status";
   // One title takes about a millisecond, too little to measure alone, so each run reads it 40 times.
-  const titles = (text: string) => () => { for (let n = 0; n < 40; n++) replyTitle(text); };
+  const titles = (text: string) => () => {
+    for (let n = 0; n < 40; n++) replyTitle(text);
+  };
   expect(cpuMs(titles(line), 3)).toBeLessThan(cpuMs(titles(line.slice(0, WINDOW)), 3) * 4);
 });
-

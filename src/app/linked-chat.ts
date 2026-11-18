@@ -10,7 +10,9 @@ import { initialMessage, initialView } from "./view";
  * read and the response cache with it (see account-epoch.ts).
  */
 let speculative: string | null = null;
-onAccountEnd(() => { speculative = null; });
+onAccountEnd(() => {
+  speculative = null;
+});
 
 /**
  * Bootstrap answered as `user`. A read started beside it for anyone else is dropped before the chat
@@ -40,7 +42,8 @@ export function settleLinkedChat(user: string) {
 export function prefetchLinkedChat(chosen?: string) {
   // A chat chosen on home before bootstrap answers (see saved-roster.ts) is read the same way.
   const botId = chosen ?? new URLSearchParams(location.search).get("bot");
-  if (!botId || chosen === undefined && (initialView() !== "conversation" || initialMessage())) return;
+  if (!botId || (chosen === undefined && (initialView() !== "conversation" || initialMessage())))
+    return;
   const hint = readHint();
   if (!hint?.user || !hint.bots.includes(botId)) return;
   speculative = hint.user;

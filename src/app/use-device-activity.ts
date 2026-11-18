@@ -40,11 +40,14 @@ export function useDeviceActivity(userId: string | undefined) {
   useEffect(() => {
     if (!userId) return;
     const generation = accountGeneration();
-    let using = false, lastInput = Date.now(), mounted = true;
+    let using = false,
+      lastInput = Date.now(),
+      mounted = true;
     const attended = () => document.visibilityState === "visible" && document.hasFocus();
     const inUse = () => mounted && attended() && Date.now() - lastInput < deviceIdleMs;
     // What to say when the report actually goes: in use now, with the idle time now, or not.
-    const current = (): Report => inUse() ? { state: "active", idleMs: Date.now() - lastInput } : { state: "inactive" };
+    const current = (): Report =>
+      inUse() ? { state: "active", idleMs: Date.now() - lastInput } : { state: "inactive" };
     const update = () => {
       const now = inUse();
       if (now || using) report(current, generation);

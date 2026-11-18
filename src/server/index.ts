@@ -24,11 +24,20 @@ const hermes = createHermesRuntime({
   files,
 });
 // Every assistant runs on Hermes until docs/RuntimePlan.md step 2 registers a second runtime and names its assistants.
-const runtime = createRuntimeRouter({ runtimes: { [hermesRuntimeId]: hermes }, defaultRuntime: hermesRuntimeId });
+const runtime = createRuntimeRouter({
+  runtimes: { [hermesRuntimeId]: hermes },
+  defaultRuntime: hermesRuntimeId,
+});
 // pino writes JSON lines to stdout; systemd keeps them in journald.
-const { app, directRoutes } = await createApp({ ...config, logLevel: config.logLevel ?? "info" }, runtime, { store });
-if (references.upgraded) app.log.info(references, "Re-signed stored file identifiers with the app's file key");
-if (references.unreadable) app.log.warn(references, "Left stored file identifiers that could not be verified");
+const { app, directRoutes } = await createApp(
+  { ...config, logLevel: config.logLevel ?? "info" },
+  runtime,
+  { store },
+);
+if (references.upgraded)
+  app.log.info(references, "Re-signed stored file identifiers with the app's file key");
+if (references.unreadable)
+  app.log.warn(references, "Left stored file identifiers that could not be verified");
 await app.listen({ host: config.host, port: config.port });
 await directRoutes?.start();
 app.log.info({ origin: config.origin, schemaVersion, node: process.version }, "WildBots started");
@@ -42,7 +51,15 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
       process.exit(1);
     }, SHUTDOWN_EXIT_MS);
     stopping = app.close().then(
-      () => { clearTimeout(deadline); app.log.info("WildBots stopped"); process.exit(0); },
-      error => { clearTimeout(deadline); app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly"); process.exit(1); },
+      () => {
+        clearTimeout(deadline);
+        app.log.info("WildBots stopped");
+        process.exit(0);
+      },
+      (error) => {
+        clearTimeout(deadline);
+        app.log.error({ error: safeError(error) }, "WildBots did not stop cleanly");
+        process.exit(1);
+      },
     );
   });

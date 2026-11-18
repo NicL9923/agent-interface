@@ -16,11 +16,11 @@ review measured the mobile main-assistant row in dark harvest at 6.330:1 against
 
 ## Red runs
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| Generator: light accent rounded lighter instead of darker | `tests/season-tint.test.ts` | stale-block check and `keep every light contrast at or above the unseasoned theme's` failed |
-| `src/motion.css`: harvest light accent hand-edited to `#4e7a60` | `tests/season-tint.test.ts` | stale-block check failed |
-| `src/motion.css`: generated block removed, plain mix back at 88% and 82% | `e2e/accessibility.spec.ts` seasonal sweep, light and dark | axe `color-contrast` in the rail for winter, the first season scanned |
+| Break                                                                    | Test                                                       | Failure                                                                                     |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Generator: light accent rounded lighter instead of darker                | `tests/season-tint.test.ts`                                | stale-block check and `keep every light contrast at or above the unseasoned theme's` failed |
+| `src/motion.css`: harvest light accent hand-edited to `#4e7a60`          | `tests/season-tint.test.ts`                                | stale-block check failed                                                                    |
+| `src/motion.css`: generated block removed, plain mix back at 88% and 82% | `e2e/accessibility.spec.ts` seasonal sweep, light and dark | axe `color-contrast` in the rail for winter, the first season scanned                       |
 
 Each file was restored from a copy and the tests passed again.
 

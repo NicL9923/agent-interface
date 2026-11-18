@@ -57,11 +57,11 @@ Attempt times in a ten-minute outage, at the middle of the jitter (each wait thr
 ceiling), from a stream that was healthy at second 0. The test runs each with the owner calling `open`
 every 45 and every 30 seconds, and the times do not change.
 
-| Server | Attempts, seconds after the outage began | Count |
-| --- | --- | --- |
-| Refuses | 1.5, 4.5, 10.5, 22.5, 46.5, 94.5, 190.5, 382.5 (next 607.5) | 8 |
-| Accepts and stays silent | 26.5, 84.5, 145.5, 212.5, 291.5, 394.5, 545.5 | 7 |
-| Greets, then stalls | 26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5 | 8 |
+| Server                   | Attempts, seconds after the outage began                    | Count |
+| ------------------------ | ----------------------------------------------------------- | ----- |
+| Refuses                  | 1.5, 4.5, 10.5, 22.5, 46.5, 94.5, 190.5, 382.5 (next 607.5) | 8     |
+| Accepts and stays silent | 26.5, 84.5, 145.5, 212.5, 291.5, 394.5, 545.5               | 7     |
+| Greets, then stalls      | 26.5, 54.5, 85.5, 122.5, 171.5, 244.5, 365.5, 582.5         | 8     |
 
 The first round, for comparison: refusing, 0, 25, 45, 90, 135 and every 45 seconds to 585, 14 attempts;
 greeting then stalling, every 25 seconds, 24 attempts. With jitter at its extremes each wait is half
@@ -91,24 +91,24 @@ or all of its ceiling, so a refusing server sees 10 attempts in 10 minutes at th
 proxy. At the cut, the proxy stops forwarding every open connection without closing it. The tool reports
 seconds from the cut until each stream's next request.
 
-| | Household stream | Chat stream |
-| --- | --- | --- |
-| `main` 39e35a6, 2 runs | 82.0, 82.0 s | 82.0, 82.0 s |
-| First round 2e95e56, 2 runs | 17.0, 17.0 s | 17.0, 17.0 s |
-| After the review fixes, 2 runs | 18.4, 18.8 s | 18.1, 18.4 s |
-| After the recovery fix 0bc4adb, 2 runs | 18.5, 18.0 s | 19.0, 18.8 s |
+|                                        | Household stream | Chat stream  |
+| -------------------------------------- | ---------------- | ------------ |
+| `main` 39e35a6, 2 runs                 | 82.0, 82.0 s     | 82.0, 82.0 s |
+| First round 2e95e56, 2 runs            | 17.0, 17.0 s     | 17.0, 17.0 s |
+| After the review fixes, 2 runs         | 18.4, 18.8 s     | 18.1, 18.4 s |
+| After the recovery fix 0bc4adb, 2 runs | 18.5, 18.0 s     | 19.0, 18.8 s |
 
 The second round adds the first retry's 1 to 2 seconds after the watchdog's verdict.
 
 Request counts from `node .agents/tools/count-stream-requests.mjs`, same method as the stream open
 reads entry:
 
-| Scenario | `main` 39e35a6 | First round | After the review fixes |
-| --- | --- | --- | --- |
-| Cold load | 10 | 10 | 10 |
-| Wake after 70 s hidden | 12 | 12 | 12 |
-| Idle chat, 10 min | 113 | 113 | 113 |
-| Idle home, 10 min | 113 | 113 | 113 |
+| Scenario               | `main` 39e35a6 | First round | After the review fixes |
+| ---------------------- | -------------- | ----------- | ---------------------- |
+| Cold load              | 10             | 10          | 10                     |
+| Wake after 70 s hidden | 12             | 12          | 12                     |
+| Idle chat, 10 min      | 113            | 113         | 113                    |
+| Idle home, 10 min      | 113            | 113         | 113                    |
 
 The watchdog and the retry policy add no request. Neither tab reopened a stream in 10 idle minutes,
 so no live stream was taken for a dead one.
@@ -194,9 +194,9 @@ A manual retry could not overlap another check but had no gap between finished o
 Attempts, from `tests/stream-revival-ui.test.ts` through the real `useConversation`, with the clock pinned
 at 2026-11-10T12:00:00Z and `Math.random` at 0.5:
 
-| Scenario | Before | After |
-| --- | --- | --- |
-| Stream refused, 100 `online` events, clock standing | 101 | 2: the opening and the first signal's |
+| Scenario                                              | Before      | After                                                     |
+| ----------------------------------------------------- | ----------- | --------------------------------------------------------- |
+| Stream refused, 100 `online` events, clock standing   | 101         | 2: the opening and the first signal's                     |
 | 100 `online` events 0.1 s apart, each attempt refused | 100 in 10 s | 5 in 10 s after the opening, at 0.1, 1.6, 3.1, 6.1, 9.1 s |
 
 The household and room owners call the same `reconnect`, so the rule covers all three streams.
@@ -258,13 +258,13 @@ Attempts, from `tests/stream-hide-ui.test.ts` through the real `App` (household 
 real `GroupRoomView` (room stream), with the clock pinned at 2026-11-10T12:00:00Z and `Math.random` at
 0.5. Each cell is household, chat, room. Before is `af63bd5` with the same tests.
 
-| Scenario | Before | After |
-| --- | --- | --- |
-| Opening refused, then 100 hide and show cycles, clock standing | 101, 101, 101 | 1, 1, 1 |
-| Then 100 `online` events, each attempt refused | 102, 102, 102 | 2, 2, 2 |
-| Then 100 more hide and show cycles | 202, 202, 202 | 2, 2, 2 |
+| Scenario                                                                       | Before        | After   |
+| ------------------------------------------------------------------------------ | ------------- | ------- |
+| Opening refused, then 100 hide and show cycles, clock standing                 | 101, 101, 101 | 1, 1, 1 |
+| Then 100 `online` events, each attempt refused                                 | 102, 102, 102 | 2, 2, 2 |
+| Then 100 more hide and show cycles                                             | 202, 202, 202 | 2, 2, 2 |
 | 100 cycles over 100 seconds, hidden half of each second, every attempt refused | 101, 101, 101 | 7, 7, 7 |
-| `online` while hidden, shown, refused, hidden and shown again | 3, 3, 3 | 2, 2, 2 |
+| `online` while hidden, shown, refused, hidden and shown again                  | 3, 3, 3       | 2, 2, 2 |
 
 Seven in 100 seconds is the same as a page left open: attempts at 0, 1.5, 4.5, 10.5, 22.5, 46.5 and
 94.5 seconds. Real Chromium request counts, `node .agents/tools/count-stream-requests.mjs --only

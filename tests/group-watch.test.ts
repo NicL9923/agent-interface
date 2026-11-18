@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import { eventStreamConnection } from "../src/server/event-stream.js";
-import { GROUP_POLL_MAX_MS, GROUP_WATCHED_ROOMS, GROUP_WATCHES_PER_PERSON, GroupWatch } from "../src/server/group-watch.js";
+import {
+  GROUP_POLL_MAX_MS,
+  GROUP_WATCHED_ROOMS,
+  GROUP_WATCHES_PER_PERSON,
+  GroupWatch,
+} from "../src/server/group-watch.js";
 import type { GroupRequest, GroupState } from "../src/shared/collaboration.js";
 import type { Runtime } from "../src/shared/types.js";
 import { botFixture } from "./helpers/runtime-fixtures.js";
@@ -14,16 +19,39 @@ import { fakeRuntime } from "./helpers/server.js";
 const origin = "http://127.0.0.1:3000";
 const member = (profile: string) => ({ member_id: profile, profile, handle: profile });
 const state = (roomId: string, latest_seq: number, working = false): GroupState => ({
-  room: { room_id: roomId, name: roomId, members: [member("ranch"), member("planner")], latest_seq },
+  room: {
+    room_id: roomId,
+    name: roomId,
+    members: [member("ranch"), member("planner")],
+    latest_seq,
+  },
   driver_status: { running: true, working, blocked: false, pending_actions: [] },
 });
-afterEach(() => { vi.useRealTimers(); });
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("group room watcher", () => {
   it("announces who works in which tool, but not each step's timestamp", async () => {
     vi.useFakeTimers();
-    let activity = { member_id: "ranch", status: "running", round_index: 0, tool: "terminal", progress_at: 1 };
-    const groupRequest = vi.fn(async () => ({ ...state("ranch", 1, true), driver_status: { running: true, working: true, blocked: false, pending_actions: [], member_activity: [activity], max_rounds: 3 } }));
+    let activity = {
+      member_id: "ranch",
+      status: "running",
+      round_index: 0,
+      tool: "terminal",
+      progress_at: 1,
+    };
+    const groupRequest = vi.fn(async () => ({
+      ...state("ranch", 1, true),
+      driver_status: {
+        running: true,
+        working: true,
+        blocked: false,
+        pending_actions: [],
+        member_activity: [activity],
+        max_rounds: 3,
+      },
+    }));
     const watch = new GroupWatch({ groupRequest });
     const heard = vi.fn();
     const stop = watch.watch("ranch", "one", heard);
@@ -39,21 +67,31 @@ describe("group room watcher", () => {
   });
   it("polls each watched room once however many watch it, announcing only changes", async () => {
     vi.useFakeTimers();
-    let seq = 1, working = false;
-    const groupRequest = vi.fn(async (input: GroupRequest) => state((input as { roomId: string }).roomId, seq, working));
+    let seq = 1,
+      working = false;
+    const groupRequest = vi.fn(async (input: GroupRequest) =>
+      state((input as { roomId: string }).roomId, seq, working),
+    );
     const watch = new GroupWatch({ groupRequest });
-    const first = vi.fn(), second = vi.fn(), other = vi.fn();
-    const stopFirst = watch.watch("ranch", "one", first), stopSecond = watch.watch("ranch", "one", second);
+    const first = vi.fn(),
+      second = vi.fn(),
+      other = vi.fn();
+    const stopFirst = watch.watch("ranch", "one", first),
+      stopSecond = watch.watch("ranch", "one", second);
     const stopOther = watch.watch("barn", "one", other);
     await vi.advanceTimersByTimeAsync(0);
     expect(groupRequest).toHaveBeenCalledTimes(2);
-    expect(first).toHaveBeenCalledTimes(1); expect(second).toHaveBeenCalledTimes(1); expect(other).toHaveBeenCalledTimes(1);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(other).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2000);
     expect(groupRequest).toHaveBeenCalledTimes(4);
     expect(first).toHaveBeenCalledTimes(1);
     seq = 2;
     await vi.advanceTimersByTimeAsync(2000);
-    expect(first).toHaveBeenLastCalledWith(expect.objectContaining({ room: expect.objectContaining({ latest_seq: 2 }) }));
+    expect(first).toHaveBeenLastCalledWith(
+      expect.objectContaining({ room: expect.objectContaining({ latest_seq: 2 }) }),
+    );
     expect(second).toHaveBeenCalledTimes(2);
     // A pending approval or a working driver changes without a new event.
     working = true;
@@ -62,8 +100,10 @@ describe("group room watcher", () => {
     stopFirst();
     seq = 3;
     await vi.advanceTimersByTimeAsync(2000);
-    expect(first).toHaveBeenCalledTimes(3); expect(second).toHaveBeenCalledTimes(4);
-    stopSecond(); stopOther();
+    expect(first).toHaveBeenCalledTimes(3);
+    expect(second).toHaveBeenCalledTimes(4);
+    stopSecond();
+    stopOther();
     expect(watch.watched).toEqual([]);
     const calls = groupRequest.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
@@ -74,7 +114,11 @@ describe("group room watcher", () => {
     vi.useFakeTimers();
     let failing = true;
     const at: number[] = [];
-    const groupRequest = vi.fn(async () => { at.push(Date.now()); if (failing) throw new Error("coordinator down"); return state("ranch", 1); });
+    const groupRequest = vi.fn(async () => {
+      at.push(Date.now());
+      if (failing) throw new Error("coordinator down");
+      return state("ranch", 1);
+    });
     const watch = new GroupWatch({ groupRequest });
     const listener = vi.fn();
     watch.watch("ranch", "one", listener);
@@ -95,7 +139,12 @@ describe("group room watcher", () => {
   it("drops a poll answered after the last watcher left", async () => {
     vi.useFakeTimers();
     let answer!: (value: GroupState) => void;
-    const groupRequest = vi.fn(() => new Promise<GroupState>(resolve => { answer = resolve; }));
+    const groupRequest = vi.fn(
+      () =>
+        new Promise<GroupState>((resolve) => {
+          answer = resolve;
+        }),
+    );
     const watch = new GroupWatch({ groupRequest });
     const listener = vi.fn();
     const stop = watch.watch("ranch", "one", listener);
@@ -109,21 +158,40 @@ describe("group room watcher", () => {
 
   it("caps each person's watches and the rooms watched in total, freeing a place when a watch ends", async () => {
     vi.useFakeTimers();
-    const groupRequest = vi.fn(async (input: GroupRequest) => state((input as { roomId: string }).roomId, 1));
+    const groupRequest = vi.fn(async (input: GroupRequest) =>
+      state((input as { roomId: string }).roomId, 1),
+    );
     const watch = new GroupWatch({ groupRequest });
-    const mine = Array.from({ length: GROUP_WATCHES_PER_PERSON }, (_, index) => watch.watch(index % 2 ? "ranch" : "barn", "one", () => {}));
-    expect(() => watch.watch("ranch", "one", () => {})).toThrow(expect.objectContaining({ statusCode: 429, message: expect.stringContaining("Too many group chats are open for you") }));
+    const mine = Array.from({ length: GROUP_WATCHES_PER_PERSON }, (_, index) =>
+      watch.watch(index % 2 ? "ranch" : "barn", "one", () => {}),
+    );
+    expect(() => watch.watch("ranch", "one", () => {})).toThrow(
+      expect.objectContaining({
+        statusCode: 429,
+        message: expect.stringContaining("Too many group chats are open for you"),
+      }),
+    );
     // Someone else still gets in, and ending one watch frees its place. Ending it twice frees nothing more.
     const theirs = watch.watch("ranch", "two", () => {});
-    mine[0](); mine[0]();
+    mine[0]();
+    mine[0]();
     const again = watch.watch("ranch", "one", () => {});
-    expect(() => watch.watch("ranch", "one", () => {})).toThrow(expect.objectContaining({ statusCode: 429 }));
+    expect(() => watch.watch("ranch", "one", () => {})).toThrow(
+      expect.objectContaining({ statusCode: 429 }),
+    );
     for (const stop of [...mine, theirs, again]) stop();
     expect(watch.watched).toEqual([]);
     // Rooms beyond the total are refused for anyone, before any poll; a room already watched still takes more watchers.
-    const people = Array.from({ length: GROUP_WATCHED_ROOMS }, (_, index) => watch.watch(`room-${index}`, `person-${index}`, () => {}));
+    const people = Array.from({ length: GROUP_WATCHED_ROOMS }, (_, index) =>
+      watch.watch(`room-${index}`, `person-${index}`, () => {}),
+    );
     groupRequest.mockClear();
-    expect(() => watch.watch("one-more", "newcomer", () => {})).toThrow(expect.objectContaining({ statusCode: 429, message: expect.stringContaining("in this household") }));
+    expect(() => watch.watch("one-more", "newcomer", () => {})).toThrow(
+      expect.objectContaining({
+        statusCode: 429,
+        message: expect.stringContaining("in this household"),
+      }),
+    );
     const joined = watch.watch("room-0", "newcomer", () => {});
     await vi.advanceTimersByTimeAsync(0);
     expect(groupRequest).not.toHaveBeenCalledWith({ operation: "state", roomId: "one-more" });
@@ -138,34 +206,82 @@ describe("watching a group chat on the app event stream", () => {
     let seq = 1;
     // A gate the next room lookup waits on, when a test sets one, and the signal that the lookup reached it.
     let gate: Promise<void> | undefined, reachedGate: (() => void) | undefined;
-    const rooms = [state("shared", 1).room, { ...state("private", 1).room, members: [member("ranch"), member("secret")] }];
+    const rooms = [
+      state("shared", 1).room,
+      { ...state("private", 1).room, members: [member("ranch"), member("secret")] },
+    ];
     const groupRequest = vi.fn(async (input: GroupRequest) => {
-      if (gate && input.operation === "state") { const waiting = gate; gate = undefined; reachedGate?.(); await waiting; }
-      return input.operation === "list" ? { supported: true, canSend: true, rooms }
-        : { ...state((input as { roomId: string }).roomId, seq), room: { ...rooms.find(room => room.room_id === (input as { roomId: string }).roomId)!, latest_seq: seq } };
+      if (gate && input.operation === "state") {
+        const waiting = gate;
+        gate = undefined;
+        reachedGate?.();
+        await waiting;
+      }
+      return input.operation === "list"
+        ? { supported: true, canSend: true, rooms }
+        : {
+            ...state((input as { roomId: string }).roomId, seq),
+            room: {
+              ...rooms.find((room) => room.room_id === (input as { roomId: string }).roomId)!,
+              latest_seq: seq,
+            },
+          };
     });
     const runtime: Runtime = fakeRuntime({
-      groupRequest, status: async () => ({ connected: true }), close: async () => {},
+      groupRequest,
+      status: async () => ({ connected: true }),
+      close: async () => {},
       capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
-      listBots: async () => [botFixture({ id: "ranch" }), botFixture({ id: "planner" }), botFixture({ id: "secret", shared: false, ownerId: "local-two" })],
+      listBots: async () => [
+        botFixture({ id: "ranch" }),
+        botFixture({ id: "planner" }),
+        botFixture({ id: "secret", shared: false, ownerId: "local-two" }),
+      ],
       ...extra,
     });
-    const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+    const { app, store } = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      runtime,
+      { background: false },
+    );
     const base = await app.listen({ port: 0, host: "127.0.0.1" });
-    const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
+    const signIn = await fetch(`${base}/api/auth/local`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ member: "one" }),
+    });
     const cookie = signIn.headers.getSetCookie()[0].split(";")[0];
-    return { app, store, base, cookie, groupRequest, setSeq: (value: number) => { seq = value; },
+    return {
+      app,
+      store,
+      base,
+      cookie,
+      groupRequest,
+      setSeq: (value: number) => {
+        seq = value;
+      },
       holdNextLookup: () => {
         let release!: () => void;
-        gate = new Promise<void>(resolve => { release = resolve; });
-        const reached = new Promise<void>(resolve => { reachedGate = resolve; });
+        gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const reached = new Promise<void>((resolve) => {
+          reachedGate = resolve;
+        });
         return { release, reached };
-      } };
+      },
+    };
   }
 
   // Sends a stream request over a real socket and disconnects once `reached` says the server is handling it.
-  async function abandon(s: Awaited<ReturnType<typeof setup>>, path: string, reached: Promise<void>) {
-    const handled = new Promise<void>(resolve => s.app.server.once("request", (_request, response) => response.once("close", () => resolve())));
+  async function abandon(
+    s: Awaited<ReturnType<typeof setup>>,
+    path: string,
+    reached: Promise<void>,
+  ) {
+    const handled = new Promise<void>((resolve) =>
+      s.app.server.once("request", (_request, response) => response.once("close", () => resolve())),
+    );
     const request = http.get(`${s.base}${path}`, { headers: { cookie: s.cookie } });
     request.on("error", () => {});
     await reached;
@@ -173,7 +289,9 @@ describe("watching a group chat on the app event stream", () => {
     await handled;
   }
   /** Turns of the event loop, not milliseconds: the server's work after an event is in memory, so a few turns finish it however slow the machine. */
-  const settle = async () => { for (let turn = 0; turn < 10; turn++) await new Promise(resolve => setImmediate(resolve)); };
+  const settle = async () => {
+    for (let turn = 0; turn < 10; turn++) await new Promise((resolve) => setImmediate(resolve));
+  };
 
   it("frees a watch whose client disconnected while the room was still being looked up", async () => {
     const s = await setup();
@@ -185,38 +303,59 @@ describe("watching a group chat on the app event stream", () => {
       await settle();
       // The abandoned request took no place, so every one of this person's watches still opens.
       for (let index = 0; index < GROUP_WATCHES_PER_PERSON; index++) {
-        const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+        const response = await fetch(`${s.base}/api/events?group=shared`, {
+          headers: { cookie: s.cookie },
+        });
         open.push(response);
         expect(response.status, `stream ${index + 1}`).toBe(200);
       }
     } finally {
-      await Promise.all(open.flatMap(response => response.body ? [response.body.cancel()] : []));
+      await Promise.all(
+        open.flatMap((response) => (response.body ? [response.body.cancel()] : [])),
+      );
       await s.app.close();
     }
   });
 
   it("leaves no conversation watcher behind for a client that disconnected during setup", async () => {
     let release!: () => void, asked!: () => void;
-    const held = new Promise<void>(resolve => { release = resolve; });
-    const reached = new Promise<void>(resolve => { asked = resolve; });
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      asked = resolve;
+    });
     const unwatch = vi.fn();
     const watch = vi.fn(() => unwatch);
     let delay = true;
-    const s = await setup({ watch,
+    const s = await setup({
+      watch,
       // The assistant access check reads Hermes's roster before the stream opens.
-      listBots: async () => { if (delay) { delay = false; asked(); await held; } return [botFixture({ id: "ranch" }), botFixture({ id: "planner" })]; } });
+      listBots: async () => {
+        if (delay) {
+          delay = false;
+          asked();
+          await held;
+        }
+        return [botFixture({ id: "ranch" }), botFixture({ id: "planner" })];
+      },
+    });
     try {
       await abandon(s, "/api/bots/ranch/events", reached);
       release();
       await settle();
       expect(watch).not.toHaveBeenCalled();
       // A stream that does open still watches until it closes.
-      const response = await fetch(`${s.base}/api/bots/ranch/events`, { headers: { cookie: s.cookie } });
+      const response = await fetch(`${s.base}/api/bots/ranch/events`, {
+        headers: { cookie: s.cookie },
+      });
       expect(response.status).toBe(200);
       expect(watch).toHaveBeenCalledTimes(1);
       await response.body?.cancel();
       await vi.waitFor(() => expect(unwatch).toHaveBeenCalledTimes(1));
-    } finally { await s.app.close(); }
+    } finally {
+      await s.app.close();
+    }
   });
 
   it("announces room changes to a stream that asked for the room, and stops polling once it closes", async () => {
@@ -224,16 +363,20 @@ describe("watching a group chat on the app event stream", () => {
     // Only the poll timer is virtual. Sockets and streams stay real, so reads advance it in small steps.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+      const response = await fetch(`${s.base}/api/events?group=shared`, {
+        headers: { cookie: s.cookie },
+      });
       expect(response.status).toBe(200);
       const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
       const next = async () => {
         let result: ReadableStreamReadResult<string> | undefined;
-        void reader.read().then(chunk => { result = chunk; });
+        void reader.read().then((chunk) => {
+          result = chunk;
+        });
         for (let step = 0; !result; step++) {
           if (step > 2000) throw new Error("Stream never produced a chunk");
           await vi.advanceTimersByTimeAsync(10);
-          await new Promise(resolve => setImmediate(resolve));
+          await new Promise((resolve) => setImmediate(resolve));
         }
         return result;
       };
@@ -249,21 +392,38 @@ describe("watching a group chat on the app event stream", () => {
         if (chunk.done) break;
         text += chunk.value;
       }
-      expect(text).not.toContain("latestSeq\":2");
-      const polls = s.groupRequest.mock.calls.filter(([input]) => input.operation === "state").length;
+      expect(text).not.toContain('latestSeq":2');
+      const polls = s.groupRequest.mock.calls.filter(
+        ([input]) => input.operation === "state",
+      ).length;
       await vi.advanceTimersByTimeAsync(2300);
-      expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(polls);
-    } finally { vi.useRealTimers(); await s.app.close(); }
+      expect(
+        s.groupRequest.mock.calls.filter(([input]) => input.operation === "state"),
+      ).toHaveLength(polls);
+    } finally {
+      vi.useRealTimers();
+      await s.app.close();
+    }
   });
 
   it("refuses a hidden or unknown room before opening the stream", async () => {
     const s = await setup();
     try {
-      expect((await fetch(`${s.base}/api/events?group=private`, { headers: { cookie: s.cookie } })).status).toBe(404);
-      expect((await fetch(`${s.base}/api/events?group=missing`, { headers: { cookie: s.cookie } })).status).toBe(404);
-      expect(s.groupRequest.mock.calls.filter(([input]) => input.operation === "state")).toHaveLength(2);
+      expect(
+        (await fetch(`${s.base}/api/events?group=private`, { headers: { cookie: s.cookie } }))
+          .status,
+      ).toBe(404);
+      expect(
+        (await fetch(`${s.base}/api/events?group=missing`, { headers: { cookie: s.cookie } }))
+          .status,
+      ).toBe(404);
+      expect(
+        s.groupRequest.mock.calls.filter(([input]) => input.operation === "state"),
+      ).toHaveLength(2);
       expect((await fetch(`${s.base}/api/events?group=shared`)).status).toBe(401);
-    } finally { await s.app.close(); }
+    } finally {
+      await s.app.close();
+    }
   });
 
   it("refuses a watch beyond the person's share with a clear 429, before opening the stream", async () => {
@@ -271,11 +431,15 @@ describe("watching a group chat on the app event stream", () => {
     const open: Response[] = [];
     try {
       for (let index = 0; index < GROUP_WATCHES_PER_PERSON; index++) {
-        const response = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+        const response = await fetch(`${s.base}/api/events?group=shared`, {
+          headers: { cookie: s.cookie },
+        });
         expect(response.status).toBe(200);
         open.push(response);
       }
-      const refused = await fetch(`${s.base}/api/events?group=shared`, { headers: { cookie: s.cookie } });
+      const refused = await fetch(`${s.base}/api/events?group=shared`, {
+        headers: { cookie: s.cookie },
+      });
       expect(refused.status).toBe(429);
       expect((await refused.json()).error).toContain("Too many group chats are open for you");
       // A stream without a room is not a watch and still opens.
@@ -283,7 +447,9 @@ describe("watching a group chat on the app event stream", () => {
       expect(roster.status).toBe(200);
       open.push(roster);
     } finally {
-      await Promise.all(open.flatMap(response => response.body ? [response.body.cancel()] : []));
+      await Promise.all(
+        open.flatMap((response) => (response.body ? [response.body.cancel()] : [])),
+      );
       await s.app.close();
     }
   });
@@ -293,13 +459,25 @@ describe("event stream setup", () => {
   // Just enough of a hijackable Fastify reply over a real ServerResponse-like emitter.
   function reply(destroyed: boolean) {
     const raw = Object.assign(new EventEmitter(), {
-      destroyed, writableEnded: false, writeHead: vi.fn(), write: vi.fn(), end: vi.fn(), destroy: vi.fn(),
+      destroyed,
+      writableEnded: false,
+      writeHead: vi.fn(),
+      write: vi.fn(),
+      end: vi.fn(),
+      destroy: vi.fn(),
     });
-    return { raw, request: { query: {} }, hijack: vi.fn(), getHeaders: () => ({}) } as unknown as FastifyReply & { raw: typeof raw };
+    return {
+      raw,
+      request: { query: {} },
+      hijack: vi.fn(),
+      getHeaders: () => ({}),
+    } as unknown as FastifyReply & { raw: typeof raw };
   }
 
   it("ends at once, tearing down what setup reserved, when the client already left", () => {
-    const left = reply(true), streams = new Set<() => void>(), teardown = vi.fn();
+    const left = reply(true),
+      streams = new Set<() => void>(),
+      teardown = vi.fn();
     const stream = eventStreamConnection(left).open(streams, { allowed: () => true, teardown });
     expect(teardown).toHaveBeenCalledTimes(1);
     expect(left.raw.writeHead).not.toHaveBeenCalled();
@@ -311,15 +489,27 @@ describe("event stream setup", () => {
   });
 
   it("tears down once when reserving fails, or when teardown itself throws as a stream that already ended", () => {
-    const streams = new Set<() => void>(), allowed = () => true;
+    const streams = new Set<() => void>(),
+      allowed = () => true;
     const teardown = vi.fn();
-    expect(() => eventStreamConnection(reply(false)).open(streams, { allowed, teardown, reserve: () => { throw new Error("watch refused"); } }))
-      .toThrow("watch refused");
+    expect(() =>
+      eventStreamConnection(reply(false)).open(streams, {
+        allowed,
+        teardown,
+        reserve: () => {
+          throw new Error("watch refused");
+        },
+      }),
+    ).toThrow("watch refused");
     expect(teardown).toHaveBeenCalledTimes(1);
     // The client left during setup, so opening ends the stream, and its teardown fails partway.
-    const failing = vi.fn(() => { throw new Error("teardown failed"); });
+    const failing = vi.fn(() => {
+      throw new Error("teardown failed");
+    });
     const left = reply(true);
-    expect(() => eventStreamConnection(left).open(streams, { allowed, teardown: failing })).toThrow("teardown failed");
+    expect(() => eventStreamConnection(left).open(streams, { allowed, teardown: failing })).toThrow(
+      "teardown failed",
+    );
     expect(failing).toHaveBeenCalledTimes(1);
     expect(left.raw.end).toHaveBeenCalled();
   });

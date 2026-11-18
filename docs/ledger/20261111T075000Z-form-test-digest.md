@@ -22,15 +22,15 @@ reproduces the cause is saturating the thread pool the digest queues on: a setup
 the vitest config) starts N concurrent `pbkdf2` jobs of 100,000 SHA-512 iterations that restart as they end, so each digest waits behind them.
 `vitest run -c <that config> tests/transcript-ui.test.ts -t "form replies"`:
 
-| File | Jobs | Runs | Red |
-| --- | --- | --- | --- |
-| before #316 (`git show 4b8fdc2^:tests/transcript-ui.test.ts`) | 6 | 3 | "works with field IDs..." and "refuses answers longer..." 3 of 3; the named test 0 of 3 |
-| before #316 | 10 | 3 | **the named test 3 of 3** (`expected null to be 'true'` on `aria-invalid`), plus "stops looking after 100 refused attempts", "works with field IDs...", "refuses answers longer..." |
-| before #316 | 14 | 3 | the same four, 3 of 3 |
-| `main` | 6 | 4 | none |
-| `main` | 10 and 14 | 4 each | "stops looking after 100 refused attempts" 8 of 8: `expected true to be false`, Send never enabled inside `ready()`'s 1 s, because it waits for 100 digests in a row |
-| `main` | 24 | 3 | that one and "finds a form sent after many refusals, however many" 3 of 3 |
-| `main` | 64 | 3 | those two and "shows a form sent from another tab or device as sent, and sends nothing" 3 of 3 |
+| File                                                          | Jobs      | Runs   | Red                                                                                                                                                                                 |
+| ------------------------------------------------------------- | --------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| before #316 (`git show 4b8fdc2^:tests/transcript-ui.test.ts`) | 6         | 3      | "works with field IDs..." and "refuses answers longer..." 3 of 3; the named test 0 of 3                                                                                             |
+| before #316                                                   | 10        | 3      | **the named test 3 of 3** (`expected null to be 'true'` on `aria-invalid`), plus "stops looking after 100 refused attempts", "works with field IDs...", "refuses answers longer..." |
+| before #316                                                   | 14        | 3      | the same four, 3 of 3                                                                                                                                                               |
+| `main`                                                        | 6         | 4      | none                                                                                                                                                                                |
+| `main`                                                        | 10 and 14 | 4 each | "stops looking after 100 refused attempts" 8 of 8: `expected true to be false`, Send never enabled inside `ready()`'s 1 s, because it waits for 100 digests in a row                |
+| `main`                                                        | 24        | 3      | that one and "finds a form sent after many refusals, however many" 3 of 3                                                                                                           |
+| `main`                                                        | 64        | 3      | those two and "shows a form sent from another tab or device as sent, and sends nothing" 3 of 3                                                                                      |
 
 The named test is green on `main` at every level; `ready()` fixed it. Its siblings are the same defect, and #316's wait only buys the digest
 a second.
@@ -50,15 +50,15 @@ Same hog, `tests/transcript-ui.test.ts`, `tests/live-reply-ui.test.ts` and `test
 
 Loaded full `npm test` (8 cores, 32 loops), 3 runs of this branch against the 6 of `main`, tests that failed in a run, by file:
 
-| File | `main`, 6 runs | this branch, 3 runs |
-| --- | --- | --- |
-| `account-transitions-ui.test.ts` | 6 | 3 |
-| `live-updates-ui.test.ts` | 3 | 1 |
-| `message-markdown.test.ts` | 3 | 0 |
-| `plain-text.test.ts` | 0 | 3 |
-| `reply-keys.test.ts` | 2 | 1 |
-| `send-timing.test.ts` | 1 | 0 |
-| `streaming-hold-back.test.ts` | 2 | 1 |
+| File                             | `main`, 6 runs | this branch, 3 runs |
+| -------------------------------- | -------------- | ------------------- |
+| `account-transitions-ui.test.ts` | 6              | 3                   |
+| `live-updates-ui.test.ts`        | 3              | 1                   |
+| `message-markdown.test.ts`       | 3              | 0                   |
+| `plain-text.test.ts`             | 0              | 3                   |
+| `reply-keys.test.ts`             | 2              | 1                   |
+| `send-timing.test.ts`            | 1              | 0                   |
+| `streaming-hold-back.test.ts`    | 2              | 1                   |
 
 The named test failed in none of the nine. Every file in the table fails the same way on `main` under this load (15 s timeouts and virtual-clock
 tests starved), none uses Web Crypto, and none is changed here. `plain-text` and `send-timing` are fixed on `t3/no-wall-clock-tests`.
@@ -67,14 +67,14 @@ tests starved), none uses Web Crypto, and none is changed here. `plain-text` and
 
 `.agents/tools/check-all` on this branch:
 
-check      result   queued  run    counts
-typecheck  pass     -       1.1s   -
-lint       pass     -       0.3s   -
-ruff       pass     -       0.0s   -
-test       pass     14m20s  32.1s  206 files, 3674 tests
-build      pass     -       2.9s   892 modules
-e2e        pass     2m42s   1m18s  40 tests
-py         skipped  -       -      no changes to Python or a file the Python tests read against origin/main
+check result queued run counts
+typecheck pass - 1.1s -
+lint pass - 0.3s -
+ruff pass - 0.0s -
+test pass 14m20s 32.1s 206 files, 3674 tests
+build pass - 2.9s 892 modules
+e2e pass 2m42s 1m18s 40 tests
+py skipped - - no changes to Python or a file the Python tests read against origin/main
 
 All 6 checks passed (18m58s total, 17m03s of it queued for heavy slots)
 

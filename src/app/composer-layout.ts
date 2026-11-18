@@ -3,7 +3,11 @@
  * while stacked, so wrapping cannot toggle the layout back. `measure` returns the text's one-line
  * width and runs only when the text alone cannot decide, because measuring can force a layout.
  */
-export function shouldStackComposer(text: string, inlineWidth: number, measure: () => number): boolean {
+export function shouldStackComposer(
+  text: string,
+  inlineWidth: number,
+  measure: () => number,
+): boolean {
   if (inlineWidth < 120) return true;
   if (!text) return false;
   return text.includes("\n") || text.length > 200 || measure() > inlineWidth - 8;
@@ -23,7 +27,8 @@ const canvasMismeasures = /[\t\v\f\uFFFC]/;
  * at the cost of a layout.
  */
 export function textWidth(text: string, slot: ComposerSlot, span: HTMLElement | null): number {
-  canvas ??= typeof OffscreenCanvas === "undefined" ? null : new OffscreenCanvas(1, 1).getContext("2d");
+  canvas ??=
+    typeof OffscreenCanvas === "undefined" ? null : new OffscreenCanvas(1, 1).getContext("2d");
   if (canvas && !canvasMismeasures.test(text)) {
     canvas.font = slot.font;
     canvas.letterSpacing = slot.letterSpacing === "normal" ? "0px" : slot.letterSpacing;
@@ -38,5 +43,9 @@ export function textWidth(text: string, slot: ComposerSlot, span: HTMLElement | 
 
 /** Whether CSS grows the field with its text, so the script need not size it. See styles.css. */
 export function cssSizesField() {
-  return typeof CSS !== "undefined" && typeof CSS.supports === "function" && CSS.supports("field-sizing", "content");
+  return (
+    typeof CSS !== "undefined" &&
+    typeof CSS.supports === "function" &&
+    CSS.supports("field-sizing", "content")
+  );
 }

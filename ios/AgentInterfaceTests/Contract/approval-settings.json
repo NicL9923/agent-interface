@@ -2,10 +2,7 @@
   "request": "GET /api/bots/household/approval-settings",
   "response": {
     "supported": true,
-    "allowlist": [
-      "grocery order",
-      "recursive delete"
-    ],
+    "allowlist": ["grocery order", "recursive delete"],
     "mode": "manual",
     "canManageAutoReview": true
   }

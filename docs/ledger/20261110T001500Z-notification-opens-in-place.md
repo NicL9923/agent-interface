@@ -34,21 +34,21 @@ Python, iOS or Hermes code changed.
 
 Each line was broken by hand, the focused tests run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| Window never asked | failed: "asks the window to open the chat in place…", "asks the window the person was last in…", "loads the chat into a window that does not answer in time" |
-| No `navigate` fallback | failed: "loads the chat into a window that does not answer in time", "opens a new window when loading the chat into the silent one fails" |
-| No new window after `navigate` fails | failed: the second of those |
-| Uncontrolled windows considered | failed: "opens a new window beside one this worker does not control…" |
-| Answer bound 1,000 ms changed to 500 | failed: "loads the chat into a window that does not answer in time" at 999 ms |
-| Focus removed | failed: in-place and no-answer cases |
-| Focused window not preferred | failed: "asks the window the person was last in…" |
-| Page: source check removed | failed: "another worker", "no source" |
-| Page: no-controller check removed | failed: "ignores a message without a source when no worker controls the page" |
-| Page: type, text, origin, path or chat check removed | each failed its own "ignores a message from…" case |
-| Page: answer removed | failed: "switches to the chat in place and tells the worker it did" |
-| Page: message link, routine or Today branch removed | each failed its own case |
-| e2e: window never asked, rebuilt | failed: "a notification tapped while the app is open…" at the same-document check |
+| Mutation                                             | Result                                                                                                                                                       |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Window never asked                                   | failed: "asks the window to open the chat in place…", "asks the window the person was last in…", "loads the chat into a window that does not answer in time" |
+| No `navigate` fallback                               | failed: "loads the chat into a window that does not answer in time", "opens a new window when loading the chat into the silent one fails"                    |
+| No new window after `navigate` fails                 | failed: the second of those                                                                                                                                  |
+| Uncontrolled windows considered                      | failed: "opens a new window beside one this worker does not control…"                                                                                        |
+| Answer bound 1,000 ms changed to 500                 | failed: "loads the chat into a window that does not answer in time" at 999 ms                                                                                |
+| Focus removed                                        | failed: in-place and no-answer cases                                                                                                                         |
+| Focused window not preferred                         | failed: "asks the window the person was last in…"                                                                                                            |
+| Page: source check removed                           | failed: "another worker", "no source"                                                                                                                        |
+| Page: no-controller check removed                    | failed: "ignores a message without a source when no worker controls the page"                                                                                |
+| Page: type, text, origin, path or chat check removed | each failed its own "ignores a message from…" case                                                                                                           |
+| Page: answer removed                                 | failed: "switches to the chat in place and tells the worker it did"                                                                                          |
+| Page: message link, routine or Today branch removed  | each failed its own case                                                                                                                                     |
+| e2e: window never asked, rebuilt                     | failed: "a notification tapped while the app is open…" at the same-document check                                                                            |
 
 ## Not exercised
 
@@ -112,23 +112,23 @@ On `7c9041e` plus the new tests:
 
 ### Mutants
 
-| Mutation | Result |
-| --- | --- |
-| Worker open ignores the sheet's close | failed: 5 unsaved-work cases |
-| Waiting destination not opened on close | failed: "opens the chat once the person discards", the section case |
-| Staying does not drop the destination | failed: "does not open the chat later…" |
-| Settings closes without asking | failed: 3 cases |
-| Keep editing not reported | failed: "does not open the chat later…" |
-| Settings does not offer its close | failed: 3 cases |
-| Settings (preferences) skips saving the typed name | failed: 2 section cases |
-| Settings (preferences) closes on a refused name | failed: "leaves Settings open with its reason…" |
-| A sheet's close kept after it unmounts | survived at first; killed by the added "opens the chat at once after the person has already discarded an edited assistant" |
-| Acknowledgement wait back to 1,000 ms | failed: 2 timing cases |
-| No re-show | failed: 3 re-show cases |
-| Re-shown without limit | failed: "shows a notification again only once…" |
-| Re-show not marked | failed: 2 cases |
-| Re-show not silent | failed: 1 case |
-| Re-show drops actions | failed: 2 cases |
+| Mutation                                           | Result                                                                                                                     |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Worker open ignores the sheet's close              | failed: 5 unsaved-work cases                                                                                               |
+| Waiting destination not opened on close            | failed: "opens the chat once the person discards", the section case                                                        |
+| Staying does not drop the destination              | failed: "does not open the chat later…"                                                                                    |
+| Settings closes without asking                     | failed: 3 cases                                                                                                            |
+| Keep editing not reported                          | failed: "does not open the chat later…"                                                                                    |
+| Settings does not offer its close                  | failed: 3 cases                                                                                                            |
+| Settings (preferences) skips saving the typed name | failed: 2 section cases                                                                                                    |
+| Settings (preferences) closes on a refused name    | failed: "leaves Settings open with its reason…"                                                                            |
+| A sheet's close kept after it unmounts             | survived at first; killed by the added "opens the chat at once after the person has already discarded an edited assistant" |
+| Acknowledgement wait back to 1,000 ms              | failed: 2 timing cases                                                                                                     |
+| No re-show                                         | failed: 3 re-show cases                                                                                                    |
+| Re-shown without limit                             | failed: "shows a notification again only once…"                                                                            |
+| Re-show not marked                                 | failed: 2 cases                                                                                                            |
+| Re-show not silent                                 | failed: 1 case                                                                                                             |
+| Re-show drops actions                              | failed: 2 cases                                                                                                            |
 
 ### Checks
 
@@ -221,28 +221,28 @@ On `928363b` plus the new tests:
 
 Each line was broken by hand, the three focused files run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| A first tap without an answer navigates | failed: 5 cases |
-| No re-show on a first tap without an answer | failed: 5 cases |
-| A late answer does not close the brought-back notification | failed: 3 cases |
-| The close ignores the `reshown` mark, or the address | failed: "closes only the notification it brought back…" |
-| A second tap ignores a late answer to the first | failed: "does not load the chat on a second tap…" |
-| Answers not counted | failed: the same |
-| A focus failure ignored | failed: both hidden focus cases |
-| The focus fallback also for a visible window | failed: "…a visible one opens nothing more" |
-| A refused window not re-shown (outer catch) | failed: 3 re-show cases |
-| Late listening 10 s changed to 5 s | failed: "leaves a window that does not answer in time…" |
-| Answer wait 250 ms changed to 1,000 | failed: 6 cases |
-| A second tap does not navigate | failed: both second-tap cases |
-| A failed `getNotifications` re-thrown | survived |
-| The close takes with no sheet | failed: 5 page cases |
-| The wait records no account | failed: 2 page cases |
-| One sheet token for every mount | failed: "…goes without closing, for the same account" |
-| The sheet's cleanup keeps its close | failed: "opens the chat at once after the person has already discarded…" |
-| Sheet or account not compared | failed: their `close-request.test.ts` cases |
-| An older stay cancels a newer wait | failed: "is cancelled by its own stay…" |
-| A close keeps the wait | failed: 4 `close-request.test.ts` cases |
+| Mutation                                                   | Result                                                                   |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------ |
+| A first tap without an answer navigates                    | failed: 5 cases                                                          |
+| No re-show on a first tap without an answer                | failed: 5 cases                                                          |
+| A late answer does not close the brought-back notification | failed: 3 cases                                                          |
+| The close ignores the `reshown` mark, or the address       | failed: "closes only the notification it brought back…"                  |
+| A second tap ignores a late answer to the first            | failed: "does not load the chat on a second tap…"                        |
+| Answers not counted                                        | failed: the same                                                         |
+| A focus failure ignored                                    | failed: both hidden focus cases                                          |
+| The focus fallback also for a visible window               | failed: "…a visible one opens nothing more"                              |
+| A refused window not re-shown (outer catch)                | failed: 3 re-show cases                                                  |
+| Late listening 10 s changed to 5 s                         | failed: "leaves a window that does not answer in time…"                  |
+| Answer wait 250 ms changed to 1,000                        | failed: 6 cases                                                          |
+| A second tap does not navigate                             | failed: both second-tap cases                                            |
+| A failed `getNotifications` re-thrown                      | survived                                                                 |
+| The close takes with no sheet                              | failed: 5 page cases                                                     |
+| The wait records no account                                | failed: 2 page cases                                                     |
+| One sheet token for every mount                            | failed: "…goes without closing, for the same account"                    |
+| The sheet's cleanup keeps its close                        | failed: "opens the chat at once after the person has already discarded…" |
+| Sheet or account not compared                              | failed: their `close-request.test.ts` cases                              |
+| An older stay cancels a newer wait                         | failed: "is cancelled by its own stay…"                                  |
+| A close keeps the wait                                     | failed: 4 `close-request.test.ts` cases                                  |
 
 The survivor: a rejected `getNotifications` reaches the tap's outer `catch`, which calls
 `showAgain` on a notification without `reshown`, showing it once more. The `catch` in
@@ -253,7 +253,7 @@ without `getNotifications` would otherwise bring back a notification for a chat 
 
 - `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
-  tests/close-request.test.ts tests/app-update.test.ts`: 4 files, 98 tests passed, before the
+tests/close-request.test.ts tests/app-update.test.ts`: 4 files, 98 tests passed, before the
   visible-window change; `tests/service-worker.test.ts` after it: 65 passed.
 - `npm test`: 173 files, 2,705 tests passed, after the last change.
 - `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed. The first e2e run failed on
@@ -291,15 +291,15 @@ Checks ran on NicolasLaptop (Fedora, Linux x64, Node 24.22.2, Playwright Chromiu
 
 ### The table
 
-| Window answers | Focus | First tap | Tap on one that came back |
-| --- | --- | --- | --- |
-| in time | in front | done | done |
-| in time | failed, visible | bring it back; no second window | nothing more |
-| in time | failed, hidden | open a new window, or bring it back | open a new window |
-| late | in front | bring it back, close it at the answer | load the chat into the window |
-| late | failed, visible | bring it back and leave it | load the chat into the window |
-| late | failed, hidden | bring it back; at the answer open a new window, and close it only if that worked | load the chat into the window |
-| never | any | bring it back and leave it | load the chat into the window |
+| Window answers | Focus           | First tap                                                                        | Tap on one that came back     |
+| -------------- | --------------- | -------------------------------------------------------------------------------- | ----------------------------- |
+| in time        | in front        | done                                                                             | done                          |
+| in time        | failed, visible | bring it back; no second window                                                  | nothing more                  |
+| in time        | failed, hidden  | open a new window, or bring it back                                              | open a new window             |
+| late           | in front        | bring it back, close it at the answer                                            | load the chat into the window |
+| late           | failed, visible | bring it back and leave it                                                       | load the chat into the window |
+| late           | failed, hidden  | bring it back; at the answer open a new window, and close it only if that worked | load the chat into the window |
+| never          | any             | bring it back and leave it                                                       | load the chat into the window |
 
 "Load the chat into the window" falls back to a new window when `navigate` fails, and does
 nothing when the page answered the first tap meanwhile. Both are unchanged from the second round.
@@ -319,13 +319,13 @@ cannot be focused" test:
 
 Each line was broken by hand, `tests/service-worker.test.ts` run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| `existing.focused` ignored | failed: "in time, focus focused already" |
-| Visible counted as in front | failed: both "failed, visible" rows |
-| A late answer closes without `reachPerson` | failed: the three late rows that are not in front |
-| A hidden window opens no new window | failed: all four hidden rows |
-| A refused new window counted as reached | failed: both refused rows |
+| Mutation                                             | Result                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------- |
+| `existing.focused` ignored                           | failed: "in time, focus focused already"                      |
+| Visible counted as in front                          | failed: both "failed, visible" rows                           |
+| A late answer closes without `reachPerson`           | failed: the three late rows that are not in front             |
+| A hidden window opens no new window                  | failed: all four hidden rows                                  |
+| A refused new window counted as reached              | failed: both refused rows                                     |
 | An in-time answer never brings the notification back | failed: in time "failed, visible", and the refused hidden row |
 
 ### Checks
@@ -363,12 +363,12 @@ Every tap ends with a window known to be in front showing the chat, or the notif
 again. "In front" is a window that was focused already, one whose `focus()` succeeded, or one
 `openWindow` just opened. The comment above `openChat` holds this table, and `reach()` reads as it:
 
-| Rule | Window this worker controls | Then |
-| --- | --- | --- |
-| 1 | none | `openWindow`. If that fails, the notification comes back. |
-| 2 | answers within 250 ms | The chat is open in it. In front: done. If not, it comes back. |
-| 3 | no answer in time, first tap | The window is left as it is and a focus attempted. The notification comes back, marked as having come back. |
-| 4 | no answer in time, tap on a marked notification | `navigate` the window, or `openWindow` if that fails. Then, unless a window is known to be in front, the notification comes back. |
+| Rule | Window this worker controls                     | Then                                                                                                                              |
+| ---- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | none                                            | `openWindow`. If that fails, the notification comes back.                                                                         |
+| 2    | answers within 250 ms                           | The chat is open in it. In front: done. If not, it comes back.                                                                    |
+| 3    | no answer in time, first tap                    | The window is left as it is and a focus attempted. The notification comes back, marked as having come back.                       |
+| 4    | no answer in time, tap on a marked notification | `navigate` the window, or `openWindow` if that fails. Then, unless a window is known to be in front, the notification comes back. |
 
 The 250 ms wait and its reasoning, the rule that a first tap never replaces the document, and the
 page side (the discard question, the sheet and account binding) are unchanged.
@@ -430,20 +430,20 @@ The new `tests/service-worker.test.ts` copied onto a worktree at `4f6839e`:
 `npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 13 failed,
 13 passed. Each changed row failed:
 
-| Test | Failure on `4f6839e` |
-| --- | --- |
-| waits 250 ms for an answer, then leaves the window as it is… | "expected false to be true": the tap still listened past 250 ms |
-| rule 1: a new window is refused on a tap of one that came back | "a window in front, or the notification back: expected 1 to be +0": nothing on screen |
-| rule 2: the window cannot come forward (hidden) | "expected 'in front' to be 'back'": a second window opened |
-| rule 2: the window cannot come forward, on a tap of one that came back | nothing on screen |
-| rule 3: the window comes forward; rule 3: the page answers late | timed out in 15,000 ms: the tap waited ten seconds |
-| rule 4: the chat loads into the window, which cannot come forward | nothing on screen |
-| rule 4: loading fails and a new window is refused | nothing on screen |
-| two overlapping taps, rule 1 | "expected { … opened: 2 } to deeply equal { … opened: 1 }" |
-| two overlapping taps, rule 2 | "expected 'in front' to be 'back'": new windows opened |
-| two overlapping taps, rule 3 | timed out in 15,000 ms |
-| two overlapping taps, rule 4: loading fails and a new window opens | "expected { asked: 2, navigated: 2, opened: 2 } to deeply equal { asked: 1, navigated: 1, opened: 1 }" |
-| two overlapping taps, rule 4: …cannot come forward | nothing on screen |
+| Test                                                                   | Failure on `4f6839e`                                                                                   |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| waits 250 ms for an answer, then leaves the window as it is…           | "expected false to be true": the tap still listened past 250 ms                                        |
+| rule 1: a new window is refused on a tap of one that came back         | "a window in front, or the notification back: expected 1 to be +0": nothing on screen                  |
+| rule 2: the window cannot come forward (hidden)                        | "expected 'in front' to be 'back'": a second window opened                                             |
+| rule 2: the window cannot come forward, on a tap of one that came back | nothing on screen                                                                                      |
+| rule 3: the window comes forward; rule 3: the page answers late        | timed out in 15,000 ms: the tap waited ten seconds                                                     |
+| rule 4: the chat loads into the window, which cannot come forward      | nothing on screen                                                                                      |
+| rule 4: loading fails and a new window is refused                      | nothing on screen                                                                                      |
+| two overlapping taps, rule 1                                           | "expected { … opened: 2 } to deeply equal { … opened: 1 }"                                             |
+| two overlapping taps, rule 2                                           | "expected 'in front' to be 'back'": new windows opened                                                 |
+| two overlapping taps, rule 3                                           | timed out in 15,000 ms                                                                                 |
+| two overlapping taps, rule 4: loading fails and a new window opens     | "expected { asked: 2, navigated: 2, opened: 2 } to deeply equal { asked: 1, navigated: 1, opened: 1 }" |
+| two overlapping taps, rule 4: …cannot come forward                     | nothing on screen                                                                                      |
 
 The rows that pass there are the ones whose behavior did not change: rule 1 with a new window or
 refused on a first tap, rule 2 in front either way, and rule 4 in front either way. "brings the
@@ -455,23 +455,23 @@ after this run; mutant W12 below shows it can fail.
 Each line was broken by hand, `tests/service-worker.test.ts` run (76 tests), and the source
 restored.
 
-| Mutation | Result |
-| --- | --- |
-| W1 A second tap never joins | failed: all 5 overlap rows |
-| W2 An attempt is never cleared | failed: "loads the chat into a window that still does not answer…" |
-| W3 An answer in time counts as in front | failed: both rule 2 "cannot come forward" rows and their overlap row |
-| W4 A first tap without an answer navigates | failed: 5 |
-| W5 A navigation counts as in front | failed: rule 4 "…cannot come forward" and its overlap row |
-| W6 No new window after `navigate` fails | failed: 4 |
-| W7 A refused new window counts as in front | failed: 5 |
-| W8 `focused` ignored | failed: "rule 2: the window was focused already" |
-| W9 Answer wait 250 ms changed to 1,000 | failed: 12 |
-| W10 The notification brought back is not marked | failed: 11 |
-| W11 Not silent | failed: 2 |
-| W12 An unexpected failure not caught | failed: "brings the notification back when a step fails…" |
-| W13 Never brought back | failed: 16 |
-| W14 No focus attempted | failed: 4 |
-| W15 Port not closed at the deadline | survived |
+| Mutation                                        | Result                                                               |
+| ----------------------------------------------- | -------------------------------------------------------------------- |
+| W1 A second tap never joins                     | failed: all 5 overlap rows                                           |
+| W2 An attempt is never cleared                  | failed: "loads the chat into a window that still does not answer…"   |
+| W3 An answer in time counts as in front         | failed: both rule 2 "cannot come forward" rows and their overlap row |
+| W4 A first tap without an answer navigates      | failed: 5                                                            |
+| W5 A navigation counts as in front              | failed: rule 4 "…cannot come forward" and its overlap row            |
+| W6 No new window after `navigate` fails         | failed: 4                                                            |
+| W7 A refused new window counts as in front      | failed: 5                                                            |
+| W8 `focused` ignored                            | failed: "rule 2: the window was focused already"                     |
+| W9 Answer wait 250 ms changed to 1,000          | failed: 12                                                           |
+| W10 The notification brought back is not marked | failed: 11                                                           |
+| W11 Not silent                                  | failed: 2                                                            |
+| W12 An unexpected failure not caught            | failed: "brings the notification back when a step fails…"            |
+| W13 Never brought back                          | failed: 16                                                           |
+| W14 No focus attempted                          | failed: 4                                                            |
+| W15 Port not closed at the deadline             | survived                                                             |
 
 W15 survives because closing the port is cleanup: the answer promise has already settled at the
 deadline, so a late message reaching `onmessage` cannot change the outcome. It stays so a stalled
@@ -481,7 +481,7 @@ page's port is released.
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
-  tests/close-request.test.ts`: 3 files, 103 tests passed.
+tests/close-request.test.ts`: 3 files, 103 tests passed.
 - `npm test`: 173 files, 2,716 tests passed.
 - `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed. The in-place case runs
   rule 2 with a window focused already.
@@ -542,27 +542,27 @@ The new tests against `4f6fc28`'s worker:
 `npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 5 failed,
 27 passed.
 
-| Test | Failure on `4f6fc28` |
-| --- | --- |
-| starts a new attempt once the notification is back… | "a window in front, or the notification back: expected 1 to be +0": nothing on screen |
-| starts one new attempt for several taps | the same |
-| tries once more, for 1 tap(s) and for 2 tap(s) | the tap rejected with "Failed to store the notification." |
-| ends every tap without a rejection when the second try fails too | both taps rejected |
+| Test                                                             | Failure on `4f6fc28`                                                                  |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| starts a new attempt once the notification is back…              | "a window in front, or the notification back: expected 1 to be +0": nothing on screen |
+| starts one new attempt for several taps                          | the same                                                                              |
+| tries once more, for 1 tap(s) and for 2 tap(s)                   | the tap rejected with "Failed to store the notification."                             |
+| ends every tap without a rejection when the second try fails too | both taps rejected                                                                    |
 
 ### Mutants
 
 Each line was broken by hand, `tests/service-worker.test.ts` run (81 tests), and the source
 restored.
 
-| Mutation | Result |
-| --- | --- |
-| R1 `restoring` never set | failed: both "a tap while…" cases |
-| R2 A tap while restoring joins the ending attempt | failed: both "a tap while…" cases |
+| Mutation                                                 | Result                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| R1 `restoring` never set                                 | failed: both "a tap while…" cases                                                     |
+| R2 A tap while restoring joins the ending attempt        | failed: both "a tap while…" cases                                                     |
 | R3 The new attempt starts before the restoration settles | failed: both "a tap while…" cases ("not asked again before the notification is back") |
-| R4 Each tap while restoring starts its own attempt | failed: "starts one new attempt for several taps" |
-| R5 No retry | failed: 3 |
-| R6 Second failure not caught | failed: "ends every tap without a rejection…" |
-| R7 Retry not bounded | failed: "ends every tap without a rejection…" |
+| R4 Each tap while restoring starts its own attempt       | failed: "starts one new attempt for several taps"                                     |
+| R5 No retry                                              | failed: 3                                                                             |
+| R6 Second failure not caught                             | failed: "ends every tap without a rejection…"                                         |
+| R7 Retry not bounded                                     | failed: "ends every tap without a rejection…"                                         |
 
 A first version kept a shared `next` promise for the taps while restoring. A mutant that
 replaced it on every tap survived, because a second `openChat` after the restoration already
@@ -574,7 +574,7 @@ assertion was added after the red run above to catch it, and R3 shows it can fai
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
-  tests/close-request.test.ts`: 3 files, 108 tests passed.
+tests/close-request.test.ts`: 3 files, 108 tests passed.
 - `npm test`: 173 files, 2,721 tests passed.
 - `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed.
 
@@ -649,13 +649,13 @@ The new tests against `c9e5217`'s worker:
 `npx vitest run tests/service-worker.test.ts -t "notification taps with the app open"`: 5 failed,
 30 passed.
 
-| Test | Failure on `c9e5217` |
-| --- | --- |
-| starts a new attempt at once that cannot come forward either… | "asked again at once": asked 1, expected 2 |
-| starts a new attempt at once that comes forward… | the same |
-| leaves one notification for the chat… | "a window in front, or the notification back: expected 1 to be 2" |
-| lets later taps join the new attempt… | the window asked once, expected twice |
-| shows the notification again… | tag `bot:ranch`, expected `reshown:https://app.example/?bot=ranch` |
+| Test                                                          | Failure on `c9e5217`                                               |
+| ------------------------------------------------------------- | ------------------------------------------------------------------ |
+| starts a new attempt at once that cannot come forward either… | "asked again at once": asked 1, expected 2                         |
+| starts a new attempt at once that comes forward…              | the same                                                           |
+| leaves one notification for the chat…                         | "a window in front, or the notification back: expected 1 to be 2"  |
+| lets later taps join the new attempt…                         | the window asked once, expected twice                              |
+| shows the notification again…                                 | tag `bot:ranch`, expected `reshown:https://app.example/?bot=ranch` |
 
 "brings back notifications for two chats side by side" passes there, since that worker kept each
 notification's own event tag; S6 below shows it can fail.
@@ -665,18 +665,18 @@ notification's own event tag; S6 below shows it can fail.
 Each line was broken by hand, `tests/service-worker.test.ts` run (84 tests), and the source
 restored.
 
-| Mutation | Result |
-| --- | --- |
-| S1 Any settling attempt clears the chat's entry | failed: "lets later taps join the new attempt…" |
-| S2 No replacement link | failed: "…that comes forward…" |
-| S3 No bound on the display | failed: "…that cannot come forward either…" |
-| S4 A tap while restoring joins the ending attempt | failed: 4 |
-| S5 The original tag kept | failed: "leaves one notification…", "shows the notification again…" |
-| S6 One tag for every chat | failed: "…two chats side by side", "shows the notification again…" |
-| S7 Bound 10 s changed to 1 s | failed: "…that cannot come forward either…" |
-| S8 No retry | failed: 3 |
-| S9 Bound timer not cleared | survived |
-| S10 `restoring` never set | failed: 4 |
+| Mutation                                          | Result                                                              |
+| ------------------------------------------------- | ------------------------------------------------------------------- |
+| S1 Any settling attempt clears the chat's entry   | failed: "lets later taps join the new attempt…"                     |
+| S2 No replacement link                            | failed: "…that comes forward…"                                      |
+| S3 No bound on the display                        | failed: "…that cannot come forward either…"                         |
+| S4 A tap while restoring joins the ending attempt | failed: 4                                                           |
+| S5 The original tag kept                          | failed: "leaves one notification…", "shows the notification again…" |
+| S6 One tag for every chat                         | failed: "…two chats side by side", "shows the notification again…"  |
+| S7 Bound 10 s changed to 1 s                      | failed: "…that cannot come forward either…"                         |
+| S8 No retry                                       | failed: 3                                                           |
+| S9 Bound timer not cleared                        | survived                                                            |
+| S10 `restoring` never set                         | failed: 4                                                           |
 
 S9 survives because clearing the timer is cleanup: it resolves a promise nobody waits on once the
 display settled, and a pending timer does not keep a service worker alive.
@@ -685,7 +685,7 @@ display settled, and a pending timer does not keep a service worker alive.
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/service-worker.test.ts tests/worker-opens-ui.test.ts
-  tests/close-request.test.ts`: 3 files, 111 tests passed.
+tests/close-request.test.ts`: 3 files, 111 tests passed.
 - `npm test`: 173 files, 2,724 tests passed.
 - `npm run build`, then `npm run test:e2e`: 6 Chromium tests passed.
 
@@ -716,10 +716,10 @@ appears when the browser finishes later, without a second call.
 The test describes behavior the code already had, so it passed when written. Two hand breaks
 prove it can fail:
 
-| Break | Result |
-| --- | --- |
-| `RESTORE_MS` raised to 20 seconds | failed: "ended at the deadline: expected false to be true" |
-| The wait on the display no longer raced against the deadline | failed the same way |
+| Break                                                        | Result                                                     |
+| ------------------------------------------------------------ | ---------------------------------------------------------- |
+| `RESTORE_MS` raised to 20 seconds                            | failed: "ended at the deadline: expected false to be true" |
+| The wait on the display no longer raced against the deadline | failed the same way                                        |
 
 The reviewer also noted, without a finding, that an old attempt's late retry can replace newer
 brought-back content for the same chat. One notification for that chat remains either way.

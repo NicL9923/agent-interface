@@ -31,7 +31,11 @@ export interface AppUpdate {
  */
 function warmOfflineWhenIdle(container: ServiceWorkerContainer) {
   const run = async () => {
-    try { (await container.ready).active?.postMessage({ type: "WARM" }); } catch { /* Best effort. */ }
+    try {
+      (await container.ready).active?.postMessage({ type: "WARM" });
+    } catch {
+      /* Best effort. */
+    }
   };
   if (typeof requestIdleCallback === "function") {
     const id = requestIdleCallback(() => void run(), { timeout: 5000 });
@@ -47,21 +51,31 @@ export function useAppInstall() {
   const [notice, setNotice] = useState("");
   useEffect(() => {
     if (!import.meta.env.PROD || !("serviceWorker" in navigator)) return;
-    let cancelled = false, cancelWarm = () => {}, registration: ServiceWorkerRegistration | undefined, checkedAt = Date.now();
+    let cancelled = false,
+      cancelWarm = () => {},
+      registration: ServiceWorkerRegistration | undefined,
+      checkedAt = Date.now();
     // A page loaded without a worker gets its first one by claim, which is not an update.
     let controlled = !!navigator.serviceWorker.controller;
     const reload = () => location.reload();
     const ready = (apply: () => void) => {
       if (cancelled) return;
-      setUpdate({ applying: false, apply: () => { setUpdate(current => current && { ...current, applying: true }); apply(); } });
+      setUpdate({
+        applying: false,
+        apply: () => {
+          setUpdate((current) => current && { ...current, applying: true });
+          apply();
+        },
+      });
     };
-    const waiting = () => ready(() => {
-      const worker = registration?.waiting;
-      // Nothing left waiting means another tab already switched; this page only needs the new files.
-      if (!worker) return reload();
-      navigator.serviceWorker.addEventListener("controllerchange", reload, { once: true });
-      worker.postMessage({ type: "SKIP_WAITING" });
-    });
+    const waiting = () =>
+      ready(() => {
+        const worker = registration?.waiting;
+        // Nothing left waiting means another tab already switched; this page only needs the new files.
+        if (!worker) return reload();
+        navigator.serviceWorker.addEventListener("controllerchange", reload, { once: true });
+        worker.postMessage({ type: "SKIP_WAITING" });
+      });
     // Another tab applied the update, so this page still runs the previous build.
     const switched = () => {
       if (controlled) ready(reload);
@@ -70,13 +84,20 @@ export function useAppInstall() {
     const check = () => {
       if (!registration || Date.now() - checkedAt < 5 * 60_000) return;
       checkedAt = Date.now();
-      void registration.update().catch(() => { /* Offline or a server restart; the next check retries. */ });
+      void registration.update().catch(() => {
+        /* Offline or a server restart; the next check retries. */
+      });
     };
-    const visible = () => { if (document.visibilityState === "visible") check(); };
+    const visible = () => {
+      if (document.visibilityState === "visible") check();
+    };
     navigator.serviceWorker.addEventListener("controllerchange", switched);
     document.addEventListener("visibilitychange", visible);
     window.addEventListener("online", check);
-    const timer = setInterval(() => { checkedAt = 0; check(); }, UPDATE_CHECK_MS);
+    const timer = setInterval(() => {
+      checkedAt = 0;
+      check();
+    }, UPDATE_CHECK_MS);
     void navigator.serviceWorker
       .register("/sw.js")
       .then((value) => {
@@ -91,9 +112,7 @@ export function useAppInstall() {
           });
         });
       })
-      .catch(() =>
-        setNotice("Offline installation is unavailable in this browser."),
-      );
+      .catch(() => setNotice("Offline installation is unavailable in this browser."));
     return () => {
       cancelled = true;
       cancelWarm();

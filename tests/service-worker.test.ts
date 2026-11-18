@@ -1,97 +1,195 @@
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import vm from 'node:vm';
-import { describe, expect, it, vi } from 'vitest';
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { describe, expect, it, vi } from "vitest";
 import type { AnyMock } from "./helpers/mock-of";
-import { isHashedAsset } from '../src/server/static-cache';
+import { isHashedAsset } from "../src/server/static-cache";
 import { byText } from "./helpers/sort";
 
-const INSTALL = ['/index.html', '/assets/app-a1234567.js', '/icon-192.png', '/assets/vendor.js'];
-const WARM = ['/assets/panel-b1234567.js', '/assets/panel-c1234567.css'];
-const ON_DEMAND = ['/assets/xterm-d1234567.js'];
-const script = (install = INSTALL, warm = WARM, onDemand = ON_DEMAND) => readFileSync('scripts/service-worker.js', 'utf8')
-  .replace('__BUILD_ID__', 'test')
-  .replace('__PRECACHE__', JSON.stringify(install))
-  .replace('__WARM__', JSON.stringify(warm))
-  .replace('__ON_DEMAND__', JSON.stringify(onDemand));
-const js = (body = 'export {}') => new Response(body, { headers: { 'content-type': 'text/javascript' } });
-const html = () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } });
+const INSTALL = ["/index.html", "/assets/app-a1234567.js", "/icon-192.png", "/assets/vendor.js"];
+const WARM = ["/assets/panel-b1234567.js", "/assets/panel-c1234567.css"];
+const ON_DEMAND = ["/assets/xterm-d1234567.js"];
+const script = (install = INSTALL, warm = WARM, onDemand = ON_DEMAND) =>
+  readFileSync("scripts/service-worker.js", "utf8")
+    .replace("__BUILD_ID__", "test")
+    .replace("__PRECACHE__", JSON.stringify(install))
+    .replace("__WARM__", JSON.stringify(warm))
+    .replace("__ON_DEMAND__", JSON.stringify(onDemand));
+const js = (body = "export {}") =>
+  new Response(body, { headers: { "content-type": "text/javascript" } });
+const html = () => new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
 // A healthy server: pages are HTML and everything else is code or an image.
-const healthy = (path: string) => Promise.resolve(path.endsWith('.html') ? html() : js(path));
+const healthy = (path: string) => Promise.resolve(path.endsWith(".html") ? html() : js(path));
 
 // A MessageChannel as the worker sees one: a message reaches the other port in a later task, and
 // none arrives once the receiving port is closed.
 class FakeMessageChannel {
-  readonly port1 = { onmessage: null as ((event: { data: unknown }) => void) | null, closed: false, close() { this.closed = true; } };
-  readonly port2 = { postMessage: (data: unknown) => { queueMicrotask(() => { if (!this.port1.closed) this.port1.onmessage?.({ data }); }); } };
+  readonly port1 = {
+    onmessage: null as ((event: { data: unknown }) => void) | null,
+    closed: false,
+    close() {
+      this.closed = true;
+    },
+  };
+  readonly port2 = {
+    postMessage: (data: unknown) => {
+      queueMicrotask(() => {
+        if (!this.port1.closed) this.port1.onmessage?.({ data });
+      });
+    },
+  };
 }
-type Port = FakeMessageChannel['port2'];
+type Port = FakeMessageChannel["port2"];
 // An open window of the app. `controlled` says whether this worker controls it; `answers` whether its page
 // says it opened what it was asked to at once. A page that does not can still answer later on `ports`.
-type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: AnyMock; navigate: ReturnType<typeof vi.fn> };
+type Window = {
+  id: string;
+  url: string;
+  controlled: boolean;
+  answers: boolean;
+  focused?: boolean;
+  visibilityState?: string;
+  ports: Port[];
+  postMessage: ReturnType<typeof vi.fn>;
+  focus: AnyMock;
+  navigate: ReturnType<typeof vi.fn>;
+};
 let windowIds = 0;
-const openWindowOf = ({ url = 'https://app.example/?bot=home', controlled = true, answers = true, focused = false } = {}): Window => {
+const openWindowOf = ({
+  url = "https://app.example/?bot=home",
+  controlled = true,
+  answers = true,
+  focused = false,
+} = {}): Window => {
   const client: Window = {
-    id: `window-${++windowIds}`, url, controlled, answers, focused, visibilityState: 'hidden', ports: [],
-    postMessage: vi.fn((_data: unknown, [port]: Port[]) => { client.ports.push(port); if (client.answers) port.postMessage({ opened: true }); }),
+    id: `window-${++windowIds}`,
+    url,
+    controlled,
+    answers,
+    focused,
+    visibilityState: "hidden",
+    ports: [],
+    postMessage: vi.fn((_data: unknown, [port]: Port[]) => {
+      client.ports.push(port);
+      if (client.answers) port.postMessage({ opened: true });
+    }),
     focus: vi.fn(async () => client),
     navigate: vi.fn(async () => client),
   };
   return client;
 };
-type Shown = { title: string; tag?: string; data?: Record<string, unknown>; close: ReturnType<typeof vi.fn> };
+type Shown = {
+  title: string;
+  tag?: string;
+  data?: Record<string, unknown>;
+  close: ReturnType<typeof vi.fn>;
+};
 type Stores = Map<string, Map<string, unknown>>;
 /**
  * Runs the worker script in a fresh context. Passing `stores` starts it over cache storage an earlier
  * run left, as when the browser stops an idle worker and starts it again for the next event.
  */
-function worker(options: { maxActions?: number; older?: Record<string, Record<string, Response>>; windows?: Window[]; stores?: Stores; holdShows?: boolean; holdAccount?: { reads?: number; puts?: number }; holdHashes?: number[]; badging?: boolean } = {}) {
+function worker(
+  options: {
+    maxActions?: number;
+    older?: Record<string, Record<string, Response>>;
+    windows?: Window[];
+    stores?: Stores;
+    holdShows?: boolean;
+    holdAccount?: { reads?: number; puts?: number };
+    holdHashes?: number[];
+    badging?: boolean;
+  } = {},
+) {
   const options_ = options;
   const handlers: Record<string, (event: any) => void> = {};
   // The badge as the person sees it: the last call wins.
   const badge = { count: undefined as number | undefined };
-  const setAppBadge = vi.fn(async (count: number) => { badge.count = count; }), clearAppBadge = vi.fn(async () => { badge.count = 0; });
+  const setAppBadge = vi.fn(async (count: number) => {
+      badge.count = count;
+    }),
+    clearAppBadge = vi.fn(async () => {
+      badge.count = 0;
+    });
   // Notifications on screen, as getNotifications lists them. Showing one with a tag replaces the last.
   // A browser lists a notification only once it is on screen, when showNotification resolves; with
   // `holdShows`, each stays on its way until the test calls releaseShows, or releaseShow for one of
   // them, which can also refuse it as Chromium does when it cannot store the notification.
   const shown: Shown[] = [];
   const onTheirWay: { title: string; resolve: () => void; reject: (error: Error) => void }[] = [];
-  const releaseShows = () => { for (const { resolve } of onTheirWay.splice(0)) resolve(); };
+  const releaseShows = () => {
+    for (const { resolve } of onTheirWay.splice(0)) resolve();
+  };
   const releaseShow = (title: string, { refuse = false } = {}) => {
-    const index = onTheirWay.findIndex(each => each.title === title);
+    const index = onTheirWay.findIndex((each) => each.title === title);
     expect(index, `a notification "${title}" on its way`).toBeGreaterThanOrEqual(0);
     const [held] = onTheirWay.splice(index, 1);
-    if (refuse) held!.reject(new TypeError('Failed to store the notification')); else held!.resolve();
+    if (refuse) held!.reject(new TypeError("Failed to store the notification"));
+    else held!.resolve();
   };
   const showNotification = vi.fn(async (title: string, options: any = {}) => {
-    await new Promise<void>((resolve, reject) => { if (options_.holdShows) onTheirWay.push({ title, resolve, reject }); else resolve(); });
-    const notification: Shown = { title, tag: options.tag, data: options.data, close: vi.fn(() => { shown.splice(shown.indexOf(notification), 1); }) };
-    if (options.tag) shown.splice(0, shown.length, ...shown.filter(other => other.tag !== options.tag));
+    await new Promise<void>((resolve, reject) => {
+      if (options_.holdShows) onTheirWay.push({ title, resolve, reject });
+      else resolve();
+    });
+    const notification: Shown = {
+      title,
+      tag: options.tag,
+      data: options.data,
+      close: vi.fn(() => {
+        shown.splice(shown.indexOf(notification), 1);
+      }),
+    };
+    if (options.tag)
+      shown.splice(0, shown.length, ...shown.filter((other) => other.tag !== options.tag));
     shown.push(notification);
   });
-  const getNotifications = vi.fn(async ({ tag }: { tag?: string } = {}) => shown.filter(each => tag === undefined || each.tag === tag));
+  const getNotifications = vi.fn(async ({ tag }: { tag?: string } = {}) =>
+    shown.filter((each) => tag === undefined || each.tag === tag),
+  );
   const openWindow = vi.fn().mockResolvedValue(undefined);
   const claim = vi.fn().mockResolvedValue(undefined);
-  const clients = { matchAll: async (query: { includeUncontrolled?: boolean } = {}) => (options.windows ?? []).filter(client => client.controlled || query.includeUncontrolled), openWindow, claim };
-  const update = vi.fn().mockResolvedValue(undefined), unregister = vi.fn().mockResolvedValue(true);
-  const fetch = vi.fn().mockRejectedValue(new Error('offline'));
+  const clients = {
+    matchAll: async (query: { includeUncontrolled?: boolean } = {}) =>
+      (options.windows ?? []).filter((client) => client.controlled || query.includeUncontrolled),
+    openWindow,
+    claim,
+  };
+  const update = vi.fn().mockResolvedValue(undefined),
+    unregister = vi.fn().mockResolvedValue(true);
+  const fetch = vi.fn().mockRejectedValue(new Error("offline"));
   // Installing needs the network; tests of later steps keep the default of being offline.
   // Cache storage by name. The current release's cache starts with its app shell, as after an install.
-  const stores: Stores = options.stores ?? new Map([['agent-interface-test', new Map<string, unknown>([['/index.html', new Response('static shell', { headers: { 'content-type': 'text/html' } })]])]]);
-  for (const [name, entries] of Object.entries(options.older ?? {})) stores.set(name, new Map(Object.entries(entries)));
+  const stores: Stores =
+    options.stores ??
+    new Map([
+      [
+        "agent-interface-test",
+        new Map<string, unknown>([
+          [
+            "/index.html",
+            new Response("static shell", { headers: { "content-type": "text/html" } }),
+          ],
+        ]),
+      ],
+    ]);
+  for (const [name, entries] of Object.entries(options.older ?? {}))
+    stores.set(name, new Map(Object.entries(entries)));
   const match = vi.fn();
   const put = vi.fn();
   // With `holdAccount`, the first reads and writes of the saved account wait for releaseAccount.
-  const accountHolds = { reads: options.holdAccount?.reads ?? 0, puts: options.holdAccount?.puts ?? 0 };
-  const accountHeld: { kind: 'read' | 'put'; release(): void }[] = [];
-  const holdingAccount = (name: string, kind: 'read' | 'put') => {
-    if (name !== 'wildbots-account' || accountHolds[`${kind}s`] <= 0) return undefined;
-    accountHolds[`${kind}s`]--;
-    return new Promise<void>(release => accountHeld.push({ kind, release }));
+  const accountHolds = {
+    reads: options.holdAccount?.reads ?? 0,
+    puts: options.holdAccount?.puts ?? 0,
   };
-  const releaseAccount = (kind: 'read' | 'put') => {
-    const index = accountHeld.findIndex(each => each.kind === kind);
+  const accountHeld: { kind: "read" | "put"; release(): void }[] = [];
+  const holdingAccount = (name: string, kind: "read" | "put") => {
+    if (name !== "wildbots-account" || accountHolds[`${kind}s`] <= 0) return undefined;
+    accountHolds[`${kind}s`]--;
+    return new Promise<void>((release) => accountHeld.push({ kind, release }));
+  };
+  const releaseAccount = (kind: "read" | "put") => {
+    const index = accountHeld.findIndex((each) => each.kind === kind);
     expect(index, `a held account ${kind}`).toBeGreaterThanOrEqual(0);
     accountHeld.splice(index, 1)[0]!.release();
   };
@@ -112,57 +210,92 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
     return {
       // Like the Cache API, each match is a new response whose body can be read on its own.
       match: async (key: string) => {
-        if (name === 'agent-interface-test') match(key);
+        if (name === "agent-interface-test") match(key);
         const value = store.get(key);
-        await holdingAccount(name, 'read');
+        await holdingAccount(name, "read");
         return value instanceof Response ? value.clone() : value;
       },
       put: async (key: string, value: unknown) => {
         put(key, value);
-        await holdingAccount(name, 'put');
-        if (name === 'wildbots-account' && refusedPuts.has(key)) throw new Error('QuotaExceededError');
+        await holdingAccount(name, "put");
+        if (name === "wildbots-account" && refusedPuts.has(key))
+          throw new Error("QuotaExceededError");
         store.set(key, value);
       },
     };
   };
   const context = {
     self: {
-      location: { origin: 'https://app.example' },
-      addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; },
+      location: { origin: "https://app.example" },
+      addEventListener: (type: string, handler: (event: any) => void) => {
+        handlers[type] = handler;
+      },
       registration: { showNotification, getNotifications, update, unregister },
       clients,
       navigator: options.badging === false ? {} : { setAppBadge, clearAppBadge },
       Notification: { maxActions: options.maxActions ?? 0 },
     },
-    caches: { open, has: async (name: string) => stores.has(name), keys: async () => [...stores.keys()], delete: async (name: string) => stores.delete(name) },
-    URL, Response, fetch, MessageChannel: FakeMessageChannel, TextEncoder,
-    crypto: { subtle: { digest: async (algorithm: string, bytes: BufferSource) => {
-      const n = ++hashes;
-      if (options.holdHashes?.includes(n)) await new Promise<void>(release => hashesHeld.set(n, release));
-      return globalThis.crypto.subtle.digest(algorithm, bytes);
-    } } },
+    caches: {
+      open,
+      has: async (name: string) => stores.has(name),
+      keys: async () => [...stores.keys()],
+      delete: async (name: string) => stores.delete(name),
+    },
+    URL,
+    Response,
+    fetch,
+    MessageChannel: FakeMessageChannel,
+    TextEncoder,
+    crypto: {
+      subtle: {
+        digest: async (algorithm: string, bytes: BufferSource) => {
+          const n = ++hashes;
+          if (options.holdHashes?.includes(n))
+            await new Promise<void>((release) => hashesHeld.set(n, release));
+          return globalThis.crypto.subtle.digest(algorithm, bytes);
+        },
+      },
+    },
     // Read at call time, so a test's fake timers apply inside the worker too.
     setTimeout: (callback: () => void, delay?: number) => setTimeout(callback, delay),
     clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
   };
   vm.runInNewContext(script(), context);
-  const run = async (type: 'install' | 'activate') => {
+  const run = async (type: "install" | "activate") => {
     let waited: Promise<unknown> | undefined;
-    handlers[type]({ waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    handlers[type]({
+      waitUntil: (value: Promise<unknown>) => {
+        waited = value;
+      },
+    });
     await waited;
   };
   // The page's request to warm. Returns what the worker handed to waitUntil, or undefined when it did not.
   const warm = () => {
     let waited: Promise<unknown> | undefined;
-    handlers.message({ data: { type: 'WARM' }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    handlers.message({
+      data: { type: "WARM" },
+      waitUntil: (value: Promise<unknown>) => {
+        waited = value;
+      },
+    });
     return waited;
   };
-  const install = () => { fetch.mockImplementation(healthy); return run('install'); };
+  const install = () => {
+    fetch.mockImplementation(healthy);
+    return run("install");
+  };
   // A navigation to the app. Returns its answer and whatever the worker left running after it.
-  const navigate = async (url = 'https://app.example/') => {
+  const navigate = async (url = "https://app.example/") => {
     let response: Promise<unknown> | undefined;
     const background: Promise<unknown>[] = [];
-    handlers.fetch({ request: { url, method: 'GET', mode: 'navigate' }, respondWith: (value: Promise<unknown>) => { response = value; }, waitUntil: (value: Promise<unknown>) => background.push(value) });
+    handlers.fetch({
+      request: { url, method: "GET", mode: "navigate" },
+      respondWith: (value: Promise<unknown>) => {
+        response = value;
+      },
+      waitUntil: (value: Promise<unknown>) => background.push(value),
+    });
     const answer = await response;
     await Promise.all(background);
     return answer as Response;
@@ -170,114 +303,204 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   // A page's word on which account is signed in, or null after a sign-out. Resolves once the worker kept it.
   const signedIn = (user: string | null) => {
     let waited: Promise<unknown> = Promise.resolve();
-    handlers.message({ data: { type: 'ACCOUNT', user }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    handlers.message({
+      data: { type: "ACCOUNT", user },
+      waitUntil: (value: Promise<unknown>) => {
+        waited = value;
+      },
+    });
     return waited;
   };
   // A page's app badge, with the port it listens on for the worker's answer. Resolves once the worker ended the step.
   const pageBadge = (user: unknown, count: unknown, answer?: Port) => {
     let waited: Promise<unknown> = Promise.resolve();
-    handlers.message({ data: { type: 'BADGE', user, count }, ports: answer ? [answer] : [], waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    handlers.message({
+      data: { type: "BADGE", user, count },
+      ports: answer ? [answer] : [],
+      waitUntil: (value: Promise<unknown>) => {
+        waited = value;
+      },
+    });
     return waited;
   };
-  return { pageBadge, handlers, fetch, match, put, stores, claim, clients, install, tryInstall: () => run('install'), activate: () => run('activate'), warm, navigate, showNotification, releaseShows, releaseShow, releaseAccount, accountHeld, releaseHash, refusedPuts, shown, openWindow, setAppBadge, clearAppBadge, badge, update, unregister, signedIn };
+  return {
+    pageBadge,
+    handlers,
+    fetch,
+    match,
+    put,
+    stores,
+    claim,
+    clients,
+    install,
+    tryInstall: () => run("install"),
+    activate: () => run("activate"),
+    warm,
+    navigate,
+    showNotification,
+    releaseShows,
+    releaseShow,
+    releaseAccount,
+    accountHeld,
+    releaseHash,
+    refusedPuts,
+    shown,
+    openWindow,
+    setAppBadge,
+    clearAppBadge,
+    badge,
+    update,
+    unregister,
+    signedIn,
+  };
 }
 
-describe('service worker privacy and return path', () => {
-  it('does not intercept API, generated downloads, POSTs or external resources', () => {
+describe("service worker privacy and return path", () => {
+  it("does not intercept API, generated downloads, POSTs or external resources", () => {
     const { handlers } = worker();
     for (const [url, method] of [
-      ['https://app.example/api/bootstrap', 'GET'],
-      ['https://app.example/api/files/private-file', 'GET'],
-      ['https://app.example/api/events', 'GET'],
-      ['https://app.example/assets/app-a1234567.js', 'POST'],
-      ['https://other.example/assets/app-a1234567.js', 'GET'],
+      ["https://app.example/api/bootstrap", "GET"],
+      ["https://app.example/api/files/private-file", "GET"],
+      ["https://app.example/api/events", "GET"],
+      ["https://app.example/assets/app-a1234567.js", "POST"],
+      ["https://other.example/assets/app-a1234567.js", "GET"],
     ]) {
       const respondWith = vi.fn();
-      handlers.fetch({ request: { url, method, mode: 'cors' }, respondWith });
+      handlers.fetch({ request: { url, method, mode: "cors" }, respondWith });
       expect(respondWith).not.toHaveBeenCalled();
     }
   });
 
-  it('installs only the app shell and the entry code, leaving lazy and admin-only code to later', async () => {
+  it("installs only the app shell and the entry code, leaving lazy and admin-only code to later", async () => {
     const { install, fetch, stores } = worker();
     await install();
     expect(fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...INSTALL].sort());
-    const kept = [...stores.get('agent-interface-test')!.keys()];
+    const kept = [...stores.get("agent-interface-test")!.keys()];
     expect(kept.sort()).toEqual([...INSTALL].sort());
   });
 
-  it('refuses to install when a code file comes back as HTML, so the browser retries and the old worker stays', async () => {
+  it("refuses to install when a code file comes back as HTML, so the browser retries and the old worker stays", async () => {
     const sw = worker();
     // A new release: no cache of its own yet.
-    sw.stores.delete('agent-interface-test');
-    sw.fetch.mockImplementation((path: string) => path === '/assets/app-a1234567.js' ? Promise.resolve(html()) : healthy(path));
-    await expect(sw.tryInstall()).rejects.toThrow('/assets/app-a1234567.js');
+    sw.stores.delete("agent-interface-test");
+    sw.fetch.mockImplementation((path: string) =>
+      path === "/assets/app-a1234567.js" ? Promise.resolve(html()) : healthy(path),
+    );
+    await expect(sw.tryInstall()).rejects.toThrow("/assets/app-a1234567.js");
     // Nothing from the failed attempt is left looking like a finished release.
-    expect(sw.stores.has('agent-interface-test')).toBe(false);
+    expect(sw.stores.has("agent-interface-test")).toBe(false);
   });
 
-  it('keeps the serving cache when a reinstall of the same release fails, as after a rollback', async () => {
+  it("keeps the serving cache when a reinstall of the same release fails, as after a rollback", async () => {
     const sw = worker();
     // The harness starts with this release's cache holding its shell, as when its worker is active.
-    sw.fetch.mockImplementation((path: string) => path === '/index.html' ? Promise.reject(new Error('offline')) : healthy(path));
+    sw.fetch.mockImplementation((path: string) =>
+      path === "/index.html" ? Promise.reject(new Error("offline")) : healthy(path),
+    );
     await expect(sw.tryInstall()).rejects.toThrow();
-    sw.fetch.mockRejectedValue(new Error('offline'));
-    expect(await (await sw.navigate()).text()).toBe('static shell');
+    sw.fetch.mockRejectedValue(new Error("offline"));
+    expect(await (await sw.navigate()).text()).toBe("static shell");
   });
 
-  it.each([['an error status', () => new Response('gone', { status: 404 })], ['a failed fetch', () => { throw new Error('offline'); }]])('refuses to install on %s', async (_name, bad) => {
+  it.each([
+    ["an error status", () => new Response("gone", { status: 404 })],
+    [
+      "a failed fetch",
+      () => {
+        throw new Error("offline");
+      },
+    ],
+  ])("refuses to install on %s", async (_name, bad) => {
     const sw = worker();
-    sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve().then(bad) : healthy(path));
-    sw.stores.delete('agent-interface-test');
+    sw.fetch.mockImplementation((path: string) =>
+      path === "/icon-192.png" ? Promise.resolve().then(bad) : healthy(path),
+    );
+    sw.stores.delete("agent-interface-test");
     await expect(sw.tryInstall()).rejects.toThrow();
-    expect(sw.stores.has('agent-interface-test')).toBe(false);
+    expect(sw.stores.has("agent-interface-test")).toBe(false);
   });
 
-  it('stores each install file as it arrives, so a limit on connections cannot stall the install', async () => {
+  it("stores each install file as it arrives, so a limit on connections cannot stall the install", async () => {
     const sw = worker();
     // Two connections, each busy until its response body is read, as when the cache stores it.
     let free = 2;
     const queued: (() => void)[] = [];
     sw.fetch.mockImplementation(async (path: string) => {
-      if (free) free--; else await new Promise<void>(resolve => queued.push(resolve));
+      if (free) free--;
+      else await new Promise<void>((resolve) => queued.push(resolve));
       return healthy(path);
     });
-    sw.put.mockImplementation(() => { const next = queued.shift(); if (next) next(); else free++; });
-    const stalled = new Promise(resolve => setTimeout(() => resolve('stalled'), 300));
-    await expect(Promise.race([sw.tryInstall().then(() => 'installed'), stalled])).resolves.toBe('installed');
+    sw.put.mockImplementation(() => {
+      const next = queued.shift();
+      if (next) next();
+      else free++;
+    });
+    const stalled = new Promise((resolve) => setTimeout(() => resolve("stalled"), 300));
+    await expect(Promise.race([sw.tryInstall().then(() => "installed"), stalled])).resolves.toBe(
+      "installed",
+    );
   });
 
-  it('installs a page-level file whatever its content type, since only bundles can be missing', async () => {
+  it("installs a page-level file whatever its content type, since only bundles can be missing", async () => {
     const sw = worker();
     // A server without a manifest type answers it as HTML; that must not block every install.
-    sw.fetch.mockImplementation((path: string) => path === '/icon-192.png' ? Promise.resolve(html()) : healthy(path));
+    sw.fetch.mockImplementation((path: string) =>
+      path === "/icon-192.png" ? Promise.resolve(html()) : healthy(path),
+    );
     await expect(sw.tryInstall()).resolves.toBeUndefined();
   });
 
-  it('still installs the HTML pages as HTML', async () => {
-    const install = ['/index.html', '/native-computer.html', '/assets/app-a1234567.js'];
+  it("still installs the HTML pages as HTML", async () => {
+    const install = ["/index.html", "/native-computer.html", "/assets/app-a1234567.js"];
     const handlers: Record<string, (event: any) => void> = {};
     const stored = new Map<string, Response>();
     vm.runInNewContext(script(install), {
-      self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
-      caches: { has: async () => false, keys: async () => [], open: async () => ({ match: async () => undefined, put: async (key: string, value: Response) => { stored.set(key, value); } }) },
-      URL, Response, fetch: healthy,
+      self: {
+        location: { origin: "https://app.example" },
+        addEventListener: (type: string, handler: (event: any) => void) => {
+          handlers[type] = handler;
+        },
+      },
+      caches: {
+        has: async () => false,
+        keys: async () => [],
+        open: async () => ({
+          match: async () => undefined,
+          put: async (key: string, value: Response) => {
+            stored.set(key, value);
+          },
+        }),
+      },
+      URL,
+      Response,
+      fetch: healthy,
     });
     let installed: Promise<unknown> | undefined;
-    handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });
+    handlers.install({
+      waitUntil: (value: Promise<unknown>) => {
+        installed = value;
+      },
+    });
     await installed;
     expect([...stored.keys()].sort()).toEqual([...install].sort());
-    expect(stored.get('/native-computer.html')!.headers.get('content-type')).toBe('text/html');
+    expect(stored.get("/native-computer.html")!.headers.get("content-type")).toBe("text/html");
   });
 
-  it.each([['a lazy screen', WARM[0]], ['an admin-only chunk', ON_DEMAND[0]]])('keeps %s after its first use so it works offline later', async (_name, path) => {
+  it.each([
+    ["a lazy screen", WARM[0]],
+    ["an admin-only chunk", ON_DEMAND[0]],
+  ])("keeps %s after its first use so it works offline later", async (_name, path) => {
     const { handlers, fetch, put } = worker();
     const chunk = js();
     fetch.mockResolvedValueOnce(chunk);
-    const request = { url: 'https://app.example' + path, method: 'GET', mode: 'cors' };
+    const request = { url: "https://app.example" + path, method: "GET", mode: "cors" };
     const kept: Promise<unknown>[] = [];
     const first = vi.fn();
-    handlers.fetch({ request, respondWith: first, waitUntil: (value: Promise<unknown>) => kept.push(value) });
+    handlers.fetch({
+      request,
+      respondWith: first,
+      waitUntil: (value: Promise<unknown>) => kept.push(value),
+    });
     expect(await first.mock.calls[0][0]).toBe(chunk);
     await Promise.all(kept);
     expect(put).toHaveBeenCalledWith(path, expect.any(Response));
@@ -288,10 +511,13 @@ describe('service worker privacy and return path', () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it.each([['a lazy screen', WARM[0]], ['an admin-only chunk', ON_DEMAND[0]]])('never stores the app shell or an error as %s', async (_name, path) => {
+  it.each([
+    ["a lazy screen", WARM[0]],
+    ["an admin-only chunk", ON_DEMAND[0]],
+  ])("never stores the app shell or an error as %s", async (_name, path) => {
     const { handlers, fetch, put } = worker();
-    const request = { url: 'https://app.example' + path, method: 'GET', mode: 'cors' };
-    for (const response of [html(), new Response('missing', { status: 404 })]) {
+    const request = { url: "https://app.example" + path, method: "GET", mode: "cors" };
+    for (const response of [html(), new Response("missing", { status: 404 })]) {
       fetch.mockResolvedValueOnce(response);
       const respondWith = vi.fn();
       handlers.fetch({ request, respondWith, waitUntil: () => {} });
@@ -300,161 +526,259 @@ describe('service worker privacy and return path', () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  it('uses only the static shell for offline conversation navigation', async () => {
+  it("uses only the static shell for offline conversation navigation", async () => {
     const { navigate, match } = worker();
-    expect(await (await navigate('https://app.example/?bot=shared')).text()).toBe('static shell');
-    expect(match).toHaveBeenCalledWith('/index.html');
+    expect(await (await navigate("https://app.example/?bot=shared")).text()).toBe("static shell");
+    expect(match).toHaveBeenCalledWith("/index.html");
   });
 
-  it('carries the saved bot through push and notification click', async () => {
+  it("carries the saved bot through push and notification click", async () => {
     const { handlers, showNotification, openWindow } = worker();
     let done: Promise<void> | undefined;
-    const waitUntil = (value: Promise<void>) => { done = value; };
+    const waitUntil = (value: Promise<void>) => {
+      done = value;
+    };
     handlers.push({
-      data: { json: () => ({ title: 'Ready', url: '/?bot=family%20helper', tag: 'run-1' }) }, waitUntil,
+      data: { json: () => ({ title: "Ready", url: "/?bot=family%20helper", tag: "run-1" }) },
+      waitUntil,
     });
     await done;
     const notification = showNotification.mock.calls[0]?.[1];
-    expect(notification.data.url).toBe('https://app.example/?bot=family%20helper');
-    expect(notification.tag).toBe('run-1');
+    expect(notification.data.url).toBe("https://app.example/?bot=family%20helper");
+    expect(notification.tag).toBe("run-1");
     handlers.notificationclick({ notification: { ...notification, close: vi.fn() }, waitUntil });
     await done;
-    expect(openWindow).toHaveBeenCalledWith('https://app.example/?bot=family%20helper');
+    expect(openWindow).toHaveBeenCalledWith("https://app.example/?bot=family%20helper");
   });
-  it('keeps routine results in a same-origin notification return path',async () => {
-    const {handlers,showNotification,openWindow}=worker();let done:Promise<void>|undefined;
-    const waitUntil=(value:Promise<void>)=>{done=value;};
-    handlers.push({data:{json:()=>({url:'/?bot=ranch&routine=morning%20check&ignored=private'})},waitUntil});await done;
-    const notification=showNotification.mock.calls[0][1];
-    expect(notification.data.url).toBe('https://app.example/?bot=ranch&routine=morning%20check');
-    handlers.notificationclick({notification:{...notification,close:vi.fn()},waitUntil});await done;
+  it("keeps routine results in a same-origin notification return path", async () => {
+    const { handlers, showNotification, openWindow } = worker();
+    let done: Promise<void> | undefined;
+    const waitUntil = (value: Promise<void>) => {
+      done = value;
+    };
+    handlers.push({
+      data: { json: () => ({ url: "/?bot=ranch&routine=morning%20check&ignored=private" }) },
+      waitUntil,
+    });
+    await done;
+    const notification = showNotification.mock.calls[0][1];
+    expect(notification.data.url).toBe("https://app.example/?bot=ranch&routine=morning%20check");
+    handlers.notificationclick({ notification: { ...notification, close: vi.fn() }, waitUntil });
+    await done;
     expect(openWindow).toHaveBeenCalledWith(notification.data.url);
   });
 });
-it('opens Today for a digest without carrying unrelated URL parameters',async()=>{
-  const {handlers,showNotification,openWindow}=worker();let done:Promise<void>|undefined;const waitUntil=(value:Promise<void>)=>{done=value;};
-  handlers.push({data:{json:()=>({url:'/?view=today&ignored=private'})},waitUntil});await done;
-  const notification=showNotification.mock.calls[0][1];expect(notification.data.url).toBe('https://app.example/?view=today');
-  handlers.notificationclick({notification:{...notification,close:vi.fn()},waitUntil});await done;expect(openWindow).toHaveBeenCalledWith('https://app.example/?view=today');
+it("opens Today for a digest without carrying unrelated URL parameters", async () => {
+  const { handlers, showNotification, openWindow } = worker();
+  let done: Promise<void> | undefined;
+  const waitUntil = (value: Promise<void>) => {
+    done = value;
+  };
+  handlers.push({ data: { json: () => ({ url: "/?view=today&ignored=private" }) }, waitUntil });
+  await done;
+  const notification = showNotification.mock.calls[0][1];
+  expect(notification.data.url).toBe("https://app.example/?view=today");
+  handlers.notificationclick({ notification: { ...notification, close: vi.fn() }, waitUntil });
+  await done;
+  expect(openWindow).toHaveBeenCalledWith("https://app.example/?view=today");
 });
 
-describe('service worker badge and approval actions', () => {
-  const approval = { title: 'Ranch', body: 'Allow command?', url: '/?bot=ranch', tag: 'approval-1', kind: 'approval', declineToken: 't'.repeat(43), badge: 2 };
+describe("service worker badge and approval actions", () => {
+  const approval = {
+    title: "Ranch",
+    body: "Allow command?",
+    url: "/?bot=ranch",
+    tag: "approval-1",
+    kind: "approval",
+    declineToken: "t".repeat(43),
+    badge: 2,
+  };
   async function push(sw: ReturnType<typeof worker>, data: object) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => data }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.push({
+      data: { json: () => data },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await done;
     return sw.showNotification.mock.calls.at(-1)![1];
   }
-  async function click(sw: ReturnType<typeof worker>, notification: object, action = '') {
+  async function click(sw: ReturnType<typeof worker>, notification: object, action = "") {
     let done: Promise<unknown> | undefined;
-    sw.handlers.notificationclick({ action, notification: { ...notification, tag: 'approval-1', close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.notificationclick({
+      action,
+      notification: { ...notification, tag: "approval-1", close: vi.fn() },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await done;
   }
 
-  it('sets the app badge from each push and clears it at zero, leaving it alone without a count', async () => {
+  it("sets the app badge from each push and clears it at zero, leaving it alone without a count", async () => {
     const sw = worker();
-    await push(sw, { title: 'Done', badge: 3 });
+    await push(sw, { title: "Done", badge: 3 });
     expect(sw.setAppBadge).toHaveBeenCalledWith(3);
-    await push(sw, { title: 'Done', badge: 0 });
+    await push(sw, { title: "Done", badge: 0 });
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
-    await push(sw, { title: 'Done' });
-    await push(sw, { title: 'Done', badge: -1 });
+    await push(sw, { title: "Done" });
+    await push(sw, { title: "Done", badge: -1 });
     expect(sw.setAppBadge).toHaveBeenCalledOnce();
   });
 
-  it('offers Review and Decline only for an approval with a token where actions are supported', async () => {
-    expect((await push(worker({ maxActions: 2 }), approval)).actions).toEqual([{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }]);
+  it("offers Review and Decline only for an approval with a token where actions are supported", async () => {
+    expect((await push(worker({ maxActions: 2 }), approval)).actions).toEqual([
+      { action: "review", title: "Review" },
+      { action: "decline", title: "Decline" },
+    ]);
     expect((await push(worker({ maxActions: 0 }), approval)).actions).toBeUndefined();
-    expect((await push(worker({ maxActions: 2 }), { ...approval, declineToken: undefined })).actions).toBeUndefined();
-    expect((await push(worker({ maxActions: 2 }), { ...approval, kind: 'completed' })).actions).toBeUndefined();
+    expect(
+      (await push(worker({ maxActions: 2 }), { ...approval, declineToken: undefined })).actions,
+    ).toBeUndefined();
+    expect(
+      (await push(worker({ maxActions: 2 }), { ...approval, kind: "completed" })).actions,
+    ).toBeUndefined();
   });
 
-  it('declines without opening the app, and offers the chat when that fails', async () => {
+  it("declines without opening the app, and offers the chat when that fails", async () => {
     const sw = worker({ maxActions: 2 });
     const notification = await push(sw, approval);
     sw.fetch.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
-    await click(sw, notification, 'decline');
-    expect(sw.fetch).toHaveBeenCalledWith('/api/push/actions', expect.objectContaining({ method: 'POST', credentials: 'omit', body: JSON.stringify({ token: approval.declineToken }) }));
+    await click(sw, notification, "decline");
+    expect(sw.fetch).toHaveBeenCalledWith(
+      "/api/push/actions",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "omit",
+        body: JSON.stringify({ token: approval.declineToken }),
+      }),
+    );
     expect(sw.openWindow).not.toHaveBeenCalled();
     expect(sw.showNotification).toHaveBeenCalledTimes(1);
-    sw.fetch.mockResolvedValueOnce(new Response('{}', { status: 409 }));
-    await click(sw, notification, 'decline');
+    sw.fetch.mockResolvedValueOnce(new Response("{}", { status: 409 }));
+    await click(sw, notification, "decline");
     const followUp = sw.showNotification.mock.calls.at(-1)!;
     expect(followUp[0]).toBe("Couldn't decline");
-    expect(followUp[1]).toMatchObject({ tag: 'approval-1:decline', data: { url: 'https://app.example/?bot=ranch' } });
+    expect(followUp[1]).toMatchObject({
+      tag: "approval-1:decline",
+      data: { url: "https://app.example/?bot=ranch" },
+    });
     // Offline counts as failed too.
-    await click(sw, notification, 'decline');
+    await click(sw, notification, "decline");
     expect(sw.showNotification).toHaveBeenCalledTimes(3);
     await click(sw, followUp[1]);
-    expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/?bot=ranch');
+    expect(sw.openWindow).toHaveBeenCalledWith("https://app.example/?bot=ranch");
   });
 
-  it('opens the chat for Review, as a tap does', async () => {
+  it("opens the chat for Review, as a tap does", async () => {
     const sw = worker({ maxActions: 2 });
-    await click(sw, await push(sw, approval), 'review');
-    expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/?bot=ranch');
+    await click(sw, await push(sw, approval), "review");
+    expect(sw.openWindow).toHaveBeenCalledWith("https://app.example/?bot=ranch");
     expect(sw.fetch).not.toHaveBeenCalled();
   });
 });
 
-describe('service worker release updates', () => {
-  const older = (entries: Record<string, Response>) => ({ older: { 'agent-interface-previous': entries } });
-  const current = (sw: ReturnType<typeof worker>) => sw.stores.get('agent-interface-test')!;
-  const fetched = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.map(([path]) => path).sort(byText);
+describe("service worker release updates", () => {
+  const older = (entries: Record<string, Response>) => ({
+    older: { "agent-interface-previous": entries },
+  });
+  const current = (sw: ReturnType<typeof worker>) => sw.stores.get("agent-interface-test")!;
+  const fetched = (sw: ReturnType<typeof worker>) =>
+    sw.fetch.mock.calls.map(([path]) => path).sort(byText);
 
-  it('copies a hashed file the last release already holds instead of fetching it', async () => {
-    const sw = worker(older({ '/assets/app-a1234567.js': js('old body'), '/assets/panel-b1234567.js': js() }));
+  it("copies a hashed file the last release already holds instead of fetching it", async () => {
+    const sw = worker(
+      older({ "/assets/app-a1234567.js": js("old body"), "/assets/panel-b1234567.js": js() }),
+    );
     await sw.install();
-    expect(fetched(sw)).toEqual(['/assets/vendor.js', '/icon-192.png', '/index.html']);
-    expect(await (current(sw).get('/assets/app-a1234567.js') as Response).text()).toBe('old body');
+    expect(fetched(sw)).toEqual(["/assets/vendor.js", "/icon-192.png", "/index.html"]);
+    expect(await (current(sw).get("/assets/app-a1234567.js") as Response).text()).toBe("old body");
     // Lazy files carry over too, since copying costs nothing, but nothing absent is invented.
-    expect(current(sw).has('/assets/panel-b1234567.js')).toBe(true);
-    expect(current(sw).has('/assets/panel-c1234567.css')).toBe(false);
+    expect(current(sw).has("/assets/panel-b1234567.js")).toBe(true);
+    expect(current(sw).has("/assets/panel-c1234567.css")).toBe(false);
   });
 
-  it('fetches the pages, icons and unhashed files fresh even when the last release holds them', async () => {
-    const sw = worker(older({ '/index.html': html(), '/icon-192.png': js(), '/assets/vendor.js': js(), '/assets/app-a1234567.js': js() }));
+  it("fetches the pages, icons and unhashed files fresh even when the last release holds them", async () => {
+    const sw = worker(
+      older({
+        "/index.html": html(),
+        "/icon-192.png": js(),
+        "/assets/vendor.js": js(),
+        "/assets/app-a1234567.js": js(),
+      }),
+    );
     await sw.install();
-    expect(fetched(sw)).toEqual(['/assets/vendor.js', '/icon-192.png', '/index.html']);
+    expect(fetched(sw)).toEqual(["/assets/vendor.js", "/icon-192.png", "/index.html"]);
   });
 
-  it('refetches a hashed file whose old copy is the app shell or an error rather than code', async () => {
-    const sw = worker(older({ '/assets/app-a1234567.js': html(), '/assets/panel-b1234567.js': new Response('gone', { status: 404 }) }));
+  it("refetches a hashed file whose old copy is the app shell or an error rather than code", async () => {
+    const sw = worker(
+      older({
+        "/assets/app-a1234567.js": html(),
+        "/assets/panel-b1234567.js": new Response("gone", { status: 404 }),
+      }),
+    );
     await sw.install();
     expect(fetched(sw)).toEqual([...INSTALL].sort());
-    expect(current(sw).has('/assets/panel-b1234567.js')).toBe(false);
+    expect(current(sw).has("/assets/panel-b1234567.js")).toBe(false);
   });
 
-  it('takes a file from whichever older cache has it, and fetches the rest', async () => {
-    const sw = worker({ older: {
-      'agent-interface-one': { '/assets/app-a1234567.js': js('one') },
-      'agent-interface-two': { '/assets/panel-b1234567.js': js('two'), '/assets/app-a1234567.js': js('two') },
-      'unrelated-cache': { '/assets/panel-c1234567.css': js('private') },
-    } });
+  it("takes a file from whichever older cache has it, and fetches the rest", async () => {
+    const sw = worker({
+      older: {
+        "agent-interface-one": { "/assets/app-a1234567.js": js("one") },
+        "agent-interface-two": {
+          "/assets/panel-b1234567.js": js("two"),
+          "/assets/app-a1234567.js": js("two"),
+        },
+        "unrelated-cache": { "/assets/panel-c1234567.css": js("private") },
+      },
+    });
     await sw.install();
-    expect(current(sw).has('/assets/app-a1234567.js')).toBe(true);
-    expect(current(sw).has('/assets/panel-b1234567.js')).toBe(true);
-    expect(current(sw).has('/assets/panel-c1234567.css')).toBe(false);
+    expect(current(sw).has("/assets/app-a1234567.js")).toBe(true);
+    expect(current(sw).has("/assets/panel-b1234567.js")).toBe(true);
+    expect(current(sw).has("/assets/panel-c1234567.css")).toBe(false);
   });
 
-  it('falls back to fetching when an older cache cannot be read', async () => {
+  it("falls back to fetching when an older cache cannot be read", async () => {
     const fetch = vi.fn(healthy);
-    const open = async (name: string) => name === 'agent-interface-previous'
-      ? { match: async () => { throw new Error('storage'); } }
-      : { match: async () => undefined, put: async () => {} };
+    const open = async (name: string) =>
+      name === "agent-interface-previous"
+        ? {
+            match: async () => {
+              throw new Error("storage");
+            },
+          }
+        : { match: async () => undefined, put: async () => {} };
     const handlers: Record<string, (event: any) => void> = {};
     vm.runInNewContext(script(), {
-      self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; } },
-      caches: { open, has: async () => true, keys: async () => ['agent-interface-previous', 'agent-interface-test'] }, URL, Response, fetch,
+      self: {
+        location: { origin: "https://app.example" },
+        addEventListener: (type: string, handler: (event: any) => void) => {
+          handlers[type] = handler;
+        },
+      },
+      caches: {
+        open,
+        has: async () => true,
+        keys: async () => ["agent-interface-previous", "agent-interface-test"],
+      },
+      URL,
+      Response,
+      fetch,
     });
     let installed: Promise<unknown> | undefined;
-    handlers.install({ waitUntil: (value: Promise<unknown>) => { installed = value; } });
+    handlers.install({
+      waitUntil: (value: Promise<unknown>) => {
+        installed = value;
+      },
+    });
     await installed;
     expect(fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...INSTALL].sort());
   });
 
-  it('does not warm on activation, so activation never waits on downloads or leaves them unprotected', async () => {
+  it("does not warm on activation, so activation never waits on downloads or leaves them unprotected", async () => {
     const sw = worker();
     await sw.activate();
     expect(sw.claim).toHaveBeenCalledOnce();
@@ -462,17 +786,24 @@ describe('service worker release updates', () => {
     expect(sw.fetch).not.toHaveBeenCalled();
   });
 
-  it('warms lazy files when the page asks, under waitUntil, and never touches admin-only chunks', async () => {
+  it("warms lazy files when the page asks, under waitUntil, and never touches admin-only chunks", async () => {
     const sw = worker();
     const release: Array<() => void> = [];
-    sw.fetch.mockImplementation((path: string) => new Promise<Response>((resolve) => { release.push(() => resolve(js(path))); }));
+    sw.fetch.mockImplementation(
+      (path: string) =>
+        new Promise<Response>((resolve) => {
+          release.push(() => resolve(js(path)));
+        }),
+    );
     const waited = sw.warm();
     // The browser is told to keep the worker alive for the whole download.
-    expect(typeof waited?.then).toBe('function');
+    expect(typeof waited?.then).toBe("function");
     await vi.waitFor(() => expect(sw.fetch).toHaveBeenCalledTimes(WARM.length));
     expect(sw.fetch.mock.calls.map(([path]) => path).sort(byText)).toEqual([...WARM].sort());
     let settled = false;
-    void waited!.then(() => { settled = true; });
+    void waited!.then(() => {
+      settled = true;
+    });
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(settled).toBe(false);
     release.forEach((resolve) => resolve());
@@ -481,18 +812,18 @@ describe('service worker release updates', () => {
     expect(current(sw).has(ON_DEMAND[0])).toBe(false);
   });
 
-  it('ignores messages that are not requests to warm or skip waiting', () => {
+  it("ignores messages that are not requests to warm or skip waiting", () => {
     const sw = worker();
     const waitUntil = vi.fn();
-    sw.handlers.message({ data: { type: 'OTHER' }, waitUntil });
+    sw.handlers.message({ data: { type: "OTHER" }, waitUntil });
     sw.handlers.message({ data: undefined, waitUntil });
     expect(waitUntil).not.toHaveBeenCalled();
   });
 
-  it('resumes after a cut-short run: a second warm fetches only what is still missing', async () => {
+  it("resumes after a cut-short run: a second warm fetches only what is still missing", async () => {
     const sw = worker();
     // The first run is stopped by the browser after one file; the rest never arrived.
-    sw.fetch.mockResolvedValueOnce(js(WARM[0])).mockRejectedValue(new Error('terminated'));
+    sw.fetch.mockResolvedValueOnce(js(WARM[0])).mockRejectedValue(new Error("terminated"));
     await sw.warm();
     expect(current(sw).has(WARM[0])).toBe(true);
     expect(current(sw).has(WARM[1])).toBe(false);
@@ -502,125 +833,189 @@ describe('service worker release updates', () => {
     expect(WARM.every((path) => current(sw).has(path))).toBe(true);
   });
 
-  it('shares one run between pages that ask at the same time', async () => {
+  it("shares one run between pages that ask at the same time", async () => {
     const sw = worker();
     sw.fetch.mockImplementation(healthy);
     await Promise.all([sw.warm(), sw.warm()]);
     expect(sw.fetch).toHaveBeenCalledTimes(WARM.length);
   });
 
-  it('warms only a few files at once and skips those already cached', async () => {
-    const warm = Array.from({ length: 8 }, (_unused, index) => `/assets/chunk${index}-abcdefg${index}.js`);
+  it("warms only a few files at once and skips those already cached", async () => {
+    const warm = Array.from(
+      { length: 8 },
+      (_unused, index) => `/assets/chunk${index}-abcdefg${index}.js`,
+    );
     const handlers: Record<string, (event: any) => void> = {};
     const stored = new Map<string, unknown>([[warm[0], js()]]);
-    let active = 0, peak = 0;
-    const fetch = vi.fn(async () => { active++; peak = Math.max(peak, active); await new Promise((resolve) => setTimeout(resolve, 5)); active--; return js(); });
+    let active = 0,
+      peak = 0;
+    const fetch = vi.fn(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return js();
+    });
     vm.runInNewContext(script(INSTALL, warm), {
-      self: { location: { origin: 'https://app.example' }, addEventListener: (type: string, handler: (event: any) => void) => { handlers[type] = handler; }, clients: { claim: async () => {} } },
+      self: {
+        location: { origin: "https://app.example" },
+        addEventListener: (type: string, handler: (event: any) => void) => {
+          handlers[type] = handler;
+        },
+        clients: { claim: async () => {} },
+      },
       caches: {
         keys: async () => [],
-        open: async () => ({ match: async (key: string) => stored.get(key), put: async (key: string, value: unknown) => { stored.set(key, value); } }),
+        open: async () => ({
+          match: async (key: string) => stored.get(key),
+          put: async (key: string, value: unknown) => {
+            stored.set(key, value);
+          },
+        }),
       },
-      URL, Response, fetch,
+      URL,
+      Response,
+      fetch,
     });
     let waited: Promise<unknown> | undefined;
-    handlers.message({ data: { type: 'WARM' }, waitUntil: (value: Promise<unknown>) => { waited = value; } });
+    handlers.message({
+      data: { type: "WARM" },
+      waitUntil: (value: Promise<unknown>) => {
+        waited = value;
+      },
+    });
     await waited;
     expect(warm.every((path) => stored.has(path))).toBe(true);
     expect(fetch).toHaveBeenCalledTimes(warm.length - 1);
     expect(peak).toBe(3);
   });
 
-  it('never keeps a warmed file that came back as the app shell, an error or nothing', async () => {
+  it("never keeps a warmed file that came back as the app shell, an error or nothing", async () => {
     const sw = worker();
-    sw.fetch.mockResolvedValueOnce(html()).mockResolvedValueOnce(new Response('gone', { status: 404 }));
+    sw.fetch
+      .mockResolvedValueOnce(html())
+      .mockResolvedValueOnce(new Response("gone", { status: 404 }));
     await sw.warm();
     expect(sw.fetch).toHaveBeenCalledTimes(WARM.length);
     expect(sw.put).not.toHaveBeenCalled();
     expect(WARM.some((path) => current(sw).has(path))).toBe(false);
   });
 
-  it('removes older releases when it activates', async () => {
-    const sw = worker(older({ '/assets/app-a1234567.js': js() }));
-    sw.fetch.mockRejectedValue(new Error('offline'));
+  it("removes older releases when it activates", async () => {
+    const sw = worker(older({ "/assets/app-a1234567.js": js() }));
+    sw.fetch.mockRejectedValue(new Error("offline"));
     await sw.activate();
-    expect([...sw.stores.keys()]).toEqual(['agent-interface-test']);
+    expect([...sw.stores.keys()]).toEqual(["agent-interface-test"]);
   });
 
-  it('judges hashed names the way the server does when it marks them immutable', () => {
-    const root = '/srv/dist/client';
+  it("judges hashed names the way the server does when it marks them immutable", () => {
+    const root = "/srv/dist/client";
     const source = script();
     const hashed = vm.runInNewContext(`${source}\n;(path) => HASHED_ASSET.test(path)`, {
-      self: { addEventListener: () => {}, location: { origin: 'https://app.example' } }, caches: {}, URL, Response, fetch: vi.fn(),
+      self: { addEventListener: () => {}, location: { origin: "https://app.example" } },
+      caches: {},
+      URL,
+      Response,
+      fetch: vi.fn(),
     }) as (path: string) => boolean;
     for (const name of [
-      'assets/index-D7HmB6AI.js', 'assets/Avatar-BilO5MgL.css', 'assets/use-action-CcK_b2am.js', 'assets/a-b-_-_-_-_.png',
-      'assets/index-D7HmB6A.js', 'assets/index-D7HmB6AIx.js', 'assets/sub/index-D7HmB6AI.js', 'assets/vendor.js',
-      'index.html', 'icon-192.png', 'manifest.webmanifest', 'native-computer.html', 'index-D7HmB6AI.js',
-    ]) expect(hashed('/' + name), name).toBe(isHashedAsset(root, `${root}/${name}`));
+      "assets/index-D7HmB6AI.js",
+      "assets/Avatar-BilO5MgL.css",
+      "assets/use-action-CcK_b2am.js",
+      "assets/a-b-_-_-_-_.png",
+      "assets/index-D7HmB6A.js",
+      "assets/index-D7HmB6AIx.js",
+      "assets/sub/index-D7HmB6AI.js",
+      "assets/vendor.js",
+      "index.html",
+      "icon-192.png",
+      "manifest.webmanifest",
+      "native-computer.html",
+      "index-D7HmB6AI.js",
+    ])
+      expect(hashed("/" + name), name).toBe(isHashedAsset(root, `${root}/${name}`));
   });
 });
 
-describe('service worker app shell', () => {
-  const shell = (body = '<!doctype html><script src="/assets/app-a1234567.js">') => new Response(body, { headers: { 'content-type': 'text/html' } });
+describe("service worker app shell", () => {
+  const shell = (body = '<!doctype html><script src="/assets/app-a1234567.js">') =>
+    new Response(body, { headers: { "content-type": "text/html" } });
   const NEXT = '<!doctype html><script src="/assets/app-z7654321.js">';
   // Where the worker notes that its cached shell is out of date. The tests only ask whether it is there.
-  const MARKER = '/.shell-outdated';
+  const MARKER = "/.shell-outdated";
   // This release's cache holds a real shell, as after an install.
   const installed = (options: Parameters<typeof worker>[0] = {}) => {
     const sw = worker(options);
-    sw.stores.get('agent-interface-test')!.set('/index.html', shell());
+    sw.stores.get("agent-interface-test")!.set("/index.html", shell());
     return sw;
   };
-  const outdated = (sw: ReturnType<typeof worker>, name = 'agent-interface-test') => sw.stores.get(name)?.has(MARKER) ?? false;
-  const window = (url = 'https://app.example/?bot=ranch') => openWindowOf({ url });
+  const outdated = (sw: ReturnType<typeof worker>, name = "agent-interface-test") =>
+    sw.stores.get(name)?.has(MARKER) ?? false;
+  const window = (url = "https://app.example/?bot=ranch") => openWindowOf({ url });
   // The worker's own background check asks for /index.html by path; a navigation passes its request.
-  const navigations = (sw: ReturnType<typeof worker>) => sw.fetch.mock.calls.filter(([request]) => typeof request !== 'string');
+  const navigations = (sw: ReturnType<typeof worker>) =>
+    sw.fetch.mock.calls.filter(([request]) => typeof request !== "string");
 
-  it('opens from this release\'s cache without waiting on the network', async () => {
+  it("opens from this release's cache without waiting on the network", async () => {
     const sw = installed();
     let check!: () => void;
     // The network answers only after the shell has opened.
-    sw.fetch.mockImplementation(() => new Promise(resolve => { check = () => resolve(shell()); }));
+    sw.fetch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          check = () => resolve(shell());
+        }),
+    );
     let answer: unknown;
-    sw.handlers.fetch({ request: { url: 'https://app.example/', method: 'GET', mode: 'navigate' }, respondWith: async (value: Promise<unknown>) => { answer = await value; }, waitUntil: () => {} });
+    sw.handlers.fetch({
+      request: { url: "https://app.example/", method: "GET", mode: "navigate" },
+      respondWith: async (value: Promise<unknown>) => {
+        answer = await value;
+      },
+      waitUntil: () => {},
+    });
     await vi.waitFor(() => expect(answer).toBeInstanceOf(Response));
-    expect(await (answer as Response).text()).toContain('/assets/app-a1234567.js');
+    expect(await (answer as Response).text()).toContain("/assets/app-a1234567.js");
     expect(navigations(sw)).toEqual([]);
     check();
   });
 
-  it('opens a first visit, with no cache at all, from the network', async () => {
+  it("opens a first visit, with no cache at all, from the network", async () => {
     const sw = worker({ stores: new Map() });
-    sw.fetch.mockImplementation(async () => shell('from the network'));
-    expect(await (await sw.navigate()).text()).toBe('from the network');
+    sw.fetch.mockImplementation(async () => shell("from the network"));
+    expect(await (await sw.navigate()).text()).toBe("from the network");
     // The navigation itself, and nothing in the background.
     expect(sw.fetch).toHaveBeenCalledOnce();
   });
 
-  it('opens from the network when this release holds no shell, never from an older release', async () => {
-    const sw = worker({ older: { 'agent-interface-previous': { '/index.html': shell('older release') } } });
-    sw.stores.get('agent-interface-test')!.delete('/index.html');
-    sw.fetch.mockImplementation(async () => shell('from the network'));
-    expect(await (await sw.navigate()).text()).toBe('from the network');
+  it("opens from the network when this release holds no shell, never from an older release", async () => {
+    const sw = worker({
+      older: { "agent-interface-previous": { "/index.html": shell("older release") } },
+    });
+    sw.stores.get("agent-interface-test")!.delete("/index.html");
+    sw.fetch.mockImplementation(async () => shell("from the network"));
+    expect(await (await sw.navigate()).text()).toBe("from the network");
     expect(sw.fetch).toHaveBeenCalledOnce();
   });
 
-  it('checks the server\'s shell after opening and changes nothing when it is the same', async () => {
+  it("checks the server's shell after opening and changes nothing when it is the same", async () => {
     const sw = installed();
     sw.fetch.mockImplementation(async () => shell());
     await sw.navigate();
     await sw.navigate();
-    expect(sw.fetch.mock.calls).toEqual([['/index.html', { cache: 'no-store', redirect: 'manual' }], ['/index.html', { cache: 'no-store', redirect: 'manual' }]]);
+    expect(sw.fetch.mock.calls).toEqual([
+      ["/index.html", { cache: "no-store", redirect: "manual" }],
+      ["/index.html", { cache: "no-store", redirect: "manual" }],
+    ]);
     expect(outdated(sw)).toBe(false);
     expect(sw.update).not.toHaveBeenCalled();
   });
 
-  it('notes a changed shell, checks for the release at once, and opens from the network from then on', async () => {
+  it("notes a changed shell, checks for the release at once, and opens from the network from then on", async () => {
     const sw = installed();
     sw.fetch.mockImplementation(async () => shell(NEXT));
     // The load that finds the change still opens the copy it has.
-    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    expect(await (await sw.navigate()).text()).toContain("/assets/app-a1234567.js");
     expect(outdated(sw)).toBe(true);
     expect(sw.update).toHaveBeenCalledOnce();
     sw.fetch.mockClear();
@@ -631,7 +1026,7 @@ describe('service worker app shell', () => {
     expect(sw.fetch).toHaveBeenCalledOnce();
   });
 
-  it('keeps the note when the browser stops the worker and starts it again', async () => {
+  it("keeps the note when the browser stops the worker and starts it again", async () => {
     const first = installed();
     first.fetch.mockImplementation(async () => shell(NEXT));
     await first.navigate();
@@ -641,80 +1036,96 @@ describe('service worker app shell', () => {
     expect(navigations(restarted)).toHaveLength(1);
   });
 
-  it('opens the cached shell offline once the note is set', async () => {
+  it("opens the cached shell offline once the note is set", async () => {
     const sw = installed();
     sw.fetch.mockImplementation(async () => shell(NEXT));
     await sw.navigate();
-    sw.fetch.mockRejectedValue(new Error('offline'));
-    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    sw.fetch.mockRejectedValue(new Error("offline"));
+    expect(await (await sw.navigate()).text()).toContain("/assets/app-a1234567.js");
   });
 
   // One bad answer must never cost a person their work: no window reloads, and the worker stays.
   it.each([
-    ['a redirect', () => Promise.resolve({ type: 'opaqueredirect', status: 0, ok: false })],
-    ['a sign-in', () => Promise.resolve(new Response('Sign in', { status: 401 }))],
-    ['a refusal', () => Promise.resolve(new Response('No', { status: 403 }))],
-    ['a server error', () => Promise.resolve(new Response('down', { status: 500 }))],
-    ['no network', () => Promise.reject(new Error('offline'))],
-    ['a body that breaks off', () => Promise.resolve({ type: 'basic', status: 200, ok: true, text: () => Promise.reject(new TypeError('network error')) })],
-  ])('changes nothing when the check gets %s', async (_name, answer) => {
-    const open = [window(), window('https://app.example/?view=today')];
+    ["a redirect", () => Promise.resolve({ type: "opaqueredirect", status: 0, ok: false })],
+    ["a sign-in", () => Promise.resolve(new Response("Sign in", { status: 401 }))],
+    ["a refusal", () => Promise.resolve(new Response("No", { status: 403 }))],
+    ["a server error", () => Promise.resolve(new Response("down", { status: 500 }))],
+    ["no network", () => Promise.reject(new Error("offline"))],
+    [
+      "a body that breaks off",
+      () =>
+        Promise.resolve({
+          type: "basic",
+          status: 200,
+          ok: true,
+          text: () => Promise.reject(new TypeError("network error")),
+        }),
+    ],
+  ])("changes nothing when the check gets %s", async (_name, answer) => {
+    const open = [window(), window("https://app.example/?view=today")];
     const sw = installed({ windows: open });
     sw.fetch.mockImplementation(answer);
-    expect(await (await sw.navigate()).text()).toContain('/assets/app-a1234567.js');
+    expect(await (await sw.navigate()).text()).toContain("/assets/app-a1234567.js");
     expect(outdated(sw)).toBe(false);
     expect(sw.update).not.toHaveBeenCalled();
     expect(sw.unregister).not.toHaveBeenCalled();
     for (const client of open) expect(client.navigate).not.toHaveBeenCalled();
   });
 
-  describe('boot.js, which belongs to the shell that loads it', () => {
-    const BOOT = 'https://app.example/boot.js';
+  describe("boot.js, which belongs to the shell that loads it", () => {
+    const BOOT = "https://app.example/boot.js";
     const withBoot = () => {
       const sw = installed();
-      sw.stores.get('agent-interface-test')!.set('/boot.js', js('this release'));
+      sw.stores.get("agent-interface-test")!.set("/boot.js", js("this release"));
       return sw;
     };
     // The page's request for the script, as the shell's <script src> makes it.
     const boot = async (sw: ReturnType<typeof worker>) => {
       let answer: Promise<unknown> | undefined;
-      sw.handlers.fetch({ request: { url: BOOT, method: 'GET', mode: 'no-cors' }, respondWith: (value: Promise<unknown>) => { answer = value; } });
-      expect(answer, 'the worker answers boot.js').toBeDefined();
-      return (await answer as Response).text();
+      sw.handlers.fetch({
+        request: { url: BOOT, method: "GET", mode: "no-cors" },
+        respondWith: (value: Promise<unknown>) => {
+          answer = value;
+        },
+      });
+      expect(answer, "the worker answers boot.js").toBeDefined();
+      return ((await answer) as Response).text();
     };
-    const fromNetwork = (sw: ReturnType<typeof worker>) => sw.fetch.mockImplementation(async (request: unknown) =>
-      typeof request === 'string' ? shell(NEXT) : js('next release'));
+    const fromNetwork = (sw: ReturnType<typeof worker>) =>
+      sw.fetch.mockImplementation(async (request: unknown) =>
+        typeof request === "string" ? shell(NEXT) : js("next release"),
+      );
 
-    it('comes from this release\'s cache while the cached shell opens', async () => {
+    it("comes from this release's cache while the cached shell opens", async () => {
       const sw = withBoot();
       fromNetwork(sw);
-      expect(await boot(sw)).toBe('this release');
+      expect(await boot(sw)).toBe("this release");
     });
 
-    it('comes from this release\'s cache without asking the network, even once the shell is noted as out of date', async () => {
+    it("comes from this release's cache without asking the network, even once the shell is noted as out of date", async () => {
       const sw = withBoot();
       fromNetwork(sw);
       await sw.navigate();
       expect(outdated(sw)).toBe(true);
       // A download that never finishes would block the page's <head>; the network is not asked.
       sw.fetch.mockImplementation(() => new Promise(() => {}));
-      expect(await boot(sw)).toBe('this release');
+      expect(await boot(sw)).toBe("this release");
     });
 
-    it('comes from the network only when this release holds no copy', async () => {
+    it("comes from the network only when this release holds no copy", async () => {
       const sw = installed();
       fromNetwork(sw);
-      expect(await boot(sw)).toBe('next release');
+      expect(await boot(sw)).toBe("next release");
     });
   });
 
-  it('starts a new release with no note, whatever the last release noted', async () => {
+  it("starts a new release with no note, whatever the last release noted", async () => {
     const old = installed();
     old.fetch.mockImplementation(async () => shell(NEXT));
     await old.navigate();
     // The next release's worker installs beside it in the same storage, then takes over.
-    old.stores.set('agent-interface-previous', old.stores.get('agent-interface-test')!);
-    old.stores.delete('agent-interface-test');
+    old.stores.set("agent-interface-previous", old.stores.get("agent-interface-test")!);
+    old.stores.delete("agent-interface-test");
     const next = worker({ stores: old.stores });
     await next.install();
     await next.activate();
@@ -726,13 +1137,29 @@ describe('service worker app shell', () => {
   });
 });
 
-describe('service worker notification taps with the app open', () => {
-  const url = 'https://app.example/?bot=ranch';
-  const tapped = { title: 'Ranch Hand', body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'bot:ranch', actions: [] as { action: string; title: string }[], data: { url: '/?bot=ranch' } as Record<string, unknown> };
-  const cameBack = { ...tapped, data: { url: '/?bot=ranch', reshown: true } };
-  async function tap(sw: ReturnType<typeof worker>, notification: Partial<typeof tapped> & { data: Record<string, unknown> } = tapped) {
+describe("service worker notification taps with the app open", () => {
+  const url = "https://app.example/?bot=ranch";
+  const tapped = {
+    title: "Ranch Hand",
+    body: "The north gate is latched.",
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    tag: "bot:ranch",
+    actions: [] as { action: string; title: string }[],
+    data: { url: "/?bot=ranch" } as Record<string, unknown>,
+  };
+  const cameBack = { ...tapped, data: { url: "/?bot=ranch", reshown: true } };
+  async function tap(
+    sw: ReturnType<typeof worker>,
+    notification: Partial<typeof tapped> & { data: Record<string, unknown> } = tapped,
+  ) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.notificationclick({ notification: { ...tapped, close: vi.fn(), ...notification }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.notificationclick({
+      notification: { ...tapped, close: vi.fn(), ...notification },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     return done!;
   }
   /** The notification the worker brought back, as a tap on it delivers it. */
@@ -741,7 +1168,9 @@ describe('service worker notification taps with the app open', () => {
     return { title, ...options, data: options.data ?? {} };
   };
   const fulfilled = async (mock: ReturnType<typeof vi.fn>) =>
-    (await Promise.allSettled(mock.mock.results.map(result => result.value))).some(result => result.status === 'fulfilled');
+    (await Promise.allSettled(mock.mock.results.map((result) => result.value))).some(
+      (result) => result.status === "fulfilled",
+    );
   /**
    * The invariant every tap ends in: a window known to be in front shows the chat, or exactly one
    * notification, marked as having come back, is on screen. A new window is in front; an open one
@@ -749,32 +1178,38 @@ describe('service worker notification taps with the app open', () => {
    * already or its focus() worked.
    */
   async function ending(sw: ReturnType<typeof worker>, window?: Window, answeredInTime = false) {
-    const shows = answeredInTime || !!window && await fulfilled(window.navigate);
-    const inFront = await fulfilled(sw.openWindow) || !!window && shows && (!!window.focused || await fulfilled(window.focus));
-    const back = sw.shown.filter(each => each.data?.reshown === true && each.data.url === '/?bot=ranch');
-    expect(inFront ? 0 : 1, 'a window in front, or the notification back').toBe(sw.shown.length);
+    const shows = answeredInTime || (!!window && (await fulfilled(window.navigate)));
+    const inFront =
+      (await fulfilled(sw.openWindow)) ||
+      (!!window && shows && (!!window.focused || (await fulfilled(window.focus))));
+    const back = sw.shown.filter(
+      (each) => each.data?.reshown === true && each.data.url === "/?bot=ranch",
+    );
+    expect(inFront ? 0 : 1, "a window in front, or the notification back").toBe(sw.shown.length);
     expect(back).toHaveLength(sw.shown.length);
-    return inFront ? 'in front' : 'back';
+    return inFront ? "in front" : "back";
   }
 
-  it('asks the window to open the chat in place and focuses it, without reloading it', async () => {
+  it("asks the window to open the chat in place and focuses it, without reloading it", async () => {
     const window = openWindowOf();
     const sw = worker({ windows: [window] });
     await tap(sw);
-    expect(window.postMessage).toHaveBeenCalledExactlyOnceWith({ type: 'OPEN_CHAT', url }, [expect.anything()]);
+    expect(window.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "OPEN_CHAT", url }, [
+      expect.anything(),
+    ]);
     expect(window.focus).toHaveBeenCalled();
     expect(window.navigate).not.toHaveBeenCalled();
     expect(sw.openWindow).not.toHaveBeenCalled();
   });
 
-  it('asks the window the person was last in when several are open', async () => {
+  it("asks the window the person was last in when several are open", async () => {
     const [other, current] = [openWindowOf(), openWindowOf({ focused: true })];
     await tap(worker({ windows: [other, current] }));
     expect(current.postMessage).toHaveBeenCalled();
     expect(other.postMessage).not.toHaveBeenCalled();
   });
 
-  it('opens a new window beside one this worker does not control, which it can neither ask nor navigate', async () => {
+  it("opens a new window beside one this worker does not control, which it can neither ask nor navigate", async () => {
     const window = openWindowOf({ controlled: false });
     const sw = worker({ windows: [window] });
     await tap(sw);
@@ -785,27 +1220,34 @@ describe('service worker notification taps with the app open', () => {
 
   // The page is busy, as with an edited settings form, and has not answered when the wait ends.
   // Loading the chat into it would replace that form, so a first tap never does, and the tap ends there.
-  it('waits 250 ms for an answer, then leaves the window as it is and brings the notification back', async () => {
+  it("waits 250 ms for an answer, then leaves the window as it is and brings the notification back", async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
       const sw = worker({ windows: [window] });
       let finished = false;
-      void tap(sw).then(() => { finished = true; });
+      void tap(sw).then(() => {
+        finished = true;
+      });
       await vi.advanceTimersByTimeAsync(249);
       expect(sw.showNotification).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect(finished).toBe(true);
-      expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', expect.objectContaining({ silent: true, data: { url: '/?bot=ranch', reshown: true } }));
+      expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith(
+        "Ranch Hand",
+        expect.objectContaining({ silent: true, data: { url: "/?bot=ranch", reshown: true } }),
+      );
       expect(window.navigate).not.toHaveBeenCalled();
       expect(sw.openWindow).not.toHaveBeenCalled();
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A window still running a release from before pages answered never answers. The tap on the
   // notification that came back is the person asking again, so it loads the chat there. Taps one
   // after the other each make their own attempt.
-  it('loads the chat into a window that still does not answer when the brought-back notification is tapped', async () => {
+  it("loads the chat into a window that still does not answer when the brought-back notification is tapped", async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
@@ -821,85 +1263,208 @@ describe('service worker notification taps with the app open', () => {
       expect(window.navigate).toHaveBeenCalledExactlyOnceWith(url);
       expect(sw.openWindow).not.toHaveBeenCalled();
       expect(sw.showNotification).toHaveBeenCalledOnce();
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('opens a new window a quarter second after a tap on one that came back when loading the chat into the silent window fails', async () => {
+  it("opens a new window a quarter second after a tap on one that came back when loading the chat into the silent window fails", async () => {
     vi.useFakeTimers();
     try {
       const window = openWindowOf({ answers: false });
-      window.navigate.mockRejectedValue(new TypeError('not controlled'));
+      window.navigate.mockRejectedValue(new TypeError("not controlled"));
       const sw = worker({ windows: [window] });
       const done = tap(sw, cameBack);
       await vi.advanceTimersByTimeAsync(250);
       // Well inside Firefox's second.
       expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith(url);
       await done;
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // One case per rule of the table above openChat and per way it can end. "Refused" makes that call
   // reject; a late answer lands after the 250 ms wait. Windows are visible unless hidden: visible
   // or not, a window that cannot come forward is not in front, and no second window opens for it.
   type Row = {
-    rule: 1 | 2 | 3 | 4; name: string; window?: 'none' | 'focused already'; hidden?: boolean;
-    answers?: 'in time' | 'late' | 'never'; reshown?: boolean;
-    focus?: 'works' | 'refused'; navigate?: 'works' | 'refused'; openWindow?: 'works' | 'refused';
-    ends: 'in front' | 'back'; calls: { asked: number; navigated: number; opened: number };
+    rule: 1 | 2 | 3 | 4;
+    name: string;
+    window?: "none" | "focused already";
+    hidden?: boolean;
+    answers?: "in time" | "late" | "never";
+    reshown?: boolean;
+    focus?: "works" | "refused";
+    navigate?: "works" | "refused";
+    openWindow?: "works" | "refused";
+    ends: "in front" | "back";
+    calls: { asked: number; navigated: number; opened: number };
   };
   const rows: Row[] = [
-    { rule: 1, name: 'a new window opens', window: 'none', ends: 'in front', calls: { asked: 0, navigated: 0, opened: 1 } },
-    { rule: 1, name: 'a new window is refused', window: 'none', openWindow: 'refused', ends: 'back', calls: { asked: 0, navigated: 0, opened: 1 } },
-    { rule: 1, name: 'a new window is refused on a tap of one that came back', window: 'none', reshown: true, openWindow: 'refused', ends: 'back', calls: { asked: 0, navigated: 0, opened: 1 } },
-    { rule: 2, name: 'the window was focused already', window: 'focused already', answers: 'in time', focus: 'refused', ends: 'in front', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 2, name: 'the window comes forward', answers: 'in time', ends: 'in front', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 2, name: 'the window cannot come forward', answers: 'in time', focus: 'refused', hidden: true, ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 2, name: 'the window cannot come forward, on a tap of one that came back', answers: 'in time', reshown: true, focus: 'refused', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 3, name: 'the window comes forward', answers: 'never', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 3, name: 'the page answers late', answers: 'late', ends: 'back', calls: { asked: 1, navigated: 0, opened: 0 } },
-    { rule: 4, name: 'the chat loads into the window, which comes forward', answers: 'never', reshown: true, ends: 'in front', calls: { asked: 1, navigated: 1, opened: 0 } },
-    { rule: 4, name: 'the chat loads into the window, which cannot come forward', answers: 'never', reshown: true, focus: 'refused', ends: 'back', calls: { asked: 1, navigated: 1, opened: 0 } },
-    { rule: 4, name: 'loading fails and a new window opens', answers: 'never', reshown: true, focus: 'refused', navigate: 'refused', ends: 'in front', calls: { asked: 1, navigated: 1, opened: 1 } },
-    { rule: 4, name: 'loading fails and a new window is refused', answers: 'never', reshown: true, navigate: 'refused', openWindow: 'refused', ends: 'back', calls: { asked: 1, navigated: 1, opened: 1 } },
+    {
+      rule: 1,
+      name: "a new window opens",
+      window: "none",
+      ends: "in front",
+      calls: { asked: 0, navigated: 0, opened: 1 },
+    },
+    {
+      rule: 1,
+      name: "a new window is refused",
+      window: "none",
+      openWindow: "refused",
+      ends: "back",
+      calls: { asked: 0, navigated: 0, opened: 1 },
+    },
+    {
+      rule: 1,
+      name: "a new window is refused on a tap of one that came back",
+      window: "none",
+      reshown: true,
+      openWindow: "refused",
+      ends: "back",
+      calls: { asked: 0, navigated: 0, opened: 1 },
+    },
+    {
+      rule: 2,
+      name: "the window was focused already",
+      window: "focused already",
+      answers: "in time",
+      focus: "refused",
+      ends: "in front",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 2,
+      name: "the window comes forward",
+      answers: "in time",
+      ends: "in front",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 2,
+      name: "the window cannot come forward",
+      answers: "in time",
+      focus: "refused",
+      hidden: true,
+      ends: "back",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 2,
+      name: "the window cannot come forward, on a tap of one that came back",
+      answers: "in time",
+      reshown: true,
+      focus: "refused",
+      ends: "back",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 3,
+      name: "the window comes forward",
+      answers: "never",
+      ends: "back",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 3,
+      name: "the page answers late",
+      answers: "late",
+      ends: "back",
+      calls: { asked: 1, navigated: 0, opened: 0 },
+    },
+    {
+      rule: 4,
+      name: "the chat loads into the window, which comes forward",
+      answers: "never",
+      reshown: true,
+      ends: "in front",
+      calls: { asked: 1, navigated: 1, opened: 0 },
+    },
+    {
+      rule: 4,
+      name: "the chat loads into the window, which cannot come forward",
+      answers: "never",
+      reshown: true,
+      focus: "refused",
+      ends: "back",
+      calls: { asked: 1, navigated: 1, opened: 0 },
+    },
+    {
+      rule: 4,
+      name: "loading fails and a new window opens",
+      answers: "never",
+      reshown: true,
+      focus: "refused",
+      navigate: "refused",
+      ends: "in front",
+      calls: { asked: 1, navigated: 1, opened: 1 },
+    },
+    {
+      rule: 4,
+      name: "loading fails and a new window is refused",
+      answers: "never",
+      reshown: true,
+      navigate: "refused",
+      openWindow: "refused",
+      ends: "back",
+      calls: { asked: 1, navigated: 1, opened: 1 },
+    },
   ];
   const setUp = (row: Row) => {
-    const window = row.window === 'none' ? undefined
-      : Object.assign(openWindowOf({ answers: row.answers === 'in time', focused: row.window === 'focused already' }), { visibilityState: row.hidden ? 'hidden' : 'visible' });
-    if (row.focus === 'refused') window?.focus.mockRejectedValue(new TypeError('Not allowed to focus a window.'));
-    if (row.navigate === 'refused') window?.navigate.mockRejectedValue(new TypeError('Not this worker\'s window.'));
+    const window =
+      row.window === "none"
+        ? undefined
+        : Object.assign(
+            openWindowOf({
+              answers: row.answers === "in time",
+              focused: row.window === "focused already",
+            }),
+            { visibilityState: row.hidden ? "hidden" : "visible" },
+          );
+    if (row.focus === "refused")
+      window?.focus.mockRejectedValue(new TypeError("Not allowed to focus a window."));
+    if (row.navigate === "refused")
+      window?.navigate.mockRejectedValue(new TypeError("Not this worker's window."));
     const sw = worker({ windows: window ? [window] : [] });
-    if (row.openWindow === 'refused') sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    if (row.openWindow === "refused")
+      sw.openWindow.mockRejectedValue(new TypeError("Not allowed to open a window."));
     return { window, sw };
   };
-  const counts = (sw: ReturnType<typeof worker>, window?: Window) =>
-    ({ asked: window?.postMessage.mock.calls.length ?? 0, navigated: window?.navigate.mock.calls.length ?? 0, opened: sw.openWindow.mock.calls.length });
+  const counts = (sw: ReturnType<typeof worker>, window?: Window) => ({
+    asked: window?.postMessage.mock.calls.length ?? 0,
+    navigated: window?.navigate.mock.calls.length ?? 0,
+    opened: sw.openWindow.mock.calls.length,
+  });
 
-  it.each(rows)('rule $rule: $name', async row => {
+  it.each(rows)("rule $rule: $name", async (row) => {
     vi.useFakeTimers();
     try {
       const { window, sw } = setUp(row);
       const done = tap(sw, row.reshown ? cameBack : tapped);
       await vi.advanceTimersByTimeAsync(250);
       await done;
-      if (row.answers === 'late') {
+      if (row.answers === "late") {
         window!.ports[0].postMessage({ opened: true });
         await vi.advanceTimersByTimeAsync(10_000);
       }
-      expect(await ending(sw, window, row.answers === 'in time')).toBe(row.ends);
+      expect(await ending(sw, window, row.answers === "in time")).toBe(row.ends);
       expect(counts(sw, window)).toEqual(row.calls);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A person taps twice before the first tap has finished, or taps two notifications about the same
   // chat. The second joins the first: one ask, one load, one new window, and one notification back.
   // The notifications are untagged, so two shown would both stay on screen.
   it.each([
-    rows.find(row => row.rule === 1 && row.ends === 'in front')!,
-    rows.find(row => row.rule === 2 && row.ends === 'back' && !row.reshown)!,
-    rows.find(row => row.rule === 3 && row.answers === 'never')!,
-    rows.find(row => row.rule === 4 && row.calls.opened === 1 && row.ends === 'in front')!,
-    rows.find(row => row.rule === 4 && row.calls.opened === 0 && row.ends === 'back')!,
-  ])('two overlapping taps act once, rule $rule: $name', async row => {
+    rows.find((row) => row.rule === 1 && row.ends === "in front")!,
+    rows.find((row) => row.rule === 2 && row.ends === "back" && !row.reshown)!,
+    rows.find((row) => row.rule === 3 && row.answers === "never")!,
+    rows.find((row) => row.rule === 4 && row.calls.opened === 1 && row.ends === "in front")!,
+    rows.find((row) => row.rule === 4 && row.calls.opened === 0 && row.ends === "back")!,
+  ])("two overlapping taps act once, rule $rule: $name", async (row) => {
     vi.useFakeTimers();
     try {
       const { window, sw } = setUp(row);
@@ -909,23 +1474,30 @@ describe('service worker notification taps with the app open', () => {
       const second = tap(sw, notification);
       await vi.advanceTimersByTimeAsync(250);
       await Promise.all([first, second]);
-      expect(await ending(sw, window, row.answers === 'in time')).toBe(row.ends);
-      expect(sw.showNotification).toHaveBeenCalledTimes(row.ends === 'back' ? 1 : 0);
+      expect(await ending(sw, window, row.answers === "in time")).toBe(row.ends);
+      expect(sw.showNotification).toHaveBeenCalledTimes(row.ends === "back" ? 1 : 0);
       expect(counts(sw, window)).toEqual(row.calls);
-    } finally { vi.useRealTimers(); }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The page answers, the window cannot come forward, and the notification is being brought back.
   // Browsers may put it on screen before showNotification() settles, and a tap on it then is the
   // person asking again, not part of the attempt that is ending. Nothing waits for that display.
-  describe('a tap while the notification is being brought back', () => {
-    const row = rows.find(row => row.rule === 2 && row.ends === 'back' && !row.reshown)!;
+  describe("a tap while the notification is being brought back", () => {
+    const row = rows.find((row) => row.rule === 2 && row.ends === "back" && !row.reshown)!;
     /** Holds the next showNotification() unsettled after it has put the notification on screen. */
     const holdNextShow = (sw: ReturnType<typeof worker>) => {
       let settle!: () => void;
-      const shown = new Promise<void>(resolve => { settle = resolve; });
+      const shown = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
       const show = sw.showNotification.getMockImplementation()!;
-      sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => { await show(...args); await shown; });
+      sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => {
+        await show(...args);
+        await shown;
+      });
       return settle;
     };
     /** The brought-back notification on screen, as the person taps it: the tap closes it. */
@@ -935,7 +1507,9 @@ describe('service worker notification taps with the app open', () => {
     };
     const settled = (promise: Promise<unknown>) => {
       const state = { done: false };
-      void promise.then(() => { state.done = true; });
+      void promise.then(() => {
+        state.done = true;
+      });
       return state;
     };
 
@@ -943,54 +1517,74 @@ describe('service worker notification taps with the app open', () => {
     // not keep the worker alive past the attempt that replaced it, and that one ends at the deadline
     // when it brings the notification back too.
     it.each([
-      { second: 'cannot come forward either', settles: 10_000, ends: 'back' },
-      { second: 'comes forward', settles: 0, ends: 'in front' },
-    ])('starts a new attempt at once that $second, and no display that never settles keeps the worker alive', async ({ second: outcome, settles, ends }) => {
-      vi.useFakeTimers();
-      try {
-        const { window, sw } = setUp(row);
-        const show = sw.showNotification.getMockImplementation()!;
-        sw.showNotification.mockImplementation(async (...args: Parameters<typeof show>) => { await show(...args); await new Promise(() => {}); });
-        const first = settled(tap(sw));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(sw.shown).toHaveLength(1);
-        if (outcome === 'comes forward') window!.focus.mockResolvedValueOnce(window);
-        const second = settled(tap(sw, onScreen(sw)));
-        await vi.advanceTimersByTimeAsync(0);
-        expect(counts(sw, window), 'asked again at once').toEqual({ asked: 2, navigated: 0, opened: 0 });
-        if (settles) {
-          await vi.advanceTimersByTimeAsync(settles - 1);
-          expect([first.done, second.done], 'kept alive while the notification is being shown').toEqual([false, false]);
-          await vi.advanceTimersByTimeAsync(1);
+      { second: "cannot come forward either", settles: 10_000, ends: "back" },
+      { second: "comes forward", settles: 0, ends: "in front" },
+    ])(
+      "starts a new attempt at once that $second, and no display that never settles keeps the worker alive",
+      async ({ second: outcome, settles, ends }) => {
+        vi.useFakeTimers();
+        try {
+          const { window, sw } = setUp(row);
+          const show = sw.showNotification.getMockImplementation()!;
+          sw.showNotification.mockImplementation(async (...args: Parameters<typeof show>) => {
+            await show(...args);
+            await new Promise(() => {});
+          });
+          const first = settled(tap(sw));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(sw.shown).toHaveLength(1);
+          if (outcome === "comes forward") window!.focus.mockResolvedValueOnce(window);
+          const second = settled(tap(sw, onScreen(sw)));
+          await vi.advanceTimersByTimeAsync(0);
+          expect(counts(sw, window), "asked again at once").toEqual({
+            asked: 2,
+            navigated: 0,
+            opened: 0,
+          });
+          if (settles) {
+            await vi.advanceTimersByTimeAsync(settles - 1);
+            expect(
+              [first.done, second.done],
+              "kept alive while the notification is being shown",
+            ).toEqual([false, false]);
+            await vi.advanceTimersByTimeAsync(1);
+          }
+          expect([first.done, second.done], "nothing left pending").toEqual([true, true]);
+          expect(await ending(sw, window, true)).toBe(ends);
+        } finally {
+          vi.useRealTimers();
         }
-        expect([first.done, second.done], 'nothing left pending').toEqual([true, true]);
-        expect(await ending(sw, window, true)).toBe(ends);
-      } finally { vi.useRealTimers(); }
-    });
+      },
+    );
 
     // Two different notifications about one chat: the second is tapped while the first is being
     // brought back, and the first is left on screen. The chat ends with one notification.
-    it('leaves one notification for the chat when another about it is tapped meanwhile', async () => {
+    it("leaves one notification for the chat when another about it is tapped meanwhile", async () => {
       const { window, sw } = setUp(row);
       const settle = holdNextShow(sw);
       const first = tap(sw, { ...tapped, tag: undefined });
       await vi.waitFor(() => expect(sw.shown).toHaveLength(1));
-      const second = tap(sw, { ...tapped, title: 'Ranch Hand again', tag: undefined });
+      const second = tap(sw, { ...tapped, title: "Ranch Hand again", tag: undefined });
       settle();
       await Promise.all([first, second]);
-      expect(await ending(sw, window, true)).toBe('back');
-      expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand again']);
+      expect(await ending(sw, window, true)).toBe("back");
+      expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand again"]);
     });
 
     // The replaced attempt's display settles while its replacement is still asking the window. A tap
     // then joins the replacement rather than starting a third attempt.
-    it('lets later taps join the new attempt, even once the replaced one settles', async () => {
+    it("lets later taps join the new attempt, even once the replaced one settles", async () => {
       const { window, sw } = setUp(row);
       const settle = holdNextShow(sw);
       const first = tap(sw);
       await vi.waitFor(() => expect(sw.shown).toHaveLength(1));
       let refuse!: () => void;
-      window!.focus.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = () => reject(new TypeError('Not allowed to focus a window.')); }));
+      window!.focus.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            refuse = () => reject(new TypeError("Not allowed to focus a window."));
+          }),
+      );
       const second = tap(sw, onScreen(sw));
       await vi.waitFor(() => expect(window!.postMessage).toHaveBeenCalledTimes(2));
       settle();
@@ -998,7 +1592,7 @@ describe('service worker notification taps with the app open', () => {
       const third = tap(sw, { ...tapped, tag: undefined });
       refuse();
       await Promise.all([second, third]);
-      expect(await ending(sw, window, true)).toBe('back');
+      expect(await ending(sw, window, true)).toBe("back");
       expect(counts(sw, window)).toEqual({ asked: 2, navigated: 0, opened: 0 });
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
     });
@@ -1006,35 +1600,41 @@ describe('service worker notification taps with the app open', () => {
 
   // A brought-back notification carries one tag per chat, so it replaces only the one brought back
   // for the same chat. The server tags each push with its own event ID, which no chat's tag matches.
-  it('brings back notifications for two chats side by side', async () => {
+  it("brings back notifications for two chats side by side", async () => {
     const sw = worker();
-    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
-    await tap(sw, { tag: 'event-1', data: { url: '/?bot=ranch' } });
-    await tap(sw, { tag: 'event-2', data: { url: '/?bot=barn' } });
-    expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }, { url: '/?bot=barn', reshown: true }]);
+    sw.openWindow.mockRejectedValue(new TypeError("Not allowed to open a window."));
+    await tap(sw, { tag: "event-1", data: { url: "/?bot=ranch" } });
+    await tap(sw, { tag: "event-2", data: { url: "/?bot=barn" } });
+    expect(sw.shown.map((each) => each.data)).toEqual([
+      { url: "/?bot=ranch", reshown: true },
+      { url: "/?bot=barn", reshown: true },
+    ]);
   });
 
   // Chromium rejects showNotification() when it cannot store the notification. Overlapping taps
   // share the attempt, so they share its one retry.
-  describe('bringing the notification back fails', () => {
-    const row = rows.find(row => row.rule === 1 && row.ends === 'back' && !row.reshown)!;
-    const failed = () => new TypeError('Failed to store the notification.');
+  describe("bringing the notification back fails", () => {
+    const row = rows.find((row) => row.rule === 1 && row.ends === "back" && !row.reshown)!;
+    const failed = () => new TypeError("Failed to store the notification.");
 
-    it.each([1, 2])('tries once more, for %i tap(s)', async taps => {
+    it.each([1, 2])("tries once more, for %i tap(s)", async (taps) => {
       const { window, sw } = setUp(row);
       sw.showNotification.mockRejectedValueOnce(failed());
       await Promise.all(Array.from({ length: taps }, () => tap(sw, { ...tapped, tag: undefined })));
-      expect(await ending(sw, window)).toBe('back');
+      expect(await ending(sw, window)).toBe("back");
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
     });
 
     // One of the two cases the invariant cannot cover: nothing is on screen, and every tap still ends cleanly.
-    it('ends every tap without a rejection when the second try fails too', async () => {
+    it("ends every tap without a rejection when the second try fails too", async () => {
       const { sw } = setUp(row);
       sw.showNotification.mockRejectedValueOnce(failed()).mockRejectedValueOnce(failed());
       const taps = [tap(sw, { ...tapped, tag: undefined }), tap(sw, { ...tapped, tag: undefined })];
-      expect(await Promise.allSettled(taps)).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]);
-      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(await Promise.allSettled(taps)).toEqual([
+        { status: "fulfilled", value: undefined },
+        { status: "fulfilled", value: undefined },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
       expect(sw.showNotification).toHaveBeenCalledTimes(2);
       expect(sw.shown).toEqual([]);
     });
@@ -1042,83 +1642,131 @@ describe('service worker notification taps with the app open', () => {
     // The other case the invariant cannot cover: the browser neither shows the notification nor
     // refuses it. The worker stops waiting at the deadline with nothing on screen, tries nothing
     // more, and the notification still appears if the browser finishes later.
-    it('stops waiting at the deadline for a display that has neither appeared nor failed', async () => {
+    it("stops waiting at the deadline for a display that has neither appeared nor failed", async () => {
       vi.useFakeTimers();
       try {
         const { sw } = setUp(row);
         const show = sw.showNotification.getMockImplementation()!;
         let finish!: () => void;
-        const stored = new Promise<void>(resolve => { finish = resolve; });
-        sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => { await stored; await show(...args); });
+        const stored = new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        sw.showNotification.mockImplementationOnce(async (...args: Parameters<typeof show>) => {
+          await stored;
+          await show(...args);
+        });
         let ended = false;
-        void tap(sw, { ...tapped, tag: undefined }).then(() => { ended = true; });
+        void tap(sw, { ...tapped, tag: undefined }).then(() => {
+          ended = true;
+        });
         await vi.advanceTimersByTimeAsync(9_999);
-        expect(ended, 'still waiting for the display').toBe(false);
+        expect(ended, "still waiting for the display").toBe(false);
         await vi.advanceTimersByTimeAsync(1);
-        expect(ended, 'ended at the deadline').toBe(true);
+        expect(ended, "ended at the deadline").toBe(true);
         expect(sw.shown).toEqual([]);
         expect(sw.showNotification).toHaveBeenCalledOnce();
         finish();
         await vi.advanceTimersByTimeAsync(0);
-        expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }]);
+        expect(sw.shown.map((each) => each.data)).toEqual([{ url: "/?bot=ranch", reshown: true }]);
         expect(sw.showNotification).toHaveBeenCalledOnce();
-      } finally { vi.useRealTimers(); }
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
-  it('brings the notification back when a step fails in a way the rules do not name', async () => {
+  it("brings the notification back when a step fails in a way the rules do not name", async () => {
     const sw = worker();
-    sw.clients.matchAll = async () => { throw new Error('The worker is shutting down.'); };
+    sw.clients.matchAll = async () => {
+      throw new Error("The worker is shutting down.");
+    };
     await tap(sw);
-    expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', reshown: true }]);
+    expect(sw.shown.map((each) => each.data)).toEqual([{ url: "/?bot=ranch", reshown: true }]);
   });
 
-  it('shows the notification again, quietly, with everything it carried', async () => {
+  it("shows the notification again, quietly, with everything it carried", async () => {
     const sw = worker();
-    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    sw.openWindow.mockRejectedValue(new TypeError("Not allowed to open a window."));
     await tap(sw);
-    expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith('Ranch Hand', {
-      body: 'The north gate is latched.', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'reshown:https://app.example/?bot=ranch', actions: [], silent: true,
-      data: { url: '/?bot=ranch', reshown: true },
+    expect(sw.showNotification).toHaveBeenCalledExactlyOnceWith("Ranch Hand", {
+      body: "The north gate is latched.",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: "reshown:https://app.example/?bot=ranch",
+      actions: [],
+      silent: true,
+      data: { url: "/?bot=ranch", reshown: true },
     });
   });
 
-  it('keeps an approval\'s actions on the notification it shows again', async () => {
+  it("keeps an approval's actions on the notification it shows again", async () => {
     const sw = worker();
-    sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
-    const actions = [{ action: 'review', title: 'Review' }, { action: 'decline', title: 'Decline' }];
-    await tap(sw, { tag: 'approval-1', actions, data: { url: '/?bot=ranch', declineToken: 'single-use' } });
-    expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ actions, data: { url: '/?bot=ranch', declineToken: 'single-use', reshown: true } }));
+    sw.openWindow.mockRejectedValue(new TypeError("Not allowed to open a window."));
+    const actions = [
+      { action: "review", title: "Review" },
+      { action: "decline", title: "Decline" },
+    ];
+    await tap(sw, {
+      tag: "approval-1",
+      actions,
+      data: { url: "/?bot=ranch", declineToken: "single-use" },
+    });
+    expect(sw.showNotification).toHaveBeenCalledWith(
+      "Ranch Hand",
+      expect.objectContaining({
+        actions,
+        data: { url: "/?bot=ranch", declineToken: "single-use", reshown: true },
+      }),
+    );
   });
 });
 
-describe('service worker pushes for the account signed in here', () => {
+describe("service worker pushes for the account signed in here", () => {
   // The server's marker for each account, as src/server/apns.ts makes it.
-  const marker = (user: string) => createHash('sha256').update(`wildbots-account:${user}`).digest('hex').slice(0, 16);
-  const forOne = { title: 'Ranch Hand', body: 'Gate code is 4471', url: '/?bot=ranch', tag: 'event-1', badge: 1, account: marker('one') };
+  const marker = (user: string) =>
+    createHash("sha256").update(`wildbots-account:${user}`).digest("hex").slice(0, 16);
+  const forOne = {
+    title: "Ranch Hand",
+    body: "Gate code is 4471",
+    url: "/?bot=ranch",
+    tag: "event-1",
+    badge: 1,
+    account: marker("one"),
+  };
   async function push(sw: ReturnType<typeof worker>, data: object) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => data }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.push({
+      data: { json: () => data },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await done;
   }
-  async function click(sw: ReturnType<typeof worker>, notification: object, action = '') {
+  async function click(sw: ReturnType<typeof worker>, notification: object, action = "") {
     let done: Promise<unknown> | undefined;
-    sw.handlers.notificationclick({ action, notification: { ...notification, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.notificationclick({
+      action,
+      notification: { ...notification, close: vi.fn() },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await done;
   }
 
-  it('shows a push for the account signed in here, and keeps whose it is with the notification', async () => {
+  it("shows a push for the account signed in here, and keeps whose it is with the notification", async () => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await push(sw, forOne);
-    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
-    expect(sw.shown[0]!.data).toMatchObject({ account: marker('one') });
+    expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand"]);
+    expect(sw.shown[0]!.data).toMatchObject({ account: marker("one") });
     expect(sw.setAppBadge).toHaveBeenCalledWith(1);
   });
 
-  it('drops a push for another account, and leaves the badge alone, after the worker restarts', async () => {
+  it("drops a push for another account, and leaves the badge alone, after the worker restarts", async () => {
     const first = worker();
-    await first.signedIn('two');
+    await first.signedIn("two");
     // The browser stopped the idle worker; the next push starts it again over the same storage.
     const sw = worker({ stores: first.stores });
     await push(sw, forOne);
@@ -1126,35 +1774,45 @@ describe('service worker pushes for the account signed in here', () => {
     expect(sw.setAppBadge).not.toHaveBeenCalled();
   });
 
-  it('keeps whose notifications may show when a new release takes over, which removes only release caches', async () => {
+  it("keeps whose notifications may show when a new release takes over, which removes only release caches", async () => {
     const old = worker();
     await old.install();
-    await old.signedIn('two');
+    await old.signedIn("two");
     // The next release's worker installs beside it in the same storage, then takes over.
-    old.stores.set('agent-interface-previous', old.stores.get('agent-interface-test')!);
-    old.stores.delete('agent-interface-test');
+    old.stores.set("agent-interface-previous", old.stores.get("agent-interface-test")!);
+    old.stores.delete("agent-interface-test");
     const next = worker({ stores: old.stores });
     await next.install();
     await next.activate();
-    expect([...next.stores.keys()].sort()).toEqual(['agent-interface-test', 'wildbots-account']);
+    expect([...next.stores.keys()].sort()).toEqual(["agent-interface-test", "wildbots-account"]);
     await push(next, forOne);
     expect(next.showNotification).not.toHaveBeenCalled();
   });
 
-  it('shows a push that names no account, as from a server before this field, while someone is signed in', async () => {
+  it("shows a push that names no account, as from a server before this field, while someone is signed in", async () => {
     const sw = worker();
-    await sw.signedIn('two');
+    await sw.signedIn("two");
     await push(sw, { ...forOne, account: undefined });
-    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+    expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand"]);
   });
 
-  it('closes a notification that reached the screen only after its account signed out, and never sets the badge its push carried', async () => {
+  it("closes a notification that reached the screen only after its account signed out, and never sets the badge its push carried", async () => {
     // The reviewer's order: the push is inside showNotification, not yet listed, when the page says no one is signed in.
     const sw = worker({ holdShows: true });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
-    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ body: 'Gate code is 4471' })));
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(sw.showNotification).toHaveBeenCalledWith(
+        "Ranch Hand",
+        expect.objectContaining({ body: "Gate code is 4471" }),
+      ),
+    );
     await sw.signedIn(null);
     sw.releaseShows();
     await done;
@@ -1165,44 +1823,79 @@ describe('service worker pushes for the account signed in here', () => {
   // Fourth review, P2: the badge is set only once the push is on screen and its account is still the
   // latest, so a push of a departed account can neither set it nor clear the next account's.
   it("keeps member two's badge when member one's push, overtaken by the switch, reaches the screen last", async () => {
-    const forTwo = { ...forOne, title: 'Barn Cat', body: 'Barn door sticks', tag: 'event-2', badge: 4, account: marker('two') };
+    const forTwo = {
+      ...forOne,
+      title: "Barn Cat",
+      body: "Barn door sticks",
+      tag: "event-2",
+      badge: 4,
+      account: marker("two"),
+    };
     const sw = worker({ holdShows: true });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     let doneOne: Promise<unknown> | undefined, doneTwo: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { doneOne = value; } });
-    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
-    await sw.signedIn('two');
-    sw.handlers.push({ data: { json: () => forTwo }, waitUntil: (value: Promise<unknown>) => { doneTwo = value; } });
-    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Barn Cat', expect.anything()));
-    sw.releaseShow('Barn Cat');
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        doneOne = value;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(sw.showNotification).toHaveBeenCalledWith("Ranch Hand", expect.anything()),
+    );
+    await sw.signedIn("two");
+    sw.handlers.push({
+      data: { json: () => forTwo },
+      waitUntil: (value: Promise<unknown>) => {
+        doneTwo = value;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(sw.showNotification).toHaveBeenCalledWith("Barn Cat", expect.anything()),
+    );
+    sw.releaseShow("Barn Cat");
     await doneTwo;
     expect(sw.badge.count).toBe(4);
-    sw.releaseShow('Ranch Hand');
+    sw.releaseShow("Ranch Hand");
     await doneOne;
     expect(sw.badge.count).toBe(4);
     expect(sw.setAppBadge).not.toHaveBeenCalledWith(1);
-    expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']);
+    expect(sw.shown.map((each) => each.title)).toEqual(["Barn Cat"]);
   });
 
-  it('settles a push whose notification the browser refused, checking its account again, and sets no badge for an account that left', async () => {
+  it("settles a push whose notification the browser refused, checking its account again, and sets no badge for an account that left", async () => {
     const sw = worker({ holdShows: true });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
-    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(sw.showNotification).toHaveBeenCalledWith("Ranch Hand", expect.anything()),
+    );
     await sw.signedIn(null);
-    sw.releaseShow('Ranch Hand', { refuse: true });
+    sw.releaseShow("Ranch Hand", { refuse: true });
     await expect(done).resolves.toBeUndefined();
     expect(sw.setAppBadge).not.toHaveBeenCalled();
   });
 
   it("sets the badge of a push the browser refused to show while its account stays signed in, since the server's count still stands", async () => {
     const sw = worker({ holdShows: true });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
-    await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.anything()));
-    sw.releaseShow('Ranch Hand', { refuse: true });
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(sw.showNotification).toHaveBeenCalledWith("Ranch Hand", expect.anything()),
+    );
+    sw.releaseShow("Ranch Hand", { refuse: true });
     await expect(done).resolves.toBeUndefined();
     expect(sw.badge.count).toBe(1);
   });
@@ -1210,83 +1903,104 @@ describe('service worker pushes for the account signed in here', () => {
   // Fourth review, P1: each account step runs after the one before it, and one that a newer word
   // overtook writes nothing and closes nothing.
   const savedAccount = async (sw: ReturnType<typeof worker>) => {
-    const saved = sw.stores.get('wildbots-account')?.get('/account');
+    const saved = sw.stores.get("wildbots-account")?.get("/account");
     return saved instanceof Response ? saved.clone().json() : saved;
   };
   it("keeps member two as the saved account when member one's word, sent first, was still reading the saved account", async () => {
     const sw = worker({ holdAccount: { reads: 1 } });
-    const first = sw.signedIn('one');
+    const first = sw.signedIn("one");
     await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
-    const second = sw.signedIn('two');
+    const second = sw.signedIn("two");
     // Give member two's word every chance to finish before member one's read does.
-    await new Promise(resolve => setTimeout(resolve, 0));
-    sw.releaseAccount('read');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    sw.releaseAccount("read");
     await Promise.all([first, second]);
-    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    expect(await savedAccount(sw)).toEqual({ marker: marker("two") });
     // A worker the browser starts again on that cache shows member two's push and drops member one's.
     const restarted = worker({ stores: sw.stores });
     await push(restarted, forOne);
-    await push(restarted, { ...forOne, title: 'Barn Cat', account: marker('two') });
-    expect(restarted.shown.map(each => each.title)).toEqual(['Barn Cat']);
+    await push(restarted, { ...forOne, title: "Barn Cat", account: marker("two") });
+    expect(restarted.shown.map((each) => each.title)).toEqual(["Barn Cat"]);
   });
 
   it("keeps member two saved, and their notification on screen, when a sign-out's write that member two overtook lands last", async () => {
     const first = worker();
-    await first.signedIn('one');
+    await first.signedIn("one");
     const sw = worker({ stores: first.stores, holdAccount: { puts: 1 } });
     const signOut = sw.signedIn(null);
     await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
-    const two = sw.signedIn('two');
-    const forTwo = { ...forOne, title: 'Barn Cat', tag: 'event-2', badge: 4, account: marker('two') };
+    const two = sw.signedIn("two");
+    const forTwo = {
+      ...forOne,
+      title: "Barn Cat",
+      tag: "event-2",
+      badge: 4,
+      account: marker("two"),
+    };
     let shownTwo: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forTwo }, waitUntil: (value: Promise<unknown>) => { shownTwo = value; } });
-    await vi.waitFor(() => expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']));
-    sw.releaseAccount('put');
+    sw.handlers.push({
+      data: { json: () => forTwo },
+      waitUntil: (value: Promise<unknown>) => {
+        shownTwo = value;
+      },
+    });
+    await vi.waitFor(() => expect(sw.shown.map((each) => each.title)).toEqual(["Barn Cat"]));
+    sw.releaseAccount("put");
     await Promise.all([signOut, two, shownTwo]);
-    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
-    expect(sw.shown.map(each => each.title)).toEqual(['Barn Cat']);
+    expect(await savedAccount(sw)).toEqual({ marker: marker("two") });
+    expect(sw.shown.map((each) => each.title)).toEqual(["Barn Cat"]);
     expect(sw.badge.count).toBe(4);
   });
 
   it("clears the badge member one's push set when member two signs in, even after the browser restarted the worker", async () => {
     const first = worker();
-    await first.signedIn('one');
+    await first.signedIn("one");
     await push(first, forOne);
     expect(first.badge.count).toBe(1);
     const sw = worker({ stores: first.stores });
-    await sw.signedIn('two');
+    await sw.signedIn("two");
     expect(sw.clearAppBadge).toHaveBeenCalled();
   });
 
-  it('keeps a notification that reached the screen while the same account stayed signed in, and its badge', async () => {
+  it("keeps a notification that reached the screen while the same account stayed signed in, and its badge", async () => {
     const sw = worker({ holdShows: true });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     sw.releaseShows();
     await done;
-    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
+    expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand"]);
     expect(sw.badge.count).toBe(1);
   });
 
-  it('judges a push still reading the saved account by the sign-out a page sent meanwhile', async () => {
+  it("judges a push still reading the saved account by the sign-out a page sent meanwhile", async () => {
     const first = worker();
-    await first.signedIn('one');
+    await first.signedIn("one");
     // A restarted worker reads the saved account from cache storage; the page's word lands during that read.
     const sw = worker({ stores: first.stores });
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => forOne }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.push({
+      data: { json: () => forOne },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     const out = sw.signedIn(null);
     await Promise.all([done, out]);
     expect(sw.showNotification).not.toHaveBeenCalled();
     expect(sw.setAppBadge).not.toHaveBeenCalled();
   });
 
-  it('shows nothing once signed out, whoever the push names', async () => {
+  it("shows nothing once signed out, whoever the push names", async () => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await sw.signedIn(null);
     await push(sw, forOne);
     await push(sw, { ...forOne, account: undefined });
@@ -1295,17 +2009,17 @@ describe('service worker pushes for the account signed in here', () => {
 
   it("refuses another account's Decline and opens none of its chats, and closes its notifications when the account changes", async () => {
     const sw = worker({ maxActions: 2 });
-    await sw.signedIn('one');
-    await push(sw, { ...forOne, kind: 'approval', declineToken: 't'.repeat(43) });
+    await sw.signedIn("one");
+    await push(sw, { ...forOne, kind: "approval", declineToken: "t".repeat(43) });
     const notification = sw.showNotification.mock.calls[0]![1];
-    await sw.signedIn('two');
+    await sw.signedIn("two");
     expect(sw.shown).toEqual([]);
-    await click(sw, notification, 'decline');
+    await click(sw, notification, "decline");
     expect(sw.fetch).not.toHaveBeenCalled();
     expect(sw.showNotification).toHaveBeenCalledTimes(1);
     // A tap brings the app up without the other account's chat in its address.
     await click(sw, notification);
-    expect(sw.openWindow).toHaveBeenCalledWith('https://app.example/');
+    expect(sw.openWindow).toHaveBeenCalledWith("https://app.example/");
   });
   // Fifth review, P3: the account step's checks and what a refused write may not stop.
   it("does not clear member one's badge when words two, one, two, one overtake a step that read member two's word", async () => {
@@ -1315,109 +2029,132 @@ describe('service worker pushes for the account signed in here', () => {
     // write, and without the check after its reads it clears the badge by a word that is no longer the
     // latest.
     const first = worker();
-    await first.signedIn('one');
+    await first.signedIn("one");
     await push(first, forOne);
     const sw = worker({ stores: first.stores, holdAccount: { puts: 1 }, holdHashes: [3] });
-    const one = sw.signedIn('two');
+    const one = sw.signedIn("two");
     await vi.waitFor(() => expect(sw.accountHeld).toHaveLength(1));
-    const two = sw.signedIn('one');
-    const three = sw.signedIn('two');
-    sw.releaseAccount('put');
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const four = sw.signedIn('one');
+    const two = sw.signedIn("one");
+    const three = sw.signedIn("two");
+    sw.releaseAccount("put");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const four = sw.signedIn("one");
     sw.releaseHash(3);
     await Promise.all([one, two, three, four]);
     expect(sw.clearAppBadge).not.toHaveBeenCalled();
-    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
+    expect(await savedAccount(sw)).toEqual({ marker: marker("one") });
   });
 
-  it('keeps going after a step throws: a push whose badge record the browser refuses ends cleanly, and the next word still applies', async () => {
+  it("keeps going after a step throws: a push whose badge record the browser refuses ends cleanly, and the next word still applies", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    sw.refusedPuts.add('/badge');
+    await sw.signedIn("one");
+    sw.refusedPuts.add("/badge");
     // The badge is set, then recording its owner fails inside the chain.
-    await expect((async () => { await push(sw, forOne); })()).resolves.toBeUndefined();
+    await expect(
+      (async () => {
+        await push(sw, forOne);
+      })(),
+    ).resolves.toBeUndefined();
     expect(sw.setAppBadge).toHaveBeenCalledWith(1);
-    sw.refusedPuts.delete('/badge');
-    await sw.signedIn('two');
-    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    sw.refusedPuts.delete("/badge");
+    await sw.signedIn("two");
+    expect(await savedAccount(sw)).toEqual({ marker: marker("two") });
     expect(sw.shown).toEqual([]);
   });
 
   it("clears the badge once for a sign-out and never again for the sign-ins after it, which leave a badge the page set alone", async () => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await push(sw, forOne);
     await sw.signedIn(null);
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
     // From here the badge is the page's, whoever signs in.
-    await sw.signedIn('one');
-    await sw.signedIn('two');
+    await sw.signedIn("one");
+    await sw.signedIn("two");
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
   });
 
   it("closes the notification of the member who left even when the browser refuses the write of the sign-out, and writes it with the next word", async () => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await push(sw, forOne);
-    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
-    sw.refusedPuts.add('/account');
+    expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand"]);
+    sw.refusedPuts.add("/account");
     await sw.signedIn(null);
     expect(sw.shown).toEqual([]);
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
     // The cache still names member one; the next word writes over it.
-    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
-    sw.refusedPuts.delete('/account');
-    await sw.signedIn('two');
-    expect(await savedAccount(sw)).toEqual({ marker: marker('two') });
+    expect(await savedAccount(sw)).toEqual({ marker: marker("one") });
+    sw.refusedPuts.delete("/account");
+    await sw.signedIn("two");
+    expect(await savedAccount(sw)).toEqual({ marker: marker("two") });
   });
 
   // Sixth review: a refused write of the badge's owner record must not stop the step before it closes
   // the departed member's notifications.
   it("closes the notification of the member who left even when the browser refuses to record the badge's owner", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    sw.refusedPuts.add('/badge');
+    await sw.signedIn("one");
+    sw.refusedPuts.add("/badge");
     await push(sw, forOne);
-    expect(sw.shown.map(each => each.title)).toEqual(['Ranch Hand']);
-    await sw.signedIn('two');
+    expect(sw.shown.map((each) => each.title)).toEqual(["Ranch Hand"]);
+    await sw.signedIn("two");
     expect(sw.shown).toEqual([]);
   });
 
   // Sixth review: the page repeats a word it already sent, and the invariants comment relies on that
   // repeat to write a word whose first write the browser refused.
-  it('writes a refused sign-out when the page says the same word again', async () => {
+  it("writes a refused sign-out when the page says the same word again", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    sw.refusedPuts.add('/account');
+    await sw.signedIn("one");
+    sw.refusedPuts.add("/account");
     await sw.signedIn(null);
-    expect(await savedAccount(sw)).toEqual({ marker: marker('one') });
-    sw.refusedPuts.delete('/account');
+    expect(await savedAccount(sw)).toEqual({ marker: marker("one") });
+    sw.refusedPuts.delete("/account");
     await sw.signedIn(null);
     expect(await savedAccount(sw)).toEqual({ signedOut: true });
   });
 
   // Fifth review, P1: a notification that comes back after a tap, or a notice of a failed decline,
   // belongs to its account like the push it came from.
-  describe('a tapped notification that comes back', () => {
+  describe("a tapped notification that comes back", () => {
     const tapped = (account: string | undefined, extra: object = {}) => ({
-      title: 'Ranch Hand', body: 'Gate code is 4471', icon: '/icon-192.png', badge: '/icon-192.png', tag: 'event-1', actions: [] as object[],
-      data: { url: '/?bot=ranch', ...(account ? { account } : {}) }, ...extra, close: vi.fn(),
+      title: "Ranch Hand",
+      body: "Gate code is 4471",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: "event-1",
+      actions: [] as object[],
+      data: { url: "/?bot=ranch", ...(account ? { account } : {}) },
+      ...extra,
+      close: vi.fn(),
     });
     const tap = (sw: ReturnType<typeof worker>, notification: object) => {
       let done: Promise<unknown> | undefined;
-      sw.handlers.notificationclick({ action: '', notification, waitUntil: (value: Promise<unknown>) => { done = value; } });
+      sw.handlers.notificationclick({
+        action: "",
+        notification,
+        waitUntil: (value: Promise<unknown>) => {
+          done = value;
+        },
+      });
       return done!;
     };
     // No window comes to the front, so the notification comes back.
-    const noWindow = (sw: ReturnType<typeof worker>) => sw.openWindow.mockRejectedValue(new TypeError('Not allowed to open a window.'));
+    const noWindow = (sw: ReturnType<typeof worker>) =>
+      sw.openWindow.mockRejectedValue(new TypeError("Not allowed to open a window."));
 
-    it('is closed when its account signs out while the display is on its way', async () => {
+    it("is closed when its account signs out while the display is on its way", async () => {
       const sw = worker({ holdShows: true });
       noWindow(sw);
-      await sw.signedIn('one');
-      const done = tap(sw, tapped(marker('one')));
-      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith('Ranch Hand', expect.objectContaining({ tag: 'reshown:https://app.example/?bot=ranch' })));
+      await sw.signedIn("one");
+      const done = tap(sw, tapped(marker("one")));
+      await vi.waitFor(() =>
+        expect(sw.showNotification).toHaveBeenCalledWith(
+          "Ranch Hand",
+          expect.objectContaining({ tag: "reshown:https://app.example/?bot=ranch" }),
+        ),
+      );
       await sw.signedIn(null);
       sw.releaseShows();
       await done;
@@ -1427,25 +2164,28 @@ describe('service worker pushes for the account signed in here', () => {
     it("is closed, not listed under member two, when member two signs in while the display is on its way", async () => {
       const sw = worker({ holdShows: true });
       noWindow(sw);
-      await sw.signedIn('one');
-      const done = tap(sw, tapped(marker('one')));
+      await sw.signedIn("one");
+      const done = tap(sw, tapped(marker("one")));
       await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
-      await sw.signedIn('two');
+      await sw.signedIn("two");
       sw.releaseShows();
       await done;
       expect(sw.shown).toEqual([]);
     });
 
-    it('is never displayed when its account left before the worker came to bring it back', async () => {
+    it("is never displayed when its account left before the worker came to bring it back", async () => {
       const sw = worker();
       noWindow(sw);
-      await sw.signedIn('one');
+      await sw.signedIn("one");
       // The tap passed the account check; the browser is still listing windows when member two signs in.
       let windows!: (value: []) => void;
-      sw.clients.matchAll = () => new Promise<[]>(resolve => { windows = resolve; });
-      const done = tap(sw, tapped(marker('one')));
-      await vi.waitFor(() => expect(windows).toBeTypeOf('function'));
-      await sw.signedIn('two');
+      sw.clients.matchAll = () =>
+        new Promise<[]>((resolve) => {
+          windows = resolve;
+        });
+      const done = tap(sw, tapped(marker("one")));
+      await vi.waitFor(() => expect(windows).toBeTypeOf("function"));
+      await sw.signedIn("two");
       windows([]);
       await done;
       expect(sw.showNotification).not.toHaveBeenCalled();
@@ -1454,61 +2194,87 @@ describe('service worker pushes for the account signed in here', () => {
     it("comes back as before for the account that stays signed in", async () => {
       const sw = worker({ holdShows: true });
       noWindow(sw);
-      await sw.signedIn('one');
-      const done = tap(sw, tapped(marker('one')));
+      await sw.signedIn("one");
+      const done = tap(sw, tapped(marker("one")));
       await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalled());
-      await sw.signedIn('one');
+      await sw.signedIn("one");
       sw.releaseShows();
       await done;
-      expect(sw.shown.map(each => each.data)).toEqual([{ url: '/?bot=ranch', account: marker('one'), reshown: true }]);
+      expect(sw.shown.map((each) => each.data)).toEqual([
+        { url: "/?bot=ranch", account: marker("one"), reshown: true },
+      ]);
     });
   });
 
-  describe('a failed Decline', () => {
+  describe("a failed Decline", () => {
     const approval = (account: string | undefined) => ({
-      title: 'Ranch Hand', body: 'Allow command?', tag: 'approval-1', close: vi.fn(),
-      data: { url: '/?bot=ranch', declineToken: 't'.repeat(43), ...(account ? { account } : {}) },
+      title: "Ranch Hand",
+      body: "Allow command?",
+      tag: "approval-1",
+      close: vi.fn(),
+      data: { url: "/?bot=ranch", declineToken: "t".repeat(43), ...(account ? { account } : {}) },
     });
     const decline = (sw: ReturnType<typeof worker>, notification: object) => {
       let done: Promise<unknown> | undefined;
-      sw.handlers.notificationclick({ action: 'decline', notification, waitUntil: (value: Promise<unknown>) => { done = value; } });
+      sw.handlers.notificationclick({
+        action: "decline",
+        notification,
+        waitUntil: (value: Promise<unknown>) => {
+          done = value;
+        },
+      });
       return done!;
     };
 
     it("names the account in its notice, so member two's sign-in closes it and a tap on it opens no chat of member one's", async () => {
       const sw = worker();
-      await sw.signedIn('one');
-      await decline(sw, approval(marker('one')));
-      expect(sw.shown.map(each => each.data)).toEqual([{ url: 'https://app.example/?bot=ranch', account: marker('one') }]);
+      await sw.signedIn("one");
+      await decline(sw, approval(marker("one")));
+      expect(sw.shown.map((each) => each.data)).toEqual([
+        { url: "https://app.example/?bot=ranch", account: marker("one") },
+      ]);
       const notice = sw.shown[0]!;
-      await sw.signedIn('two');
+      await sw.signedIn("two");
       expect(sw.shown).toEqual([]);
       // A tap that was already on its way when the browser closed it.
-      await new Promise<void>(resolve => {
-        sw.handlers.notificationclick({ action: '', notification: { ...notice, close: vi.fn() }, waitUntil: (value: Promise<unknown>) => { void value.then(() => resolve()); } });
+      await new Promise<void>((resolve) => {
+        sw.handlers.notificationclick({
+          action: "",
+          notification: { ...notice, close: vi.fn() },
+          waitUntil: (value: Promise<unknown>) => {
+            void value.then(() => resolve());
+          },
+        });
       });
-      expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith('https://app.example/');
+      expect(sw.openWindow).toHaveBeenCalledExactlyOnceWith("https://app.example/");
     });
 
-    it('is not shown when its account left while the request was on its way', async () => {
+    it("is not shown when its account left while the request was on its way", async () => {
       const sw = worker();
-      await sw.signedIn('one');
+      await sw.signedIn("one");
       let answer!: (response: Response) => void;
-      sw.fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { answer = resolve; }));
-      const done = decline(sw, approval(marker('one')));
-      await vi.waitFor(() => expect(answer).toBeTypeOf('function'));
-      await sw.signedIn('two');
-      answer(new Response('{}', { status: 409 }));
+      sw.fetch.mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const done = decline(sw, approval(marker("one")));
+      await vi.waitFor(() => expect(answer).toBeTypeOf("function"));
+      await sw.signedIn("two");
+      answer(new Response("{}", { status: 409 }));
       await done;
       expect(sw.showNotification).not.toHaveBeenCalled();
     });
 
-    it('is closed when its account left while the notice was on its way', async () => {
+    it("is closed when its account left while the notice was on its way", async () => {
       const sw = worker({ holdShows: true });
-      await sw.signedIn('one');
-      sw.fetch.mockResolvedValueOnce(new Response('{}', { status: 409 }));
-      const done = decline(sw, approval(marker('one')));
-      await vi.waitFor(() => expect(sw.showNotification).toHaveBeenCalledWith("Couldn't decline", expect.anything()));
+      await sw.signedIn("one");
+      sw.fetch.mockResolvedValueOnce(new Response("{}", { status: 409 }));
+      const done = decline(sw, approval(marker("one")));
+      await vi.waitFor(() =>
+        expect(sw.showNotification).toHaveBeenCalledWith("Couldn't decline", expect.anything()),
+      );
       await sw.signedIn(null);
       sw.releaseShows();
       await done;
@@ -1517,107 +2283,127 @@ describe('service worker pushes for the account signed in here', () => {
   });
 });
 
-
-describe('service worker app badge for the page', () => {
+describe("service worker app badge for the page", () => {
   // The server's marker for each account, as src/server/apns.ts makes it.
-  const marker = (user: string) => createHash('sha256').update(`wildbots-account:${user}`).digest('hex').slice(0, 16);
-  const forOne = { title: 'Ranch Hand', body: 'Gate code is 4471', url: '/?bot=ranch', tag: 'event-1', badge: 1, account: marker('one') };
+  const marker = (user: string) =>
+    createHash("sha256").update(`wildbots-account:${user}`).digest("hex").slice(0, 16);
+  const forOne = {
+    title: "Ranch Hand",
+    body: "Gate code is 4471",
+    url: "/?bot=ranch",
+    tag: "event-1",
+    badge: 1,
+    account: marker("one"),
+  };
   async function push(sw: ReturnType<typeof worker>, data: object) {
     let done: Promise<unknown> | undefined;
-    sw.handlers.push({ data: { json: () => data }, waitUntil: (value: Promise<unknown>) => { done = value; } });
+    sw.handlers.push({
+      data: { json: () => data },
+      waitUntil: (value: Promise<unknown>) => {
+        done = value;
+      },
+    });
     await done;
   }
-  const badgeCalls = (sw: ReturnType<typeof worker>) => [...sw.setAppBadge.mock.calls.map(([count]) => `set ${count}`), ...sw.clearAppBadge.mock.calls.map(() => 'clear')];
+  const badgeCalls = (sw: ReturnType<typeof worker>) => [
+    ...sw.setAppBadge.mock.calls.map(([count]) => `set ${count}`),
+    ...sw.clearAppBadge.mock.calls.map(() => "clear"),
+  ];
 
   it("sets the latest account's count from its page, and a restarted worker clears it when another account signs in", async () => {
     const first = worker();
-    await first.signedIn('one');
-    await first.pageBadge('one', 3);
+    await first.signedIn("one");
+    await first.pageBadge("one", 3);
     expect(first.setAppBadge).toHaveBeenCalledExactlyOnceWith(3);
     const sw = worker({ stores: first.stores });
-    await sw.signedIn('two');
+    await sw.signedIn("two");
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
   });
 
   it("sets a count only for the account the latest word names", async () => {
     const sw = worker();
-    await sw.pageBadge('one', 2);
+    await sw.pageBadge("one", 2);
     // No word has arrived yet, so nothing names another account.
     expect(sw.setAppBadge).toHaveBeenLastCalledWith(2);
-    await sw.signedIn('two');
-    await sw.pageBadge('one', 5);
+    await sw.signedIn("two");
+    await sw.pageBadge("one", 5);
     expect(sw.badge.count).toBe(0);
     await sw.signedIn(null);
-    await sw.pageBadge('two', 5);
+    await sw.pageBadge("two", 5);
     expect(sw.badge.count).toBe(0);
     expect(sw.setAppBadge).toHaveBeenCalledOnce();
   });
 
   it.each([
-    ['a count that is not a whole number', 'one', 1.5],
-    ['a negative count', 'one', -1],
-    ['a count that is text', 'one', '3'],
-    ['a count that is not a number', 'one', Number.NaN],
-    ['no account for a count', null, 3],
-    ['an empty account for a count', '', 3],
-    ['an account that is not text for a count', 7, 3],
-  ])('does nothing for %s', async (_name, user, count) => {
+    ["a count that is not a whole number", "one", 1.5],
+    ["a negative count", "one", -1],
+    ["a count that is text", "one", "3"],
+    ["a count that is not a number", "one", Number.NaN],
+    ["no account for a count", null, 3],
+    ["an empty account for a count", "", 3],
+    ["an account that is not text for a count", 7, 3],
+  ])("does nothing for %s", async (_name, user, count) => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await sw.pageBadge(user, count);
     expect(badgeCalls(sw)).toEqual([]);
-    expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
+    expect(sw.stores.get("wildbots-account")?.has("/badge")).toBe(false);
   });
 
   it("clears the badge its own push set when the account's own page says nothing is counted", async () => {
     const sw = worker();
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await push(sw, { ...forOne, badge: 4 });
     expect(sw.badge.count).toBe(4);
-    await sw.pageBadge('one', 0);
+    await sw.pageBadge("one", 0);
     expect(sw.badge.count).toBe(0);
   });
 
   it("lets the latest account clear a legacy push badge after a restart, while stale tabs leave it alone", async () => {
     const first = worker();
-    await first.signedIn('one');
-    await push(first, { title: 'Legacy reply', body: 'The gate is shut.', badge: 4 });
+    await first.signedIn("one");
+    await push(first, { title: "Legacy reply", body: "The gate is shut.", badge: 4 });
     expect(first.badge.count).toBe(4);
-    await first.pageBadge('two', 0);
+    await first.pageBadge("two", 0);
     expect(first.badge.count).toBe(4);
     await first.pageBadge(null, 0);
     expect(first.badge.count).toBe(4);
     // The worker reads the saved owner {}, as a push from an older server has no account marker.
     const sw = worker({ stores: first.stores });
-    await sw.pageBadge('one', 0);
+    await sw.pageBadge("one", 0);
     expect(sw.badge.count).toBe(0);
   });
 
   it.each([
-    ['a tab of another account', 'two'],
-    ['a tab that shows no account', null],
-  ])("leaves the latest account's count alone when %s clears, since it never set it", async (_name, asker) => {
-    const sw = worker();
-    await sw.signedIn('one');
-    await push(sw, { ...forOne, badge: 4 });
-    await sw.pageBadge(asker, 0);
-    expect(sw.badge.count).toBe(4);
-    expect(sw.clearAppBadge).not.toHaveBeenCalled();
-  });
+    ["a tab of another account", "two"],
+    ["a tab that shows no account", null],
+  ])(
+    "leaves the latest account's count alone when %s clears, since it never set it",
+    async (_name, asker) => {
+      const sw = worker();
+      await sw.signedIn("one");
+      await push(sw, { ...forOne, badge: 4 });
+      await sw.pageBadge(asker, 0);
+      expect(sw.badge.count).toBe(4);
+      expect(sw.clearAppBadge).not.toHaveBeenCalled();
+    },
+  );
 
-  it('clears when it knows of no badge to protect, as a page of any account may after the worker was stopped', async () => {
+  it("clears when it knows of no badge to protect, as a page of any account may after the worker was stopped", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    await sw.pageBadge('two', 0);
+    await sw.signedIn("one");
+    await sw.pageBadge("two", 0);
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
   });
 
   it("clears a count of the member who left when a page that shows no account asks, though the worker stopped before its sign-out cleared it", async () => {
     const first = worker();
-    await first.signedIn('one');
+    await first.signedIn("one");
     await push(first, { ...forOne, badge: 4 });
     // The sign-out's word was kept, and the browser stopped the worker before the clear and its record.
-    first.stores.get('wildbots-account')!.set('/account', new Response(JSON.stringify({ signedOut: true })));
+    first.stores
+      .get("wildbots-account")!
+      .set("/account", new Response(JSON.stringify({ signedOut: true })));
     const sw = worker({ stores: first.stores });
     await sw.pageBadge(null, 0);
     expect(sw.clearAppBadge).toHaveBeenCalledOnce();
@@ -1626,25 +2412,27 @@ describe('service worker app badge for the page', () => {
   it("keeps the new account's count when the old account's clear reaches the worker after the word, in the page's own order", async () => {
     // The word's hash is slow, so the clear and the count are both waiting behind it when it arrives.
     const sw = worker({ holdHashes: [3] });
-    await sw.signedIn('one');
-    await sw.pageBadge('one', 2);
+    await sw.signedIn("one");
+    await sw.pageBadge("one", 2);
     sw.setAppBadge.mockClear();
-    const sent = [sw.signedIn('two'), sw.pageBadge('one', 0), sw.pageBadge('two', 4)];
+    const sent = [sw.signedIn("two"), sw.pageBadge("one", 0), sw.pageBadge("two", 4)];
     sw.releaseHash(3);
     await Promise.all(sent);
     expect(sw.badge.count).toBe(4);
     expect(sw.setAppBadge).toHaveBeenLastCalledWith(4);
     // The last call to the badge API is member two's count, not a clear.
-    expect(sw.setAppBadge.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(sw.clearAppBadge.mock.invocationCallOrder.at(-1)!);
+    expect(sw.setAppBadge.mock.invocationCallOrder.at(-1)!).toBeGreaterThan(
+      sw.clearAppBadge.mock.invocationCallOrder.at(-1)!,
+    );
   });
 
   it("drops a count that a newer word overtook before the worker reached it", async () => {
     const sw = worker({ holdHashes: [2] });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     sw.setAppBadge.mockClear();
     // Member one's page says a count; before the worker reaches it (its account's hash is held), two signs in.
-    const stale = sw.pageBadge('one', 3);
-    const word = sw.signedIn('two');
+    const stale = sw.pageBadge("one", 3);
+    const word = sw.signedIn("two");
     sw.releaseHash(2);
     await Promise.all([stale, word]);
     expect(sw.setAppBadge).not.toHaveBeenCalled();
@@ -1654,55 +2442,57 @@ describe('service worker app badge for the page', () => {
   it("drops the clear a page of an older generation sent once the same account has come back, which would wipe the count it set", async () => {
     // The clear's hash is held, so member two's word and member one's again overtake it before it reaches the front.
     const sw = worker({ holdHashes: [2] });
-    await sw.signedIn('one');
+    await sw.signedIn("one");
     await push(sw, { ...forOne, badge: 4 });
-    const stale = sw.pageBadge('one', 0);
-    const words = [sw.signedIn('two'), sw.signedIn('one')];
+    const stale = sw.pageBadge("one", 0);
+    const words = [sw.signedIn("two"), sw.signedIn("one")];
     sw.releaseHash(2);
     await Promise.all([stale, ...words]);
     expect(sw.clearAppBadge).not.toHaveBeenCalled();
     expect(sw.badge.count).toBe(4);
   });
 
-  it('answers on the page\'s port once the step has ended, whether it changed the badge or not', async () => {
+  it("answers on the page's port once the step has ended, whether it changed the badge or not", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    const channel = new FakeMessageChannel(), answers: unknown[] = [];
-    channel.port1.onmessage = event => answers.push(event.data);
-    await sw.pageBadge('one', 3, channel.port2);
+    await sw.signedIn("one");
+    const channel = new FakeMessageChannel(),
+      answers: unknown[] = [];
+    channel.port1.onmessage = (event) => answers.push(event.data);
+    await sw.pageBadge("one", 3, channel.port2);
     await Promise.resolve();
     expect(answers).toEqual([{ badge: true }]);
-    await sw.pageBadge('two', 3, channel.port2);
+    await sw.pageBadge("two", 3, channel.port2);
     await Promise.resolve();
     expect(answers).toEqual([{ badge: true }, { badge: true }]);
     expect(sw.setAppBadge).toHaveBeenCalledOnce();
   });
 
-  it('answers a browser without the badge API that it cannot write one, so the page does, and keeps no record of a badge', async () => {
+  it("answers a browser without the badge API that it cannot write one, so the page does, and keeps no record of a badge", async () => {
     const sw = worker({ badging: false });
-    await sw.signedIn('one');
-    const channel = new FakeMessageChannel(), answers: unknown[] = [];
-    channel.port1.onmessage = event => answers.push(event.data);
-    await sw.pageBadge('one', 3, channel.port2);
-    await sw.pageBadge('one', 0, channel.port2);
+    await sw.signedIn("one");
+    const channel = new FakeMessageChannel(),
+      answers: unknown[] = [];
+    channel.port1.onmessage = (event) => answers.push(event.data);
+    await sw.pageBadge("one", 3, channel.port2);
+    await sw.pageBadge("one", 0, channel.port2);
     await Promise.resolve();
     expect(answers).toEqual([{ badge: false }, { badge: false }]);
-    expect(sw.stores.get('wildbots-account')?.has('/badge')).toBe(false);
+    expect(sw.stores.get("wildbots-account")?.has("/badge")).toBe(false);
   });
 
-  it('sets nothing for a page that names no account before any word has arrived either', async () => {
+  it("sets nothing for a page that names no account before any word has arrived either", async () => {
     const sw = worker();
     await sw.pageBadge(null, 3);
     expect(badgeCalls(sw)).toEqual([]);
   });
 
-  it('keeps going when the browser refuses the record of the badge, and the next write still applies', async () => {
+  it("keeps going when the browser refuses the record of the badge, and the next write still applies", async () => {
     const sw = worker();
-    await sw.signedIn('one');
-    sw.refusedPuts.add('/badge');
-    await sw.pageBadge('one', 3);
-    sw.refusedPuts.delete('/badge');
-    await sw.pageBadge('one', 4);
-    expect(badgeCalls(sw)).toEqual(['set 3', 'set 4']);
+    await sw.signedIn("one");
+    sw.refusedPuts.add("/badge");
+    await sw.pageBadge("one", 3);
+    sw.refusedPuts.delete("/badge");
+    await sw.pageBadge("one", 4);
+    expect(badgeCalls(sw)).toEqual(["set 3", "set 4"]);
   });
 });

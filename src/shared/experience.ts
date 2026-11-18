@@ -1,14 +1,21 @@
-import type { Activity, Approval, AttentionRequest, FileRef, Message, RuntimeEvent } from './types.js';
-import type { HistoryPage, SearchHit, UsageSummary } from './discovery.js';
-import type { RoutineOutput, RoutineResult } from './collaboration.js';
-import type { AccountSnapshot, ResetOutcome } from './account-usage.js';
+import type {
+  Activity,
+  Approval,
+  AttentionRequest,
+  FileRef,
+  Message,
+  RuntimeEvent,
+} from "./types.js";
+import type { HistoryPage, SearchHit, UsageSummary } from "./discovery.js";
+import type { RoutineOutput, RoutineResult } from "./collaboration.js";
+import type { AccountSnapshot, ResetOutcome } from "./account-usage.js";
 export interface TodayItem {
   botId: string;
   botName: string;
   activity: Activity;
   approvals: Approval[];
   attention: AttentionRequest[];
-  latestMessage?: Pick<Message, 'id' | 'text' | 'createdAt' | 'files'>;
+  latestMessage?: Pick<Message, "id" | "text" | "createdAt" | "files">;
   files: FileRef[];
   error?: string;
   /**
@@ -27,9 +34,12 @@ export interface TodayOverview {
   unavailableBots: string[];
   upcoming?: import("./types.js").Routine[];
 }
-export interface MemoryEntry { id: string; text: string }
+export interface MemoryEntry {
+  id: string;
+  text: string;
+}
 export interface MemoryDocument {
-  target: 'memory' | 'user';
+  target: "memory" | "user";
   label: string;
   revision: string;
   enabled: boolean;
@@ -40,24 +50,29 @@ export interface MemoryDocument {
 export interface ProfileMemory {
   botId: string;
   profile: string;
-  scope: 'profile';
-  owner: 'Hermes';
+  scope: "profile";
+  owner: "Hermes";
   documents: MemoryDocument[];
   notice: string;
-  refresh?: { revision: string; state: 'next_turn' | 'pending' | 'applied'; busy: boolean; message: string };
+  refresh?: {
+    revision: string;
+    state: "next_turn" | "pending" | "applied";
+    busy: boolean;
+    message: string;
+  };
 }
 export interface RoutinePreview {
   botId: string;
   schedule: string;
   timezone: string;
   nextRuns: string[];
-  kind: 'once' | 'interval' | 'cron';
+  kind: "once" | "interval" | "cron";
 }
 export interface RoutineRunReceipt {
   requestId: string;
   routineId: string;
   botId: string;
-  status: 'accepted' | 'completed' | 'failed' | 'uncertain';
+  status: "accepted" | "completed" | "failed" | "uncertain";
   message?: string;
   startedAt: string;
   finishedAt?: string;
@@ -65,21 +80,39 @@ export interface RoutineRunReceipt {
   ownerStatus?: string;
 }
 type ExperienceRequestUnion =
-  | { operation: 'search'; profile: string; query: string }
-  | { operation: 'history'; profile: string; sessionId: string; offset: number; messageId?: string }
-  | { operation: 'usage'; profile: string; days: number }
-  | { operation: 'routine_results'; profile: string; routineId: string }
-  | { operation: 'routine_output'; profile: string; routineId: string; resultId: string }
-  | { operation: 'memory'; profile: string }
-  | { operation: 'save_memory'; profile: string; target: 'memory' | 'user'; revision: string; entries: { id?: string; text: string }[] }
-  | { operation: 'delete_memory'; profile: string; target: 'memory' | 'user'; revision: string; entryId: string }
-  | { operation: 'model_names'; profile: string; models: { provider: string; model: string }[] }
-  | { operation: 'preview'; profile: string; schedule: string }
-  | { operation: 'run'; profile: string; routineId: string; requestId: string; senderId: string }
-  | { operation: 'run_receipt'; profile: string; routineId: string; requestId: string; senderId: string }
-  | { operation: 'accounts'; profile: string }
-  | { operation: 'account_usage'; profile: string; key: string }
-  | { operation: 'account_reset'; profile: string; key: string; requestId: string; force: boolean };
+  | { operation: "search"; profile: string; query: string }
+  | { operation: "history"; profile: string; sessionId: string; offset: number; messageId?: string }
+  | { operation: "usage"; profile: string; days: number }
+  | { operation: "routine_results"; profile: string; routineId: string }
+  | { operation: "routine_output"; profile: string; routineId: string; resultId: string }
+  | { operation: "memory"; profile: string }
+  | {
+      operation: "save_memory";
+      profile: string;
+      target: "memory" | "user";
+      revision: string;
+      entries: { id?: string; text: string }[];
+    }
+  | {
+      operation: "delete_memory";
+      profile: string;
+      target: "memory" | "user";
+      revision: string;
+      entryId: string;
+    }
+  | { operation: "model_names"; profile: string; models: { provider: string; model: string }[] }
+  | { operation: "preview"; profile: string; schedule: string }
+  | { operation: "run"; profile: string; routineId: string; requestId: string; senderId: string }
+  | {
+      operation: "run_receipt";
+      profile: string;
+      routineId: string;
+      requestId: string;
+      senderId: string;
+    }
+  | { operation: "accounts"; profile: string }
+  | { operation: "account_usage"; profile: string; key: string }
+  | { operation: "account_reset"; profile: string; key: string; requestId: string; force: boolean };
 /** The result belongs to the requested operation. Missing receipts are HTTP 404 errors. */
 export interface ExperienceResults {
   search: SearchHit[];
@@ -96,13 +129,20 @@ export interface ExperienceResults {
   run: RoutineRunReceipt;
   run_receipt: RoutineRunReceipt;
   /** The provider accounts a profile runs on, read without the network. */
-  accounts: { accounts: { key: string; provider: string; role: 'main' | 'fallback' }[] };
+  accounts: { accounts: { key: string; provider: string; role: "main" | "fallback" }[] };
   account_usage: AccountSnapshot;
   account_reset: ResetOutcome;
 }
-export type ExperienceOperation = ExperienceRequestUnion['operation'];
-export type ExperienceRequests = { [O in ExperienceOperation]: Extract<ExperienceRequestUnion, { operation: O }> };
-export type ExperienceRequest<K extends ExperienceOperation = ExperienceOperation> = { [O in K]: ExperienceRequests[O] }[K];
-export type ExperienceResponse<K extends ExperienceOperation = ExperienceOperation> = ExperienceResults[K];
-export type ExperienceRequester = <R extends ExperienceRequest>(input: R) => Promise<ExperienceResult<R['operation']>>;
+export type ExperienceOperation = ExperienceRequestUnion["operation"];
+export type ExperienceRequests = {
+  [O in ExperienceOperation]: Extract<ExperienceRequestUnion, { operation: O }>;
+};
+export type ExperienceRequest<K extends ExperienceOperation = ExperienceOperation> = {
+  [O in K]: ExperienceRequests[O];
+}[K];
+export type ExperienceResponse<K extends ExperienceOperation = ExperienceOperation> =
+  ExperienceResults[K];
+export type ExperienceRequester = <R extends ExperienceRequest>(
+  input: R,
+) => Promise<ExperienceResult<R["operation"]>>;
 export type ExperienceResult<O extends ExperienceOperation> = ExperienceResults[O];

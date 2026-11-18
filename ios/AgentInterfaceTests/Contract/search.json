@@ -20,8 +20,6 @@
         "resultId": "result-1"
       }
     ],
-    "unavailableBots": [
-      "archive"
-    ]
+    "unavailableBots": ["archive"]
   }
 }

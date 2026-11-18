@@ -13,13 +13,23 @@ import { advance, mountRoot } from "./ui-harness";
 
 // Only the network is replaced; changeStream and the conversation hook run for real. Every request a
 // test did not list fails loudly, and the hook swallows some, so `unexpected` is checked after each test.
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest({
-  ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn(),
-}));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest({
+    ...(await original<typeof import("../src/client-api")>()),
+    api: vi.fn(),
+    write: vi.fn(),
+  }),
+);
 
 const START = Date.parse("2026-11-10T12:00:00Z");
 let unexpected: string[];
-const conversation: Conversation = { botId: "shared", messages: [{ id: "one", role: "assistant", text: "Howdy" }], approvals: [], files: [], activity: { state: "idle" } };
+const conversation: Conversation = {
+  botId: "shared",
+  messages: [{ id: "one", role: "assistant", text: "Howdy" }],
+  approvals: [],
+  files: [],
+  activity: { state: "idle" },
+};
 
 beforeEach(() => {
   vi.useFakeTimers({ now: START });
@@ -29,15 +39,19 @@ beforeEach(() => {
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
   unexpected = [];
-  vi.mocked(api).mockReset().mockImplementation(async <T>(path: string) => {
-    if (path.startsWith("/bots/shared/conversation?")) return conversation as T;
-    unexpected.push(`GET ${path}`);
-    throw new Error(`This test serves no GET ${path}`);
-  });
-  vi.mocked(write).mockReset().mockImplementation(async (path: string, _body: unknown, method = "POST") => {
-    unexpected.push(`${method} ${path}`);
-    throw new Error(`This test serves no ${method} ${path}`);
-  });
+  vi.mocked(api)
+    .mockReset()
+    .mockImplementation(async <T>(path: string) => {
+      if (path.startsWith("/bots/shared/conversation?")) return conversation as T;
+      unexpected.push(`GET ${path}`);
+      throw new Error(`This test serves no GET ${path}`);
+    });
+  vi.mocked(write)
+    .mockReset()
+    .mockImplementation(async (path: string, _body: unknown, method = "POST") => {
+      unexpected.push(`${method} ${path}`);
+      throw new Error(`This test serves no ${method} ${path}`);
+    });
 });
 afterEach(() => {
   expect(unexpected).toEqual([]);
@@ -46,7 +60,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const Chat = () => { useConversation("shared", "one"); return null; };
+const Chat = () => {
+  useConversation("shared", "one");
+  return null;
+};
 const attempts = () => FakeEventSource.created.length;
 const live = () => [...FakeEventSource.streams].at(-1);
 /** Mounts the chat and refuses its first stream, so the chat is in an outage with one failure. */
@@ -56,9 +73,13 @@ async function refused() {
   expect(attempts()).toBe(1);
   await act(async () => live()!.fail());
 }
-const signal = (type: "online" | "agent-interface:reconnect") => act(async () => { window.dispatchEvent(new Event(type)); });
+const signal = (type: "online" | "agent-interface:reconnect") =>
+  act(async () => {
+    window.dispatchEvent(new Event(type));
+  });
 /** Seconds after `from` of each attempt since `seen`, to a tenth. */
-const times = (from: number, seen: number) => FakeEventSource.opened.slice(seen).map(source => Math.round((source.at - from) / 100) / 10);
+const times = (from: number, seen: number) =>
+  FakeEventSource.opened.slice(seen).map((source) => Math.round((source.at - from) / 100) / 10);
 
 describe("signals that a chat stream's failures are stale", () => {
   it("connects at once on the first and coalesces 100 more into none while the clock stands still", async () => {
@@ -77,9 +98,10 @@ describe("signals that a chat stream's failures are stale", () => {
 
   it("starts 5 attempts in 10 seconds for 100 signals a tenth of a second apart, against a server that refuses", async () => {
     await refused();
-    const from = Date.now(), seen = attempts();
+    const from = Date.now(),
+      seen = attempts();
     // The server refuses each attempt a millisecond after it starts.
-    FakeEventSource.serve = source => source.fail();
+    FakeEventSource.serve = (source) => source.fail();
     for (let event = 0; event < 100; event++) {
       await advance(100);
       await signal("online");
@@ -92,7 +114,8 @@ describe("signals that a chat stream's failures are stale", () => {
 
   it("answers a manual retry inside the gap with the pending attempt, and never later than the ordinary retry", async () => {
     await refused();
-    const from = Date.now(), seen = attempts();
+    const from = Date.now(),
+      seen = attempts();
     await signal("online");
     await act(async () => live()!.fail());
     // The ordinary retry, 1.5 s away, is sooner than the gap's end at 3 s: a manual retry keeps it.
@@ -127,7 +150,10 @@ describe("signals that a chat stream's failures are stale", () => {
     // A server may name any interval from 1 to 60 seconds. At 2, a ping a second after the headers proves
     // the stream, well inside the 3-second gap that began with this attempt.
     const proved = live()!;
-    await act(async () => { proved.connect(); proved.emit("ping", "2"); });
+    await act(async () => {
+      proved.connect();
+      proved.emit("ping", "2");
+    });
     await advance(1_000);
     await act(async () => proved.emit("ping", "2"));
     await act(async () => proved.fail());
@@ -140,7 +166,10 @@ describe("signals that a chat stream's failures are stale", () => {
     await refused();
     await signal("online");
     const greeted = live()!;
-    await act(async () => { greeted.connect(); greeted.emit("ping", "10"); });
+    await act(async () => {
+      greeted.connect();
+      greeted.emit("ping", "10");
+    });
     await act(async () => greeted.fail());
     const after = attempts();
     await signal("online");

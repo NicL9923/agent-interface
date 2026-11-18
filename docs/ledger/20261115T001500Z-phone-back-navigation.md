@@ -10,12 +10,12 @@ before the e2e spec and README were added; the code under test is `src/app/histo
 `e2e/back-navigation.spec.ts` (16 tests, 390px phone and 1280px two-pane). Each line below was broken by hand, the spec run,
 and the line restored byte for byte; the restored spec passes 16 of 16.
 
-| Broken line | Result |
-| --- | --- |
-| `window.addEventListener("popstate", popped)` in `useBackNavigation`, never registered | 12 failed, 4 passed: every test that presses Back from a chat, Today, Search, a link, a notification, a reload or a sheet. The 4 that pass need no popstate: the on-screen Back, resizing, two-pane choices. |
-| `history.go(depth - landed)`, the pop when the screen steps back | 2 failed: "the on-screen Back leaves no entry behind", "a phone widened to two panes drops its entry". |
-| `stepBack`'s sheet branch changed to `if (panel) return true;`, so Back never closes the sheet | 3 failed: sheet over home, sheet over a chat, edited sheet asks first. |
-| `depth` without the `mobile &&` condition, so two panes push too | 1 failed: "choosing chats adds no entries, so one Back leaves the app". |
+| Broken line                                                                                    | Result                                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `window.addEventListener("popstate", popped)` in `useBackNavigation`, never registered         | 12 failed, 4 passed: every test that presses Back from a chat, Today, Search, a link, a notification, a reload or a sheet. The 4 that pass need no popstate: the on-screen Back, resizing, two-pane choices. |
+| `history.go(depth - landed)`, the pop when the screen steps back                               | 2 failed: "the on-screen Back leaves no entry behind", "a phone widened to two panes drops its entry".                                                                                                       |
+| `stepBack`'s sheet branch changed to `if (panel) return true;`, so Back never closes the sheet | 3 failed: sheet over home, sheet over a chat, edited sheet asks first.                                                                                                                                       |
+| `depth` without the `mobile &&` condition, so two panes push too                               | 1 failed: "choosing chats adds no entries, so one Back leaves the app".                                                                                                                                      |
 
 ## Review findings: red runs
 
@@ -25,13 +25,13 @@ e2e tests failed on the branch: the sign-out test with `Expected: "about:blank"`
 which is the old account's chat coming back into the address, and the group form test because no discard question appeared.
 The group form's e2e test scripts `GET /api/groups` with Playwright's `page.route`, because the e2e server hosts no group coordinator.
 
-| Broken line | Result |
-| --- | --- |
-| `history.go(-depth)` in `leaveAccountEntries` replaced by a no-op | e2e: 1 failed, the sign-out in another tab test; 18 passed. |
-| `stepBack`'s group branch in `src/App.tsx` back to `setCreatingGroup(false)`, skipping the form's guard | e2e: 1 failed, "asks before Back discards it"; 18 passed. |
-| `useCloseRequest` callback in `GroupCreate` returns `onClose()` without checking `unsaved` | `tests/collaboration-ui.test.ts`: 1 failed, "asks before the app closes it". |
-| `requestClose` in `GroupCreate` calls `onClose()` directly | `tests/collaboration-ui.test.ts`: 1 failed, "asks for the close button". |
-| `unsaved` counts `name !== ''` instead of the trimmed name | `tests/collaboration-ui.test.ts`: 1 failed, "closes at once, asking nothing". |
+| Broken line                                                                                             | Result                                                                        |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `history.go(-depth)` in `leaveAccountEntries` replaced by a no-op                                       | e2e: 1 failed, the sign-out in another tab test; 18 passed.                   |
+| `stepBack`'s group branch in `src/App.tsx` back to `setCreatingGroup(false)`, skipping the form's guard | e2e: 1 failed, "asks before Back discards it"; 18 passed.                     |
+| `useCloseRequest` callback in `GroupCreate` returns `onClose()` without checking `unsaved`              | `tests/collaboration-ui.test.ts`: 1 failed, "asks before the app closes it".  |
+| `requestClose` in `GroupCreate` calls `onClose()` directly                                              | `tests/collaboration-ui.test.ts`: 1 failed, "asks for the close button".      |
+| `unsaved` counts `name !== ''` instead of the trimmed name                                              | `tests/collaboration-ui.test.ts`: 1 failed, "closes at once, asking nothing". |
 
 `e2e/back-navigation.spec.ts` is 19 tests after this change, all passing.
 
@@ -65,8 +65,8 @@ the next Cancel opened the notification's chat. The assistant settings sheet sto
 Back now reaches it too. Both now add each waiting request with `stayAlso` (`src/app/close-request.ts`), so Keep
 editing cancels every request that was waiting.
 
-| Break | Test | Failure |
-| --- | --- | --- |
+| Break                                              | Test                                                                                                                     | Failure                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
 | The group form replaces the waiting callback again | `Back pressed while a notification waits on the group form's question leaves the notification cancelled by Keep editing` | Trail Cook's chat opened: `toBeHidden()` failed |
 
 `e2e/back-navigation.spec.ts` then passed 20 of 20. One full run before that failed `a chat opened again after Back

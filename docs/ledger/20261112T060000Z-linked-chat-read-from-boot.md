@@ -33,12 +33,12 @@ alternating (before, after, before, after), each against a fresh e2e server; `--
 build swap crashed Chromium here, and the `worker` load crashes Chromium on `265f36d` too, with or without `--chat`,
 so it is not reported. Medians (quartiles), 10 loads each, ms from navigation start:
 
-| Load | Build | Chat read issued | Chat read sent | Chat read answered | Bootstrap answered |
-| --- | --- | --- | --- | --- | --- |
-| cold | `265f36d` | 5561 (5557 to 5568) | 5561 (5558 to 5569) | 5715 (5712 to 5724) | 3496 (3488 to 3538) |
-| cold | this change | 478 (475 to 482) | 3370 (3366 to 3380) | 3548 (3541 to 3561) | 3516 (3507 to 3525) |
-| warm | `265f36d` | 444 (441 to 446) | 444 (441 to 446) | 600 (595 to 602) | 493 (493 to 494) |
-| warm | this change | 330 (329 to 332) | 331 (330 to 332) | 492 (491 to 493) | 498 (497 to 500) |
+| Load | Build       | Chat read issued    | Chat read sent      | Chat read answered  | Bootstrap answered  |
+| ---- | ----------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| cold | `265f36d`   | 5561 (5557 to 5568) | 5561 (5558 to 5569) | 5715 (5712 to 5724) | 3496 (3488 to 3538) |
+| cold | this change | 478 (475 to 482)    | 3370 (3366 to 3380) | 3548 (3541 to 3561) | 3516 (3507 to 3525) |
+| warm | `265f36d`   | 444 (441 to 446)    | 444 (441 to 446)    | 600 (595 to 602)    | 493 (493 to 494)    |
+| warm | this change | 330 (329 to 332)    | 331 (330 to 332)    | 492 (491 to 493)    | 498 (497 to 500)    |
 
 The e2e server speaks HTTP/1.1, so on a cold load Chromium's six connections a host queue both early reads behind the
 bundle's files: the chat read is issued at 0.48 s but leaves at 3.4 s. Production serves the app over a proxy whose
@@ -59,22 +59,22 @@ the chat read's figures moved by seconds.
 
 Each mutation by hand, restored after, against `npx vitest run tests/startup-read.test.ts tests/linked-chat-ui.test.ts`:
 
-| Mutation | Result |
-| --- | --- |
-| no chat read | failed: is dropped with bootstrap's when the account changes… (5 tests) |
-| any chat read | failed: waits for bootstrap with a chat the last sign-in could not open (2 tests) |
-| a message link read at the latest page | failed: opens a message link at that message after bootstrap (3 tests) |
-| Today read | failed: waits for bootstrap with a link to Today |
-| a group chat read | failed: waits for bootstrap with a link to a group chat |
-| hidden page read | failed: reads bootstrap alone for a hidden page… |
-| offline read | failed: reads bootstrap alone for an offline browser |
-| another path than the bundle's | failed: drops a read for a chat the person can no longer see… (12 tests) |
-| the timer lets go of bootstrap's only | failed: lets both go after a minute when no bundle asks for them |
-| taken under another account | failed: is not taken under another account record, and nor is bootstrap's |
-| taken twice | failed: is taken once, so the read after an error answer asks the server again (2 tests) |
-| left on window once all are taken | failed: reads the chat's first page beside bootstrap… |
-| malformed reads kept | failed: is dropped, and aborted, when it has a read whose path is not text (3 tests) |
-| an older release's read not aborted | failed: is dropped, and aborted, when it has the shape an older release left |
+| Mutation                               | Result                                                                                   |
+| -------------------------------------- | ---------------------------------------------------------------------------------------- |
+| no chat read                           | failed: is dropped with bootstrap's when the account changes… (5 tests)                  |
+| any chat read                          | failed: waits for bootstrap with a chat the last sign-in could not open (2 tests)        |
+| a message link read at the latest page | failed: opens a message link at that message after bootstrap (3 tests)                   |
+| Today read                             | failed: waits for bootstrap with a link to Today                                         |
+| a group chat read                      | failed: waits for bootstrap with a link to a group chat                                  |
+| hidden page read                       | failed: reads bootstrap alone for a hidden page…                                         |
+| offline read                           | failed: reads bootstrap alone for an offline browser                                     |
+| another path than the bundle's         | failed: drops a read for a chat the person can no longer see… (12 tests)                 |
+| the timer lets go of bootstrap's only  | failed: lets both go after a minute when no bundle asks for them                         |
+| taken under another account            | failed: is not taken under another account record, and nor is bootstrap's                |
+| taken twice                            | failed: is taken once, so the read after an error answer asks the server again (2 tests) |
+| left on window once all are taken      | failed: reads the chat's first page beside bootstrap…                                    |
+| malformed reads kept                   | failed: is dropped, and aborted, when it has a read whose path is not text (3 tests)     |
+| an older release's read not aborted    | failed: is dropped, and aborted, when it has the shape an older release left             |
 
 ## Checks
 
