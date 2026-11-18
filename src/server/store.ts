@@ -16,10 +16,20 @@ import { FileKeyRepository } from "./store-files.js";
 import type { FileSigner } from "./hermes-files.js";
 
 export { schemaVersion } from "./store-database.js";
-export type { CoveredRun, LiveActivityRegistration, LiveActivityStartRegistration } from "./store-devices.js";
+export type {
+  CoveredRun,
+  LiveActivityRegistration,
+  LiveActivityStartRegistration,
+} from "./store-devices.js";
 export type { RejectionReason } from "./store-submissions.js";
 export type { FileReferenceUpgrade } from "./store-files.js";
-export { maxDeliveryAttempts, presenceTtl, pushActionTtl, type ChatPresence, type PushAction } from "./store-notifications.js";
+export {
+  maxDeliveryAttempts,
+  presenceTtl,
+  pushActionTtl,
+  type ChatPresence,
+  type PushAction,
+} from "./store-notifications.js";
 
 /**
  * The app database: one SQLite connection shared by a repository per area. Each repository
@@ -58,11 +68,24 @@ export class Store {
     this.routines = new RoutineRepository(this.database);
     this.checkIns = new CheckInRepository(this.database);
     this.notifications = new NotificationRepository(this.database, {
-      accounts: this.accounts, personal: this.personalState, presentation: this.presentations,
-      routines: this.routines, submissions: this.submissions,
+      accounts: this.accounts,
+      personal: this.personalState,
+      presentation: this.presentations,
+      routines: this.routines,
+      submissions: this.submissions,
     });
-    this.events = new EventRepository(this.database, this.notifications, this.presentations, this.checkIns);
-    this.retention = new RetentionRepository(this.database, this.accounts, this.personalState, this.checkIns);
+    this.events = new EventRepository(
+      this.database,
+      this.notifications,
+      this.presentations,
+      this.checkIns,
+    );
+    this.retention = new RetentionRepository(
+      this.database,
+      this.accounts,
+      this.personalState,
+      this.checkIns,
+    );
     this.macs = new MacRepository(this.database);
   }
   close() {
@@ -72,154 +95,420 @@ export class Store {
     return this.database.transaction(fn);
   }
   /** Advances whenever an assistant's sharing or owner changes, so a request can tell it changed meanwhile. */
-  get privacyVersion() { return this.presentations.privacyVersion; }
+  get privacyVersion() {
+    return this.presentations.privacyVersion;
+  }
   /** Assistant display names for notification titles, refreshed by the background worker. */
-  get botNames() { return this.notifications.botNames; }
-  set botNames(names: Map<string, string>) { this.notifications.botNames = names; }
+  get botNames() {
+    return this.notifications.botNames;
+  }
+  set botNames(names: Map<string, string>) {
+    this.notifications.botNames = names;
+  }
   // file keys
-  fileKeys() { return this.files.fileKeys(); }
-  upgradeFileReferences(files: Pick<FileSigner, "isCurrent" | "resign">) { return this.files.upgradeFileReferences(files); }
+  fileKeys() {
+    return this.files.fileKeys();
+  }
+  upgradeFileReferences(files: Pick<FileSigner, "isCurrent" | "resign">) {
+    return this.files.upgradeFileReferences(files);
+  }
   // accounts
-  user(...args: Parameters<AccountRepository["user"]>) { return this.accounts.user(...args); }
-  formKey(userId: string) { return this.accounts.formKey(userId); }
-  users(...args: Parameters<AccountRepository["users"]>) { return this.accounts.users(...args); }
-  getUser(...args: Parameters<AccountRepository["getUser"]>) { return this.accounts.getUser(...args); }
-  session(...args: Parameters<AccountRepository["session"]>) { return this.accounts.session(...args); }
-  getSession(...args: Parameters<AccountRepository["getSession"]>) { return this.accounts.getSession(...args); }
-  deleteSession(...args: Parameters<AccountRepository["deleteSession"]>) { return this.accounts.deleteSession(...args); }
-  confirmSession(...args: Parameters<AccountRepository["confirmSession"]>) { return this.accounts.confirmSession(...args); }
-  sessionConfirmedAt(...args: Parameters<AccountRepository["sessionConfirmedAt"]>) { return this.accounts.sessionConfirmedAt(...args); }
-  nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) { return this.accounts.nativeSession(...args); }
-  getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) { return this.accounts.getNativeSession(...args); }
-  confirmNativeSession(...args: Parameters<AccountRepository["confirmNativeSession"]>) { return this.accounts.confirmNativeSession(...args); }
-  nativeSessionConfirmedAt(...args: Parameters<AccountRepository["nativeSessionConfirmedAt"]>) { return this.accounts.nativeSessionConfirmedAt(...args); }
-  deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) { return this.accounts.deleteNativeSession(...args); }
-  renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) { return this.accounts.renewNativeSession(...args); }
-  pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) { return this.accounts.pruneNativeAuth(...args); }
-  nativeFlow(...args: Parameters<AccountRepository["nativeFlow"]>) { return this.accounts.nativeFlow(...args); }
-  getNativeFlow(...args: Parameters<AccountRepository["getNativeFlow"]>) { return this.accounts.getNativeFlow(...args); }
-  finishNativeFlow(...args: Parameters<AccountRepository["finishNativeFlow"]>) { return this.accounts.finishNativeFlow(...args); }
-  consumeNativeCode(...args: Parameters<AccountRepository["consumeNativeCode"]>) { return this.accounts.consumeNativeCode(...args); }
+  user(...args: Parameters<AccountRepository["user"]>) {
+    return this.accounts.user(...args);
+  }
+  formKey(userId: string) {
+    return this.accounts.formKey(userId);
+  }
+  users(...args: Parameters<AccountRepository["users"]>) {
+    return this.accounts.users(...args);
+  }
+  getUser(...args: Parameters<AccountRepository["getUser"]>) {
+    return this.accounts.getUser(...args);
+  }
+  session(...args: Parameters<AccountRepository["session"]>) {
+    return this.accounts.session(...args);
+  }
+  getSession(...args: Parameters<AccountRepository["getSession"]>) {
+    return this.accounts.getSession(...args);
+  }
+  deleteSession(...args: Parameters<AccountRepository["deleteSession"]>) {
+    return this.accounts.deleteSession(...args);
+  }
+  confirmSession(...args: Parameters<AccountRepository["confirmSession"]>) {
+    return this.accounts.confirmSession(...args);
+  }
+  sessionConfirmedAt(...args: Parameters<AccountRepository["sessionConfirmedAt"]>) {
+    return this.accounts.sessionConfirmedAt(...args);
+  }
+  nativeSession(...args: Parameters<AccountRepository["nativeSession"]>) {
+    return this.accounts.nativeSession(...args);
+  }
+  getNativeSession(...args: Parameters<AccountRepository["getNativeSession"]>) {
+    return this.accounts.getNativeSession(...args);
+  }
+  confirmNativeSession(...args: Parameters<AccountRepository["confirmNativeSession"]>) {
+    return this.accounts.confirmNativeSession(...args);
+  }
+  nativeSessionConfirmedAt(...args: Parameters<AccountRepository["nativeSessionConfirmedAt"]>) {
+    return this.accounts.nativeSessionConfirmedAt(...args);
+  }
+  deleteNativeSession(...args: Parameters<AccountRepository["deleteNativeSession"]>) {
+    return this.accounts.deleteNativeSession(...args);
+  }
+  renewNativeSession(...args: Parameters<AccountRepository["renewNativeSession"]>) {
+    return this.accounts.renewNativeSession(...args);
+  }
+  pruneNativeAuth(...args: Parameters<AccountRepository["pruneNativeAuth"]>) {
+    return this.accounts.pruneNativeAuth(...args);
+  }
+  nativeFlow(...args: Parameters<AccountRepository["nativeFlow"]>) {
+    return this.accounts.nativeFlow(...args);
+  }
+  getNativeFlow(...args: Parameters<AccountRepository["getNativeFlow"]>) {
+    return this.accounts.getNativeFlow(...args);
+  }
+  finishNativeFlow(...args: Parameters<AccountRepository["finishNativeFlow"]>) {
+    return this.accounts.finishNativeFlow(...args);
+  }
+  consumeNativeCode(...args: Parameters<AccountRepository["consumeNativeCode"]>) {
+    return this.accounts.consumeNativeCode(...args);
+  }
   // devices
-  registerNativeDevice(...args: Parameters<DeviceRepository["registerNativeDevice"]>) { return this.devices.registerNativeDevice(...args); }
-  removeNativeDevice(...args: Parameters<DeviceRepository["removeNativeDevice"]>) { return this.devices.removeNativeDevice(...args); }
-  nativeDevices(...args: Parameters<DeviceRepository["nativeDevices"]>) { return this.devices.nativeDevices(...args); }
-  allNativeDevices(...args: Parameters<DeviceRepository["allNativeDevices"]>) { return this.devices.allNativeDevices(...args); }
+  registerNativeDevice(...args: Parameters<DeviceRepository["registerNativeDevice"]>) {
+    return this.devices.registerNativeDevice(...args);
+  }
+  removeNativeDevice(...args: Parameters<DeviceRepository["removeNativeDevice"]>) {
+    return this.devices.removeNativeDevice(...args);
+  }
+  nativeDevices(...args: Parameters<DeviceRepository["nativeDevices"]>) {
+    return this.devices.nativeDevices(...args);
+  }
+  allNativeDevices(...args: Parameters<DeviceRepository["allNativeDevices"]>) {
+    return this.devices.allNativeDevices(...args);
+  }
   // BEGIN device activity
-  deviceActivity(...args: Parameters<DeviceRepository["deviceActivity"]>) { return this.devices.deviceActivity(...args); }
-  activeDevices(...args: Parameters<DeviceRepository["activeDevices"]>) { return this.devices.activeDevices(...args); }
-  endSessionActivity(...args: Parameters<DeviceRepository["endSessionActivity"]>) { return this.devices.endSessionActivity(...args); }
-  attachSubscriptionDevice(...args: Parameters<NotificationRepository["attachSubscriptionDevice"]>) { return this.notifications.attachSubscriptionDevice(...args); }
-  subscriptionDevices(...args: Parameters<NotificationRepository["subscriptionDevices"]>) { return this.notifications.subscriptionDevices(...args); }
+  deviceActivity(...args: Parameters<DeviceRepository["deviceActivity"]>) {
+    return this.devices.deviceActivity(...args);
+  }
+  activeDevices(...args: Parameters<DeviceRepository["activeDevices"]>) {
+    return this.devices.activeDevices(...args);
+  }
+  endSessionActivity(...args: Parameters<DeviceRepository["endSessionActivity"]>) {
+    return this.devices.endSessionActivity(...args);
+  }
+  attachSubscriptionDevice(
+    ...args: Parameters<NotificationRepository["attachSubscriptionDevice"]>
+  ) {
+    return this.notifications.attachSubscriptionDevice(...args);
+  }
+  subscriptionDevices(...args: Parameters<NotificationRepository["subscriptionDevices"]>) {
+    return this.notifications.subscriptionDevices(...args);
+  }
   // END device activity
-  registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) { return this.devices.registerLiveActivity(...args); }
-  liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) { return this.devices.liveActivityContext(...args); }
-  removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) { return this.devices.removeLiveActivity(...args); }
-  dismissLiveActivity(...args: Parameters<DeviceRepository["dismissLiveActivity"]>) { return this.devices.dismissLiveActivity(...args); }
-  liveActivities(...args: Parameters<DeviceRepository["liveActivities"]>) { return this.devices.liveActivities(...args); }
-  liveActivityObserved(...args: Parameters<DeviceRepository["liveActivityObserved"]>) { return this.devices.liveActivityObserved(...args); }
-  liveActivitySent(...args: Parameters<DeviceRepository["liveActivitySent"]>) { return this.devices.liveActivitySent(...args); }
-  liveActivityFailed(...args: Parameters<DeviceRepository["liveActivityFailed"]>) { return this.devices.liveActivityFailed(...args); }
-  liveActivityDevices(...args: Parameters<DeviceRepository["liveActivityDevices"]>) { return this.devices.liveActivityDevices(...args); }
-  registerLiveActivityStart(...args: Parameters<DeviceRepository["registerLiveActivityStart"]>) { return this.devices.registerLiveActivityStart(...args); }
-  removeLiveActivityStart(...args: Parameters<DeviceRepository["removeLiveActivityStart"]>) { return this.devices.removeLiveActivityStart(...args); }
-  liveActivityStart(...args: Parameters<DeviceRepository["liveActivityStart"]>) { return this.devices.liveActivityStart(...args); }
-  liveActivityStarts(...args: Parameters<DeviceRepository["liveActivityStarts"]>) { return this.devices.liveActivityStarts(...args); }
-  liveActivityStartedLocally(...args: Parameters<DeviceRepository["liveActivityStartedLocally"]>) { return this.devices.liveActivityStartedLocally(...args); }
-  liveActivityStartCovered(...args: Parameters<DeviceRepository["liveActivityStartCovered"]>) { return this.devices.liveActivityStartCovered(...args); }
-  liveActivityStartFailed(...args: Parameters<DeviceRepository["liveActivityStartFailed"]>) { return this.devices.liveActivityStartFailed(...args); }
-  removeLiveActivityStartToken(...args: Parameters<DeviceRepository["removeLiveActivityStartToken"]>) { return this.devices.removeLiveActivityStartToken(...args); }
+  registerLiveActivity(...args: Parameters<DeviceRepository["registerLiveActivity"]>) {
+    return this.devices.registerLiveActivity(...args);
+  }
+  liveActivityContext(...args: Parameters<DeviceRepository["liveActivityContext"]>) {
+    return this.devices.liveActivityContext(...args);
+  }
+  removeLiveActivity(...args: Parameters<DeviceRepository["removeLiveActivity"]>) {
+    return this.devices.removeLiveActivity(...args);
+  }
+  dismissLiveActivity(...args: Parameters<DeviceRepository["dismissLiveActivity"]>) {
+    return this.devices.dismissLiveActivity(...args);
+  }
+  liveActivities(...args: Parameters<DeviceRepository["liveActivities"]>) {
+    return this.devices.liveActivities(...args);
+  }
+  liveActivityObserved(...args: Parameters<DeviceRepository["liveActivityObserved"]>) {
+    return this.devices.liveActivityObserved(...args);
+  }
+  liveActivitySent(...args: Parameters<DeviceRepository["liveActivitySent"]>) {
+    return this.devices.liveActivitySent(...args);
+  }
+  liveActivityFailed(...args: Parameters<DeviceRepository["liveActivityFailed"]>) {
+    return this.devices.liveActivityFailed(...args);
+  }
+  liveActivityDevices(...args: Parameters<DeviceRepository["liveActivityDevices"]>) {
+    return this.devices.liveActivityDevices(...args);
+  }
+  registerLiveActivityStart(...args: Parameters<DeviceRepository["registerLiveActivityStart"]>) {
+    return this.devices.registerLiveActivityStart(...args);
+  }
+  removeLiveActivityStart(...args: Parameters<DeviceRepository["removeLiveActivityStart"]>) {
+    return this.devices.removeLiveActivityStart(...args);
+  }
+  liveActivityStart(...args: Parameters<DeviceRepository["liveActivityStart"]>) {
+    return this.devices.liveActivityStart(...args);
+  }
+  liveActivityStarts(...args: Parameters<DeviceRepository["liveActivityStarts"]>) {
+    return this.devices.liveActivityStarts(...args);
+  }
+  liveActivityStartedLocally(...args: Parameters<DeviceRepository["liveActivityStartedLocally"]>) {
+    return this.devices.liveActivityStartedLocally(...args);
+  }
+  liveActivityStartCovered(...args: Parameters<DeviceRepository["liveActivityStartCovered"]>) {
+    return this.devices.liveActivityStartCovered(...args);
+  }
+  liveActivityStartFailed(...args: Parameters<DeviceRepository["liveActivityStartFailed"]>) {
+    return this.devices.liveActivityStartFailed(...args);
+  }
+  removeLiveActivityStartToken(
+    ...args: Parameters<DeviceRepository["removeLiveActivityStartToken"]>
+  ) {
+    return this.devices.removeLiveActivityStartToken(...args);
+  }
   // personal
-  preferences(...args: Parameters<PersonalRepository["preferences"]>) { return this.personalState.preferences(...args); }
-  savePreferences(...args: Parameters<PersonalRepository["savePreferences"]>) { return this.personalState.savePreferences(...args); }
-  personal(...args: Parameters<PersonalRepository["personal"]>) { return this.personalState.personal(...args); }
-  savePersonal(...args: Parameters<PersonalRepository["savePersonal"]>) { return this.personalState.savePersonal(...args); }
-  cardState(...args: Parameters<PersonalRepository["cardState"]>) { return this.personalState.cardState(...args); }
-  saveCardState(...args: Parameters<PersonalRepository["saveCardState"]>) { return this.personalState.saveCardState(...args); }
-  savedItems(...args: Parameters<PersonalRepository["savedItems"]>) { return this.personalState.savedItems(...args); }
-  saveItem(...args: Parameters<PersonalRepository["saveItem"]>) { return this.personalState.saveItem(...args); }
-  deleteSavedItem(...args: Parameters<PersonalRepository["deleteSavedItem"]>) { return this.personalState.deleteSavedItem(...args); }
+  preferences(...args: Parameters<PersonalRepository["preferences"]>) {
+    return this.personalState.preferences(...args);
+  }
+  savePreferences(...args: Parameters<PersonalRepository["savePreferences"]>) {
+    return this.personalState.savePreferences(...args);
+  }
+  personal(...args: Parameters<PersonalRepository["personal"]>) {
+    return this.personalState.personal(...args);
+  }
+  savePersonal(...args: Parameters<PersonalRepository["savePersonal"]>) {
+    return this.personalState.savePersonal(...args);
+  }
+  cardState(...args: Parameters<PersonalRepository["cardState"]>) {
+    return this.personalState.cardState(...args);
+  }
+  saveCardState(...args: Parameters<PersonalRepository["saveCardState"]>) {
+    return this.personalState.saveCardState(...args);
+  }
+  savedItems(...args: Parameters<PersonalRepository["savedItems"]>) {
+    return this.personalState.savedItems(...args);
+  }
+  saveItem(...args: Parameters<PersonalRepository["saveItem"]>) {
+    return this.personalState.saveItem(...args);
+  }
+  deleteSavedItem(...args: Parameters<PersonalRepository["deleteSavedItem"]>) {
+    return this.personalState.deleteSavedItem(...args);
+  }
   // drafts
-  draft(...args: Parameters<DraftRepository["draft"]>) { return this.drafts.draft(...args); }
-  saveDraft(...args: Parameters<DraftRepository["saveDraft"]>) { return this.drafts.saveDraft(...args); }
-  clearSubmittedDraft(...args: Parameters<DraftRepository["clearSubmittedDraft"]>) { return this.drafts.clearSubmittedDraft(...args); }
-  watchDrafts(...args: Parameters<DraftRepository["watch"]>) { return this.drafts.watch(...args); }
+  draft(...args: Parameters<DraftRepository["draft"]>) {
+    return this.drafts.draft(...args);
+  }
+  saveDraft(...args: Parameters<DraftRepository["saveDraft"]>) {
+    return this.drafts.saveDraft(...args);
+  }
+  clearSubmittedDraft(...args: Parameters<DraftRepository["clearSubmittedDraft"]>) {
+    return this.drafts.clearSubmittedDraft(...args);
+  }
+  watchDrafts(...args: Parameters<DraftRepository["watch"]>) {
+    return this.drafts.watch(...args);
+  }
   // presentation
-  presentation(...args: Parameters<PresentationRepository["presentation"]>) { return this.presentations.presentation(...args); }
-  changedSince(...args: Parameters<PresentationRepository["changedSince"]>) { return this.presentations.changedSince(...args); }
-  privateBots(...args: Parameters<PresentationRepository["privateBots"]>) { return this.presentations.privateBots(...args); }
-  rememberNames(...args: Parameters<PresentationRepository["rememberNames"]>) { return this.presentations.rememberNames(...args); }
-  nameHistory(...args: Parameters<PresentationRepository["nameHistory"]>) { return this.presentations.nameHistory(...args); }
-  visibilityPeriods(...args: Parameters<PresentationRepository["visibilityPeriods"]>) { return this.presentations.visibilityPeriods(...args); }
-  mayReceive(...args: Parameters<PresentationRepository["mayReceive"]>) { return this.presentations.mayReceive(...args); }
-  savePresentation(...args: Parameters<PresentationRepository["savePresentation"]>) { return this.presentations.savePresentation(...args); }
-  swapPresentation(...args: Parameters<PresentationRepository["swapPresentation"]>) { return this.presentations.swapPresentation(...args); }
-  restorePresentation(...args: Parameters<PresentationRepository["restorePresentation"]>) { return this.presentations.restorePresentation(...args); }
-  saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) { return this.presentations.saveAvatar(...args); }
-  botVoice(...args: Parameters<PresentationRepository["voice"]>) { return this.presentations.voice(...args); }
-  saveVoice(...args: Parameters<PresentationRepository["saveVoice"]>) { return this.presentations.saveVoice(...args); }
+  presentation(...args: Parameters<PresentationRepository["presentation"]>) {
+    return this.presentations.presentation(...args);
+  }
+  changedSince(...args: Parameters<PresentationRepository["changedSince"]>) {
+    return this.presentations.changedSince(...args);
+  }
+  privateBots(...args: Parameters<PresentationRepository["privateBots"]>) {
+    return this.presentations.privateBots(...args);
+  }
+  rememberNames(...args: Parameters<PresentationRepository["rememberNames"]>) {
+    return this.presentations.rememberNames(...args);
+  }
+  nameHistory(...args: Parameters<PresentationRepository["nameHistory"]>) {
+    return this.presentations.nameHistory(...args);
+  }
+  visibilityPeriods(...args: Parameters<PresentationRepository["visibilityPeriods"]>) {
+    return this.presentations.visibilityPeriods(...args);
+  }
+  mayReceive(...args: Parameters<PresentationRepository["mayReceive"]>) {
+    return this.presentations.mayReceive(...args);
+  }
+  savePresentation(...args: Parameters<PresentationRepository["savePresentation"]>) {
+    return this.presentations.savePresentation(...args);
+  }
+  swapPresentation(...args: Parameters<PresentationRepository["swapPresentation"]>) {
+    return this.presentations.swapPresentation(...args);
+  }
+  restorePresentation(...args: Parameters<PresentationRepository["restorePresentation"]>) {
+    return this.presentations.restorePresentation(...args);
+  }
+  saveAvatar(...args: Parameters<PresentationRepository["saveAvatar"]>) {
+    return this.presentations.saveAvatar(...args);
+  }
+  botVoice(...args: Parameters<PresentationRepository["voice"]>) {
+    return this.presentations.voice(...args);
+  }
+  saveVoice(...args: Parameters<PresentationRepository["saveVoice"]>) {
+    return this.presentations.saveVoice(...args);
+  }
   // submissions
-  intent(...args: Parameters<SubmissionRepository["intent"]>) { return this.submissions.intent(...args); }
-  claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) { return this.submissions.claimRetry(...args); }
-  retryClaims(...args: Parameters<SubmissionRepository["retryClaims"]>) { return this.submissions.retryClaims(...args); }
-  submission(...args: Parameters<SubmissionRepository["submission"]>) { return this.submissions.submission(...args); }
-  submissionForMessage(...args: Parameters<SubmissionRepository["submissionForMessage"]>) { return this.submissions.submissionForMessage(...args); }
-  pending(...args: Parameters<SubmissionRepository["pending"]>) { return this.submissions.pending(...args); }
-  receipt(...args: Parameters<SubmissionRepository["receipt"]>) { return this.submissions.receipt(...args); }
-  participate(...args: Parameters<SubmissionRepository["participate"]>) { return this.submissions.participate(...args); }
-  participants(...args: Parameters<SubmissionRepository["participants"]>) { return this.submissions.participants(...args); }
-  attributeApproval(...args: Parameters<SubmissionRepository["attributeApproval"]>) { return this.submissions.attributeApproval(...args); }
-  approval(...args: Parameters<SubmissionRepository["approval"]>) { return this.submissions.approval(...args); }
-  attributeGroupMessage(...args: Parameters<SubmissionRepository["attributeGroupMessage"]>) { return this.submissions.attributeGroupMessage(...args); }
-  groupSenders(...args: Parameters<SubmissionRepository["groupSenders"]>) { return this.submissions.groupSenders(...args); }
+  intent(...args: Parameters<SubmissionRepository["intent"]>) {
+    return this.submissions.intent(...args);
+  }
+  claimRetry(...args: Parameters<SubmissionRepository["claimRetry"]>) {
+    return this.submissions.claimRetry(...args);
+  }
+  retryClaims(...args: Parameters<SubmissionRepository["retryClaims"]>) {
+    return this.submissions.retryClaims(...args);
+  }
+  submission(...args: Parameters<SubmissionRepository["submission"]>) {
+    return this.submissions.submission(...args);
+  }
+  submissionForMessage(...args: Parameters<SubmissionRepository["submissionForMessage"]>) {
+    return this.submissions.submissionForMessage(...args);
+  }
+  pending(...args: Parameters<SubmissionRepository["pending"]>) {
+    return this.submissions.pending(...args);
+  }
+  receipt(...args: Parameters<SubmissionRepository["receipt"]>) {
+    return this.submissions.receipt(...args);
+  }
+  participate(...args: Parameters<SubmissionRepository["participate"]>) {
+    return this.submissions.participate(...args);
+  }
+  participants(...args: Parameters<SubmissionRepository["participants"]>) {
+    return this.submissions.participants(...args);
+  }
+  attributeApproval(...args: Parameters<SubmissionRepository["attributeApproval"]>) {
+    return this.submissions.attributeApproval(...args);
+  }
+  approval(...args: Parameters<SubmissionRepository["approval"]>) {
+    return this.submissions.approval(...args);
+  }
+  attributeGroupMessage(...args: Parameters<SubmissionRepository["attributeGroupMessage"]>) {
+    return this.submissions.attributeGroupMessage(...args);
+  }
+  groupSenders(...args: Parameters<SubmissionRepository["groupSenders"]>) {
+    return this.submissions.groupSenders(...args);
+  }
   // routines
-  routineRecipients(...args: Parameters<RoutineRepository["routineRecipients"]>) { return this.routines.routineRecipients(...args); }
-  getRoutineRecipients(...args: Parameters<RoutineRepository["getRoutineRecipients"]>) { return this.routines.getRoutineRecipients(...args); }
-  adoptLegacyRecipients(...args: Parameters<RoutineRepository["adoptLegacyRecipients"]>) { return this.routines.adoptLegacyRecipients(...args); }
-  routineTrial(...args: Parameters<RoutineRepository["routineTrial"]>) { return this.routines.routineTrial(...args); }
-  routineTrials(...args: Parameters<RoutineRepository["routineTrials"]>) { return this.routines.routineTrials(...args); }
-  rememberRoutineTrial(...args: Parameters<RoutineRepository["rememberRoutineTrial"]>) { return this.routines.rememberRoutineTrial(...args); }
-  recordRoutineTrialStatus(...args: Parameters<RoutineRepository["recordRoutineTrialStatus"]>) { return this.routines.recordRoutineTrialStatus(...args); }
+  routineRecipients(...args: Parameters<RoutineRepository["routineRecipients"]>) {
+    return this.routines.routineRecipients(...args);
+  }
+  getRoutineRecipients(...args: Parameters<RoutineRepository["getRoutineRecipients"]>) {
+    return this.routines.getRoutineRecipients(...args);
+  }
+  adoptLegacyRecipients(...args: Parameters<RoutineRepository["adoptLegacyRecipients"]>) {
+    return this.routines.adoptLegacyRecipients(...args);
+  }
+  routineTrial(...args: Parameters<RoutineRepository["routineTrial"]>) {
+    return this.routines.routineTrial(...args);
+  }
+  routineTrials(...args: Parameters<RoutineRepository["routineTrials"]>) {
+    return this.routines.routineTrials(...args);
+  }
+  rememberRoutineTrial(...args: Parameters<RoutineRepository["rememberRoutineTrial"]>) {
+    return this.routines.rememberRoutineTrial(...args);
+  }
+  recordRoutineTrialStatus(...args: Parameters<RoutineRepository["recordRoutineTrialStatus"]>) {
+    return this.routines.recordRoutineTrialStatus(...args);
+  }
   // notifications
-  recipients(...args: Parameters<NotificationRepository["recipients"]>) { return this.notifications.recipients(...args); }
-  queueNotification(...args: Parameters<NotificationRepository["queueNotification"]>) { return this.notifications.queueNotification(...args); }
-  enqueue(...args: Parameters<NotificationRepository["enqueue"]>) { return this.notifications.enqueue(...args); }
-  chatPresence(...args: Parameters<NotificationRepository["chatPresence"]>) { return this.notifications.chatPresence(...args); }
-  seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) { return this.notifications.seenInChat(...args); }
-  chatReads(...args: Parameters<NotificationRepository["chatReads"]>) { return this.notifications.chatReads(...args); }
-  pendingDecisions(...args: Parameters<NotificationRepository["pendingDecisions"]>) { return this.notifications.pendingDecisions(...args); }
-  unresolvedApprovalBots(...args: Parameters<NotificationRepository["unresolvedApprovalBots"]>) { return this.notifications.unresolvedApprovalBots(...args); }
-  reconcileApprovals(...args: Parameters<NotificationRepository["reconcileApprovals"]>) { return this.notifications.reconcileApprovals(...args); }
-  issuePushAction(...args: Parameters<NotificationRepository["issuePushAction"]>) { return this.notifications.issuePushAction(...args); }
-  consumePushAction(...args: Parameters<NotificationRepository["consumePushAction"]>) { return this.notifications.consumePushAction(...args); }
-  readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) { return this.notifications.readOnDevices(...args); }
-  markCleared(...args: Parameters<NotificationRepository["markCleared"]>) { return this.notifications.markCleared(...args); }
-  subscribe(...args: Parameters<NotificationRepository["subscribe"]>) { return this.notifications.subscribe(...args); }
-  unsubscribe(...args: Parameters<NotificationRepository["unsubscribe"]>) { return this.notifications.unsubscribe(...args); }
-  hasSubscription(...args: Parameters<NotificationRepository["hasSubscription"]>) { return this.notifications.hasSubscription(...args); }
-  subscriptions(...args: Parameters<NotificationRepository["subscriptions"]>) { return this.notifications.subscriptions(...args); }
-  outbox(...args: Parameters<NotificationRepository["outbox"]>) { return this.notifications.outbox(...args); }
-  deliveryGroups(...args: Parameters<NotificationRepository["deliveryGroups"]>) { return this.notifications.deliveryGroups(...args); }
-  delivered(...args: Parameters<NotificationRepository["delivered"]>) { return this.notifications.delivered(...args); }
-  markDelivered(...args: Parameters<NotificationRepository["markDelivered"]>) { return this.notifications.markDelivered(...args); }
-  finishDelivery(...args: Parameters<NotificationRepository["finishDelivery"]>) { return this.notifications.finishDelivery(...args); }
-  retryDelivery(...args: Parameters<NotificationRepository["retryDelivery"]>) { return this.notifications.retryDelivery(...args); }
-  expireNotifications(...args: Parameters<NotificationRepository["expireNotifications"]>) { return this.notifications.expireNotifications(...args); }
+  recipients(...args: Parameters<NotificationRepository["recipients"]>) {
+    return this.notifications.recipients(...args);
+  }
+  queueNotification(...args: Parameters<NotificationRepository["queueNotification"]>) {
+    return this.notifications.queueNotification(...args);
+  }
+  enqueue(...args: Parameters<NotificationRepository["enqueue"]>) {
+    return this.notifications.enqueue(...args);
+  }
+  chatPresence(...args: Parameters<NotificationRepository["chatPresence"]>) {
+    return this.notifications.chatPresence(...args);
+  }
+  seenInChat(...args: Parameters<NotificationRepository["seenInChat"]>) {
+    return this.notifications.seenInChat(...args);
+  }
+  chatReads(...args: Parameters<NotificationRepository["chatReads"]>) {
+    return this.notifications.chatReads(...args);
+  }
+  pendingDecisions(...args: Parameters<NotificationRepository["pendingDecisions"]>) {
+    return this.notifications.pendingDecisions(...args);
+  }
+  unresolvedApprovalBots(...args: Parameters<NotificationRepository["unresolvedApprovalBots"]>) {
+    return this.notifications.unresolvedApprovalBots(...args);
+  }
+  reconcileApprovals(...args: Parameters<NotificationRepository["reconcileApprovals"]>) {
+    return this.notifications.reconcileApprovals(...args);
+  }
+  issuePushAction(...args: Parameters<NotificationRepository["issuePushAction"]>) {
+    return this.notifications.issuePushAction(...args);
+  }
+  consumePushAction(...args: Parameters<NotificationRepository["consumePushAction"]>) {
+    return this.notifications.consumePushAction(...args);
+  }
+  readOnDevices(...args: Parameters<NotificationRepository["readOnDevices"]>) {
+    return this.notifications.readOnDevices(...args);
+  }
+  markCleared(...args: Parameters<NotificationRepository["markCleared"]>) {
+    return this.notifications.markCleared(...args);
+  }
+  subscribe(...args: Parameters<NotificationRepository["subscribe"]>) {
+    return this.notifications.subscribe(...args);
+  }
+  unsubscribe(...args: Parameters<NotificationRepository["unsubscribe"]>) {
+    return this.notifications.unsubscribe(...args);
+  }
+  hasSubscription(...args: Parameters<NotificationRepository["hasSubscription"]>) {
+    return this.notifications.hasSubscription(...args);
+  }
+  subscriptions(...args: Parameters<NotificationRepository["subscriptions"]>) {
+    return this.notifications.subscriptions(...args);
+  }
+  outbox(...args: Parameters<NotificationRepository["outbox"]>) {
+    return this.notifications.outbox(...args);
+  }
+  deliveryGroups(...args: Parameters<NotificationRepository["deliveryGroups"]>) {
+    return this.notifications.deliveryGroups(...args);
+  }
+  delivered(...args: Parameters<NotificationRepository["delivered"]>) {
+    return this.notifications.delivered(...args);
+  }
+  markDelivered(...args: Parameters<NotificationRepository["markDelivered"]>) {
+    return this.notifications.markDelivered(...args);
+  }
+  finishDelivery(...args: Parameters<NotificationRepository["finishDelivery"]>) {
+    return this.notifications.finishDelivery(...args);
+  }
+  retryDelivery(...args: Parameters<NotificationRepository["retryDelivery"]>) {
+    return this.notifications.retryDelivery(...args);
+  }
+  expireNotifications(...args: Parameters<NotificationRepository["expireNotifications"]>) {
+    return this.notifications.expireNotifications(...args);
+  }
   // events
-  cursor(...args: Parameters<EventRepository["cursor"]>) { return this.events.cursor(...args); }
-  recordEvents(...args: Parameters<EventRepository["recordEvents"]>) { return this.events.recordEvents(...args); }
-  enqueueKnownEvents(...args: Parameters<EventRepository["enqueueKnownEvents"]>) { return this.events.enqueueKnownEvents(...args); }
-  latestEventFrontier(...args: Parameters<EventRepository["latestEventFrontier"]>) { return this.events.latestEventFrontier(...args); }
-  runOutcome(...args: Parameters<EventRepository["runOutcome"]>) { return this.events.runOutcome(...args); }
-  eventPage(...args: Parameters<EventRepository["eventPage"]>) { return this.events.eventPage(...args); }
-  todaySeen(...args: Parameters<EventRepository["todaySeen"]>) { return this.events.todaySeen(...args); }
-  todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) { return this.events.todayFrontier(...args); }
-  markTodaySeen(...args: Parameters<EventRepository["markTodaySeen"]>) { return this.events.markTodaySeen(...args); }
+  cursor(...args: Parameters<EventRepository["cursor"]>) {
+    return this.events.cursor(...args);
+  }
+  recordEvents(...args: Parameters<EventRepository["recordEvents"]>) {
+    return this.events.recordEvents(...args);
+  }
+  enqueueKnownEvents(...args: Parameters<EventRepository["enqueueKnownEvents"]>) {
+    return this.events.enqueueKnownEvents(...args);
+  }
+  latestEventFrontier(...args: Parameters<EventRepository["latestEventFrontier"]>) {
+    return this.events.latestEventFrontier(...args);
+  }
+  runOutcome(...args: Parameters<EventRepository["runOutcome"]>) {
+    return this.events.runOutcome(...args);
+  }
+  eventPage(...args: Parameters<EventRepository["eventPage"]>) {
+    return this.events.eventPage(...args);
+  }
+  todaySeen(...args: Parameters<EventRepository["todaySeen"]>) {
+    return this.events.todaySeen(...args);
+  }
+  todayFrontier(...args: Parameters<EventRepository["todayFrontier"]>) {
+    return this.events.todayFrontier(...args);
+  }
+  markTodaySeen(...args: Parameters<EventRepository["markTodaySeen"]>) {
+    return this.events.markTodaySeen(...args);
+  }
   // retention
   forgetBot(...args: Parameters<RetentionRepository["forgetBot"]>) {
     this.retention.forgetBot(...args);
     // Its sharing record is gone, so open streams must rebuild what they hide.
     this.presentations.noteRemoved();
   }
-  pruneRetention(...args: Parameters<RetentionRepository["pruneRetention"]>) { return this.retention.pruneRetention(...args); }
+  pruneRetention(...args: Parameters<RetentionRepository["pruneRetention"]>) {
+    return this.retention.pruneRetention(...args);
+  }
 }

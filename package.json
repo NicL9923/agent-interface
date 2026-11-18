@@ -21,7 +21,8 @@
     "doctor": "tsx scripts/setup.ts --check",
     "prepare": "node scripts/install-hooks.mjs",
     "verify:ci": "node scripts/check-parallel.mjs",
-    "format": "oxfmt --write src scripts tests e2e"
+    "format": "python3 .agents/tools/format-python.py --write && oxfmt --write --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --write --log-level warn \"**/*.{css,json,md,yml,yaml}\"",
+    "format:check": "python3 .agents/tools/format-python.py --check && oxfmt --check --no-error-on-unmatched-pattern \"**/*.{ts,tsx,js,jsx,mjs}\" && prettier --check \"**/*.{css,json,md,yml,yaml}\""
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
@@ -76,7 +77,7 @@
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs}": [
       "oxlint --deny-warnings",
-      "oxfmt --write"
+      "oxfmt --write --no-error-on-unmatched-pattern"
     ],
     "*.{css,json,md,yml,yaml}": [
       "prettier --write"

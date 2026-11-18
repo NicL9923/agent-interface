@@ -146,7 +146,10 @@ export function silhouette(shape: AvatarShape | "mascot"): string {
  * Where each silhouette's face sits. Eyes follow the visual center of mass, so
  * a triangle or drop looks out from its wide base instead of its point.
  */
-export const faces: Record<AvatarShape | "mascot", { cy: number; scale: number; top: number; hat: number }> = {
+export const faces: Record<
+  AvatarShape | "mascot",
+  { cy: number; scale: number; top: number; hat: number }
+> = {
   blob: { cy: 50, scale: 1, top: 3, hat: 1 },
   pebble: { cy: 50, scale: 1, top: 2, hat: 1 },
   squircle: { cy: 50, scale: 1, top: 5, hat: 1 },
@@ -230,9 +233,7 @@ function useShapeTransition(desired: string, reduce: boolean) {
     const tick = (now: number) => {
       const t = Math.min((now - start) / 280, 1);
       const ease = t * t * (3 - 2 * t);
-      points.current = target.map((p, i) =>
-        p.map((v, j) => from[i][j] + (v - from[i][j]) * ease),
-      );
+      points.current = target.map((p, i) => p.map((v, j) => from[i][j] + (v - from[i][j]) * ease));
       setPath("M" + points.current.map((p) => p.join(" ")).join(" L") + "Z");
       if (t < 1) frame = requestAnimationFrame(tick);
     };
@@ -243,7 +244,12 @@ function useShapeTransition(desired: string, reduce: boolean) {
 }
 
 /** Trails from the current pose, or residual trails still sweeping after a change. */
-function trailsAt(pose: { trails: number; sweep: number }, t: number, carry: number, carrySweep: number) {
+function trailsAt(
+  pose: { trails: number; sweep: number },
+  t: number,
+  carry: number,
+  carrySweep: number,
+) {
   const residual = carry * (1 - smoothstep(t / 0.6));
   return pose.trails >= residual
     ? { level: pose.trails, sweep: pose.sweep }
@@ -262,7 +268,11 @@ const sparks = [0, 45, 90, 135, 180, 225, 270, 315];
  * must still move independently; an avatar with neither counts as its own bot.
  */
 export function motionOwner(botId: string | undefined, name: string | undefined, instance: string) {
-  return botId !== undefined ? `bot:${botId}` : name !== undefined ? `name:${name}` : `avatar-${instance}`;
+  return botId !== undefined
+    ? `bot:${botId}`
+    : name !== undefined
+      ? `name:${name}`
+      : `avatar-${instance}`;
 }
 
 export function Avatar({
@@ -297,9 +307,7 @@ export function Avatar({
   useEffect(() => {
     // Without the observer, as in jsdom or an old browser, the avatar stays visible and keeps moving.
     if (!wrapper.current || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) =>
-      setVisible(entry.isIntersecting),
-    );
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting));
     observer.observe(wrapper.current);
     return () => observer.disconnect();
   }, []);
@@ -330,7 +338,11 @@ export function Avatar({
   const expression = useRef<Expression>(expressionFor(state, 0));
   const morph = useRef(morphTargets(state));
   const still = reduce || !visible || avatar.mode === "portrait" || frozenStates.includes(state);
-  const gaze = useAvatarAttention(wrapper, botId, aware && !still && (state === "idle" || state === "done"));
+  const gaze = useAvatarAttention(
+    wrapper,
+    botId,
+    aware && !still && (state === "idle" || state === "done"),
+  );
   const burst = useAvatarReactions(wrapper, botId, !reduce);
   useLayoutEffect(() => {
     if (motion.current.prop === prop) return;
@@ -354,7 +366,14 @@ export function Avatar({
     if (still) {
       expression.current = expressionFor(state, Infinity);
       morph.current = morphTargets(state);
-      motion.current = { ...motion.current, elapsed: 0, level: 0, sweep: 0, carry: 0, carrySweep: 0 };
+      motion.current = {
+        ...motion.current,
+        elapsed: 0,
+        level: 0,
+        sweep: 0,
+        carry: 0,
+        carrySweep: 0,
+      };
       setFrame((f) => f + 1);
       return;
     }
@@ -365,10 +384,22 @@ export function Avatar({
         const dt = Math.min(Math.max(0, (now - last) / 1000), 0.05);
         last = now;
         const clock = motion.current;
-        const cue = avatarConductor.cue(owner, state, clock.since / 1000, clock.entered, !!clock.prop, now / 1000);
+        const cue = avatarConductor.cue(
+          owner,
+          state,
+          clock.since / 1000,
+          clock.entered,
+          !!clock.prop,
+          now / 1000,
+        );
         const { plan } = cue;
         const t = Math.max(0, now / 1000 - cue.since);
-        const trail = trailsAt(avatarPose(state, t, false, clock.prop, plan), t, clock.carry, clock.carrySweep);
+        const trail = trailsAt(
+          avatarPose(state, t, false, clock.prop, plan),
+          t,
+          clock.carry,
+          clock.carrySweep,
+        );
         motion.current = { ...clock, elapsed: t, now, plan, ...trail };
         expression.current = approach(expression.current, expressionFor(state, t, plan), dt);
         const targets = morphTargets(state);
@@ -381,8 +412,11 @@ export function Avatar({
         // Small avatars repaint at about 30 fps to spare battery. They sleep between frames, because
         // asking for every display refresh makes the page restyle on each one even when nothing paints.
         // An idle avatar that is only breathing sleeps longer, until just before its next blink or glance.
-        return state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000) ? IDLE_FRAME_MS
-          : size >= 56 ? 0 : 24;
+        return state === "idle" && !settling && idleQuietAt(t, plan, (IDLE_FRAME_MS + 20) / 1000)
+          ? IDLE_FRAME_MS
+          : size >= 56
+            ? 0
+            : 24;
       },
       commit: () => setFrame((f) => f + 1),
     });
@@ -411,16 +445,19 @@ export function Avatar({
   const accessory = avatar.mode === "portrait" ? "none" : avatar.accessory;
   const geometry = avatar.mode === "geometric" ? avatar.shape : "mascot";
   const anchor = (character && characterAnchors[character]) || faces[geometry] || faces.blob;
-  const bodyPath = useShapeTransition((character && characterHeads[character]) || silhouette(geometry), reduce);
+  const bodyPath = useShapeTransition(
+    (character && characterHeads[character]) || silhouette(geometry),
+    reduce,
+  );
   const ink = faceInk(character ? eyeSurroundColor(character, color) : color, !!mascot);
   const headFill = character ? headColor(character, color) : color;
   // Glasses sit mostly on the head, so they contrast with it rather than with an eye patch.
   const frameInk = headFill === color ? ink : faceInk(headFill, !!mascot);
   const edge = bodyEdge(headFill);
   const eyeScale = anchor.scale;
-  const eyeWidth = avatar.mode === "portrait" ? 1 : avatar.eyeWidth ?? 1;
-  const eyeHeight = avatar.mode === "portrait" ? 1 : avatar.eyeHeight ?? 1;
-  const eyeSpacing = avatar.mode === "portrait" ? 1 : avatar.eyeSpacing ?? 1;
+  const eyeWidth = avatar.mode === "portrait" ? 1 : (avatar.eyeWidth ?? 1);
+  const eyeHeight = avatar.mode === "portrait" ? 1 : (avatar.eyeHeight ?? 1);
+  const eyeSpacing = avatar.mode === "portrait" ? 1 : (avatar.eyeSpacing ?? 1);
   const eyeY = anchor.cy + pose.gazeY * 3 + (state === "waiting" ? 2 : 0);
   const eyeOffset = (mascot ? 17 : 15) * eyeSpacing * eyeScale;
   const center = project(pose.gazeX * 2, pose.yaw);
@@ -428,13 +465,16 @@ export function Avatar({
   // A pitched face rolls everything painted on it, eyes and muzzle alike, around the sphere.
   const roll = pitchEyes(pose.pitch);
   // Dots replace pills outright; other eye styles shrink toward a dot instead.
-  const pill = !(mascot && (eyes === "oval" || eyes === "round")) && eyes !== "spark" && eyes !== "visor" && eyes !== "round";
+  const pill =
+    !(mascot && (eyes === "oval" || eyes === "round")) &&
+    eyes !== "spark" &&
+    eyes !== "visor" &&
+    eyes !== "round";
   const dotShrink = pill ? 1 + 0.12 * face.dot : 1 - 0.3 * face.dot;
-  const trailArcs = trailLevel > 0.01
-    ? trailOrbits.map(([rx, ry, tilt], i) =>
-        orbitArcs(-sweep - i * 0.9, 1.5, rx, ry, tilt),
-      )
-    : [];
+  const trailArcs =
+    trailLevel > 0.01
+      ? trailOrbits.map(([rx, ry, tilt], i) => orbitArcs(-sweep - i * 0.9, 1.5, rx, ry, tilt))
+      : [];
   const trailLayer = (part: "back" | "front") =>
     trailLevel > 0.01 && (
       <g fill="none" strokeWidth="3" strokeLinecap="round" opacity={trailLevel * 0.9}>
@@ -464,8 +504,14 @@ export function Avatar({
     if (eyes === "round") return <circle r="7.5" />;
     const height = 25 - 14 * face.dot;
     return (
-      <rect x="-5.5" y={-height / 2} width="11" height={height} rx="5.5"
-        transform={`rotate(${face.tilt * side})`} />
+      <rect
+        x="-5.5"
+        y={-height / 2}
+        width="11"
+        height={height}
+        rx="5.5"
+        transform={`rotate(${face.tilt * side})`}
+      />
     );
   };
   const eyesLayer = [-1, 1].map((direction) => {
@@ -476,7 +522,15 @@ export function Avatar({
     const size = perspective(p.scale) * pose.eyeScale * dotShrink;
     return (
       <g key={direction} transform={`translate(${50 + p.x} ${eyeY})`}>
-        {character && <EyeSurround family={character} side={side} color={color} scaleX={p.scale * eyeScale} scale={eyeScale} />}
+        {character && (
+          <EyeSurround
+            family={character}
+            side={side}
+            color={color}
+            scaleX={p.scale * eyeScale}
+            scale={eyeScale}
+          />
+        )}
         <g
           opacity={1 - face.happy}
           transform={`scale(${p.scale * eyeWidth * eyeScale * size * (1 + (1 - Math.min(face.open, 1)) * 0.4)} ${open * size})`}
@@ -517,82 +571,120 @@ export function Avatar({
   );
   const mascotFace = mascot && center.visible && (
     <g transform={`translate(${50 + center.x} 0) scale(${center.scale} 1) translate(-50 0)`}>
-      {character ? <CharacterFace family={character} color={color} ink={ink} mouth={face.mouth} happy={face.happy} /> : <>
-      {mascot.family === "bear" && <ellipse cx="50" cy="71" rx="18" ry="13" fill="#fff3db" />}
-      {mascot.family === "fox" && (
-        <path
-          d="M50 60 C43 67 24 65 10 70 C16 86 33 96 50 96 C67 96 84 86 90 70 C76 65 57 67 50 60Z"
-          fill="#fff3db"
-        />
-      )}
-      {mascot.family !== "sprout" && (
-        <path d="M45.5 66 Q50 63 54.5 66 Q53 70.5 50 71 Q47 70.5 45.5 66Z" fill="#2b201b" />
-      )}
-      {mascot.family === "sprout" ? (
-        <path
-          d={`M45 70 Q50 ${70 + 6 * face.mouth} 55 70`}
-          fill="none"
-          stroke={ink}
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          opacity={1 - face.happy}
+      {character ? (
+        <CharacterFace
+          family={character}
+          color={color}
+          ink={ink}
+          mouth={face.mouth}
+          happy={face.happy}
         />
       ) : (
-        <path
-          d={`M50 70.5 V73 M43.5 73 Q46.75 ${73 + 4 * face.mouth} 50 73 Q53.25 ${73 + 4 * face.mouth} 56.5 73`}
-          fill="none"
-          stroke="#2b201b"
-          strokeWidth="2"
-          strokeLinecap="round"
-          opacity={1 - face.happy}
-        />
+        <>
+          {mascot.family === "bear" && <ellipse cx="50" cy="71" rx="18" ry="13" fill="#fff3db" />}
+          {mascot.family === "fox" && (
+            <path
+              d="M50 60 C43 67 24 65 10 70 C16 86 33 96 50 96 C67 96 84 86 90 70 C76 65 57 67 50 60Z"
+              fill="#fff3db"
+            />
+          )}
+          {mascot.family !== "sprout" && (
+            <path d="M45.5 66 Q50 63 54.5 66 Q53 70.5 50 71 Q47 70.5 45.5 66Z" fill="#2b201b" />
+          )}
+          {mascot.family === "sprout" ? (
+            <path
+              d={`M45 70 Q50 ${70 + 6 * face.mouth} 55 70`}
+              fill="none"
+              stroke={ink}
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              opacity={1 - face.happy}
+            />
+          ) : (
+            <path
+              d={`M50 70.5 V73 M43.5 73 Q46.75 ${73 + 4 * face.mouth} 50 73 Q53.25 ${73 + 4 * face.mouth} 56.5 73`}
+              fill="none"
+              stroke="#2b201b"
+              strokeWidth="2"
+              strokeLinecap="round"
+              opacity={1 - face.happy}
+            />
+          )}
+          {face.happy > 0.01 && (
+            <path
+              d={
+                mascot.family === "sprout"
+                  ? "M44 69 Q50 79 56 69 Q50 71.5 44 69Z"
+                  : "M44 73 Q50 83 56 73 Q50 75.5 44 73Z"
+              }
+              fill="#2b201b"
+              opacity={face.happy}
+            />
+          )}
+        </>
       )}
-      {face.happy > 0.01 && (
-        <path
-          d={mascot.family === "sprout" ? "M44 69 Q50 79 56 69 Q50 71.5 44 69Z" : "M44 73 Q50 83 56 73 Q50 75.5 44 73Z"}
-          fill="#2b201b"
-          opacity={face.happy}
-        />
-      )}
-      </>}
     </g>
   );
-  const cheeks = mascot && !(character && cheekless.has(character)) && [-1, 1].map((direction) => {
-    const p = project(direction * 27, pose.yaw);
-    return p.visible ? (
-      <ellipse key={direction} cx={50 + p.x} cy={anchor.cy + 12} rx={6 * p.scale} ry="3.8"
-        fill="#ff7a8a" opacity="0.42" />
-    ) : null;
-  });
-  const ears = mascot && (() => {
-    const inner = mascot.family === "fox" ? tint(color, -0.35) : tint(color, 0.45);
-    return [-1, 1].map((direction) => {
-      const p = project(direction * 31, pose.yaw, 44);
-      const flip = direction < 0 ? 1 : -1;
-      const transform = `translate(${50 + p.x} 0) scale(${Math.max(Math.abs(Math.cos(pose.yaw)), 0.35) * flip} 1)`;
-      if (mascot.family === "bear")
-        return (
-          <g key={direction} transform={transform}>
-            <circle cx="0" cy="24" r="15" fill={color} />
-            <circle cx="0" cy="25" r="8" fill={inner} />
-          </g>
-        );
-      if (mascot.family === "fox")
-        return (
-          <g key={direction} transform={transform}>
-            <path d="M-19 42 L-14 5 Q-12 -1 -7.5 3 L14 23Z" fill={color} />
-            <path d="M-13 31 L-10.5 11 L3 23Z" fill={inner} />
-          </g>
-        );
-      return null;
+  const cheeks =
+    mascot &&
+    !(character && cheekless.has(character)) &&
+    [-1, 1].map((direction) => {
+      const p = project(direction * 27, pose.yaw);
+      return p.visible ? (
+        <ellipse
+          key={direction}
+          cx={50 + p.x}
+          cy={anchor.cy + 12}
+          rx={6 * p.scale}
+          ry="3.8"
+          fill="#ff7a8a"
+          opacity="0.42"
+        />
+      ) : null;
     });
-  })();
+  const ears =
+    mascot &&
+    (() => {
+      const inner = mascot.family === "fox" ? tint(color, -0.35) : tint(color, 0.45);
+      return [-1, 1].map((direction) => {
+        const p = project(direction * 31, pose.yaw, 44);
+        const flip = direction < 0 ? 1 : -1;
+        const transform = `translate(${50 + p.x} 0) scale(${Math.max(Math.abs(Math.cos(pose.yaw)), 0.35) * flip} 1)`;
+        if (mascot.family === "bear")
+          return (
+            <g key={direction} transform={transform}>
+              <circle cx="0" cy="24" r="15" fill={color} />
+              <circle cx="0" cy="25" r="8" fill={inner} />
+            </g>
+          );
+        if (mascot.family === "fox")
+          return (
+            <g key={direction} transform={transform}>
+              <path d="M-19 42 L-14 5 Q-12 -1 -7.5 3 L14 23Z" fill={color} />
+              <path d="M-13 31 L-10.5 11 L3 23Z" fill={inner} />
+            </g>
+          );
+        return null;
+      });
+    })();
   const sprout = mascot?.family === "sprout" && (
     <g transform={`translate(${project(0, pose.yaw).x * 0.3} 0)`}>
-      <path d="M50 18 Q48.5 10 51 3" fill="none" stroke="#3f7f55" strokeWidth="3" strokeLinecap="round" />
+      <path
+        d="M50 18 Q48.5 10 51 3"
+        fill="none"
+        stroke="#3f7f55"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
       <path d="M50 10 C41 -1 27 1 24 7 C33 14 44 15 50 10Z" fill="#4f9d69" />
       <path d="M51 7 C58 -4 73 -4 77 2 C69 9 58 11 51 7Z" fill="#62b07a" />
-      <path d="M47 9.5 Q37 6 29 7 M54 6.5 Q63 2.5 72 2.5" fill="none" stroke="#a9d9b3" strokeWidth="1.2" strokeLinecap="round" />
+      <path
+        d="M47 9.5 Q37 6 29 7 M54 6.5 Q63 2.5 72 2.5"
+        fill="none"
+        stroke="#a9d9b3"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+      />
     </g>
   );
   const hatAnchor = (character && characterHatAnchors[character]) || anchor;
@@ -600,7 +692,10 @@ export function Avatar({
     <g transform={`translate(50 ${hatAnchor.top + 15 * hatAnchor.hat}) scale(${hatAnchor.hat})`}>
       <path d="M-20 -2 Q-21 -20 -10 -21 Q0 -16 10 -21 Q21 -20 20 -2Z" fill="#3a2f28" />
       <path d="M-20.3 -7 Q0 -3 20.3 -7 L20 -2 Q0 2 -20 -2Z" fill="#b48156" />
-      <path d="M-37 -4 Q-34 5 0 5 Q34 5 37 -4 Q38 -8 33 -6 Q0 2 -33 -6 Q-38 -8 -37 -4Z" fill="#302925" />
+      <path
+        d="M-37 -4 Q-34 5 0 5 Q34 5 37 -4 Q38 -8 33 -6 Q0 2 -33 -6 Q-38 -8 -37 -4Z"
+        fill="#302925"
+      />
     </g>
   );
   // A held prop pops in when Hermes starts a new kind of tool.
@@ -612,8 +707,19 @@ export function Avatar({
   );
   // Emphasis marks are lost at list sizes, so only larger avatars draw them.
   const ticks = size >= 40 && pose.ticks > 0.01 && (
-    <g fill="none" stroke={color} strokeWidth="4.2" strokeLinecap="round" opacity={Math.min(pose.ticks, 1)} className="avatar-ticks">
-      {tickMarks(pose.ticks, pose.tickSide, hatAnchor === anchor ? anchor.top : hatAnchor.top).map((d, i) => <path key={i} d={d} />)}
+    <g
+      fill="none"
+      stroke={color}
+      strokeWidth="4.2"
+      strokeLinecap="round"
+      opacity={Math.min(pose.ticks, 1)}
+      className="avatar-ticks"
+    >
+      {tickMarks(pose.ticks, pose.tickSide, hatAnchor === anchor ? anchor.top : hatAnchor.top).map(
+        (d, i) => (
+          <path key={i} d={d} />
+        ),
+      )}
     </g>
   );
   const bodyScale = 1 - 0.45 * symbolic;
@@ -625,9 +731,10 @@ export function Avatar({
   ].join(" ");
   // A portrait's ring turns at this bot's own offset and pace.
   const ring = avatar.mode === "portrait" ? ringOffset(owner) : null;
-  const badge = avatar.mode === "portrait"
-    ? state !== "idle" && state !== "thinking" && state !== "working"
-    : ["disconnected", "failed", "interrupted", "done"].includes(state);
+  const badge =
+    avatar.mode === "portrait"
+      ? state !== "idle" && state !== "thinking" && state !== "working"
+      : ["disconnected", "failed", "interrupted", "done"].includes(state);
   return (
     <span
       ref={wrapper}
@@ -636,7 +743,10 @@ export function Avatar({
         width: size,
         height: size,
         ["--avatar-size" as string]: `${size}px`,
-        ...(ring && { ["--avatar-ring-phase" as string]: ring.phase.toFixed(3), ["--avatar-ring-pace" as string]: ring.pace.toFixed(3) }),
+        ...(ring && {
+          ["--avatar-ring-phase" as string]: ring.phase.toFixed(3),
+          ["--avatar-ring-pace" as string]: ring.pace.toFixed(3),
+        }),
       }}
       data-state={state}
       data-family={mascot?.family}
@@ -675,7 +785,13 @@ export function Avatar({
             <path d={bodyPath} fill={headFill} className="avatar-body" />
             <g clipPath={`url(#face-${id})`}>
               {roll.visible && (
-                <g transform={pose.pitch ? `translate(0 ${anchor.cy + roll.y}) scale(1 ${roll.scale}) translate(0 ${-anchor.cy})` : undefined}>
+                <g
+                  transform={
+                    pose.pitch
+                      ? `translate(0 ${anchor.cy + roll.y}) scale(1 ${roll.scale}) translate(0 ${-anchor.cy})`
+                      : undefined
+                  }
+                >
                   {mascotFace}
                   {cheeks}
                   <g fill={ink}>{eyesLayer}</g>
@@ -692,8 +808,10 @@ export function Avatar({
           {heldProp}
           <g fill={color}>
             {bang > 0.01 && (
-              <g opacity={smoothstep(bang)}
-                transform={`translate(50 50) rotate(${pose.symbolTilt} 0 30) scale(${0.4 + 0.6 * bang}) translate(-50 -50)`}>
+              <g
+                opacity={smoothstep(bang)}
+                transform={`translate(50 50) rotate(${pose.symbolTilt} 0 30) scale(${0.4 + 0.6 * bang}) translate(-50 -50)`}
+              >
                 <path d="M42.5 21 Q50 12 57.5 21 L54.5 61 Q50 68 45.5 61Z" />
                 <circle cx="50" cy="79" r="7.5" />
               </g>
@@ -706,12 +824,12 @@ export function Avatar({
           <StateGlyph state={state} />
         </span>
       )}
-      {showState && (
-        <span className="avatar-caption">{statusLabel}</span>
-      )}
+      {showState && <span className="avatar-caption">{statusLabel}</span>}
       {burst > 0 && (
         <span className="avatar-burst" key={burst} aria-hidden="true">
-          {sparks.map(turn => <i key={turn} style={{ ["--spark-turn" as string]: `${turn}deg` }} />)}
+          {sparks.map((turn) => (
+            <i key={turn} style={{ ["--spark-turn" as string]: `${turn}deg` }} />
+          ))}
         </span>
       )}
     </span>
@@ -721,46 +839,105 @@ export function Avatar({
 /** Small held props, drawn in avatar units in front of the body. */
 function PropArt({ prop, t, grow }: { prop: AvatarProp; t: number; grow: number }) {
   const { x, y, rotate } = propMotion(prop, t);
-  const outline = { stroke: "#2b201b", strokeWidth: 2.2, strokeLinejoin: "round" as const, strokeLinecap: "round" as const };
-  const art = prop === "search" ? <>
-    <path d="M8 8 L19 19" {...outline} strokeWidth={6.5} />
-    <path d="M8 8 L19 19" stroke="#b07a4a" strokeWidth={3.6} strokeLinecap="round" />
-    <circle r="11" fill="#d9f2ff" fillOpacity="0.55" {...outline} strokeWidth={3.4} />
-    <path d="M-6 -3 Q-5 -6 -2 -7" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" opacity="0.9" />
-  </> : prop === "computer" ? <>
-    <rect x="-21" y="-23" width="42" height="27" rx="4" fill="#cfd5dc" {...outline} />
-    <circle cy="-10" r="3" fill="#9aa4ae" />
-    <path d="M-27 4 H27 L24 10 H-24Z" fill="#aab3bc" {...outline} />
-    <circle cx="16" cy="7" r="1.1" fill="#7bd88f" opacity={0.5 + 0.5 * Math.sin(t * 5)} />
-  </> : prop === "read" ? <>
-    <path d="M0 -10 Q-12 -15 -24 -11 V7 Q-12 3 0 8Z" fill="#fff8ec" {...outline} />
-    <path d="M0 -10 Q12 -15 24 -11 V7 Q12 3 0 8Z" fill="#fff8ec" {...outline} />
-    <path d="M-19 -6 Q-11 -9 -4 -6 M-19 -1 Q-11 -4 -4 -1 M4 -6 Q11 -9 19 -6 M4 -1 Q11 -4 19 -1" fill="none" stroke="#b9ab96" strokeWidth={1.4} strokeLinecap="round" />
-    <path d="M-25 8 Q-12 4 0 9 Q12 4 25 8" fill="none" stroke="#c0503a" strokeWidth={3} strokeLinecap="round" />
-  </> : <>
-    <g transform="rotate(-8 0 12)">
-      <rect x="-15" y="2" width="26" height="20" rx="2.5" fill="#fff8ec" {...outline} />
-      <path d={`M-10 9 H${-10 + 16 * ((t * 0.5) % 1)} M-10 15 H2`} fill="none" stroke="#9db7d6" strokeWidth={1.6} strokeLinecap="round" />
-    </g>
-    <g transform="rotate(38)">
-      <rect x="-3.2" y="-22" width="6.4" height="22" rx="1.2" fill="#ffc94a" {...outline} />
-      <path d="M-3.2 -22 H3.2 V-25.5 Q3.2 -27 0 -27 Q-3.2 -27 -3.2 -25.5Z" fill="#f28fa0" {...outline} />
-      <path d="M-3.2 0 L0 6 L3.2 0Z" fill="#f2d1a8" {...outline} />
-    </g>
-  </>;
+  const outline = {
+    stroke: "#2b201b",
+    strokeWidth: 2.2,
+    strokeLinejoin: "round" as const,
+    strokeLinecap: "round" as const,
+  };
+  const art =
+    prop === "search" ? (
+      <>
+        <path d="M8 8 L19 19" {...outline} strokeWidth={6.5} />
+        <path d="M8 8 L19 19" stroke="#b07a4a" strokeWidth={3.6} strokeLinecap="round" />
+        <circle r="11" fill="#d9f2ff" fillOpacity="0.55" {...outline} strokeWidth={3.4} />
+        <path
+          d="M-6 -3 Q-5 -6 -2 -7"
+          fill="none"
+          stroke="#fff"
+          strokeWidth={2}
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+      </>
+    ) : prop === "computer" ? (
+      <>
+        <rect x="-21" y="-23" width="42" height="27" rx="4" fill="#cfd5dc" {...outline} />
+        <circle cy="-10" r="3" fill="#9aa4ae" />
+        <path d="M-27 4 H27 L24 10 H-24Z" fill="#aab3bc" {...outline} />
+        <circle cx="16" cy="7" r="1.1" fill="#7bd88f" opacity={0.5 + 0.5 * Math.sin(t * 5)} />
+      </>
+    ) : prop === "read" ? (
+      <>
+        <path d="M0 -10 Q-12 -15 -24 -11 V7 Q-12 3 0 8Z" fill="#fff8ec" {...outline} />
+        <path d="M0 -10 Q12 -15 24 -11 V7 Q12 3 0 8Z" fill="#fff8ec" {...outline} />
+        <path
+          d="M-19 -6 Q-11 -9 -4 -6 M-19 -1 Q-11 -4 -4 -1 M4 -6 Q11 -9 19 -6 M4 -1 Q11 -4 19 -1"
+          fill="none"
+          stroke="#b9ab96"
+          strokeWidth={1.4}
+          strokeLinecap="round"
+        />
+        <path
+          d="M-25 8 Q-12 4 0 9 Q12 4 25 8"
+          fill="none"
+          stroke="#c0503a"
+          strokeWidth={3}
+          strokeLinecap="round"
+        />
+      </>
+    ) : (
+      <>
+        <g transform="rotate(-8 0 12)">
+          <rect x="-15" y="2" width="26" height="20" rx="2.5" fill="#fff8ec" {...outline} />
+          <path
+            d={`M-10 9 H${-10 + 16 * ((t * 0.5) % 1)} M-10 15 H2`}
+            fill="none"
+            stroke="#9db7d6"
+            strokeWidth={1.6}
+            strokeLinecap="round"
+          />
+        </g>
+        <g transform="rotate(38)">
+          <rect x="-3.2" y="-22" width="6.4" height="22" rx="1.2" fill="#ffc94a" {...outline} />
+          <path
+            d="M-3.2 -22 H3.2 V-25.5 Q3.2 -27 0 -27 Q-3.2 -27 -3.2 -25.5Z"
+            fill="#f28fa0"
+            {...outline}
+          />
+          <path d="M-3.2 0 L0 6 L3.2 0Z" fill="#f2d1a8" {...outline} />
+        </g>
+      </>
+    );
   const size = prop === "search" ? 1.3 : 1;
-  return <g transform={`translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rotate.toFixed(2)}) scale(${(grow * size).toFixed(3)})`}>{art}</g>;
+  return (
+    <g
+      transform={`translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rotate.toFixed(2)}) scale(${(grow * size).toFixed(3)})`}
+    >
+      {art}
+    </g>
+  );
 }
 
 function StateGlyph({ state }: { state: ActivityState }) {
-  const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 2.4, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+  const stroke = {
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 2.4,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+  };
   return (
     <svg viewBox="0 0 16 16">
       {state === "done" ? (
         <path d="M4 8.4 L6.9 11.2 L12.2 5.2" {...stroke} />
       ) : state === "disconnected" ? (
         <>
-          <path d="M5.8 6.1 Q5.9 3.6 8.1 3.6 Q10.4 3.7 10.4 5.8 Q10.4 7.4 8.1 8.3 V9.3" {...stroke} strokeWidth={2.1} />
+          <path
+            d="M5.8 6.1 Q5.9 3.6 8.1 3.6 Q10.4 3.7 10.4 5.8 Q10.4 7.4 8.1 8.3 V9.3"
+            {...stroke}
+            strokeWidth={2.1}
+          />
           <circle cx="8.1" cy="12.3" r="1.3" fill="currentColor" />
         </>
       ) : state === "interrupted" || state === "waiting" ? (

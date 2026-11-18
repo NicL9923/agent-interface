@@ -9,18 +9,18 @@ sentence in `AGENTS.md`.
 
 App-module mocks in UI tests, `vi.mock("../src/...")` other than `client-api` and the server: 44 before, 3 after.
 
-| Mock | Files before | Now |
-| --- | --- | --- |
-| `Avatar` | 24 | real |
-| `use-chat-presence` | 6 | real hook; its reports filtered in the client-API mock |
-| `use-device-activity` | 3 | real hook; its reports filtered in the client-API mock |
-| `MessageMarkdown` | 3 | real |
-| `Composer` pass-through spy | 1 | real; a `Profiler` runs the Stop press inside the commit |
-| `When`, `ReplyActions` | 1 | real; see below |
-| `DeviceNotifications` | 1 | real |
-| `GroupChats` | 1 | real, with the room's two reads answered |
-| `portrait-upload` | 1 | kept: jsdom decodes no image and has no canvas, so `preparePortrait` cannot run |
-| `DiscoveryPanel`, `ChatModelPicker` | 1 | kept: they simulate a chunk a release retired; a test run from disk cannot lose a file |
+| Mock                                | Files before | Now                                                                                    |
+| ----------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `Avatar`                            | 24           | real                                                                                   |
+| `use-chat-presence`                 | 6            | real hook; its reports filtered in the client-API mock                                 |
+| `use-device-activity`               | 3            | real hook; its reports filtered in the client-API mock                                 |
+| `MessageMarkdown`                   | 3            | real                                                                                   |
+| `Composer` pass-through spy         | 1            | real; a `Profiler` runs the Stop press inside the commit                               |
+| `When`, `ReplyActions`              | 1            | real; see below                                                                        |
+| `DeviceNotifications`               | 1            | real                                                                                   |
+| `GroupChats`                        | 1            | real, with the room's two reads answered                                               |
+| `portrait-upload`                   | 1            | kept: jsdom decodes no image and has no canvas, so `preparePortrait` cannot run        |
+| `DiscoveryPanel`, `ChatModelPicker` | 1            | kept: they simulate a chunk a release retired; a test run from disk cannot lose a file |
 
 `AGENTS.md` names the two kept exceptions in one sentence. Third-party libraries are untouched (`remark-gfm` in
 `connection-grace-ui.test.ts`, `@novnc/novnc`, `@xterm/*`, `react-dom` in `avatar-frames.test.ts`, `node:http2`), as is
@@ -61,14 +61,14 @@ screen (`.group-panel`) where a stand-in paragraph was.
 
 Each protecting change broken by hand, the file run, the source restored. Where the old test existed, it ran against the same break too.
 
-| Break | Test | Result |
-| --- | --- | --- |
-| `useChatPresence(undefined, userId)` in `App.tsx` | app-ui, phones on home | failed: 1 |
-| `shownRun` read from `conversation`, not `ownConversation` | shell-ui, never names another assistant's run | failed: 1 (the `Profiler` press reaches the same commit) |
-| `sameTurnProps` dropped from `TurnView` | transcript-rerender | failed: 6 of 8 |
-| `unchanged && previous ? previous : ...` in `use-session.ts` made `false` | app-ui "does not re-render the app" | failed: 1, and the old mock-based test failed too |
-| the memo comparators of `Conversation`, `Turns` and `TurnView` always `false` | app-ui "keeps the transcript from re-rendering while typing" | failed: 1, and the old test failed too |
-| `Conversation` given a fresh prop each render, and `TurnView`'s comparator dropped | the same test | passed, and so did the old one: both stop at the memo above the turn |
+| Break                                                                              | Test                                                         | Result                                                               |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------- |
+| `useChatPresence(undefined, userId)` in `App.tsx`                                  | app-ui, phones on home                                       | failed: 1                                                            |
+| `shownRun` read from `conversation`, not `ownConversation`                         | shell-ui, never names another assistant's run                | failed: 1 (the `Profiler` press reaches the same commit)             |
+| `sameTurnProps` dropped from `TurnView`                                            | transcript-rerender                                          | failed: 6 of 8                                                       |
+| `unchanged && previous ? previous : ...` in `use-session.ts` made `false`          | app-ui "does not re-render the app"                          | failed: 1, and the old mock-based test failed too                    |
+| the memo comparators of `Conversation`, `Turns` and `TurnView` always `false`      | app-ui "keeps the transcript from re-rendering while typing" | failed: 1, and the old test failed too                               |
+| `Conversation` given a fresh prop each render, and `TurnView`'s comparator dropped | the same test                                                | passed, and so did the old one: both stop at the memo above the turn |
 
 A timer that re-renders `App` every 10 s failed the old mock test in a full-file run. The first avatar check did not: see "Review fixes" below, which finds why and replaces that check.
 
@@ -87,17 +87,17 @@ render the real Avatar's artwork: `bot-settings` about three times its old time,
 
 `npm test` under the same load as the other entries (8 cores, 32 busy loops), tests that failed in a run, by file, `main` over 6 runs and this branch over 3 runs:
 
-| File | `main` | this branch |
-| --- | --- | --- |
-| `account-transitions-ui.test.ts` | 6 of 6 | 3 of 3 |
-| `live-turn-stream.test.ts` | 0 of 6 | 1 of 3 |
-| `live-updates-ui.test.ts` | 3 of 6 | 1 of 3 |
-| `message-markdown.test.ts` | 3 of 6 | 1 of 3 |
-| `plain-text.test.ts` | 0 of 6 | 3 of 3 |
-| `reply-keys.test.ts` | 2 of 6 | 1 of 3 |
-| `send-timing.test.ts` | 1 of 6 | 0 of 3 |
-| `streaming-hold-back.test.ts` | 2 of 6 | 1 of 3 |
-| `transcript-ui.test.ts` | 0 of 6 | 1 of 3 |
+| File                             | `main` | this branch |
+| -------------------------------- | ------ | ----------- |
+| `account-transitions-ui.test.ts` | 6 of 6 | 3 of 3      |
+| `live-turn-stream.test.ts`       | 0 of 6 | 1 of 3      |
+| `live-updates-ui.test.ts`        | 3 of 6 | 1 of 3      |
+| `message-markdown.test.ts`       | 3 of 6 | 1 of 3      |
+| `plain-text.test.ts`             | 0 of 6 | 3 of 3      |
+| `reply-keys.test.ts`             | 2 of 6 | 1 of 3      |
+| `send-timing.test.ts`            | 1 of 6 | 0 of 3      |
+| `streaming-hold-back.test.ts`    | 2 of 6 | 1 of 3      |
+| `transcript-ui.test.ts`          | 0 of 6 | 1 of 3      |
 
 `home-groups-ui` failed in a loaded run before reduced motion became the default and in none after. `account-transitions-ui`,
 `live-updates-ui`, `message-markdown`, `reply-keys` and `streaming-hold-back` fail on `main` under this load too; `plain-text` and `send-timing`
@@ -107,19 +107,18 @@ retry IDs through Web Crypto, whose thread-pool latency `t3/transcript-form-flak
 "keeps growth as deltas across a write's change notice" counted 4 reads where it expected 3, once. Neither failed in `main`'s six runs, and
 three runs cannot tell a regression from a rarer flake.
 
-
 ## Checks
 
 `.agents/tools/check-all` on this branch at its last code commit:
 
-check      result   queued  run    counts
-typecheck  pass     -       0.6s   -
-lint       pass     -       0.1s   -
-ruff       pass     -       0.0s   -
-test       pass     3m55s   31.1s  205 files, 3668 tests
-build      pass     -       8.4s   892 modules
-e2e        pass     20m28s  1m15s  40 tests
-py         skipped  -       -      no changes to Python or a file the Python tests read against origin/main
+check result queued run counts
+typecheck pass - 0.6s -
+lint pass - 0.1s -
+ruff pass - 0.0s -
+test pass 3m55s 31.1s 205 files, 3668 tests
+build pass - 8.4s 892 modules
+e2e pass 20m28s 1m15s 40 tests
+py skipped - - no changes to Python or a file the Python tests read against origin/main
 
 All 6 checks passed (26m19s total, 24m23s of it queued for heavy slots)
 
@@ -143,14 +142,14 @@ An Opus review of `f46bcbf` found five things. Fixed on top of it, on NicolasLap
 
 ### Red runs
 
-| Break | Test | Before this fix (`f46bcbf`) | Now |
-| --- | --- | --- | --- |
-| `App` re-renders itself every 10 s (`setInterval` and state in `App`) | app-ui "does not re-render the app", full file | passed (103 of 103) | failed: 1, "the app shell was rendered again"; also failed when run alone |
-| `use-session.ts`: `unchanged && previous ? previous` made `false` | the same | failed alone | failed: 1, alone and in the full file |
-| `Sidebar` re-renders itself every 10 s | the same, avatar check | not run | failed: 1 (an avatar wrapper got new props) |
-| `TurnView` renders twice per update (`useLayoutEffect` that bumps state when `block` changes) | transcript-rerender | passed (8 of 8) | failed: 6 of 8 |
-| memo comparators of `Conversation`, `Turns` and `TurnView` all `() => false` | app-ui "keeps the transcript from re-rendering while typing" | failed | failed: 1 |
-| any one of those three comparators `() => false` | the same | passed | passed: the other two memo layers absorb it, for both forms of the check |
+| Break                                                                                         | Test                                                         | Before this fix (`f46bcbf`) | Now                                                                       |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------- | ------------------------------------------------------------------------- |
+| `App` re-renders itself every 10 s (`setInterval` and state in `App`)                         | app-ui "does not re-render the app", full file               | passed (103 of 103)         | failed: 1, "the app shell was rendered again"; also failed when run alone |
+| `use-session.ts`: `unchanged && previous ? previous` made `false`                             | the same                                                     | failed alone                | failed: 1, alone and in the full file                                     |
+| `Sidebar` re-renders itself every 10 s                                                        | the same, avatar check                                       | not run                     | failed: 1 (an avatar wrapper got new props)                               |
+| `TurnView` renders twice per update (`useLayoutEffect` that bumps state when `block` changes) | transcript-rerender                                          | passed (8 of 8)             | failed: 6 of 8                                                            |
+| memo comparators of `Conversation`, `Turns` and `TurnView` all `() => false`                  | app-ui "keeps the transcript from re-rendering while typing" | failed                      | failed: 1                                                                 |
+| any one of those three comparators `() => false`                                              | the same                                                     | passed                      | passed: the other two memo layers absorb it, for both forms of the check  |
 
 The last row is not a gap in the identity check: the layers cover each other, and only breaking all three lets typing reach a turn. Identity is the stricter form by
 construction; I found no single source break that tells the two forms apart in this test.

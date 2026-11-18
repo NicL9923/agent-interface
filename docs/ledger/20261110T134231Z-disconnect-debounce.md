@@ -60,13 +60,13 @@ Hand, aborts the next conversation read at the network (`route.abort`, which the
 `CONNECTION_UNAVAILABLE`), asks a read, waits 200 ms, lets the next read through and asks it, then
 waits 1.5 seconds. Three runs each; every run gave the same counts. Raw output: `results.json`.
 
-| One failed read, then a success | Before (`d090194`) | After |
-| --- | --- | --- |
-| Disconnected state shown during the failure | yes, all 3 runs | no, all 3 runs |
-| `TurnView` renders | 40 (every turn, twice) | 10 (the 5 turns with cards, twice) |
-| Markdown parses (`MarkdownBlocks` renders) | 80 (every reply, twice) | 10 (the 5 card replies, twice) |
-| `MessageActions` renders | 80 | 80 |
-| Transcript commits over 0.5 ms, ms | 41.1 + 20.7, 33.0 + 20.4, 33.8 + 23.7 | 10.8 + 10.7, 16.4 + 9.8, 10.5 + 8.8 + 3.8 |
+| One failed read, then a success             | Before (`d090194`)                    | After                                     |
+| ------------------------------------------- | ------------------------------------- | ----------------------------------------- |
+| Disconnected state shown during the failure | yes, all 3 runs                       | no, all 3 runs                            |
+| `TurnView` renders                          | 40 (every turn, twice)                | 10 (the 5 turns with cards, twice)        |
+| Markdown parses (`MarkdownBlocks` renders)  | 80 (every reply, twice)               | 10 (the 5 card replies, twice)            |
+| `MessageActions` renders                    | 80                                    | 80                                        |
+| Transcript commits over 0.5 ms, ms          | 41.1 + 20.7, 33.0 + 20.4, 33.8 + 23.7 | 10.8 + 10.7, 16.4 + 9.8, 10.5 + 8.8 + 3.8 |
 
 Email cards do not read `unavailable`, but the `agent-ui` test cannot tell card types apart without
 parsing, so their turns still render.
@@ -75,7 +75,7 @@ parsing, so their turns still render.
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/connection-ui.test.ts tests/app-ui.test.ts tests/shell-ui.test.ts
-  tests/transcript-ui.test.ts tests/live-reply-ui.test.ts`: 5 files, 302 tests passed.
+tests/transcript-ui.test.ts tests/live-reply-ui.test.ts`: 5 files, 302 tests passed.
 - `npm test`: 184 files, 3,087 tests passed.
 - `npm run build` passed. `npm run test:e2e`, with ports 4173 and 4174 contended by another worktree's
   runs: one attempt reported 13 passed and listed three tests under a summary heading that was not
@@ -108,19 +108,19 @@ after one generic failure now advance `DISCONNECT_GRACE_MS` first.
 
 Each line was broken by hand, the "a failed conversation read" tests run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| No failure proves the connection down | failed: offline case |
-| `navigator.onLine` not checked | failed: offline case |
-| Any API error code proves it down | 5 failed, including the unreadable-answer case |
-| A second failure not enough (`> 2`) | 2 failed, including "a second failure in a row" |
-| Grace one millisecond short | failed: the 3-second boundary |
-| A success leaves the grace timer running | failed: "one failure that the next read answers" |
-| Send and Stop gated on the shown fact | 2 failed, including "refuses a send and a stop" |
-| Every turn gets `unavailable` | failed: the rows test (first turn rendered) |
-| Every reply in a card's turn gets `unavailable` | failed: the rows test (progress line parsed) |
-| Every turn gets `disconnected` | failed: the rows test (first turn rendered) |
-| "Last seen running" follows the immediate fact | failed: the rows test |
+| Mutation                                        | Result                                           |
+| ----------------------------------------------- | ------------------------------------------------ |
+| No failure proves the connection down           | failed: offline case                             |
+| `navigator.onLine` not checked                  | failed: offline case                             |
+| Any API error code proves it down               | 5 failed, including the unreadable-answer case   |
+| A second failure not enough (`> 2`)             | 2 failed, including "a second failure in a row"  |
+| Grace one millisecond short                     | failed: the 3-second boundary                    |
+| A success leaves the grace timer running        | failed: "one failure that the next read answers" |
+| Send and Stop gated on the shown fact           | 2 failed, including "refuses a send and a stop"  |
+| Every turn gets `unavailable`                   | failed: the rows test (first turn rendered)      |
+| Every reply in a card's turn gets `unavailable` | failed: the rows test (progress line parsed)     |
+| Every turn gets `disconnected`                  | failed: the rows test (first turn rendered)      |
+| "Last seen running" follows the immediate fact  | failed: the rows test                            |
 
 A first version of the rows test compared props objects with `toEqual`. That let "every turn gets
 `unavailable`" and "every turn gets `disconnected`" survive, because a re-render with equal props is
@@ -183,11 +183,11 @@ The Composer now gets `connectionShown` beside `connectionLost`.
 
 What a person sees and hears:
 
-| Case | Sees | Hears |
-| --- | --- | --- |
+| Case                        | Sees                                                                                                                                                                                                                                                                                                           | Hears                                                                                                                                                     |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | One blip, cleared in 300 ms | Nothing changes. A hover on Send or Stop inside those 300 ms shows "Checking the connection. Try again in a moment." A keyboard send inside them shows "Not sent. Checking the connection. Try again in a moment." under the message box for up to 8 seconds or until they type; the message stays in the box. | Nothing, unless they focus Send or Stop, which reads the same reason as the description, or send from the keyboard, which announces the status line once. |
-| One blip lasting 2 seconds | The same, for 2 seconds. The chat never looks disconnected. | The same. |
-| A real outage | Up to 3 seconds as above, or at once on a second failure, offline, or a Hermes-down answer. Then the dock's connection notice, the disconnected avatars and activity, as on `main`; the status line clears, and Send and Stop's tooltip reads "Waiting for the connection. Your draft is kept." | The connection notice's status line, as on `main`; Send and Stop read the waiting reason as their description. |
+| One blip lasting 2 seconds  | The same, for 2 seconds. The chat never looks disconnected.                                                                                                                                                                                                                                                    | The same.                                                                                                                                                 |
+| A real outage               | Up to 3 seconds as above, or at once on a second failure, offline, or a Hermes-down answer. Then the dock's connection notice, the disconnected avatars and activity, as on `main`; the status line clears, and Send and Stop's tooltip reads "Waiting for the connection. Your draft is kept."                | The connection notice's status line, as on `main`; Send and Stop read the waiting reason as their description.                                            |
 
 Red runs, before the Composer change: "refuses a send and a stop during the grace period, says why"
 failed with `expected 'Stop response' to be 'Checking the connection. Try again in…'`, and "hands the
@@ -230,34 +230,34 @@ Each line broken by hand with
 [`mutate.py`](../evidence/2026-11-10-disconnect-debounce/mutate.py), the new file run, and the source
 restored.
 
-| Mutation | Result |
-| --- | --- |
-| A failure gates any chat, not its own (`!!readFailedFor`) | 2 failed: both "once its chat is gone" cases |
-| A shown disconnection outlives its chat (`!!disconnectedFor`) | failed: "once its chat is gone", two failures in a row |
-| The transcript's "Create an assistant" ignores `connectionLost` | survived: unreachable, see item 1 |
-| Stop gives no connection reason | failed: "refuses a send and a stop" |
-| Send gives no connection reason | 2 failed |
-| Grace and outage reasons swapped | 2 failed |
-| A refused keyboard send says nothing | 2 failed |
-| The status line also speaks during a shown outage | failed: "hands the explanation" |
-| The status line stays once the connection notice shows | failed: "hands the explanation" |
-| Every reply in a card's turn gets `unavailable` | failed: the rows test (progress line parsed) |
-| Every turn gets `unavailable` | failed: the rows test |
-| Every turn gets `disconnected` | failed: the rows test |
-| "Last seen running" follows the immediate fact | failed: the rows test |
-| No failure proves the connection down | 2 failed: offline, unreachable |
-| `navigator.onLine` not checked | failed: offline |
-| Any API error code proves it down | 6 failed, including the unreadable-answer case |
-| A second failure not enough (`> 2`) | 3 failed, including "a second failure in a row" |
-| Grace one millisecond short | failed: the 3-second boundary |
-| A success leaves the grace timer running | failed: "one failure that the next read answers" |
-| Send and Stop gated on the shown fact | 3 failed, including "refuses a send and a stop" |
+| Mutation                                                        | Result                                                 |
+| --------------------------------------------------------------- | ------------------------------------------------------ |
+| A failure gates any chat, not its own (`!!readFailedFor`)       | 2 failed: both "once its chat is gone" cases           |
+| A shown disconnection outlives its chat (`!!disconnectedFor`)   | failed: "once its chat is gone", two failures in a row |
+| The transcript's "Create an assistant" ignores `connectionLost` | survived: unreachable, see item 1                      |
+| Stop gives no connection reason                                 | failed: "refuses a send and a stop"                    |
+| Send gives no connection reason                                 | 2 failed                                               |
+| Grace and outage reasons swapped                                | 2 failed                                               |
+| A refused keyboard send says nothing                            | 2 failed                                               |
+| The status line also speaks during a shown outage               | failed: "hands the explanation"                        |
+| The status line stays once the connection notice shows          | failed: "hands the explanation"                        |
+| Every reply in a card's turn gets `unavailable`                 | failed: the rows test (progress line parsed)           |
+| Every turn gets `unavailable`                                   | failed: the rows test                                  |
+| Every turn gets `disconnected`                                  | failed: the rows test                                  |
+| "Last seen running" follows the immediate fact                  | failed: the rows test                                  |
+| No failure proves the connection down                           | 2 failed: offline, unreachable                         |
+| `navigator.onLine` not checked                                  | failed: offline                                        |
+| Any API error code proves it down                               | 6 failed, including the unreadable-answer case         |
+| A second failure not enough (`> 2`)                             | 3 failed, including "a second failure in a row"        |
+| Grace one millisecond short                                     | failed: the 3-second boundary                          |
+| A success leaves the grace timer running                        | failed: "one failure that the next read answers"       |
+| Send and Stop gated on the shown fact                           | 3 failed, including "refuses a send and a stop"        |
 
 ### Checks, review round
 
 - `npm ci` once, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/connection-grace-ui.test.ts tests/connection-ui.test.ts tests/app-ui.test.ts
-  tests/shell-ui.test.ts tests/transcript-ui.test.ts tests/live-reply-ui.test.ts`: 6 files, 305 tests
+tests/shell-ui.test.ts tests/transcript-ui.test.ts tests/live-reply-ui.test.ts`: 6 files, 305 tests
   passed, the first round's 302 and the 3 new ones.
 - `npm test`: 185 files, 3,090 tests passed.
 - `npm run build` passed. `npm run test:e2e`: 20 Chromium tests passed, ports uncontended.

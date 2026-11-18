@@ -40,14 +40,14 @@ afterward along with every uploaded file. The display read (`get_messages_as_con
 and compacted rows) returned 8,016 rows, 4,779 of them tool rows, projected to 7,446 messages. Numbers only; no
 content was printed.
 
-| Projection | Time |
-| --- | --- |
-| whole, shell memo cold | 4,023 ms |
-| whole, shell memo warm | 1,146 ms, 924 ms |
-| memo cold (86 pieces) | 1,411 ms |
-| memo warm, each history read fresh from the store | 165 ms, 133 ms, 150 ms |
+| Projection                                            | Time                            |
+| ----------------------------------------------------- | ------------------------------- |
+| whole, shell memo cold                                | 4,023 ms                        |
+| whole, shell memo warm                                | 1,146 ms, 924 ms                |
+| memo cold (86 pieces)                                 | 1,411 ms                        |
+| memo warm, each history read fresh from the store     | 165 ms, 133 ms, 150 ms          |
 | memo warm, last 20 rows new, as a turn read sees them | 162 ms (85 of 86 pieces reused) |
-| shadow mode, warm | 1,555 ms |
+| shadow mode, warm                                     | 1,555 ms                        |
 
 Every memoized output, cold, warm and grown, equaled the whole projection in messages and tool rows, and shadow
 mode found no difference. Cutting at every safe turn gave 394 pieces and a cold projection of 1,385 ms against
@@ -67,28 +67,28 @@ in-place edit, and a compaction rewrite.
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_projection_memo_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| cut wherever a user row is | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| hidden rows name no calls | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| a tool row uses up its call | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| calls read before compaction projection | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1) |
-| non-mapping row read | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1) |
-| no input snapshot | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1) |
-| kept projection handed out | failed: test_decoration_never_reaches_a_kept_projection (exit 1) |
-| projection kept uncopied | failed: test_decoration_never_reaches_a_kept_projection (exit 1) |
-| cheap key decides | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1) |
-| arguments not in context | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| config not in context | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| redaction not in context | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1) |
-| memoized without redaction state | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1) |
-| no budget | failed: test_a_history_beyond_the_budget_keeps_its_first_pieces_and_projects_the_rest (exit 1) |
-| a new stored session keeps its row cache | failed: test_a_new_stored_session_starts_an_empty_memo (exit 1) |
-| shadow answers with the memo | failed: test_shadow_mode_answers_with_the_whole_projection_and_says_where_the_memo_differs (exit 1) |
-| shadow on whatever the value | failed: test_shadow_mode_is_off_unless_set (exit 1) |
-| unnamed call counts as named | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1) |
-| pieces of any size | failed: test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut (exit 1) |
-| least counted from the start | failed: test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut (exit 1) |
+| Mutation                                 | Result                                                                                              |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| cut wherever a user row is               | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| hidden rows name no calls                | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| a tool row uses up its call              | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| calls read before compaction projection  | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1)             |
+| non-mapping row read                     | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1)             |
+| no input snapshot                        | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1)            |
+| kept projection handed out               | failed: test_decoration_never_reaches_a_kept_projection (exit 1)                                    |
+| projection kept uncopied                 | failed: test_decoration_never_reaches_a_kept_projection (exit 1)                                    |
+| cheap key decides                        | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1)            |
+| arguments not in context                 | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| config not in context                    | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| redaction not in context                 | failed: test_what_a_projection_reads_besides_its_rows_projects_again (exit 1)                       |
+| memoized without redaction state         | failed: test_a_memoized_open_answers_as_a_whole_projection_through_every_change (exit 1)            |
+| no budget                                | failed: test_a_history_beyond_the_budget_keeps_its_first_pieces_and_projects_the_rest (exit 1)      |
+| a new stored session keeps its row cache | failed: test_a_new_stored_session_starts_an_empty_memo (exit 1)                                     |
+| shadow answers with the memo             | failed: test_shadow_mode_answers_with_the_whole_projection_and_says_where_the_memo_differs (exit 1) |
+| shadow on whatever the value             | failed: test_shadow_mode_is_off_unless_set (exit 1)                                                 |
+| unnamed call counts as named             | failed: test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across (exit 1)             |
+| pieces of any size                       | failed: test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut (exit 1) |
+| least counted from the start             | failed: test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut (exit 1) |
 
 The snapshot mutant first survived: a flush's `_row_id` stamp changes the cheap key, so it misses without the copy.
 The test now also edits a live row in place under the same ID and length, which only the copy catches.
@@ -112,12 +112,12 @@ characters for every memo in the gateway, counting each kept piece's input rows,
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_projection_memo_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| no shared charge | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
+| Mutation                         | Result                                                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| no shared charge                 | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
 | most recently used empties first | failed: test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget (exit 1) |
-| rows only counted | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1) |
-| tuples not counted | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1) |
+| rows only counted                | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1)                               |
+| tuples not counted               | failed: test_kept_projections_and_tool_rows_count_toward_the_budget (exit 1)                               |
 
 A first version of the tests let three of these survive: two memos cannot tell least from most recently used, and
 fixture rows without row IDs collided on the memo's cheap key and re-projected whatever the budget. The tests use

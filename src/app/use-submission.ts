@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { SubmissionReceipt } from "../shared/types";
 import { ApiError, request as apiRequest } from "../client-api";
-import { clearSavedDraft, draftKey, localRead, localRemove, localSave, sentCopy, submissionKey } from "./storage";
+import {
+  clearSavedDraft,
+  draftKey,
+  localRead,
+  localRemove,
+  localSave,
+  sentCopy,
+  submissionKey,
+} from "./storage";
 import type { Draft, Pending } from "./storage";
 import { contentHash } from "./draft-merge";
 import { restoreSent } from "./sent-echo";
@@ -11,9 +19,21 @@ import { restoreSent } from "./sent-echo";
  * that ended Hermes's voice chat is accepted with `turn: "none"`. Either way its words go back into the draft.
  */
 const notTaken = (receipt: SubmissionReceipt) =>
-  receipt.status === "rejected" || receipt.status === "interrupted" || receipt.status === "accepted" && receipt.turn === "none";
+  receipt.status === "rejected" ||
+  receipt.status === "interrupted" ||
+  (receipt.status === "accepted" && receipt.turn === "none");
 // A submission whose outcome is unknown stays pending (and blocks sending) until Hermes confirms it.
-export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, draftReady, reviewed, connectionLost, setError }: {
+export function useSubmission({
+  botId,
+  userId,
+  identityEpoch,
+  draft,
+  setDraft,
+  draftReady,
+  reviewed,
+  connectionLost,
+  setError,
+}: {
   botId: string;
   userId?: string;
   identityEpoch: RefObject<number>;
@@ -28,11 +48,15 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   const [receipt, setReceipt] = useState<SubmissionReceipt | null>(null);
   const [inFlight, setInFlight] = useState<Record<string, string>>({});
   const sending = !!inFlight[botId];
-  const start = (request: Pending) => setInFlight(current => ({ ...current, [request.botId]: request.requestId }));
-  const finish = (request: Pending) => setInFlight(current => {
-    if (current[request.botId] !== request.requestId) return current;
-    const next = { ...current }; delete next[request.botId]; return next;
-  });
+  const start = (request: Pending) =>
+    setInFlight((current) => ({ ...current, [request.botId]: request.requestId }));
+  const finish = (request: Pending) =>
+    setInFlight((current) => {
+      if (current[request.botId] !== request.requestId) return current;
+      const next = { ...current };
+      delete next[request.botId];
+      return next;
+    });
   const activeBotRef = useRef(botId);
   activeBotRef.current = botId;
   const clearSent = (user: string, request: Pending) =>
@@ -44,13 +68,22 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
   // Until the server shows the send, a save of the sent text from this copy is not new work.
   const markSent = (user: string, request: Pending, sent: boolean) => {
     // The copy's edit sequence identifies it as the sent copy until someone types in it again.
-    const mark = (copy: Draft) => sent
-      ? { sentHash: contentHash(request), sentBase: request.draftBaseRevision ?? 0, sentSeq: copy.seq ?? 0 }
-      : { sentHash: undefined, sentBase: undefined };
+    const mark = (copy: Draft) =>
+      sent
+        ? {
+            sentHash: contentHash(request),
+            sentBase: request.draftBaseRevision ?? 0,
+            sentSeq: copy.seq ?? 0,
+          }
+        : { sentHash: undefined, sentBase: undefined };
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
     if (saved) localSave(key, { ...saved, ...mark(saved) });
-    setDraft(current => current.botId === request.botId && current.userId === user ? { ...current, ...mark(current) } : current);
+    setDraft((current) =>
+      current.botId === request.botId && current.userId === user
+        ? { ...current, ...mark(current) }
+        : current,
+    );
   };
   // A refused message goes back into its draft, in front of anything that replaced it meanwhile.
   const refused = (user: string, request: Pending) => {
@@ -58,11 +91,18 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     const key = draftKey(user, request.botId);
     const saved = localRead<Draft>(key);
     if (saved) localSave(key, restoreSent(saved, request));
-    setDraft(current => current.botId === request.botId && current.userId === user ? restoreSent(current, request) : current);
+    setDraft((current) =>
+      current.botId === request.botId && current.userId === user
+        ? restoreSent(current, request)
+        : current,
+    );
   };
   useEffect(() => {
     setReceipt(null);
-    if (!botId || !userId) { setPending(null); return; }
+    if (!botId || !userId) {
+      setPending(null);
+      return;
+    }
     setPending(localRead<Pending>(submissionKey(userId, botId)));
   }, [botId, userId]);
   useEffect(() => {
@@ -75,7 +115,9 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
       if (loading || navigator.onLine === false || document.visibilityState === "hidden") return;
       loading = true;
       try {
-        const result = await apiRequest("GET /submissions/:id", { params: { id: pending.requestId } });
+        const result = await apiRequest("GET /submissions/:id", {
+          params: { id: pending.requestId },
+        });
         if (!live || epoch !== identityEpoch.current) return;
         setReceipt(result);
         if (notTaken(result)) {
@@ -90,7 +132,9 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
         }
       } catch {
         /* Unknown submission stays pending until a reliable reconciliation. */
-      } finally { loading = false; }
+      } finally {
+        loading = false;
+      }
     };
     void reconcile();
     const timer = setInterval(() => void reconcile(), 2000);
@@ -128,7 +172,10 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     start(request);
     onStart?.(request);
     try {
-      const result = await apiRequest("POST /bots/:id/messages", { params: { id: botId }, body: request });
+      const result = await apiRequest("POST /bots/:id/messages", {
+        params: { id: botId },
+        body: request,
+      });
       if (epoch !== identityEpoch.current) return;
       if (activeBotRef.current === request.botId) setReceipt(result);
       if (notTaken(result)) {
@@ -158,12 +205,18 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     const request = pending;
     const epoch = identityEpoch.current;
     const requestBot = pending.botId;
-    const current = () => epoch === identityEpoch.current &&
-      activeBotRef.current === requestBot;
+    const current = () => epoch === identityEpoch.current && activeBotRef.current === requestBot;
     start(request);
-    void apiRequest("POST /bots/:id/messages", { params: { id: pending.botId }, body: { ...pending, reviewedUncertain: true } })
-      .then((result) => { if (current()) setReceipt(result); })
-      .catch((e) => { if (current()) setError(e.message); })
+    void apiRequest("POST /bots/:id/messages", {
+      params: { id: pending.botId },
+      body: { ...pending, reviewedUncertain: true },
+    })
+      .then((result) => {
+        if (current()) setReceipt(result);
+      })
+      .catch((e) => {
+        if (current()) setError(e.message);
+      })
       .finally(() => {
         if (epoch === identityEpoch.current) finish(request);
       });
@@ -178,7 +231,9 @@ export function useSubmission({ botId, userId, identityEpoch, draft, setDraft, d
     localRemove(submissionKey(userId, pending.botId));
   };
   const reset = () => {
-    setInFlight({}); setPending(null); setReceipt(null);
+    setInFlight({});
+    setPending(null);
+    setReceipt(null);
   };
   return { pending, receipt, sending, send, retry, discard, reset };
 }

@@ -24,15 +24,44 @@ it("splits input at the server's byte limit without cutting a code point", () =>
 });
 
 it("sends what xterm sends for each key the iOS keyboard offers, honoring application cursor keys", () => {
-  expect(Object.fromEntries((Object.keys(desktopKeys) as DesktopKey[]).map(key => [key, [keySequence(key, false), keySequence(key, true)]]))).toEqual({
-    enter: ["\r", "\r"], tab: ["\t", "\t"], backspace: ["\x7f", "\x7f"], escape: ["\x1b", "\x1b"], delete: ["\x1b[3~", "\x1b[3~"],
-    left: ["\x1b[D", "\x1bOD"], up: ["\x1b[A", "\x1bOA"], right: ["\x1b[C", "\x1bOC"], down: ["\x1b[B", "\x1bOB"],
-    home: ["\x1b[H", "\x1bOH"], end: ["\x1b[F", "\x1bOF"], pageUp: ["\x1b[5~", "\x1b[5~"], pageDown: ["\x1b[6~", "\x1b[6~"],
+  expect(
+    Object.fromEntries(
+      (Object.keys(desktopKeys) as DesktopKey[]).map((key) => [
+        key,
+        [keySequence(key, false), keySequence(key, true)],
+      ]),
+    ),
+  ).toEqual({
+    enter: ["\r", "\r"],
+    tab: ["\t", "\t"],
+    backspace: ["\x7f", "\x7f"],
+    escape: ["\x1b", "\x1b"],
+    delete: ["\x1b[3~", "\x1b[3~"],
+    left: ["\x1b[D", "\x1bOD"],
+    up: ["\x1b[A", "\x1bOA"],
+    right: ["\x1b[C", "\x1bOC"],
+    down: ["\x1b[B", "\x1bOB"],
+    home: ["\x1b[H", "\x1bOH"],
+    end: ["\x1b[F", "\x1bOF"],
+    pageUp: ["\x1b[5~", "\x1b[5~"],
+    pageDown: ["\x1b[6~", "\x1b[6~"],
   });
 });
 
 it("turns Control and one letter or symbol into its control character, and refuses anything else", () => {
-  expect(["c", "C", "d", "z", "@", " ", "[", "\\", "]", "^", "_"].map(controlCharacter))
-    .toEqual(["\x03", "\x03", "\x04", "\x1a", "\0", "\0", "\x1b", "\x1c", "\x1d", "\x1e", "\x1f"]);
-  for (const text of ["", "cc", "1", "?", "é", "\n", "`", "{"]) expect(controlCharacter(text)).toBeUndefined();
+  expect(["c", "C", "d", "z", "@", " ", "[", "\\", "]", "^", "_"].map(controlCharacter)).toEqual([
+    "\x03",
+    "\x03",
+    "\x04",
+    "\x1a",
+    "\0",
+    "\0",
+    "\x1b",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x1f",
+  ]);
+  for (const text of ["", "cc", "1", "?", "é", "\n", "`", "{"])
+    expect(controlCharacter(text)).toBeUndefined();
 });

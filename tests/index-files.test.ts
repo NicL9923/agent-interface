@@ -12,9 +12,16 @@ const started = vi.hoisted(() => ({
   store: undefined as Store | undefined,
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-vi.mock("node:fs", async original => ({ ...await original<typeof import("node:fs")>(), existsSync: () => false }));
-vi.mock("../src/server/config.js", () => ({ loadConfig: () => ({ database: started.database, hermesToken: "hermes-token" }) }));
-vi.mock("../src/server/hermes.js", () => ({ createHermesRuntime: (options: { files: FileSigner }) => (started.runtime = options) }));
+vi.mock("node:fs", async (original) => ({
+  ...(await original<typeof import("node:fs")>()),
+  existsSync: () => false,
+}));
+vi.mock("../src/server/config.js", () => ({
+  loadConfig: () => ({ database: started.database, hermesToken: "hermes-token" }),
+}));
+vi.mock("../src/server/hermes.js", () => ({
+  createHermesRuntime: (options: { files: FileSigner }) => (started.runtime = options),
+}));
 vi.mock("../src/server/app.js", () => ({
   createApp: async (_config: unknown, _runtime: unknown, options: { store: Store }) => {
     started.store = options.store;
@@ -35,9 +42,21 @@ it("signs with the database's key and upgrades stored identifiers before the app
   const { Store } = await import("../src/server/store.js");
   const seed = new Store(started.database);
   seed.user({ id: "one", email: "one@example.test", name: "One" });
-  const body = Buffer.from(JSON.stringify({ path: "/workspace/staged/a.png", name: "a.png", mime: "image/png", botId: "ranch", kind: "upload", version: 1 })).toString("base64url");
+  const body = Buffer.from(
+    JSON.stringify({
+      path: "/workspace/staged/a.png",
+      name: "a.png",
+      mime: "image/png",
+      botId: "ranch",
+      kind: "upload",
+      version: 1,
+    }),
+  ).toString("base64url");
   const id = `${body}.${createHmac("sha256", "hermes-token").update(body).digest("base64url")}`;
-  seed.saveDraft("one", "ranch", { text: "", attachments: [{ id, name: "a.png", mime: "image/png" }] });
+  seed.saveDraft("one", "ranch", {
+    text: "",
+    attachments: [{ id, name: "a.png", mime: "image/png" }],
+  });
   const key = seed.fileKeys().current;
   seed.close();
 
@@ -45,8 +64,22 @@ it("signs with the database's key and upgrades stored identifiers before the app
 
   // The same database goes to the app, and the runtime signs with its key.
   expect(started.store!.fileKeys().current).toEqual(key);
-  expect(started.runtime!.files.signFile({ path: "/b", name: "b", mime: "text/plain", botId: "ranch", kind: "artifact", version: 1 }).id).toMatch(new RegExp(`^v2\\.${key.id}\\.`));
-  expect(started.store!.draft("one", "ranch")!.attachments[0].id).toMatch(new RegExp(`^v2\\.${key.id}\\.`));
-  expect(started.log.info).toHaveBeenCalledWith({ upgraded: 1, unreadable: 0 }, expect.stringContaining("Re-signed"));
+  expect(
+    started.runtime!.files.signFile({
+      path: "/b",
+      name: "b",
+      mime: "text/plain",
+      botId: "ranch",
+      kind: "artifact",
+      version: 1,
+    }).id,
+  ).toMatch(new RegExp(`^v2\\.${key.id}\\.`));
+  expect(started.store!.draft("one", "ranch")!.attachments[0].id).toMatch(
+    new RegExp(`^v2\\.${key.id}\\.`),
+  );
+  expect(started.log.info).toHaveBeenCalledWith(
+    { upgraded: 1, unreadable: 0 },
+    expect.stringContaining("Re-signed"),
+  );
   expect(started.log.warn).not.toHaveBeenCalled();
 });

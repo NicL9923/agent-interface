@@ -45,11 +45,18 @@ const containerPrefix = new RegExp(`^${container}`);
 const markerLine = /^[ \t]*[-=*_+#|:~>][-=*_+#|:~> \t]*$/;
 const spaceOrOpening = /[\s([{"'\u2018\u201c]/;
 const letterOrDigit = /[\p{L}\p{N}]/u;
-const opensAfter = { "*": /[\p{L}\p{N}`[("'\u2018\u201c]/u, "_": letterOrDigit, "~": /[\p{L}\p{N}`[("'\u2018\u201c]/u };
+const opensAfter = {
+  "*": /[\p{L}\p{N}`[("'\u2018\u201c]/u,
+  _: letterOrDigit,
+  "~": /[\p{L}\p{N}`[("'\u2018\u201c]/u,
+};
 // A line that ends a sentence, with any closing quote or bracket after its full stop.
 const sentenceEnd = /[.!?\u3002\uff01\uff1f]["')\]\u2019\u201d]*[ \t]*$/;
 // Without a segmenter a cut cannot be proved to fall between characters, so nothing is held.
-const graphemes = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function" ? new Intl.Segmenter(undefined, { granularity: "grapheme" }) : undefined;
+const graphemes =
+  typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : undefined;
 
 export function streamingHoldBack(text: string): string {
   try {
@@ -58,7 +65,11 @@ export function streamingHoldBack(text: string): string {
     const line = text.slice(lineStart);
     if (/[\t]| {4}/.test(containerPrefix.exec(line)![0])) return text;
     const earliest = text.length - HOLD_LIMIT - lineStart;
-    const cut = markerLine.test(line) || /^ {0,3}\|/.test(line) && !/^ {0,3}\|/.test(previousLine(text, lineStart)) ? 0 : inlineCut(line, earliest);
+    const cut =
+      markerLine.test(line) ||
+      (/^ {0,3}\|/.test(line) && !/^ {0,3}\|/.test(previousLine(text, lineStart)))
+        ? 0
+        : inlineCut(line, earliest);
     if (cut === undefined || cut < earliest) return text;
     // Only quote and list markers stay before the cut, so the hold hides everything the line says.
     if (containerPrefix.exec(line)![0].length >= cut && sentenceEnd.test(line)) return text;
@@ -74,20 +85,28 @@ function previousLine(text: string, lineStart: number): string {
   if (lineStart === 0) return "";
   let end = lineStart - 1;
   if (text[end] === "\n" && text[end - 1] === "\r") end--;
-  return text.slice(Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1, end);
+  return text.slice(
+    Math.max(text.lastIndexOf("\n", end - 1), text.lastIndexOf("\r", end - 1)) + 1,
+    end,
+  );
 }
 
 /** Where an unfinished inline construct on the line starts, if one does. One pass over the line. */
 function inlineCut(line: string, earliest: number): number | undefined {
   const length = line.length;
   // Backtick runs by size, so a code span's closer is found without rescanning the line.
-  const runs = new Map<number, number[]>(), seen = new Map<number, number>();
+  const runs = new Map<number, number[]>(),
+    seen = new Map<number, number>();
   for (let at = 0; at < length;) {
-    if (line[at] !== "`") { at++; continue; }
+    if (line[at] !== "`") {
+      at++;
+      continue;
+    }
     let end = at;
     while (line[end] === "`") end++;
     const starts = runs.get(end - at);
-    if (starts) starts.push(at); else runs.set(end - at, [at]);
+    if (starts) starts.push(at);
+    else runs.set(end - at, [at]);
     at = end;
   }
   const closerAfter = (from: number, size: number) => {
@@ -98,13 +117,20 @@ function inlineCut(line: string, earliest: number): number | undefined {
     return starts[index];
   };
 
-  const open = { "*": [] as Array<{ at: number; size: number }>, "_": [] as Array<{ at: number; size: number }>, "~": [] as Array<{ at: number; size: number }> };
+  const open = {
+    "*": [] as Array<{ at: number; size: number }>,
+    _: [] as Array<{ at: number; size: number }>,
+    "~": [] as Array<{ at: number; size: number }>,
+  };
   const brackets: Array<{ at: number; link: boolean }> = [];
   // Where a construct that runs to the end of the line starts: everything after it is its content.
   let rest: number | undefined;
   for (let at = 0; at < length && rest === undefined;) {
     const char = line[at];
-    if (char === "\\") { at += 2; continue; }
+    if (char === "\\") {
+      at += 2;
+      continue;
+    }
     if (char === "`") {
       let end = at;
       while (line[end] === "`") end++;
@@ -116,8 +142,11 @@ function inlineCut(line: string, earliest: number): number | undefined {
     if (char === "*" || char === "_" || char === "~") {
       let end = at;
       while (line[end] === char) end++;
-      const size = end - at, after = line[end] ?? "", spaced = at === 0 || spaceOrOpening.test(line[at - 1]);
-      const stack = open[char], top = stack.at(-1);
+      const size = end - at,
+        after = line[end] ?? "",
+        spaced = at === 0 || spaceOrOpening.test(line[at - 1]);
+      const stack = open[char],
+        top = stack.at(-1);
       if (char === "~" && size !== 2) {
         // A single tilde at the end may still become `~~`.
         if (size === 1 && spaced && !after) rest = at;
@@ -125,29 +154,46 @@ function inlineCut(line: string, earliest: number): number | undefined {
         // A shorter run is a closer still being typed, so its opener stays open.
         if (size >= top.size) {
           stack.pop();
-          for (const other of Object.values(open)) while (other.length && other.at(-1)!.at > top.at) other.pop();
+          for (const other of Object.values(open))
+            while (other.length && other.at(-1)!.at > top.at) other.pop();
         }
       } else if (spaced && !after) rest = at;
       else if (spaced && opensAfter[char].test(after)) stack.push({ at, size });
       at = end;
       continue;
     }
-    if (char === "|" && at === length - 1 && (at === 0 || /\s/.test(line[at - 1]))) { rest = at; break; }
+    if (char === "|" && at === length - 1 && (at === 0 || /\s/.test(line[at - 1]))) {
+      rest = at;
+      break;
+    }
     if (char === "[") {
       const start = line[at - 1] === "!" ? at - 1 : at;
-      brackets.push({ at: start, link: start === 0 || /[\s(*"'\u2018\u201c]/.test(line[start - 1]) });
+      brackets.push({
+        at: start,
+        link: start === 0 || /[\s(*"'\u2018\u201c]/.test(line[start - 1]),
+      });
       at++;
       continue;
     }
-    if (char !== "]") { at++; continue; }
+    if (char !== "]") {
+      at++;
+      continue;
+    }
     const bracket = brackets.pop();
     at++;
     if (!bracket) continue;
-    if (at === length) { if (bracket.link) rest = bracket.at; break; }
+    if (at === length) {
+      if (bracket.link) rest = bracket.at;
+      break;
+    }
     if (line[at] === "(") {
       // A destination, read to its closing parenthesis.
-      let depth = 1, end = at + 1;
-      for (; end < length && depth; end++) if (line[end] === "\\") end++; else if (line[end] === "(") depth++; else if (line[end] === ")") depth--;
+      let depth = 1,
+        end = at + 1;
+      for (; end < length && depth; end++)
+        if (line[end] === "\\") end++;
+        else if (line[end] === "(") depth++;
+        else if (line[end] === ")") depth--;
       if (depth) rest = bracket.at;
       at = end;
     } else if (line[at] === "[") {
@@ -159,7 +205,9 @@ function inlineCut(line: string, earliest: number): number | undefined {
   // A construct running to the end that started before the window holds everything after it, so
   // the caller shows the line as typed.
   let cut = rest ?? Infinity;
-  for (const stack of Object.values(open)) for (const opener of stack) if (opener.at >= earliest) cut = Math.min(cut, opener.at);
-  for (const bracket of brackets) if (bracket.link && bracket.at >= earliest) cut = Math.min(cut, bracket.at);
+  for (const stack of Object.values(open))
+    for (const opener of stack) if (opener.at >= earliest) cut = Math.min(cut, opener.at);
+  for (const bracket of brackets)
+    if (bracket.link && bracket.at >= earliest) cut = Math.min(cut, bracket.at);
   return cut === Infinity ? undefined : cut;
 }

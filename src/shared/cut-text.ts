@@ -12,7 +12,8 @@ let made: { from: unknown; segmenter: Intl.Segmenter } | undefined;
 function graphemes(): Intl.Segmenter | undefined {
   const Segmenter = typeof Intl === "object" ? Intl.Segmenter : undefined;
   if (typeof Segmenter !== "function") return undefined;
-  if (made?.from !== Segmenter) made = { from: Segmenter, segmenter: new Segmenter(undefined, { granularity: "grapheme" }) };
+  if (made?.from !== Segmenter)
+    made = { from: Segmenter, segmenter: new Segmenter(undefined, { granularity: "grapheme" }) };
   return made.segmenter;
 }
 
@@ -31,7 +32,10 @@ export function safeCut(text: string, index: number): number {
   if (segmenter) {
     for (const { index: at, segment } of segmenter.segment(text.slice(0, whole + LOOKAHEAD))) {
       // A character that starts the text and is longer than the lookahead may run on past it, so it is not known to end there.
-      if (at + segment.length > whole) { if (at > 0 || segment.length < LOOKAHEAD) return at; break; }
+      if (at + segment.length > whole) {
+        if (at > 0 || segment.length < LOOKAHEAD) return at;
+        break;
+      }
     }
   }
   // No grapheme boundary found, or none to look for: do not split a surrogate pair.

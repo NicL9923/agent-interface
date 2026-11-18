@@ -52,20 +52,24 @@ export type Pending = {
 };
 // Every key this app keeps in browser storage. The names are persisted: renaming one orphans what a
 // browser already saved, such as a request whose outcome is uncertain and must be retried, not resent.
-export const draftKey = (user: string, bot: string) =>
-  `agent-interface:draft:${user}:${bot}`;
+export const draftKey = (user: string, bot: string) => `agent-interface:draft:${user}:${bot}`;
 export const submissionKey = (user: string, bot: string) =>
   `agent-interface:submission:${user}:${bot}`;
 export const goalResumeKey = (user: string, bot: string) => `automation-goal-resume:${user}:${bot}`;
 /** In sessionStorage: a sign-in flow belongs to this tab. */
-export const integrationFlowKey = (user: string, profile: string) => `integration-flow:${user ? `${user}:` : ""}${profile}`;
+export const integrationFlowKey = (user: string, profile: string) =>
+  `integration-flow:${user ? `${user}:` : ""}${profile}`;
 export const groupCreateKey = (user: string) => `agent-interface:group-create:${user}`;
-export const groupSendKey = (user: string, room: string) => `agent-interface:group-send:${user}:${room}`;
-export const routineTrialKey = (user: string, routine: string) => `agent-interface:routine-trial:${user}:${routine}`;
+export const groupSendKey = (user: string, room: string) =>
+  `agent-interface:group-send:${user}:${room}`;
+export const routineTrialKey = (user: string, routine: string) =>
+  `agent-interface:routine-trial:${user}:${routine}`;
 /** In sessionStorage: retain an unclear approval decision across navigation and reloads. */
-export const approvalDecisionKey = (user: string, bot: string, approval: string) => `agent-interface:approval:${user}:${bot}:${approval}`;
+export const approvalDecisionKey = (user: string, bot: string, approval: string) =>
+  `agent-interface:approval:${user}:${bot}:${approval}`;
 /** A form card's answers on their way to the assistant, or sent, so a reload neither loses nor resends them. */
-export const formReplyKey = (user: string, bot: string, message: string, card: string) => `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
+export const formReplyKey = (user: string, bot: string, message: string, card: string) =>
+  `agent-interface:form-reply:${user}:${bot}:${message}:${card}`;
 /** When this browser's sign-in lapses and which chats it could open. See account-epoch.ts. */
 export const signInHintKey = "agent-interface:sign-in-hint";
 /** The theme this device last showed the account the sign-in hint names, for public/boot.js. */
@@ -79,7 +83,8 @@ export const savedRosterKey = "agent-interface:roster";
 export const accountKeys = [savedThemeKey, savedRosterKey];
 /** Which account every tab of this browser acts for, and whether a sign-in or sign-out is under way. See account-epoch.ts. */
 export const authEpochKey = "agent-interface:auth-epoch";
-export const notificationPromptKey = (user: string) => `agent-interface:notifications-prompt:v2:${user}`;
+export const notificationPromptKey = (user: string) =>
+  `agent-interface:notifications-prompt:v2:${user}`;
 /**
  * The localStorage records that hold what a member wrote or chose to send: drafts, a message whose
  * outcome is uncertain, a group chat's draft and send, a group being made, and a form's answers.
@@ -87,17 +92,25 @@ export const notificationPromptKey = (user: string) => `agent-interface:notifica
  * uncertain request can still be checked instead of repeated after the member signs in again.
  */
 const contentPrefixes = (user: string) => [
-  `agent-interface:draft:${user}:`, `agent-interface:submission:${user}:`, `agent-interface:group-send:${user}:`,
+  `agent-interface:draft:${user}:`,
+  `agent-interface:submission:${user}:`,
+  `agent-interface:group-send:${user}:`,
   `agent-interface:form-reply:${user}:`,
 ];
 /** Removes the records of `user` that hold their content. Every name includes the account, so no other member's go. */
 export function forgetAccountContent(user: string) {
-  const prefixes = contentPrefixes(user), exact = groupCreateKey(user);
+  const prefixes = contentPrefixes(user),
+    exact = groupCreateKey(user);
   try {
-    const names = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
+    const names = Array.from({ length: localStorage.length }, (_, index) =>
+      localStorage.key(index),
+    );
     for (const name of names)
-      if (name !== null && (name === exact || prefixes.some(prefix => name.startsWith(prefix)))) localStorage.removeItem(name);
-  } catch { /* Storage that cannot be listed holds nothing this app could read either. */ }
+      if (name !== null && (name === exact || prefixes.some((prefix) => name.startsWith(prefix))))
+        localStorage.removeItem(name);
+  } catch {
+    /* Storage that cannot be listed holds nothing this app could read either. */
+  }
 }
 export function localRead<T>(key: string): T | null {
   try {
@@ -120,20 +133,43 @@ export function localSave(key: string, value: unknown) {
 }
 /** Draft content in a fixed field order: uploads and the server's validation order file fields differently. */
 export const draftContent = (draft: Pick<Draft, "text" | "attachments">) =>
-  JSON.stringify([draft.text, draft.attachments.map(file => [file.id, file.name, file.mime, file.size ?? null, file.url ?? null])]);
-export const sameDraft = (a: Pick<Draft, "text" | "attachments">, b: Pick<Draft, "text" | "attachments">) =>
-  draftContent(a) === draftContent(b);
+  JSON.stringify([
+    draft.text,
+    draft.attachments.map((file) => [
+      file.id,
+      file.name,
+      file.mime,
+      file.size ?? null,
+      file.url ?? null,
+    ]),
+  ]);
+export const sameDraft = (
+  a: Pick<Draft, "text" | "attachments">,
+  b: Pick<Draft, "text" | "attachments">,
+) => draftContent(a) === draftContent(b);
 /**
  * Whether this copy may be the one this device sent, untouched since. Drafts are compared by
  * content on the server, so only the edit sequence can tell the sent copy from the same words
  * typed again. A copy from an older version has no sequence and keeps the content-only check.
  */
 export const isSentCopy = (draft: Draft) =>
-  draft.sentSeq === undefined || draft.sentHash !== undefined && (draft.seq ?? 0) === draft.sentSeq;
+  draft.sentSeq === undefined ||
+  (draft.sentHash !== undefined && (draft.seq ?? 0) === draft.sentSeq);
 /** This device's copy once its send was accepted: emptied if it is still the sent copy. */
 export function sentCopy(draft: Draft, submission: Pick<Pending, "text" | "attachments">): Draft {
   return isSentCopy(draft) && sameDraft(draft, submission)
-    ? { text: "", attachments: [], botId: draft.botId, userId: draft.userId, baseRevision: draft.baseRevision, baseHash: draft.baseHash, sentHash: draft.sentHash, sentBase: draft.sentBase, sentSeq: draft.sentSeq, seq: draft.seq }
+    ? {
+        text: "",
+        attachments: [],
+        botId: draft.botId,
+        userId: draft.userId,
+        baseRevision: draft.baseRevision,
+        baseHash: draft.baseHash,
+        sentHash: draft.sentHash,
+        sentBase: draft.sentBase,
+        sentSeq: draft.sentSeq,
+        seq: draft.seq,
+      }
     : draft;
 }
 export function clearSavedDraft(user: string, submission: Pending) {

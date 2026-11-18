@@ -45,29 +45,29 @@ fails (exit 3, original named, next run finishes it).
 The tool run on itself: `python3 .agents/tools/mutate-py.py --batch mutations.json --baseline --timeout 120 -- python3 tests/mutate_py_test.py`.
 Each protecting line broken, the suite run, the file restored. The batch ran as one command and the table below is its output.
 
-| Mutation | Result |
-| --- | --- |
-| No clearing before the run | failed: test_clearing_before_the_run_defeats_stale_bytecode_for_a_command_that_ignores_the_private_prefix (exit 1) |
-| No clearing after the restore | failed: test_clearing_after_the_restore_removes_bytecode_a_command_compiled_from_the_mutant (exit 1) |
-| No private pycache prefix | failed: test_the_command_runs_with_no_bytecode_writing_and_a_private_pycache_prefix (exit 1) |
-| No PYTHONDONTWRITEBYTECODE | failed: test_the_command_runs_with_no_bytecode_writing_and_a_private_pycache_prefix (exit 1) |
-| No -B after python | failed: test_dash_b_reaches_a_python_that_ignores_the_environment (exit 1) |
-| Restore skips mtime | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1) |
-| Restore skips mode | failed: test_a_file_the_command_deleted_comes_back_with_its_bytes_mode_and_mtime (exit 1) |
-| Stop signal leaves the command running | survived |
-| SIGTERM not handled | failed: test_sigterm_restores_the_file_too (exit 1) |
-| No pending record saved | failed: test_a_killed_tool_leaves_the_mutant_and_the_next_run_restores_it_first (exit 1) |
-| A live run's record is ignored | failed: test_a_second_run_on_a_file_another_live_run_is_mutating_is_refused (exit 1) |
-| A dead run's record is not restored | failed: test_a_killed_tool_leaves_the_mutant_and_the_next_run_restores_it_first (exit 1) |
-| Non-unique text accepted | failed: test_a_mutation_that_cannot_apply_is_an_error_row_that_never_runs_the_command (exit 1) |
-| Line replacement drops its line ending | failed: test_a_line_mutation_replaces_the_whole_line_and_keeps_its_crlf (exit 1) |
-| No-op replacement accepted | failed: test_a_mutation_that_cannot_apply_is_an_error_row_that_never_runs_the_command (exit 1) |
-| Survivors exit 0 | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1) |
-| Pipes not escaped | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1) |
-| Timeout does not kill the group | failed: test_a_command_that_outlives_the_timeout_is_an_error_row_and_its_children_die_with_it (exit 1) |
-| Baseline ignored | failed: test_a_baseline_that_fails_stops_the_run_before_any_mutation (exit 1) |
-| Restore not verified | survived |
-| Restore failure raised as a bare OSError | failed: test_a_restore_that_fails_exits_3_names_the_saved_original_and_the_next_run_finishes_it (exit 1) |
+| Mutation                                 | Result                                                                                                             |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| No clearing before the run               | failed: test_clearing_before_the_run_defeats_stale_bytecode_for_a_command_that_ignores_the_private_prefix (exit 1) |
+| No clearing after the restore            | failed: test_clearing_after_the_restore_removes_bytecode_a_command_compiled_from_the_mutant (exit 1)               |
+| No private pycache prefix                | failed: test_the_command_runs_with_no_bytecode_writing_and_a_private_pycache_prefix (exit 1)                       |
+| No PYTHONDONTWRITEBYTECODE               | failed: test_the_command_runs_with_no_bytecode_writing_and_a_private_pycache_prefix (exit 1)                       |
+| No -B after python                       | failed: test_dash_b_reaches_a_python_that_ignores_the_environment (exit 1)                                         |
+| Restore skips mtime                      | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1)    |
+| Restore skips mode                       | failed: test_a_file_the_command_deleted_comes_back_with_its_bytes_mode_and_mtime (exit 1)                          |
+| Stop signal leaves the command running   | survived                                                                                                           |
+| SIGTERM not handled                      | failed: test_sigterm_restores_the_file_too (exit 1)                                                                |
+| No pending record saved                  | failed: test_a_killed_tool_leaves_the_mutant_and_the_next_run_restores_it_first (exit 1)                           |
+| A live run's record is ignored           | failed: test_a_second_run_on_a_file_another_live_run_is_mutating_is_refused (exit 1)                               |
+| A dead run's record is not restored      | failed: test_a_killed_tool_leaves_the_mutant_and_the_next_run_restores_it_first (exit 1)                           |
+| Non-unique text accepted                 | failed: test_a_mutation_that_cannot_apply_is_an_error_row_that_never_runs_the_command (exit 1)                     |
+| Line replacement drops its line ending   | failed: test_a_line_mutation_replaces_the_whole_line_and_keeps_its_crlf (exit 1)                                   |
+| No-op replacement accepted               | failed: test_a_mutation_that_cannot_apply_is_an_error_row_that_never_runs_the_command (exit 1)                     |
+| Survivors exit 0                         | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1)    |
+| Pipes not escaped                        | failed: test_a_batch_prints_one_row_per_mutation_in_order_with_pipes_escaped_and_per_mutation_commands (exit 1)    |
+| Timeout does not kill the group          | failed: test_a_command_that_outlives_the_timeout_is_an_error_row_and_its_children_die_with_it (exit 1)             |
+| Baseline ignored                         | failed: test_a_baseline_that_fails_stops_the_run_before_any_mutation (exit 1)                                      |
+| Restore not verified                     | survived                                                                                                           |
+| Restore failure raised as a bare OSError | failed: test_a_restore_that_fails_exits_3_names_the_saved_original_and_the_next_run_finishes_it (exit 1)           |
 
 Two survivors, both equivalent. "Stop signal leaves the command running" removes the handler's own kill of the process group, and the
 `finally` in `run_command` kills the same group a moment later, so a stop ends the command either way. "Restore not verified" removes the
@@ -83,12 +83,12 @@ An Opus review of the pushed branch (head `e5e129a`) found four defects in the t
 in `.agents/tools/mutate-py.py`; each fix has one test in `tests/mutate_py_test.py`, now 30 tests. Each test uses its own `TMPDIR`, so its pending
 records are its own.
 
-| Finding | Fix | Test |
-| --- | --- | --- |
-| P1 recovery ran only for the file being mutated | `recover_dead_runs()` runs once at startup and restores every record whose pid is dead. A live run's record is left alone. A record whose directory no longer exists is discarded, because a killed run in a deleted checkout would otherwise warn on every later run | `test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated`, `test_a_live_runs_record_is_left_alone_when_another_file_starts`, `test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever` |
-| P2 a second stop signal could abort the restore | `stop()` sets SIGINT, SIGTERM and SIGHUP to `SIG_IGN` before it does anything else | `test_a_second_stop_signal_cannot_interrupt_the_restore` |
-| P2 a mutant that does not compile read as caught | `compile()` the mutant first; `error: the mutant does not compile (line N: ...)`, exit 2, the command never runs | `test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command` |
-| P3 a kill mid-write could leave bad JSON that crashed later runs | the record and the saved original are written to a temporary file and renamed. Recovery and the per-file guard catch an unreadable or wrongly shaped record, report it and keep it (its `.orig` may be the only copy). It blocks a run on its own file only | `test_an_unreadable_record_is_reported_and_blocks_only_its_own_file` |
+| Finding                                                          | Fix                                                                                                                                                                                                                                                                   | Test                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1 recovery ran only for the file being mutated                  | `recover_dead_runs()` runs once at startup and restores every record whose pid is dead. A live run's record is left alone. A record whose directory no longer exists is discarded, because a killed run in a deleted checkout would otherwise warn on every later run | `test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated`, `test_a_live_runs_record_is_left_alone_when_another_file_starts`, `test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever` |
+| P2 a second stop signal could abort the restore                  | `stop()` sets SIGINT, SIGTERM and SIGHUP to `SIG_IGN` before it does anything else                                                                                                                                                                                    | `test_a_second_stop_signal_cannot_interrupt_the_restore`                                                                                                                                                                  |
+| P2 a mutant that does not compile read as caught                 | `compile()` the mutant first; `error: the mutant does not compile (line N: ...)`, exit 2, the command never runs                                                                                                                                                      | `test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command`                                                                                                                                         |
+| P3 a kill mid-write could leave bad JSON that crashed later runs | the record and the saved original are written to a temporary file and renamed. Recovery and the per-file guard catch an unreadable or wrongly shaped record, report it and keep it (its `.orig` may be the only copy). It blocks a run on its own file only           | `test_an_unreadable_record_is_reported_and_blocks_only_its_own_file`                                                                                                                                                      |
 
 The second-signal test cannot rely on timing: the reviewer's pair of signals failed 2 of 100 runs. Its command starts a grandchild in its own session, which
 survives the tool's process-group kill and sends SIGTERM to the tool in a loop until `m.py` is restored. The first SIGTERM is the stop; the loop is the
@@ -101,29 +101,29 @@ checks the final content passes with an in-place write too. The unreadable-recor
 
 `python3 .agents/tools/mutate-py.py --batch mutations.json --baseline --timeout 120`, each mutation running only the test written for it; the file restored after each.
 
-| Mutation | Result |
-| --- | --- |
-| Recovery limited to the file this run targets | failed: test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated (exit 1) |
-| A live run's record is restored too | failed: test_a_live_runs_record_is_left_alone_when_another_file_starts (exit 1) |
-| A record whose directory is gone is kept | failed: test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever (exit 1) |
-| Mutant not compiled | failed: test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command (exit 1) |
-| Unreadable record not caught in recovery | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
-| Unreadable record not caught in the file guard | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
-| Record shape not checked | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1) |
-| Stop handler does not ignore later stop signals (by hand, 40 runs) | failed 40 of 40: test_a_second_stop_signal_cannot_interrupt_the_restore |
+| Mutation                                                           | Result                                                                                           |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Recovery limited to the file this run targets                      | failed: test_a_run_on_another_file_restores_the_file_a_dead_run_left_mutated (exit 1)            |
+| A live run's record is restored too                                | failed: test_a_live_runs_record_is_left_alone_when_another_file_starts (exit 1)                  |
+| A record whose directory is gone is kept                           | failed: test_a_record_whose_directory_is_gone_is_discarded_instead_of_warning_forever (exit 1)   |
+| Mutant not compiled                                                | failed: test_a_mutant_that_does_not_compile_is_an_error_row_that_never_runs_the_command (exit 1) |
+| Unreadable record not caught in recovery                           | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1)              |
+| Unreadable record not caught in the file guard                     | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1)              |
+| Record shape not checked                                           | failed: test_an_unreadable_record_is_reported_and_blocks_only_its_own_file (exit 1)              |
+| Stop handler does not ignore later stop signals (by hand, 40 runs) | failed 40 of 40: test_a_second_stop_signal_cannot_interrupt_the_restore                          |
 
 ## Checks
 
 `.agents/tools/check-all --py always --keep-going` on this tree:
 
-check      result  queued  run    counts
-typecheck  pass    -       1.8s   -
-lint       pass    -       0.3s   -
-ruff       pass    -       0.0s   -
-test       pass    5m51s   18.4s  205 files, 3665 tests
-build      pass    -       2.1s   892 modules
-e2e        pass    5m27s   1m25s  40 tests
-py         pass    -       4m41s  47 files
+check result queued run counts
+typecheck pass - 1.8s -
+lint pass - 0.3s -
+ruff pass - 0.0s -
+test pass 5m51s 18.4s 205 files, 3665 tests
+build pass - 2.1s 892 modules
+e2e pass 5m27s 1m25s 40 tests
+py pass - 4m41s 47 files
 
 All 7 checks passed (17m49s total, 11m19s of it queued for heavy slots)
 
@@ -166,4 +166,3 @@ such as the Mac mini's DevSSD. Records now carry the file's device, and a run ke
 folder that exists is on another device. `test_a_record_whose_volume_is_not_mounted_is_kept_with_its_original` rewrites the
 record's device to stand in for the unmount. With the device check removed it failed (`discarded the record ... no longer
 exists`); restored, all 31 tests pass.
-

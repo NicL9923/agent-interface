@@ -24,15 +24,10 @@
             "scope": "account"
           }
         ],
-        "details": [
-          "Credits balance: $4.00"
-        ],
+        "details": ["Credits balance: $4.00"],
         "unavailableReason": null,
         "bankedResets": 2,
-        "botIds": [
-          "household",
-          "garden"
-        ],
+        "botIds": ["household", "garden"],
         "fallbackOnly": false
       },
       {
@@ -57,14 +52,10 @@
             "scope": "model"
           }
         ],
-        "details": [
-          "Credits balance: $12.00"
-        ],
+        "details": ["Credits balance: $12.00"],
         "unavailableReason": null,
         "bankedResets": 0,
-        "botIds": [
-          "household"
-        ],
+        "botIds": ["household"],
         "fallbackOnly": true
       },
       {
@@ -77,14 +68,10 @@
         "details": [],
         "unavailableReason": "This provider does not report plan limits or credits to Hermes.",
         "bankedResets": 0,
-        "botIds": [
-          "garden"
-        ],
+        "botIds": ["garden"],
         "fallbackOnly": true
       }
     ],
-    "unavailableBots": [
-      "archive"
-    ]
+    "unavailableBots": ["archive"]
   }
 }

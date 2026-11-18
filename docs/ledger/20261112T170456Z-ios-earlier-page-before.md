@@ -29,20 +29,20 @@ newest message (see `20261112T053000Z-earlier-page-only.md` for the sizes). The 
 Each line was broken by hand alone, the tests below ran, and the file was restored with `git checkout`. The mutation runs used
 `validate-ios.sh` with `IOS_VALIDATION_FRESH=1` and the `NativeContractTests` and `ConversationParityTests` cases for the page.
 
-| Broken line | Result |
-| --- | --- |
-| page asked with `start=` instead of `before=` | red: windowed history, late poll, newer read, lost message, view lost, files (6 tests) |
-| any answer treated as the page (`value.before == first` dropped) | red: lost message page, lost message after a newer read (2 tests) |
-| unplaceable page returns instead of reading whole | red: `testAnEarlierPageIsReadWholeWhenTheViewNoLongerHoldsItsMessage` |
-| `windowGeneration += 1` removed from the page path | red: `testAReadAskedBeforeAPageCannotShrinkTheWindowEvenWhenTheReadAfterThePageFails` |
-| `historyStarts` not moved by the page | red: late poll, newer read, windowed history (3 tests) |
-| refresh after a page that outran a read removed | red: `testAPollThatAnsweredLateCannotReplaceExpandedHistory` |
-| `conversationCache[id] = merged` removed | red: `testConversationRequestsAreWindowedAndEarlierHistoryExtendsTheWindow` |
-| `read > appliedConversationRead` skipped on a whole answer | red: `testALostMessagePageAnsweringAfterANewerReadIsReadFreshInsteadOfShown` |
-| `requestedWindow == windowGeneration` guard removed | red: `testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded` |
-| `prepending` repeats the page's files | red: `testAnEarlierPageCountsFilesFromItsStartAndKeepsEachFileOnce` |
-| `prepending` keeps the view's `earlier` and `earlierFiles` | red: files, windowed history and `testFilesFromBeforeTheWindowLoadOnDemandAndMergeWithoutDuplicates` (3 tests) |
-| `prepending` keeps messages before the anchor | red: `testAnEarlierPageDropsWhateverTheViewHoldsBeforeItsMessageAndPlacesNothingWithoutIt` |
+| Broken line                                                      | Result                                                                                                         |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| page asked with `start=` instead of `before=`                    | red: windowed history, late poll, newer read, lost message, view lost, files (6 tests)                         |
+| any answer treated as the page (`value.before == first` dropped) | red: lost message page, lost message after a newer read (2 tests)                                              |
+| unplaceable page returns instead of reading whole                | red: `testAnEarlierPageIsReadWholeWhenTheViewNoLongerHoldsItsMessage`                                          |
+| `windowGeneration += 1` removed from the page path               | red: `testAReadAskedBeforeAPageCannotShrinkTheWindowEvenWhenTheReadAfterThePageFails`                          |
+| `historyStarts` not moved by the page                            | red: late poll, newer read, windowed history (3 tests)                                                         |
+| refresh after a page that outran a read removed                  | red: `testAPollThatAnsweredLateCannotReplaceExpandedHistory`                                                   |
+| `conversationCache[id] = merged` removed                         | red: `testConversationRequestsAreWindowedAndEarlierHistoryExtendsTheWindow`                                    |
+| `read > appliedConversationRead` skipped on a whole answer       | red: `testALostMessagePageAnsweringAfterANewerReadIsReadFreshInsteadOfShown`                                   |
+| `requestedWindow == windowGeneration` guard removed              | red: `testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded`                                               |
+| `prepending` repeats the page's files                            | red: `testAnEarlierPageCountsFilesFromItsStartAndKeepsEachFileOnce`                                            |
+| `prepending` keeps the view's `earlier` and `earlierFiles`       | red: files, windowed history and `testFilesFromBeforeTheWindowLoadOnDemandAndMergeWithoutDuplicates` (3 tests) |
+| `prepending` keeps messages before the anchor                    | red: `testAnEarlierPageDropsWhateverTheViewHoldsBeforeItsMessageAndPlacesNothingWithoutIt`                     |
 
 The first eleven mutations ran at `9fc88008`; the window and anchor mutations were run again, and the guard mutation added, at the
 final test set (`db3dc9f2`), where the baseline run of those 13 tests passed first.
@@ -86,11 +86,11 @@ change, and two defects in `loadEarlier` that were already on `main`. Both are f
 Each line was broken by hand alone at `3d3b0b73` and the page tests ran (`NativeContractTests`, `ConversationParityTests`), after a
 passing baseline of the same set:
 
-| Broken line | Result |
-| --- | --- |
-| `requestedWindow == nil` removed from the `loadEarlier` guard | red: `testNoPageIsReadWhileAnOpenAtMessageReadOwnsTheWindow` |
-| `windowAtStart == windowGeneration` guard removed | red: `testALostMessageAnswerForAWindowThatMovedIsDroppedAndAReadItOutranIsRepeated`, `testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded` |
-| refresh after a lost-message `apply` removed | red: `testALostMessageAnswerRepeatsTheReadItDroppedWhenTheWindowMoves` |
+| Broken line                                                   | Result                                                                                                                                           |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `requestedWindow == nil` removed from the `loadEarlier` guard | red: `testNoPageIsReadWhileAnOpenAtMessageReadOwnsTheWindow`                                                                                     |
+| `windowAtStart == windowGeneration` guard removed             | red: `testALostMessageAnswerForAWindowThatMovedIsDroppedAndAReadItOutranIsRepeated`, `testAnEarlierPageIsDroppedWhenTheWindowMovedWhileItLoaded` |
+| refresh after a lost-message `apply` removed                  | red: `testALostMessageAnswerRepeatsTheReadItDroppedWhenTheWindowMoves`                                                                           |
 
 Final run: `validate-ios.sh 0915E0B2-A1A0-43FC-9A9A-35DF02CAF0F0 test -only-testing:AgentInterfaceTests -only-testing:AgentInterfaceUITests/ParityFlowTests/testLongChatOpensAtLatestPagesEarlierAndJumpsBack`
 at `3d3b0b73`, validated inputs `2963e3ffa16d89872eca93a65d3cd1f351e1d52a74a0262d5074b9c7049dd046`: 799 unit tests passed (2 skipped),

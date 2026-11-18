@@ -17,13 +17,13 @@ iPhone 18 Pro simulator, iOS 27.0) through `.agents/tools/validate-ios.sh`. Simu
 
 Each protecting line was broken by hand alone, its test went red, and the file was restored with `git checkout`:
 
-| Broken line | Result |
-| --- | --- |
-| `ownMessages` guard returns `true` for a no-sender row | `ShellFeatureTests` 2 failures (shared-chat test, lines 38 and 40); UI `testUpArrowRecallsANoSenderMessageOnlyInAPrivateChat` red |
-| `!othersCanWrite` removed | `testRecallListsOnlyThisPersonsOwnMessagesNewestFirstWithoutRepeats` red (private chat stopped recalling) |
-| `|| ownRows.contains(message.id)` removed | `testRecallInASharedChatSkipsANoSenderRowUnlessItIsThisPersonsOwnSend` red (own queued send not recalled) |
-| `ComposerView` passes `othersCanWrite: false` | UI `testUpArrowRecallsANoSenderMessageOnlyInAPrivateChat` red at its shared-chat Down assertion |
-| `receipt.admitted` back to `receipt.status == "accepted"` | `OwnSendsTests.testATypedStopPhraseThatAdmittedNothingLeavesNoRecordButEveryOtherTurnDoes` red |
+| Broken line                                               | Result                                                                                                                            |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `ownMessages` guard returns `true` for a no-sender row    | `ShellFeatureTests` 2 failures (shared-chat test, lines 38 and 40); UI `testUpArrowRecallsANoSenderMessageOnlyInAPrivateChat` red |
+| `!othersCanWrite` removed                                 | `testRecallListsOnlyThisPersonsOwnMessagesNewestFirstWithoutRepeats` red (private chat stopped recalling)                         |
+| `                                                         |                                                                                                                                   | ownRows.contains(message.id)` removed | `testRecallInASharedChatSkipsANoSenderRowUnlessItIsThisPersonsOwnSend` red (own queued send not recalled) |
+| `ComposerView` passes `othersCanWrite: false`             | UI `testUpArrowRecallsANoSenderMessageOnlyInAPrivateChat` red at its shared-chat Down assertion                                   |
+| `receipt.admitted` back to `receipt.status == "accepted"` | `OwnSendsTests.testATypedStopPhraseThatAdmittedNothingLeavesNoRecordButEveryOtherTurnDoes` red                                    |
 
 ## Final run
 

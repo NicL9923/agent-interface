@@ -17,8 +17,11 @@ import { chunkInput, controlCharacter, keySequence, terminalOptions } from "./li
  * `terminalPaste(text)`, which send nothing unless the shell is connected and say whether they sent.
  * A finger drag scrolls the shell's output, or reaches a full-screen program as a mouse wheel does.
  */
-type Report = { type: "connected" | "ended" | "focus" } | { type: "disconnected"; reason: "closed" | "lost" }
-  | { type: "failed"; reason: "invalid_ticket" | "viewer_unavailable" } | { type: "error"; message: string };
+type Report =
+  | { type: "connected" | "ended" | "focus" }
+  | { type: "disconnected"; reason: "closed" | "lost" }
+  | { type: "failed"; reason: "invalid_ticket" | "viewer_unavailable" }
+  | { type: "error"; message: string };
 type Input = { text?: unknown; key?: unknown; control?: unknown };
 declare global {
   interface Window {
@@ -27,15 +30,25 @@ declare global {
   }
 }
 const ticketPath = /^\/api\/computer\/terminal\/ws\?ticket=[A-Za-z0-9_-]{43}$/;
-const screen = document.getElementById("screen")!, status = document.getElementById("status")!;
-let emulator: Terminal | undefined, fitting: FitAddon | undefined, loading: Promise<boolean> | undefined;
-let socket: WebSocket | undefined, path = "", connected = false, ended = false;
+const screen = document.getElementById("screen")!,
+  status = document.getElementById("status")!;
+let emulator: Terminal | undefined,
+  fitting: FitAddon | undefined,
+  loading: Promise<boolean> | undefined;
+let socket: WebSocket | undefined,
+  path = "",
+  connected = false,
+  ended = false;
 
 function report(value: Report, text?: string) {
-  if (value.type !== "focus" && value.type !== "error") document.documentElement.dataset.state = value.type;
+  if (value.type !== "focus" && value.type !== "error")
+    document.documentElement.dataset.state = value.type;
   if (text) status.textContent = text;
-  (window as unknown as { webkit?: { messageHandlers?: { terminal?: { postMessage(value: Report): void } } } })
-    .webkit?.messageHandlers?.terminal?.postMessage(value);
+  (
+    window as unknown as {
+      webkit?: { messageHandlers?: { terminal?: { postMessage(value: Report): void } } };
+    }
+  ).webkit?.messageHandlers?.terminal?.postMessage(value);
 }
 function send(message: Record<string, unknown>) {
   // Never queue input. Replaying shell commands after reconnection can run them twice.
@@ -48,12 +61,16 @@ function resize() {
   fitting.fit();
   // The server closes the connection for a size outside 2-500 columns and 2-300 rows.
   const { cols, rows } = emulator;
-  if (cols >= 2 && cols <= 500 && rows >= 2 && rows <= 300) send({ type: "resize", columns: cols, rows });
+  if (cols >= 2 && cols <= 500 && rows >= 2 && rows <= 300)
+    send({ type: "resize", columns: cols, rows });
 }
 /** Loads the emulator once; it stays across reconnections. */
 function load() {
   loading ??= (async () => {
-    const [{ Terminal: Emulator }, { FitAddon: Fit }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+    const [{ Terminal: Emulator }, { FitAddon: Fit }] = await Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+    ]);
     // Unfocused is the normal state here, so the cursor keeps its focused look.
     const terminal = new Emulator({ ...terminalOptions, cursorInactiveStyle: "block" });
     fitting = new Fit();
@@ -63,11 +80,16 @@ function load() {
     // app's own keyboard away, so it can never take focus.
     const area = terminal.textarea;
     if (area) {
-      area.disabled = true; area.readOnly = true; area.tabIndex = -1;
-      area.setAttribute("inputmode", "none"); area.setAttribute("aria-hidden", "true");
+      area.disabled = true;
+      area.readOnly = true;
+      area.tabIndex = -1;
+      area.setAttribute("inputmode", "none");
+      area.setAttribute("aria-hidden", "true");
       area.addEventListener("focus", () => area.blur());
     }
-    terminal.onData(data => { for (const chunk of chunkInput(data)) if (!send({ type: "input", data: chunk })) return; });
+    terminal.onData((data) => {
+      for (const chunk of chunkInput(data)) if (!send({ type: "input", data: chunk })) return;
+    });
     emulator = terminal;
     if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(screen);
     window.addEventListener("resize", resize);
@@ -86,8 +108,14 @@ async function connect(next: string) {
   connected = false;
   ended = false;
   previous?.close(1000);
-  if (!ticketPath.test(next)) { report({ type: "failed", reason: "invalid_ticket" }, "The terminal address is not valid."); return; }
-  if (!await load()) { report({ type: "failed", reason: "viewer_unavailable" }, "The terminal could not load."); return; }
+  if (!ticketPath.test(next)) {
+    report({ type: "failed", reason: "invalid_ticket" }, "The terminal address is not valid.");
+    return;
+  }
+  if (!(await load())) {
+    report({ type: "failed", reason: "viewer_unavailable" }, "The terminal could not load.");
+    return;
+  }
   // Another hash change replaced this ticket while the emulator loaded.
   if (path !== next) return;
   // A fresh attachment redraws the shell. Modes a previous program left on, such as application
@@ -103,24 +131,39 @@ async function connect(next: string) {
     report({ type: "connected" }, "Connected to the terminal.");
     resize();
   });
-  client.addEventListener("message", event => {
+  client.addEventListener("message", (event) => {
     if (socket !== client) return;
     let message: { type?: unknown; data?: unknown; message?: unknown };
-    try { message = JSON.parse(String(event.data)); } catch { return; }
-    if (message.type === "output" && typeof message.data === "string") emulator!.write(message.data);
+    try {
+      message = JSON.parse(String(event.data));
+    } catch {
+      return;
+    }
+    if (message.type === "output" && typeof message.data === "string")
+      emulator!.write(message.data);
     else if (message.type === "error")
-      report({ type: "error", message: typeof message.message === "string" ? message.message.slice(0, 500) : "The shell reported an error." });
+      report({
+        type: "error",
+        message:
+          typeof message.message === "string"
+            ? message.message.slice(0, 500)
+            : "The shell reported an error.",
+      });
     else if (message.type === "exit") {
       ended = true;
       connected = false;
       report({ type: "ended" }, "The shell ended.");
     }
   });
-  client.addEventListener("close", event => {
+  client.addEventListener("close", (event) => {
     if (socket !== client) return;
     socket = undefined;
     connected = false;
-    if (!ended) report({ type: "disconnected", reason: event.wasClean ? "closed" : "lost" }, "The terminal disconnected.");
+    if (!ended)
+      report(
+        { type: "disconnected", reason: event.wasClean ? "closed" : "lost" },
+        "The terminal disconnected.",
+      );
   });
 }
 window.terminalInput = ({ text, key, control }: Input) => {
@@ -136,7 +179,7 @@ window.terminalInput = ({ text, key, control }: Input) => {
   return true;
 };
 // xterm brackets a paste when the shell asked for it, so a pasted command waits for Return.
-window.terminalPaste = text => {
+window.terminalPaste = (text) => {
   if (typeof text !== "string" || !text || !connected || !emulator) return false;
   emulator.paste(limitPaste(text).text);
   return true;
@@ -153,31 +196,59 @@ function scroll(deltaY: number, x: number, y: number) {
     const row = (emulator.element?.clientHeight || screen.clientHeight) / emulator.rows;
     touch.carry += deltaY;
     const lines = row > 0 ? Math.trunc(touch.carry / row) : 0;
-    if (lines) { touch.carry -= lines * row; emulator.scrollLines(lines); }
+    if (lines) {
+      touch.carry -= lines * row;
+      emulator.scrollLines(lines);
+    }
     return;
   }
   const target = emulator.element?.querySelector(".xterm-screen") ?? emulator.element;
-  target?.dispatchEvent(new WheelEvent("wheel", { deltaY, deltaMode: WheelEvent.DOM_DELTA_PIXEL, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+  target?.dispatchEvent(
+    new WheelEvent("wheel", {
+      deltaY,
+      deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+      clientX: x,
+      clientY: y,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
 }
-screen.addEventListener("touchstart", event => {
-  const point = event.touches.length === 1 ? event.touches[0] : undefined;
-  touch = point && { x: point.clientX, y: point.clientY, lastY: point.clientY, moved: false, carry: 0 };
-}, { passive: true });
-screen.addEventListener("touchmove", event => {
-  const point = event.touches[0];
-  if (!touch || event.touches.length !== 1) return;
-  if (!touch.moved && Math.hypot(point.clientX - touch.x, point.clientY - touch.y) < 10) return;
-  touch.moved = true;
-  event.preventDefault();
-  const deltaY = touch.lastY - point.clientY;
-  touch.lastY = point.clientY;
-  if (deltaY) scroll(deltaY, point.clientX, point.clientY);
-}, { passive: false });
+screen.addEventListener(
+  "touchstart",
+  (event) => {
+    const point = event.touches.length === 1 ? event.touches[0] : undefined;
+    touch = point && {
+      x: point.clientX,
+      y: point.clientY,
+      lastY: point.clientY,
+      moved: false,
+      carry: 0,
+    };
+  },
+  { passive: true },
+);
+screen.addEventListener(
+  "touchmove",
+  (event) => {
+    const point = event.touches[0];
+    if (!touch || event.touches.length !== 1) return;
+    if (!touch.moved && Math.hypot(point.clientX - touch.x, point.clientY - touch.y) < 10) return;
+    touch.moved = true;
+    event.preventDefault();
+    const deltaY = touch.lastY - point.clientY;
+    touch.lastY = point.clientY;
+    if (deltaY) scroll(deltaY, point.clientX, point.clientY);
+  },
+  { passive: false },
+);
 screen.addEventListener("touchend", () => {
   if (touch && !touch.moved) report({ type: "focus" });
   touch = undefined;
 });
-screen.addEventListener("touchcancel", () => { touch = undefined; });
+screen.addEventListener("touchcancel", () => {
+  touch = undefined;
+});
 
 function apply() {
   const next = new URLSearchParams(location.hash.slice(1)).get("path") ?? "";

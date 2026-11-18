@@ -9,7 +9,10 @@ export type PreferenceEdit = (value: Preferences) => Preferences;
  * which applies it to the newest value there, including saves queued from other panels, so
  * two quick taps or two panels never undo each other.
  */
-export function usePreferenceEdits(saved: Preferences, editSaved: (edit: PreferenceEdit) => Promise<void>) {
+export function usePreferenceEdits(
+  saved: Preferences,
+  editSaved: (edit: PreferenceEdit) => Promise<void>,
+) {
   const [pending, setPending] = useState<Preferences | null>(null);
   const current = pending ?? saved;
   const latest = useRef(current);
@@ -18,7 +21,7 @@ export function usePreferenceEdits(saved: Preferences, editSaved: (edit: Prefere
     const next = edit(latest.current);
     latest.current = next;
     setPending(next);
-    void editSaved(edit).finally(() => setPending(value => value === next ? null : value));
+    void editSaved(edit).finally(() => setPending((value) => (value === next ? null : value)));
   };
   return [current, commit] as const;
 }

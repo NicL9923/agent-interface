@@ -11,46 +11,83 @@ import { everydayFamilies } from "../src/shared/types";
 let container: HTMLDivElement;
 let root: Root;
 let current: Avatar;
-const editor = () => createElement(AvatarEditor, {
-  avatar: current,
-  // Runs inside the act scope of the click that changed the avatar, so it must not open another.
-  onChange: (next: Avatar) => { current = next; root.render(editor()); },
-  portraitControls: createElement("p", null, "Portrait controls"),
-});
+const editor = () =>
+  createElement(AvatarEditor, {
+    avatar: current,
+    // Runs inside the act scope of the click that changed the avatar, so it must not open another.
+    onChange: (next: Avatar) => {
+      current = next;
+      root.render(editor());
+    },
+    portraitControls: createElement("p", null, "Portrait controls"),
+  });
 const render = () => act(async () => root.render(editor()));
 const choose = async (label: string) => {
   const input = Array.from(container.querySelectorAll("label"))
-    .find((element) => element.textContent?.trim() === label)?.querySelector("input");
+    .find((element) => element.textContent?.trim() === label)
+    ?.querySelector("input");
   expect(input, label).toBeTruthy();
   await act(async () => input!.click());
 };
 
 beforeEach(async () => {
-  current = { mode: "geometric", shape: "hex", color: "#FF309B", eyes: "visor", accessory: "hat", eyeWidth: 1.2 };
+  current = {
+    mode: "geometric",
+    shape: "hex",
+    color: "#FF309B",
+    eyes: "visor",
+    accessory: "hat",
+    eyeWidth: 1.2,
+  };
   ({ container, root } = mountRoot());
   await render();
 });
 
 describe("avatar editor", () => {
-  it.each(seasonalChoices)("selects $label with a recognizable palette and remembers it across styles", async ({ family, label, color }) => {
-    await choose("Mascot");
-    await choose(label);
-    expect(current).toMatchObject({ mode: "mascot", family, color, eyes: "visor", accessory: "hat", eyeWidth: 1.2 });
-    await choose("Geometric");
-    expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
-    await choose("Mascot");
-    expect(current).toMatchObject({ mode: "mascot", family, color });
-  });
+  it.each(seasonalChoices)(
+    "selects $label with a recognizable palette and remembers it across styles",
+    async ({ family, label, color }) => {
+      await choose("Mascot");
+      await choose(label);
+      expect(current).toMatchObject({
+        mode: "mascot",
+        family,
+        color,
+        eyes: "visor",
+        accessory: "hat",
+        eyeWidth: 1.2,
+      });
+      await choose("Geometric");
+      expect(current).toMatchObject({ mode: "geometric", shape: "hex" });
+      await choose("Mascot");
+      expect(current).toMatchObject({ mode: "mascot", family, color });
+    },
+  );
 
   it.each(everydayFamilies)("offers the %s character in your own color", async (family) => {
     await choose("Mascot");
     await choose(family[0].toUpperCase() + family.slice(1));
-    expect(current).toMatchObject({ mode: "mascot", family, color: "#FF309B", eyes: "visor", accessory: "hat" });
+    expect(current).toMatchObject({
+      mode: "mascot",
+      family,
+      color: "#FF309B",
+      eyes: "visor",
+      accessory: "hat",
+    });
   });
 
   it("keeps color, eyes and accessory when switching to a mascot", async () => {
     await choose("Mascot");
-    expect(current).toEqual({ mode: "mascot", family: "bear", color: "#FF309B", eyes: "visor", accessory: "hat", eyeWidth: 1.2, eyeHeight: undefined, eyeSpacing: undefined });
+    expect(current).toEqual({
+      mode: "mascot",
+      family: "bear",
+      color: "#FF309B",
+      eyes: "visor",
+      accessory: "hat",
+      eyeWidth: 1.2,
+      eyeHeight: undefined,
+      eyeSpacing: undefined,
+    });
   });
 
   it("restores the drawn character after trying a portrait", async () => {
@@ -58,7 +95,12 @@ describe("avatar editor", () => {
     expect(current.mode).toBe("portrait");
     expect(container.textContent).toContain("Portrait controls");
     await choose("Geometric");
-    expect(current).toMatchObject({ mode: "geometric", shape: "hex", color: "#FF309B", eyes: "visor" });
+    expect(current).toMatchObject({
+      mode: "geometric",
+      shape: "hex",
+      color: "#FF309B",
+      eyes: "visor",
+    });
   });
 
   it("remembers the last shape and character across styles", async () => {
@@ -81,14 +123,18 @@ describe("avatar editor", () => {
   it("updates the chosen shape and resets eye tuning", async () => {
     await choose("Drop");
     expect(current).toMatchObject({ shape: "drop" });
-    const reset = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Reset eyes")!;
+    const reset = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Reset eyes",
+    )!;
     await act(async () => reset.click());
     expect(current).toMatchObject({ eyeWidth: undefined });
   });
 
   it("previews states without changing the saved avatar", async () => {
     const before = current;
-    const working = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Working")!;
+    const working = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Working",
+    )!;
     await act(async () => working.click());
     expect(working.getAttribute("aria-pressed")).toBe("true");
     expect(current).toBe(before);
@@ -100,5 +146,4 @@ describe("avatar editor", () => {
       expect(range.labels![0].textContent).toMatch(/Eye (width|height|spacing)/);
     }
   });
-
 });

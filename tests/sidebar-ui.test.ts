@@ -8,7 +8,6 @@ import { defaultPreferences, type Bootstrap } from "../src/shared/types";
 import type { ComponentProps } from "react";
 import { mountRoot } from "./ui-harness";
 
-
 let root: Root;
 let container: HTMLDivElement;
 let props: ComponentProps<typeof Sidebar>;
@@ -28,25 +27,46 @@ beforeEach(() => {
         { id: "garden", name: "Garden planner", activity: "thinking" },
       ],
     } as Bootstrap,
-    botId: "ranch", readThrough: {}, view: "conversation", state: "working",
-    connectionLost: false, offline: false, mobile: false, open: true, update: null,
-    onSelectBot: vi.fn(), onView: vi.fn(), onNewBot: vi.fn(),
-    onSettings: vi.fn(), onUsage: vi.fn(), onSignOut: vi.fn(), onPin: vi.fn(), onBotSettings: vi.fn(),
-    onMoveToSection: vi.fn(), onNewSection: vi.fn(),
+    botId: "ranch",
+    readThrough: {},
+    view: "conversation",
+    state: "working",
+    connectionLost: false,
+    offline: false,
+    mobile: false,
+    open: true,
+    update: null,
+    onSelectBot: vi.fn(),
+    onView: vi.fn(),
+    onNewBot: vi.fn(),
+    onSettings: vi.fn(),
+    onUsage: vi.fn(),
+    onSignOut: vi.fn(),
+    onPin: vi.fn(),
+    onBotSettings: vi.fn(),
+    onMoveToSection: vi.fn(),
+    onNewSection: vi.fn(),
   };
 });
 // Rows hold a lightweight stand-in until the menu code has loaded, which happens right after first paint.
 // These tests are about the real menu; bot-menu-ui.test.ts covers gestures that beat it.
 const render = async () => {
   await act(async () => root.render(createElement(Sidebar, props)));
-  await act(async () => { await preloadBotMenu(); });
+  await act(async () => {
+    await preloadBotMenu();
+  });
 };
-const statuses = () => [...container.querySelectorAll(".pinned-activity")].map(node => node.textContent);
+const statuses = () =>
+  [...container.querySelectorAll(".pinned-activity")].map((node) => node.textContent);
 
 it("updates pinned activity from the selected conversation and other bots' live summaries", async () => {
   await render();
   expect(statuses()).toEqual(["Working", "Thinking"]);
-  props = { ...props, state: "done", boot: { ...props.boot, bots: props.boot.bots.map(bot => ({ ...bot, activity: "waiting" })) } };
+  props = {
+    ...props,
+    state: "done",
+    boot: { ...props.boot, bots: props.boot.bots.map((bot) => ({ ...bot, activity: "waiting" })) },
+  };
   await render();
   expect(statuses()).toEqual(["", "Waiting"]);
   props = { ...props, state: "thinking" };
@@ -84,13 +104,46 @@ it("replaces stale working indicators during connection loss and restores them o
 
 it("marks unread chats until they are on screen or read through their latest message", async () => {
   const at = "2026-10-23T15:00:00.000Z";
-  props = { ...props, boot: { ...props.boot, preferences: { ...props.boot.preferences, favorites: ["garden"] }, bots: [
-    { id: "ranch", name: "Ranch hand", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Gate is fixed.", at } },
-    { id: "garden", name: "Garden planner", activity: "idle", model: "test", shared: true, unread: true, lastMessage: { text: "Frost tonight.", at } },
-    { id: "kitchen", name: "Kitchen", activity: "idle", model: "test", shared: true, lastMessage: { text: "Soup.", at } },
-  ] } };
+  props = {
+    ...props,
+    boot: {
+      ...props.boot,
+      preferences: { ...props.boot.preferences, favorites: ["garden"] },
+      bots: [
+        {
+          id: "ranch",
+          name: "Ranch hand",
+          activity: "idle",
+          model: "test",
+          shared: true,
+          unread: true,
+          lastMessage: { text: "Gate is fixed.", at },
+        },
+        {
+          id: "garden",
+          name: "Garden planner",
+          activity: "idle",
+          model: "test",
+          shared: true,
+          unread: true,
+          lastMessage: { text: "Frost tonight.", at },
+        },
+        {
+          id: "kitchen",
+          name: "Kitchen",
+          activity: "idle",
+          model: "test",
+          shared: true,
+          lastMessage: { text: "Soup.", at },
+        },
+      ],
+    },
+  };
   await render();
-  const marked = () => [...container.querySelectorAll(".unread")].map(node => node.querySelector(".pinned-name, strong")!.textContent);
+  const marked = () =>
+    [...container.querySelectorAll(".unread")].map(
+      (node) => node.querySelector(".pinned-name, strong")!.textContent,
+    );
   expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
   expect(container.querySelector(".bot-row.unread")!.textContent).toContain("Unread");
   props = { ...props, shownBotId: "ranch" };
@@ -100,17 +153,32 @@ it("marks unread chats until they are on screen or read through their latest mes
   props = { ...props, shownBotId: undefined, readThrough: { ranch: at } };
   await render();
   expect(marked()).toEqual(["UnreadGarden planner"]);
-  props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "ranch"
-    ? { ...bot, lastMessage: { text: "Cattle are out.", at: "2026-10-23T15:05:00.000Z" } } : bot) } };
+  props = {
+    ...props,
+    boot: {
+      ...props.boot,
+      bots: props.boot.bots.map((bot) =>
+        bot.id === "ranch"
+          ? { ...bot, lastMessage: { text: "Cattle are out.", at: "2026-10-23T15:05:00.000Z" } }
+          : bot,
+      ),
+    },
+  };
   await render();
   expect(marked()).toEqual(["UnreadGarden planner", "Ranch hand"]);
 });
 
 const menuItems = () => [...document.body.querySelectorAll<HTMLElement>('[role="menuitem"]')];
-const key = async (target: Element, value: string, shiftKey = false) => act(async () => {
-  target.dispatchEvent(new KeyboardEvent("keydown", { key: value, shiftKey, bubbles: true, cancelable: true }));
-});
-const settleFocus = () => act(async () => { await new Promise(resolve => setTimeout(resolve, 30)); });
+const key = async (target: Element, value: string, shiftKey = false) =>
+  act(async () => {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", { key: value, shiftKey, bubbles: true, cancelable: true }),
+    );
+  });
+const settleFocus = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  });
 
 it("opens the assistant menu by keyboard, navigates its actions, and restores row focus on Escape", async () => {
   await render();
@@ -118,7 +186,9 @@ it("opens the assistant menu by keyboard, navigates its actions, and restores ro
   row.focus();
   await key(row, "F10", true);
   await settleFocus();
-  expect(document.body.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe("Ranch hand");
+  expect(document.body.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe(
+    "Ranch hand",
+  );
   const [unpin, move, settings] = menuItems();
   expect(move.textContent).toBe("Move to section");
   await key(document.activeElement!, "ArrowDown");
@@ -139,7 +209,17 @@ it("opens the assistant menu by keyboard, navigates its actions, and restores ro
 it("opens a right-click menu for its own assistant and invokes its settings", async () => {
   await render();
   const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
-  await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
+  await act(async () =>
+    row.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        clientX: 100,
+        clientY: 180,
+        button: 2,
+        bubbles: true,
+        cancelable: true,
+      }),
+    ),
+  );
   await settleFocus();
   await act(async () => menuItems()[2].click());
   expect(props.onBotSettings).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
@@ -150,18 +230,25 @@ it("opens a right-click menu for its own assistant and invokes its settings", as
 it("opens on a held touch, cancels a scrolling touch, and suppresses selection after a long press", async () => {
   await render();
   const row = container.querySelector<HTMLButtonElement>(".pinned-bot")!;
-  const touch = async (type: string, x: number, y: number) => act(async () => {
-    const event = new Event(type, { bubbles: true, cancelable: true });
-    Object.defineProperty(event, "touches", { value: type === "touchend" ? [] : [{ clientX: x, clientY: y }] });
-    row.dispatchEvent(event);
-  });
+  const touch = async (type: string, x: number, y: number) =>
+    act(async () => {
+      const event = new Event(type, { bubbles: true, cancelable: true });
+      Object.defineProperty(event, "touches", {
+        value: type === "touchend" ? [] : [{ clientX: x, clientY: y }],
+      });
+      row.dispatchEvent(event);
+    });
   await touch("touchstart", 30, 40);
   await touch("touchmove", 30, 60);
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 520)); });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 520));
+  });
   expect(document.body.querySelector('[role="menu"]')).toBeNull();
   await touch("touchend", 30, 60);
   await touch("touchstart", 30, 40);
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 520)); });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 520));
+  });
   await settleFocus();
   expect(document.body.querySelector('[role="menu"]')).not.toBeNull();
   await touch("touchend", 30, 40);
@@ -170,31 +257,58 @@ it("opens on a held touch, cancels a scrolling touch, and suppresses selection a
 });
 
 it("moves an assistant to one home section from its menu, or starts a new section for it", async () => {
-  props.boot.preferences = { ...props.boot.preferences, sections: [{ id: "house", name: "Around the house", botIds: ["garden"] }] };
+  props.boot.preferences = {
+    ...props.boot.preferences,
+    sections: [{ id: "house", name: "Around the house", botIds: ["garden"] }],
+  };
   await render();
   const openSubmenu = async () => {
     const row = container.querySelectorAll<HTMLButtonElement>(".pinned-bot")[1];
-    await act(async () => row.dispatchEvent(new MouseEvent("contextmenu", { clientX: 100, clientY: 180, button: 2, bubbles: true, cancelable: true })));
+    await act(async () =>
+      row.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          clientX: 100,
+          clientY: 180,
+          button: 2,
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    );
     await settleFocus();
-    await act(async () => menuItems().find(item => item.textContent === "Move to section")!.click());
+    await act(async () =>
+      menuItems()
+        .find((item) => item.textContent === "Move to section")!
+        .click(),
+    );
     await settleFocus();
   };
   await openSubmenu();
   const choices = [...document.body.querySelectorAll<HTMLElement>('[role="menuitemradio"]')];
-  expect(choices.map(item => [item.textContent, item.getAttribute("aria-checked")])).toEqual([["None", "false"], ["✓Around the house", "true"]]);
+  expect(choices.map((item) => [item.textContent, item.getAttribute("aria-checked")])).toEqual([
+    ["None", "false"],
+    ["✓Around the house", "true"],
+  ]);
   await act(async () => choices[0].click());
   expect(props.onMoveToSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1], null);
   await settleFocus();
   expect(document.body.querySelector('[role="menu"]')).toBeNull();
   await openSubmenu();
-  await act(async () => menuItems().find(item => item.textContent === "New section…")!.click());
+  await act(async () =>
+    menuItems()
+      .find((item) => item.textContent === "New section…")!
+      .click(),
+  );
   expect(props.onNewSection).toHaveBeenCalledExactlyOnceWith(props.boot.bots[1]);
   expect(props.onSelectBot).not.toHaveBeenCalled();
 });
 
 it("cheers a pinned assistant that finishes its work and has the other pinned ones glance at it", async () => {
   const events: string[] = [];
-  const reacted = (event: Event) => events.push(`react:${(event as CustomEvent).detail.botId}:${(event as CustomEvent).detail.kind}`);
+  const reacted = (event: Event) =>
+    events.push(
+      `react:${(event as CustomEvent).detail.botId}:${(event as CustomEvent).detail.kind}`,
+    );
   const glanced = (event: Event) => events.push(`glance:${(event as CustomEvent).detail.botId}`);
   window.addEventListener("wildbots:avatar-react", reacted);
   window.addEventListener("wildbots:avatar-glance", glanced);
@@ -202,7 +316,17 @@ it("cheers a pinned assistant that finishes its work and has the other pinned on
     await render();
     expect(events).toEqual([]);
     // The selected chat finishes; the other moves on to waiting, which is not a finish.
-    props = { ...props, state: "idle", boot: { ...props.boot, bots: props.boot.bots.map(bot => ({ ...bot, activity: bot.id === "garden" ? "waiting" : bot.activity })) } };
+    props = {
+      ...props,
+      state: "idle",
+      boot: {
+        ...props.boot,
+        bots: props.boot.bots.map((bot) => ({
+          ...bot,
+          activity: bot.id === "garden" ? "waiting" : bot.activity,
+        })),
+      },
+    };
     await render();
     expect(events).toEqual(["react:ranch:cheer", "glance:ranch"]);
     await render();
@@ -229,15 +353,42 @@ it("marks home with the season and draws its drifting shapes, hidden from assist
     expect(container.querySelector(".season-ambience")).toBeNull();
     // Outside every calendar season, a pinned seasonal character brings its own.
     await act(async () => root.unmount());
-    props = { ...props, boot: { ...props.boot, bots: props.boot.bots.map(bot => bot.id === "garden"
-      ? { ...bot, avatar: { mode: "mascot", family: "snowman", color: "#F4F8FB", eyes: "round", accessory: "none" } } : bot) } };
+    props = {
+      ...props,
+      boot: {
+        ...props.boot,
+        bots: props.boot.bots.map((bot) =>
+          bot.id === "garden"
+            ? {
+                ...bot,
+                avatar: {
+                  mode: "mascot",
+                  family: "snowman",
+                  color: "#F4F8FB",
+                  eyes: "round",
+                  accessory: "none",
+                },
+              }
+            : bot,
+        ),
+      },
+    };
     await render();
     expect(container.querySelector(".bot-rail")?.getAttribute("data-season")).toBe("winter");
-  } finally { vi.useRealTimers(); }
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("gives the avatar morph and glances a place on home", async () => {
   await render();
-  expect([...container.querySelectorAll(".pinned-avatar")].map(node => [node.getAttribute("data-morph"), node.getAttribute("data-glance-target")]))
-    .toEqual([["ranch", "ranch"], ["garden", "garden"]]);
+  expect(
+    [...container.querySelectorAll(".pinned-avatar")].map((node) => [
+      node.getAttribute("data-morph"),
+      node.getAttribute("data-glance-target"),
+    ]),
+  ).toEqual([
+    ["ranch", "ranch"],
+    ["garden", "garden"],
+  ]);
 });

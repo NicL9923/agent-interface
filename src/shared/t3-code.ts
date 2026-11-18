@@ -34,10 +34,15 @@ export interface T3Thread {
 }
 
 type Fields = Record<string, unknown>;
-const isFields = (value: unknown): value is Fields => typeof value === "object" && value !== null && !Array.isArray(value);
+const isFields = (value: unknown): value is Fields =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 const json = (text: string | undefined): unknown => {
   if (text === undefined) return undefined;
-  try { return JSON.parse(text); } catch { return text; }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 const words = (value: unknown, max: number) => {
   if (typeof value !== "string") return undefined;
@@ -54,7 +59,8 @@ function launchResult(text: string | undefined): Fields | undefined {
   let value = json(text);
   for (let depth = 0; depth < 3 && isFields(value); depth++) {
     if (typeof value.threadId === "string") return value;
-    if (isFields(value.structuredContent) && typeof value.structuredContent.threadId === "string") return value.structuredContent;
+    if (isFields(value.structuredContent) && typeof value.structuredContent.threadId === "string")
+      return value.structuredContent;
     if (!Object.hasOwn(value, "result")) return undefined;
     value = typeof value.result === "string" ? json(value.result) : value.result;
   }
@@ -66,14 +72,19 @@ function launchError(call: ToolCall): string | undefined {
   let value = json(call.result);
   for (let depth = 0; depth < 3 && isFields(value); depth++) {
     if (typeof value.error === "string") return words(value.error, 300);
-    if (isFields(value.error) && typeof value.error.message === "string") return words(value.error.message, 300);
+    if (isFields(value.error) && typeof value.error.message === "string")
+      return words(value.error.message, 300);
     value = typeof value.result === "string" ? json(value.result) : value.result;
   }
   return undefined;
 }
 
 // T3 Code escapes even URL-safe punctuation in a hosted link, so a sentence's period never joins an ID.
-const segment = (id: string) => encodeURIComponent(id).replace(/[.!~*'()]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+const segment = (id: string) =>
+  encodeURIComponent(id).replace(
+    /[.!~*'()]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
 const hostedPath = /^\/threads\/[A-Za-z0-9_%-]+\/[A-Za-z0-9_%-]+\/?$/;
 /**
  * A link that opens the thread: T3 Code's hosted link as given, or a `t3-thread://v2/` link
@@ -84,13 +95,21 @@ export function t3ThreadUrl(link: unknown): string | undefined {
   const written = link.trim().replace(/^<(.*)>$/, "$1");
   const v2 = /^t3-thread:\/\/v2\/([^/\s]+)\/([^/\s]+)$/.exec(written);
   if (v2) {
-    try { return `${T3_HOSTED_APP_URL}/threads/${segment(decodeURIComponent(v2[1]))}/${segment(decodeURIComponent(v2[2]))}`; }
-    catch { return `${T3_HOSTED_APP_URL}/threads/${segment(v2[1])}/${segment(v2[2])}`; }
+    try {
+      return `${T3_HOSTED_APP_URL}/threads/${segment(decodeURIComponent(v2[1]))}/${segment(decodeURIComponent(v2[2]))}`;
+    } catch {
+      return `${T3_HOSTED_APP_URL}/threads/${segment(v2[1])}/${segment(v2[2])}`;
+    }
   }
   try {
     const url = new URL(written);
     // A self-hosted T3 Code can serve the app at another HTTPS origin, with the same path.
-    return url.protocol === "https:" && hostedPath.test(url.pathname) && !url.username && !url.password ? url.toString() : undefined;
+    return url.protocol === "https:" &&
+      hostedPath.test(url.pathname) &&
+      !url.username &&
+      !url.password
+      ? url.toString()
+      : undefined;
   } catch {
     return undefined;
   }
@@ -104,9 +123,12 @@ function workspace(args: Fields): string | undefined {
       const branch = words(strategy.branch, 80);
       return branch ? `New worktree on ${branch}` : "New worktree";
     }
-    case "existing_worktree": return "Existing worktree";
-    case "root": return "Project checkout";
-    default: return undefined;
+    case "existing_worktree":
+      return "Existing worktree";
+    case "root":
+      return "Project checkout";
+    default:
+      return undefined;
   }
 }
 const modelName = (selection: unknown) => {
@@ -120,13 +142,15 @@ export function t3ThreadLaunch(call: ToolCall): T3Thread | null {
   const parsedArgs = json(call.arguments);
   const args = isFields(parsedArgs) ? parsedArgs : {};
   const result = call.status === "completed" ? launchResult(call.result) : undefined;
-  const failed = call.status === "failed" || call.status === "completed" && !result;
+  const failed = call.status === "failed" || (call.status === "completed" && !result);
   const thread: T3Thread = {
     callId: call.id,
     state: call.status === "running" ? "starting" : failed ? "failed" : "started",
     title: words(args.title, 200) ?? "New thread",
   };
-  const prompt = words(args.message, 280), model = modelName(result?.modelSelection) ?? modelName(args.modelSelection), place = workspace(args);
+  const prompt = words(args.message, 280),
+    model = modelName(result?.modelSelection) ?? modelName(args.modelSelection),
+    place = workspace(args);
   if (prompt) thread.prompt = prompt;
   if (model) thread.model = model;
   if (place) thread.workspace = place;
@@ -135,6 +159,7 @@ export function t3ThreadLaunch(call: ToolCall): T3Thread | null {
     const url = t3ThreadUrl(result?.link);
     if (url) thread.url = url;
   }
-  if (thread.state === "failed") thread.error = launchError(call) ?? "T3 Code didn't report the new thread.";
+  if (thread.state === "failed")
+    thread.error = launchError(call) ?? "T3 Code didn't report the new thread.";
   return thread;
 }

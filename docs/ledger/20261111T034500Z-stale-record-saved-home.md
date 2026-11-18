@@ -36,11 +36,11 @@ about when the saved home is drawn says so.
 Each protecting line broken by hand, the file restored, over `tests/account-transitions-ui.test.ts`, `tests/saved-roster-ui.test.ts`
 and `tests/account-epoch.test.ts`.
 
-| Mutation | Result |
-| --- | --- |
-| Record check removed from `readSavedRoster`, as before | failed: the probe (1) |
+| Mutation                                                                              | Result                                                        |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Record check removed from `readSavedRoster`, as before                                | failed: the probe (1)                                         |
 | Blocks unless the record names the hint's account, so a record naming none blocks too | failed: 8 saved-home tests, which open with no record account |
-| `readSavedRoster` returns null always | failed: the matching case (1) |
+| `readSavedRoster` returns null always                                                 | failed: the matching case (1)                                 |
 
 ## Checks
 

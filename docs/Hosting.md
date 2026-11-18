@@ -54,6 +54,7 @@ To change it, as [issue #210](https://github.com/NicL9923/agent-interface/issues
    `/api/health/ready`. Confirm the process runs the new binary:
    `readlink -f /proc/$(systemctl --user show -p MainPID --value agent-interface.service)/exe`.
    To roll back, remove the drop-in, then reload and restart the same way.
+
 3. Prepare the next release with `release-app.py prepare COMMIT --node ABSOLUTE_PATH`. The
    release records the binary that path resolved to when the host built it, and qualification,
    activation and recovery run that binary even if a symlink in the path is retargeted later.
@@ -144,14 +145,14 @@ The launch profile must be signed in to ChatGPT (`openai-codex`) in Hermes.
 `POST /api/agent-interface/voice/status` on the service bridge reports
 `{available, reason}`, and the app shows the reason in place of Talk:
 
-| Reason | Meaning and fix |
-| --- | --- |
-| The plugin is not linked into Hermes | The link is missing. Activate a current release. |
-| The plugin link is broken | The link's target is gone, usually a pruned release. Activate a current release. |
-| The plugin links to a different release | The link resolves to another release than the running add-on. Activate the current release again. |
-| The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release. |
-| Enable the wildbots-voice plugin in Hermes | The launch profile's config does not enable it, disables it, or cannot be read. Run the enable command above. |
-| This Hermes version cannot share its ChatGPT sign-in | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes. |
+| Reason                                                   | Meaning and fix                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| The plugin is not linked into Hermes                     | The link is missing. Activate a current release.                                                              |
+| The plugin link is broken                                | The link's target is gone, usually a pruned release. Activate a current release.                              |
+| The plugin links to a different release                  | The link resolves to another release than the running add-on. Activate the current release again.             |
+| The plugin manifest does not ask for the ChatGPT sign-in | The linked `plugin.yaml` lost `requires_auth`. Restore the release.                                           |
+| Enable the wildbots-voice plugin in Hermes               | The launch profile's config does not enable it, disables it, or cannot be read. Run the enable command above. |
+| This Hermes version cannot share its ChatGPT sign-in     | Hermes lacks `hermes_cli.plugin_provider_requests`. Update Hermes.                                            |
 
 Status does not contact OpenAI or refresh the sign-in. Starting Talk can still
 fail: signed out of ChatGPT answers 409 with "Sign in to ChatGPT in Hermes", a

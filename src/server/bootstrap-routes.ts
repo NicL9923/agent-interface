@@ -20,23 +20,41 @@ import type { HermesUpgrades } from "./upgrades.js";
 export function visiblePreferences(store: Store, userId: string): Preferences {
   const value = store.preferences(userId);
   const seen = (botId: string) => visibleTo(store, botId, userId);
-  const main = value.mainBotId && mainEligible(store.presentation(value.mainBotId), userId) ? value.mainBotId : undefined;
-  return { ...value, favorites: value.favorites.filter(seen), followBots: value.followBots.filter(seen),
-    sections: value.sections.map(section => ({ ...section, botIds: section.botIds.filter(seen) })),
-    ...(value.hiddenRoutineRuns ? { hiddenRoutineRuns: value.hiddenRoutineRuns.filter(entry => seen(entry.botId)) } : {}),
+  const main =
+    value.mainBotId && mainEligible(store.presentation(value.mainBotId), userId)
+      ? value.mainBotId
+      : undefined;
+  return {
+    ...value,
+    favorites: value.favorites.filter(seen),
+    followBots: value.followBots.filter(seen),
+    sections: value.sections.map((section) => ({
+      ...section,
+      botIds: section.botIds.filter(seen),
+    })),
+    ...(value.hiddenRoutineRuns
+      ? { hiddenRoutineRuns: value.hiddenRoutineRuns.filter((entry) => seen(entry.botId)) }
+      : {}),
     defaultBotId: value.defaultBotId && seen(value.defaultBotId) ? value.defaultBotId : undefined,
-    mainBotId: main, ...(value.checkIns ? { checkIns: main ? value.checkIns : { ...value.checkIns, enabled: false } } : {}) };
+    mainBotId: main,
+    ...(value.checkIns
+      ? { checkIns: main ? value.checkIns : { ...value.checkIns, enabled: false } }
+      : {}),
+  };
 }
 
 /** The client's first read, retrying the Hermes connection, this person's preferences and model options. */
-export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
-  config: Config;
-  runtime: Runtime;
-  store: Store;
-  upgrades: Pick<HermesUpgrades, "revisionDate">;
-  directory: BotDirectory;
-  snapshot: RuntimeSnapshots;
-}) {
+export function installBootstrapRoutes(
+  app: FastifyInstance,
+  collaborators: {
+    config: Config;
+    runtime: Runtime;
+    store: Store;
+    upgrades: Pick<HermesUpgrades, "revisionDate">;
+    directory: BotDirectory;
+    snapshot: RuntimeSnapshots;
+  },
+) {
   const { config, runtime, store, upgrades, directory, snapshot } = collaborators;
   // Someone else's private assistant leaves this person's lists, so their saved
   // preferences stop naming it too.
@@ -45,14 +63,20 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
     const revisionDate = upgrades.revisionDate(status.version);
     return revisionDate ? { ...status, revisionDate } : status;
   };
-  apiRoute(app, "GET /bootstrap", {}, async req => ({
+  apiRoute(app, "GET /bootstrap", {}, async (req) => ({
     user: signedIn(req),
     household: store.users().filter((user) => allowedIdentity(config, user)),
     preferences: preferencesFor(signedIn(req).id),
-    ...await snapshot.read().then(async value => ({ ...value, connection: dated(value.connection),
-      bots: await directory.rosterFor(signedIn(req).id, value.bots, value.capabilities.avatarMetadata.supported,
-        (req.query as { roster?: string }).roster === "lean"),
-    })),
+    ...(await snapshot.read().then(async (value) => ({
+      ...value,
+      connection: dated(value.connection),
+      bots: await directory.rosterFor(
+        signedIn(req).id,
+        value.bots,
+        value.capabilities.avatarMetadata.supported,
+        (req.query as { roster?: string }).roster === "lean",
+      ),
+    }))),
     csrfToken: req.csrfToken,
     formKey: store.formKey(signedIn(req).id),
     vapidPublicKey: config.vapidPublicKey || undefined,
@@ -79,14 +103,20 @@ export function installBootstrapRoutes(app: FastifyInstance, collaborators: {
     store.savePreferences(signedIn(req).id, value);
     return preferencesFor(signedIn(req).id);
   });
-  apiRoute(app, "PUT /preferences/models", { body: z.object({ modelFavorites: modelFavoriteList }).strict() }, async (req, { modelFavorites }) => {
-    const userId = signedIn(req).id;
-    store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
-    return { modelFavorites };
-  });
-  apiRoute(app, "GET /models", {}, async req => {
+  apiRoute(
+    app,
+    "PUT /preferences/models",
+    { body: z.object({ modelFavorites: modelFavoriteList }).strict() },
+    async (req, { modelFavorites }) => {
+      const userId = signedIn(req).id;
+      store.savePreferences(userId, { ...store.preferences(userId), modelFavorites });
+      return { modelFavorites };
+    },
+  );
+  apiRoute(app, "GET /models", {}, async (req) => {
     const { botId } = z.object({ botId: id.optional() }).parse(req.query);
-    if (!runtime.modelOptions) throw httpError(409, "The connected Hermes installation does not expose model options.");
+    if (!runtime.modelOptions)
+      throw httpError(409, "The connected Hermes installation does not expose model options.");
     return runtime.modelOptions(botId);
   });
 }

@@ -30,23 +30,23 @@ same value.
 
 Each line was broken by hand, the focused tests run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
+| Mutation                                              | Result                                                                                                           |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `prefetchLinkedChat()` call removed from `useSession` | failed: "reads the chat while bootstrap is on its way…", "drops a read for a chat the person can no longer see…" |
-| Chat-list guard removed | failed: signed-out case and 6 "waits for bootstrap" cases |
-| Lapse check removed | failed: "waits for bootstrap with a sign-in that has lapsed" |
-| `Array.isArray(bots)` check removed | failed: "…whose chats are not a list of IDs" |
-| `typeof until` check removed | failed: "…a lapse time that is not a number" |
-| Message-link guard removed | failed: "opens a message link at that message…", "…a link to a message…" |
-| View guard removed | failed: "…a link to Today" |
-| `forgetSignIn()` on a 401 removed | failed: "starts at sign-in, learns the chats…" |
-| `forgetSignIn()` on sign-out removed | failed: "is forgotten when the person signs out" |
-| `rememberSignIn()` removed | failed: "starts at sign-in, learns the chats…" |
-| Connected check on the chat-list write removed | failed: "starts at sign-in, learns the chats…" |
-| Lifetime not from `SESSION_MAX_AGE_MS` | failed: "starts at sign-in, learns the chats…" |
-| A finished read not joinable | failed: "opened 4999ms after a prefetch finished…", "reads the chat while bootstrap is on its way…" |
-| Freshness boundary `<` changed to `<=` | failed: "opened 5000ms after a prefetch finished…" |
-| e2e: `prefetchLinkedChat()` removed, rebuilt | failed: "a link to a chat…" at `expect(heldUntil[0]).toBe(true)`, received `false` |
+| Chat-list guard removed                               | failed: signed-out case and 6 "waits for bootstrap" cases                                                        |
+| Lapse check removed                                   | failed: "waits for bootstrap with a sign-in that has lapsed"                                                     |
+| `Array.isArray(bots)` check removed                   | failed: "…whose chats are not a list of IDs"                                                                     |
+| `typeof until` check removed                          | failed: "…a lapse time that is not a number"                                                                     |
+| Message-link guard removed                            | failed: "opens a message link at that message…", "…a link to a message…"                                         |
+| View guard removed                                    | failed: "…a link to Today"                                                                                       |
+| `forgetSignIn()` on a 401 removed                     | failed: "starts at sign-in, learns the chats…"                                                                   |
+| `forgetSignIn()` on sign-out removed                  | failed: "is forgotten when the person signs out"                                                                 |
+| `rememberSignIn()` removed                            | failed: "starts at sign-in, learns the chats…"                                                                   |
+| Connected check on the chat-list write removed        | failed: "starts at sign-in, learns the chats…"                                                                   |
+| Lifetime not from `SESSION_MAX_AGE_MS`                | failed: "starts at sign-in, learns the chats…"                                                                   |
+| A finished read not joinable                          | failed: "opened 4999ms after a prefetch finished…", "reads the chat while bootstrap is on its way…"              |
+| Freshness boundary `<` changed to `<=`                | failed: "opened 5000ms after a prefetch finished…"                                                               |
+| e2e: `prefetchLinkedChat()` removed, rebuilt          | failed: "a link to a chat…" at `expect(heldUntil[0]).toBe(true)`, received `false`                               |
 
 One mutant survived the first pass: removing the check that each listed chat is a string. A
 non-string entry never equals a chat ID, so the check was dead. It was removed with its test case.
@@ -100,20 +100,20 @@ On `bd6def6` plus the new tests, before each fix:
 
 Each line was broken by hand, the two focused files run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| `settleLinkedChat()` call removed from `refresh()` | failed: both "never shows a read made as another account" |
-| A mismatched account settles without dropping | failed: the same two |
-| `storage` listener not added | failed: both "drops its read when another tab…" |
-| Any record change drops the read | failed: "keeps its read when another tab changes the same account's chat list" |
-| Storage key filter removed | failed: "keeps its read when another tab changes something other than the sign-in" |
-| A record without an account prefetches | failed: "waits for bootstrap with a sign-in whose account no bootstrap has named yet" |
-| Account type check removed | failed: "waits for bootstrap with an account that is not an ID" |
-| Another account's record kept | failed: "is forgotten when bootstrap names an account other than the one it recorded" |
-| Account not recorded | failed: "starts at sign-in, learns the account and chats…" |
-| A drop does not clear the response cache | failed: 4 drop cases |
-| Every load may join the prefetch | failed: "reads fresh for the stream's connection and each notice after an empty prefetch" |
-| No load may join the prefetch | failed: 6 cases |
+| Mutation                                           | Result                                                                                    |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `settleLinkedChat()` call removed from `refresh()` | failed: both "never shows a read made as another account"                                 |
+| A mismatched account settles without dropping      | failed: the same two                                                                      |
+| `storage` listener not added                       | failed: both "drops its read when another tab…"                                           |
+| Any record change drops the read                   | failed: "keeps its read when another tab changes the same account's chat list"            |
+| Storage key filter removed                         | failed: "keeps its read when another tab changes something other than the sign-in"        |
+| A record without an account prefetches             | failed: "waits for bootstrap with a sign-in whose account no bootstrap has named yet"     |
+| Account type check removed                         | failed: "waits for bootstrap with an account that is not an ID"                           |
+| Another account's record kept                      | failed: "is forgotten when bootstrap names an account other than the one it recorded"     |
+| Account not recorded                               | failed: "starts at sign-in, learns the account and chats…"                                |
+| A drop does not clear the response cache           | failed: 4 drop cases                                                                      |
+| Every load may join the prefetch                   | failed: "reads fresh for the stream's connection and each notice after an empty prefetch" |
+| No load may join the prefetch                      | failed: 6 cases                                                                           |
 
 ### Checks
 
@@ -175,14 +175,14 @@ On `21cb37f` plus the new tests, with the source change reverted:
 
 Each line was broken by hand, the two focused files run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| `sendMessage()` does not call the rule | failed: "…when the person left before any read landed" |
-| The chat's read path does not call the rule | failed: "drops a prefetch still on its way…" |
-| The rule does not abort a prefetch on its way | failed: "drops a prefetch still on its way…", at the response cache |
-| The rule keeps a finished prefetch | failed: both "shows the person's message on return…" cases |
-| The rule keeps the entry of a prefetch on its way | survived |
-| A finished prefetch stored without checking it is still current | survived |
+| Mutation                                                        | Result                                                              |
+| --------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `sendMessage()` does not call the rule                          | failed: "…when the person left before any read landed"              |
+| The chat's read path does not call the rule                     | failed: "drops a prefetch still on its way…"                        |
+| The rule does not abort a prefetch on its way                   | failed: "drops a prefetch still on its way…", at the response cache |
+| The rule keeps a finished prefetch                              | failed: both "shows the person's message on return…" cases          |
+| The rule keeps the entry of a prefetch on its way               | survived                                                            |
+| A finished prefetch stored without checking it is still current | survived                                                            |
 
 The two survivors cover the same window: a prefetch whose response was already read when the rule
 runs, so the abort comes too late and its `then` has not run yet. Every test aborts before the
@@ -193,7 +193,7 @@ holding the order of two settled reads to one microtask is not something the fak
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/conversation-prefetch.test.ts tests/linked-chat-ui.test.ts
-  tests/submission-state-ui.test.ts tests/draft-sync-ui.test.ts`: 4 files, 57 tests passed.
+tests/submission-state-ui.test.ts tests/draft-sync-ui.test.ts`: 4 files, 57 tests passed.
 - `npm test`: 172 files, 2,678 tests passed.
 - `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
 
@@ -229,18 +229,18 @@ round. Checks ran on NicolasLaptop (Fedora, Linux x64, Node 24.22.2).
 
 ### Other requests that submit to a chat
 
-| Request | Caller | Result |
-| --- | --- | --- |
-| `POST /bots/:id/messages` | `sendMessage()`: composer send and retry, turn retry, form reply | already covered |
-| `POST /bots/:id/talk/ask` | `use-talk.ts` | fixed this round |
-| `POST /bots/:id/steer` | no web caller; the composer steers through `/messages` | nothing to change |
-| `POST /bots/:id/requests/:approvalId` | clarify answers in `AttentionCard.tsx` | left as decided last round: not a send |
-| `POST /bots/:id/approvals/:approvalId`, `POST /push/actions` | approval cards, the worker's notification actions | left: not a send; the worker has no page state |
-| `POST /bots/:id/stop` | Stop | left: not a send |
-| `POST /routines/:id/run` | "Try once" in `RoutineEnhancements.tsx` | left: the run's output arrives later as a delivery, like any reply, so retiring at start would not cover it; the change stream reads it |
-| `POST /bots/:id/automation/goal/resume`, `.../tasks/:taskId/actions` | `AutomationPanel.tsx` | left: same as a routine run |
-| `POST /groups/:id/messages` | `GroupChats.tsx` | not a prefetched path; only `/bots/:id/conversation` is prefetched |
-| Main assistant's Ask | `CommandPalette.tsx` | puts text in a draft; sends nothing |
+| Request                                                              | Caller                                                           | Result                                                                                                                                  |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /bots/:id/messages`                                            | `sendMessage()`: composer send and retry, turn retry, form reply | already covered                                                                                                                         |
+| `POST /bots/:id/talk/ask`                                            | `use-talk.ts`                                                    | fixed this round                                                                                                                        |
+| `POST /bots/:id/steer`                                               | no web caller; the composer steers through `/messages`           | nothing to change                                                                                                                       |
+| `POST /bots/:id/requests/:approvalId`                                | clarify answers in `AttentionCard.tsx`                           | left as decided last round: not a send                                                                                                  |
+| `POST /bots/:id/approvals/:approvalId`, `POST /push/actions`         | approval cards, the worker's notification actions                | left: not a send; the worker has no page state                                                                                          |
+| `POST /bots/:id/stop`                                                | Stop                                                             | left: not a send                                                                                                                        |
+| `POST /routines/:id/run`                                             | "Try once" in `RoutineEnhancements.tsx`                          | left: the run's output arrives later as a delivery, like any reply, so retiring at start would not cover it; the change stream reads it |
+| `POST /bots/:id/automation/goal/resume`, `.../tasks/:taskId/actions` | `AutomationPanel.tsx`                                            | left: same as a routine run                                                                                                             |
+| `POST /groups/:id/messages`                                          | `GroupChats.tsx`                                                 | not a prefetched path; only `/bots/:id/conversation` is prefetched                                                                      |
+| Main assistant's Ask                                                 | `CommandPalette.tsx`                                             | puts text in a draft; sends nothing                                                                                                     |
 
 ### Red before the fix
 
@@ -261,15 +261,15 @@ On `32b9bd0` plus the new tests, with the source change reverted:
 
 Each line was broken by hand, the focused file run, and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| Order check in `remember()` removed | failed: 5 finishing orders, both "…finishing in the order [ 2, 1 ]" |
-| 304 keeps the old identity check beside the order rule | failed: "…answered with a 304 confirmed, finishing in the order [ 1, 2 ]" |
-| 304 re-stores the entry with its old number | failed: both 304 cases |
-| Same body re-stores the entry with its old number | failed: both same-body cases |
-| Talk does not call the rule | failed: "retires the chat's prefetched page before a spoken request leaves" |
-| A finished prefetch stored without checking it is still current | failed: "keeps the newer read's page cached…", at `prefetchedFirstPage` |
-| The rule keeps the entry of a prefetch on its way | failed: the same test |
+| Mutation                                                        | Result                                                                      |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Order check in `remember()` removed                             | failed: 5 finishing orders, both "…finishing in the order [ 2, 1 ]"         |
+| 304 keeps the old identity check beside the order rule          | failed: "…answered with a 304 confirmed, finishing in the order [ 1, 2 ]"   |
+| 304 re-stores the entry with its old number                     | failed: both 304 cases                                                      |
+| Same body re-stores the entry with its old number               | failed: both same-body cases                                                |
+| Talk does not call the rule                                     | failed: "retires the chat's prefetched page before a spoken request leaves" |
+| A finished prefetch stored without checking it is still current | failed: "keeps the newer read's page cached…", at `prefetchedFirstPage`     |
+| The rule keeps the entry of a prefetch on its way               | failed: the same test                                                       |
 
 The last two were the survivors of the second round. The new test holds two settled bodies to one
 turn with real streams, which the second round's fakes could not.
@@ -278,7 +278,7 @@ turn with real streams, which the second round's fakes could not.
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/client-api.test.ts tests/conversation-prefetch.test.ts
-  tests/talk-ui.test.ts tests/linked-chat-ui.test.ts`: 4 files, 75 tests passed.
+tests/talk-ui.test.ts tests/linked-chat-ui.test.ts`: 4 files, 75 tests passed.
 - `npm test`: 172 files, 2,690 tests passed.
 - `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
 
@@ -331,15 +331,15 @@ orchestrator decided to remove that reuse rather than patch the new cases. No me
 
 ### Tests
 
-| Test | What it shows |
-| --- | --- |
+| Test                                                                                                                                    | What it shows                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `linked-chat-ui`: "reads the chat again after …", rows nothing, a typed send, a typed send whose reply was read, a clarification answer | Whole app. The chat opens from the link's read, the person acts, leaves and returns inside five seconds; the return makes a fresh conversation request. |
-| `prefetch-after-action-ui`: rows Live Talk and a goal resume | The real `useTalk`/`TalkPanel` and `AutomationPanel` against a fake server at fetch, then the same return. |
-| `linked-chat-ui`: "reads fresh when the chat's change stream connects…" | The one whole-app case that opens the stream; its connection reads fresh. |
-| `conversation-prefetch`: "shows a finished prefetch at once from the cache and still reads the chat" | A finished hover read is not reused. |
-| `conversation-prefetch`: "answers the first load from the link's read finished / still on its way, and reads again on the next open" | The startup read answers once. |
-| `conversation-prefetch`: "never answers a later open once the first load was for another chat / a message window" | The slot is used up by whatever the first load reads. |
-| `conversation-prefetch`: "reads fresh for the stream's connection and each notice after opening from an empty startup read" | Round 1's empty-page case, now with the startup read, with the stream opening. |
+| `prefetch-after-action-ui`: rows Live Talk and a goal resume                                                                            | The real `useTalk`/`TalkPanel` and `AutomationPanel` against a fake server at fetch, then the same return.                                              |
+| `linked-chat-ui`: "reads fresh when the chat's change stream connects…"                                                                 | The one whole-app case that opens the stream; its connection reads fresh.                                                                               |
+| `conversation-prefetch`: "shows a finished prefetch at once from the cache and still reads the chat"                                    | A finished hover read is not reused.                                                                                                                    |
+| `conversation-prefetch`: "answers the first load from the link's read finished / still on its way, and reads again on the next open"    | The startup read answers once.                                                                                                                          |
+| `conversation-prefetch`: "never answers a later open once the first load was for another chat / a message window"                       | The slot is used up by whatever the first load reads.                                                                                                   |
+| `conversation-prefetch`: "reads fresh for the stream's connection and each notice after opening from an empty startup read"             | Round 1's empty-page case, now with the startup read, with the stream opening.                                                                          |
 
 The `linked-chat-ui` "returning" rows and both `prefetch-after-action-ui` rows never open the
 change stream, so each read they count is a load the chat made itself. The account-check tests
@@ -357,24 +357,24 @@ and Live Talk rows passed there, because `2feaad5` retired the prefetch for thos
 Each line was broken by hand, `conversation-prefetch`, `linked-chat-ui` and
 `prefetch-after-action-ui` run (47 tests), and the source restored.
 
-| Mutation | Result |
-| --- | --- |
-| The startup read is not used up | failed: 10, including all six action rows and both "reads again on the next open" |
-| Used up only by a load of its own chat | failed: "…once the first load was for another chat" |
-| Asked for only when the load reads the latest page | failed: "…once the first load was for a message window in the same chat" |
-| Every finished prefetch kept like the startup read | failed: "shows a finished prefetch at once from the cache and still reads the chat", "…still on its way, and reads again on the next open" |
-| An account change keeps the startup slot | failed: both "never shows a read made as another account", both "drops its read when another tab…" |
-| `prefetchLinkedChat()` starts a plain prefetch | failed: 16, including both action rows and every linked-read case |
-| A finished prefetch stays in the in-flight map | failed: 15, including "reads fresh for a notice that arrived while…" |
-| Cache start-order check removed (with `client-api.test.ts`) | failed: 8, including "keeps the newer read's page cached…" |
-| `opened` guard removed (before removing it) | survived; see Removed |
+| Mutation                                                    | Result                                                                                                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| The startup read is not used up                             | failed: 10, including all six action rows and both "reads again on the next open"                                                          |
+| Used up only by a load of its own chat                      | failed: "…once the first load was for another chat"                                                                                        |
+| Asked for only when the load reads the latest page          | failed: "…once the first load was for a message window in the same chat"                                                                   |
+| Every finished prefetch kept like the startup read          | failed: "shows a finished prefetch at once from the cache and still reads the chat", "…still on its way, and reads again on the next open" |
+| An account change keeps the startup slot                    | failed: both "never shows a read made as another account", both "drops its read when another tab…"                                         |
+| `prefetchLinkedChat()` starts a plain prefetch              | failed: 16, including both action rows and every linked-read case                                                                          |
+| A finished prefetch stays in the in-flight map              | failed: 15, including "reads fresh for a notice that arrived while…"                                                                       |
+| Cache start-order check removed (with `client-api.test.ts`) | failed: 8, including "keeps the newer read's page cached…"                                                                                 |
+| `opened` guard removed (before removing it)                 | survived; see Removed                                                                                                                      |
 
 ### Checks
 
 - `npm ci`, `npm run typecheck` and `npm run lint` passed.
 - `npx vitest run tests/conversation-prefetch.test.ts tests/linked-chat-ui.test.ts
-  tests/prefetch-after-action-ui.test.ts tests/talk-ui.test.ts tests/client-api.test.ts
-  tests/submission-state-ui.test.ts tests/draft-sync-ui.test.ts`: 7 files, 101 tests passed.
+tests/prefetch-after-action-ui.test.ts tests/talk-ui.test.ts tests/client-api.test.ts
+tests/submission-state-ui.test.ts tests/draft-sync-ui.test.ts`: 7 files, 101 tests passed.
 - `npm test`: 173 files, 2,697 tests passed.
 - `npm run build`, then `npm run test:e2e`: 4 Chromium tests passed.
 

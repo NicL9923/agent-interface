@@ -4,7 +4,16 @@ import { allowedIdentity, type Config } from "./config.js";
 import { maxDeliveryAttempts, type Store } from "./store.js";
 import type { Runtime, RuntimeEvent } from "../shared/types.js";
 import { visibleTo } from "./bot-access.js";
-import { accountMarker, ApnsError, createApnsSender, type ApnsBadgeSender, type ApnsClearSender, type ApnsRefreshSender, type ApnsSender, type NativeDevice } from "./apns.js";
+import {
+  accountMarker,
+  ApnsError,
+  createApnsSender,
+  type ApnsBadgeSender,
+  type ApnsClearSender,
+  type ApnsRefreshSender,
+  type ApnsSender,
+  type NativeDevice,
+} from "./apns.js";
 import { WidgetRefresh } from "./widget-refresh.js";
 import { FailureTracker, quietLog, safeError, type Log } from "./logging.js";
 import { LiveActivities, type LiveActivitySender } from "./live-activity.js";
@@ -15,11 +24,21 @@ export type PushSender = (
   subscription: webpush.PushSubscription,
   payload: string,
 ) => Promise<unknown>;
-export function inQuietHours(settings: import('../shared/types.js').Preferences['notifications'], now = new Date()) {
+export function inQuietHours(
+  settings: import("../shared/types.js").Preferences["notifications"],
+  now = new Date(),
+) {
   if (!settings?.quietStart || !settings.quietEnd) return false;
-  const parts = new Intl.DateTimeFormat('en-GB', { timeZone:settings.timezone, hour:'2-digit',minute:'2-digit',hourCycle:'h23' }).formatToParts(now);
-  const time = `${parts.find(part=>part.type==='hour')!.value}:${parts.find(part=>part.type==='minute')!.value}`;
-  return settings.quietStart < settings.quietEnd ? time >= settings.quietStart && time < settings.quietEnd : time >= settings.quietStart || time < settings.quietEnd;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: settings.timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const time = `${parts.find((part) => part.type === "hour")!.value}:${parts.find((part) => part.type === "minute")!.value}`;
+  return settings.quietStart < settings.quietEnd
+    ? time >= settings.quietStart && time < settings.quietEnd
+    : time >= settings.quietStart || time < settings.quietEnd;
 }
 /** One place a notification can go: a browser's subscription or an iPhone or iPad. */
 interface DeliveryTarget {
@@ -46,11 +65,18 @@ const deadEndpoint = (endpoint: string) => `dead:${endpoint}`;
  */
 const webPushDead = (error: unknown) => {
   const { statusCode, body } = error as { statusCode?: number; body?: unknown };
-  return statusCode === 404 || statusCode === 410 || statusCode === 400 && typeof body === "string" && body.includes("BadDeviceToken");
+  return (
+    statusCode === 404 ||
+    statusCode === 410 ||
+    (statusCode === 400 && typeof body === "string" && body.includes("BadDeviceToken"))
+  );
 };
 /** Apple's answers for a token that will never work again. */
-const apnsTokenDead = (error: unknown) => error instanceof ApnsError
-  && (error.apnsStatus === 410 || error.apnsStatus === 400 && ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(error.reason ?? ""));
+const apnsTokenDead = (error: unknown) =>
+  error instanceof ApnsError &&
+  (error.apnsStatus === 410 ||
+    (error.apnsStatus === 400 &&
+      ["BadDeviceToken", "DeviceTokenNotForTopic"].includes(error.reason ?? "")));
 // Reconciling counted approvals against Hermes: at most this many assistants, this often, and
 // for no longer than the budget. A read still pending then is abandoned and checked next pass.
 const approvalCheckInterval = 60000;
@@ -59,7 +85,7 @@ export const approvalPassBudget = 20000;
 type Job = "runtime" | "outbox" | "live" | "widgets" | "approvals";
 export class BackgroundWorker {
   private timer?: ReturnType<typeof setInterval>;
-  private jobs = makeJobs<Job>(error => this.loop.failure(error));
+  private jobs = makeJobs<Job>((error) => this.loop.failure(error));
   private outbox?: Promise<void>;
   private outboxRequested = false;
   private stopped = false;
@@ -111,11 +137,7 @@ export class BackgroundWorker {
     this.live = new LiveActivities(store, runtime, config, sendLiveActivity, log);
     this.widgets = new WidgetRefresh(store, runtime, config, sendRefresh, log);
     if (!send && config.vapidPublicKey) {
-      webpush.setVapidDetails(
-        config.vapidSubject,
-        config.vapidPublicKey,
-        config.vapidPrivateKey,
-      );
+      webpush.setVapidDetails(config.vapidSubject, config.vapidPublicKey, config.vapidPrivateKey);
       this.send = (subscription, payload) =>
         webpush.sendNotification(subscription, payload, {
           timeout: 15000,
@@ -125,19 +147,21 @@ export class BackgroundWorker {
   }
   start() {
     if (this.timer || this.stopped) return;
-    this.timer = setInterval(() => { void this.schedule(); }, 5000);
+    this.timer = setInterval(() => {
+      void this.schedule();
+    }, 5000);
     this.timer.unref();
     void this.schedule();
   }
   stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
-    return this.stopping ??= (async () => {
+    return (this.stopping ??= (async () => {
       // Recovery can request another delivery pass while shutdown is draining.
       await this.jobs.interrupt("approvals");
       await this.jobs.drain();
       this.closeApns?.();
-    })();
+    })());
   }
   async tick() {
     if (this.stopped) return;
@@ -153,38 +177,63 @@ export class BackgroundWorker {
       void this.flushOutbox();
     });
     const live = this.runJob("live", async () => {
-      try { await this.live.tick(); } catch (error) { this.live.push.failure(error); }
+      try {
+        await this.live.tick();
+      } catch (error) {
+        this.live.push.failure(error);
+      }
     });
     const widgets = this.runJob("widgets", async () => {
-      try { await this.widgets.tick(); } catch (error) { this.widgets.push.failure(error); }
+      try {
+        await this.widgets.tick();
+      } catch (error) {
+        this.widgets.push.failure(error);
+      }
     });
     // Its own job, so a slow Hermes read never holds up discovery or receipt recovery.
-    const approvals = this.jobs.run("approvals", fromPromise(signal => this.reconcileApprovals(signal)));
+    const approvals = this.jobs.run(
+      "approvals",
+      fromPromise((signal) => this.reconcileApprovals(signal)),
+    );
     return [outbox, runtime, live, widgets, approvals];
   }
   private runJob(name: Job, work: () => Promise<void>, rerun?: () => boolean) {
-    return this.jobs.run(name, fromPromise(() => work()), rerun);
+    return this.jobs.run(
+      name,
+      fromPromise(() => work()),
+      rerun,
+    );
   }
   private flushOutbox() {
     this.outboxRequested = true;
-    return this.outbox = this.runJob("outbox", async () => {
-      this.outboxRequested = false;
-      await this.processOutbox();
-    }, () => this.outboxRequested);
+    return (this.outbox = this.runJob(
+      "outbox",
+      async () => {
+        this.outboxRequested = false;
+        await this.processOutbox();
+      },
+      () => this.outboxRequested,
+    ));
   }
   private async processOutbox() {
     try {
       this.store.enqueueKnownEvents();
       const expired = this.store.expireNotifications();
-      if (expired) this.log.info({ expired }, "Expired notifications that stayed undelivered for a day");
+      if (expired)
+        this.log.info({ expired }, "Expired notifications that stayed undelivered for a day");
       if (Date.now() - this.retainedAt >= 3600000) {
         this.retainedAt = Date.now();
         const removed = this.store.pruneRetention();
-        if (removed.sessions || removed.notifications) this.log.info(removed, "Removed expired sessions and old notifications");
+        if (removed.sessions || removed.notifications)
+          this.log.info(removed, "Removed expired sessions and old notifications");
       }
       await this.deliver();
       // Clearing is a courtesy; its failures never hold up delivery.
-      try { await this.clearRead(); } catch (error) { this.clears.failure(error); }
+      try {
+        await this.clearRead();
+      } catch (error) {
+        this.clears.failure(error);
+      }
       this.loop.success();
     } catch (error) {
       this.loop.failure(error);
@@ -198,7 +247,13 @@ export class BackgroundWorker {
       const asked = new Map<string, Promise<boolean>>();
       const idempotent = (botId: string) => {
         let known = asked.get(botId);
-        if (!known) asked.set(botId, known = this.runtime.capabilities(botId).then(capabilities => capabilities.idempotency.supported));
+        if (!known)
+          asked.set(
+            botId,
+            (known = this.runtime
+              .capabilities(botId)
+              .then((capabilities) => capabilities.idempotency.supported)),
+          );
         return known;
       };
       for (const pending of this.store.pending()) {
@@ -207,7 +262,10 @@ export class BackgroundWorker {
         const previous = this.submissionChecks.get(id);
         if (previous && previous.next > Date.now()) continue;
         const count = (previous?.count ?? 0) + 1;
-        this.submissionChecks.set(id, { count, next: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(count - 1, 4)) });
+        this.submissionChecks.set(id, {
+          count,
+          next: Date.now() + Math.min(60_000, 5000 * 2 ** Math.min(count - 1, 4)),
+        });
         try {
           const receipt = await this.runtime.lookupSubmission(
             pending.input.requestId,
@@ -218,7 +276,9 @@ export class BackgroundWorker {
           /* Preserve uncertain intent, never replay. */
         }
       }
-      for (const id of this.submissionChecks.keys()) if (this.store.submission(id)?.receipt.status !== "uncertain") this.submissionChecks.delete(id);
+      for (const id of this.submissionChecks.keys())
+        if (this.store.submission(id)?.receipt.status !== "uncertain")
+          this.submissionChecks.delete(id);
       // Each runtime's events resume from its own cursor. One that fails, or has no durable events, keeps its cursor
       // and holds up no other.
       let failure: { error: unknown } | undefined;
@@ -228,16 +288,24 @@ export class BackgroundWorker {
           // A runtime with event sources refuses one without durable events itself; a lone runtime is asked here.
           if (!sources) {
             const durable = (await this.runtime.capabilities()).durableEvents;
-            if (!durable.supported) throw new Error(durable.reason ?? "Durable events are unavailable");
+            if (!durable.supported)
+              throw new Error(durable.reason ?? "Durable events are unavailable");
           }
           const discovery = await this.runtime.discoverEvents(this.store.cursor(source), source);
           // Titles name the assistant; a roster failure keeps the previous names.
-          if (discovery.events.length) try {
-            this.store.botNames = new Map((await this.runtime.listBots()).map(bot => [bot.id, bot.name]));
-          } catch { /* Fall back to the last known names. */ }
+          if (discovery.events.length)
+            try {
+              this.store.botNames = new Map(
+                (await this.runtime.listBots()).map((bot) => [bot.id, bot.name]),
+              );
+            } catch {
+              /* Fall back to the last known names. */
+            }
           if (this.identify) await this.identify(discovery.events);
           this.store.recordEvents(discovery.events, discovery.cursor, source);
-        } catch (error) { failure ??= { error }; }
+        } catch (error) {
+          failure ??= { error };
+        }
       }
       if (failure) throw failure.error;
       this.discovery.success();
@@ -254,11 +322,16 @@ export class BackgroundWorker {
     if (now - this.approvalsCheckedAt < approvalCheckInterval) return;
     this.approvalsCheckedAt = now;
     const unresolved = this.store.unresolvedApprovalBots(now);
-    for (const botId of this.approvalChecks.keys()) if (!unresolved.includes(botId)) this.approvalChecks.delete(botId);
-    const due = unresolved.sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0)).slice(0, approvalChecksPerPass);
+    for (const botId of this.approvalChecks.keys())
+      if (!unresolved.includes(botId)) this.approvalChecks.delete(botId);
+    const due = unresolved
+      .sort((a, b) => (this.approvalChecks.get(a) ?? 0) - (this.approvalChecks.get(b) ?? 0))
+      .slice(0, approvalChecksPerPass);
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const outOfTime = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), approvalPassBudget); });
-    const interrupted = new Promise<undefined>(resolve => {
+    const outOfTime = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), approvalPassBudget);
+    });
+    const interrupted = new Promise<undefined>((resolve) => {
       if (signal.aborted) resolve(undefined);
       else signal.addEventListener("abort", () => resolve(undefined), { once: true });
     });
@@ -268,12 +341,25 @@ export class BackgroundWorker {
         try {
           const readAt = Date.now();
           // A read that outlives the pass or the worker is never applied.
-          const conversation = await Promise.race([this.runtime.conversation(botId, { history: false }), outOfTime, interrupted]);
+          const conversation = await Promise.race([
+            this.runtime.conversation(botId, { history: false }),
+            outOfTime,
+            interrupted,
+          ]);
           if (!conversation || signal.aborted) return;
-          this.store.reconcileApprovals(botId, conversation.requestSessionId, conversation.approvals.map(approval => approval.id), readAt);
-        } catch { /* Unreadable now; it stays counted and is checked again later. */ }
+          this.store.reconcileApprovals(
+            botId,
+            conversation.requestSessionId,
+            conversation.approvals.map((approval) => approval.id),
+            readAt,
+          );
+        } catch {
+          /* Unreadable now; it stays counted and is checked again later. */
+        }
       }
-    } finally { clearTimeout(timer); }
+    } finally {
+      clearTimeout(timer);
+    }
   }
   private async deliver() {
     if (!this.send && !this.sendApns) return;
@@ -287,69 +373,133 @@ export class BackgroundWorker {
         if (!security && inQuietHours(this.store.preferences(item.user_id).notifications)) continue;
         // An assistant made private after this was queued, held by quiet hours or a digest, stays with its owner.
         // News the person is reading in the chat, or already read there on any device, needs no alert.
-        if (!security) item.items = item.items.filter(row => {
-          const due = visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id);
-          if (!due) this.store.finishDelivery(row.id, "suppressed");
-          return due;
-        });
+        if (!security)
+          item.items = item.items.filter((row) => {
+            const due =
+              visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) &&
+              !this.store.seenInChat(row.id);
+            if (!due) this.store.finishDelivery(row.id, "suppressed");
+            return due;
+          });
         if (!item.items.length) continue;
         // Rebuild the frozen membership's display after revocation, preserving its
         // tag and each endpoint's delivery receipts without exposing removed titles.
         const original = JSON.parse(item.payload);
-        const display = original.url === '/?view=today' ? {...original,...digestCopy(item.items.map(row=>JSON.parse(row.payload)))} : original;
+        const display =
+          original.url === "/?view=today"
+            ? { ...original, ...digestCopy(item.items.map((row) => JSON.parse(row.payload))) }
+            : original;
         // The person's app badge as of this delivery, including what it is about to tell them.
-        const badge = badgeFor(await roster(), this.store, item.user_id, item.items.map(row => JSON.parse(row.payload)));
-        const deliveryPayload = JSON.stringify(badge === undefined ? display : {...display, badge});
+        const badge = badgeFor(
+          await roster(),
+          this.store,
+          item.user_id,
+          item.items.map((row) => JSON.parse(row.payload)),
+        );
+        const deliveryPayload = JSON.stringify(
+          badge === undefined ? display : { ...display, badge },
+        );
         // Every payload names the account it is for, so a phone or browser signed in as someone else since
         // shows none of it and refuses its actions (scripts/service-worker.js). Older web workers ignore it.
-        const accountPayload = JSON.stringify({...JSON.parse(deliveryPayload), account: accountMarker(item.user_id)});
+        const accountPayload = JSON.stringify({
+          ...JSON.parse(deliveryPayload),
+          account: accountMarker(item.user_id),
+        });
         const subscriptions = this.send ? this.store.subscriptions(item.user_id) : [];
-        const devices = this.sendApns && this.config.apns ? this.store.nativeDevices(item.user_id, this.config.apns.environment) : [];
+        const devices =
+          this.sendApns && this.config.apns
+            ? this.store.nativeDevices(item.user_id, this.config.apns.environment)
+            : [];
         // Keep undelivered events durable until this person has a subscription.
         if (!subscriptions.length && !devices.length) continue;
         // A browser's Decline action carries its own single-use authority; the service worker has no session.
-        const single = item.items.length === 1 ? JSON.parse(item.items[0].payload) as { kind?: string; botId?: unknown; approvalId?: unknown } : undefined;
-        const declineToken = subscriptions.length && single?.kind === "approval" && typeof single.botId === "string" && typeof single.approvalId === "string" && single.approvalId
-          ? this.store.issuePushAction({ userId: item.user_id, botId: single.botId, approvalId: single.approvalId, decision: "denied" }) : undefined;
-        const webPayload = declineToken ? JSON.stringify({...JSON.parse(accountPayload), declineToken}) : accountPayload;
+        const single =
+          item.items.length === 1
+            ? (JSON.parse(item.items[0].payload) as {
+                kind?: string;
+                botId?: unknown;
+                approvalId?: unknown;
+              })
+            : undefined;
+        const declineToken =
+          subscriptions.length &&
+          single?.kind === "approval" &&
+          typeof single.botId === "string" &&
+          typeof single.approvalId === "string" &&
+          single.approvalId
+            ? this.store.issuePushAction({
+                userId: item.user_id,
+                botId: single.botId,
+                approvalId: single.approvalId,
+                decision: "denied",
+              })
+            : undefined;
+        const webPayload = declineToken
+          ? JSON.stringify({ ...JSON.parse(accountPayload), declineToken })
+          : accountPayload;
         let failed: string | undefined;
         // A send can take a while; an assistant made private meanwhile stops the rest of this
         // delivery before its frozen payload reaches another endpoint. The next pass drops it.
         // Reading the chat on one device meanwhile likewise stops the alert reaching the others.
-        const stillVisible = () => item.items.every(row => security || visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) && !this.store.seenInChat(row.id));
+        const stillVisible = () =>
+          item.items.every(
+            (row) =>
+              security ||
+              (visibleTo(this.store, JSON.parse(row.payload).botId, item.user_id) &&
+                !this.store.seenInChat(row.id)),
+          );
         let revoked = false;
         const sendBadge = badge === undefined ? undefined : this.sendBadge;
         const webDevices = this.store.subscriptionDevices(item.user_id);
         const targets: DeliveryTarget[] = [
           ...subscriptions.map((subscription): DeliveryTarget => ({
-            endpoint: subscription.endpoint, deviceId: webDevices.get(subscription.endpoint),
+            endpoint: subscription.endpoint,
+            deviceId: webDevices.get(subscription.endpoint),
             held: () => this.store.hasSubscription(item.user_id, subscription.endpoint),
-            deliver: async () => { await this.send!(subscription, webPayload); },
+            deliver: async () => {
+              await this.send!(subscription, webPayload);
+            },
             dead: webPushDead,
             drop: () => this.store.unsubscribe(item.user_id, subscription.endpoint),
-            describe: error => `Web Push ${(error as { statusCode?: number }).statusCode ?? "error"}: ${error instanceof Error ? error.message : String(error)}`,
+            describe: (error) =>
+              `Web Push ${(error as { statusCode?: number }).statusCode ?? "error"}: ${error instanceof Error ? error.message : String(error)}`,
           })),
           ...devices.map((device): DeliveryTarget => ({
-            endpoint: `apns:${device.environment}:${device.token}`, deviceId: device.deviceId,
-            deliver: async () => { await this.sendApns!(device, accountPayload); },
+            endpoint: `apns:${device.environment}:${device.token}`,
+            deviceId: device.deviceId,
+            deliver: async () => {
+              await this.sendApns!(device, accountPayload);
+            },
             dead: apnsTokenDead,
             drop: () => this.store.removeNativeDevice(item.user_id, device.deviceId),
-            describe: error => {
+            describe: (error) => {
               const apns = error instanceof ApnsError ? error : undefined;
               return `APNs ${apns?.apnsStatus ?? "error"}: ${apns?.reason ?? (error instanceof Error ? error.message : String(error))}`;
             },
-            quiet: sendBadge && (async () => { await sendBadge(device, badge!); }),
+            quiet:
+              sendBadge &&
+              (async () => {
+                await sendBadge(device, badge!);
+              }),
           })),
         ];
-        const marked = (endpoint: string) => item.items.every(row => this.store.delivered(row.id, endpoint));
+        const marked = (endpoint: string) =>
+          item.items.every((row) => this.store.delivered(row.id, endpoint));
         // "sent" covers an earlier pass; a dead endpoint is recorded apart so it never counts as reached.
-        const attempt = async (target: DeliveryTarget): Promise<"sent" | "done" | "dead" | "failed" | "revoked"> => {
+        const attempt = async (
+          target: DeliveryTarget,
+        ): Promise<"sent" | "done" | "dead" | "failed" | "revoked"> => {
           if (marked(target.endpoint)) return "sent";
-          if (marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint))) return "done";
-          if (!stillVisible()) { revoked = true; return "revoked"; }
+          if (marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint)))
+            return "done";
+          if (!stillVisible()) {
+            revoked = true;
+            return "revoked";
+          }
           // Another member took this browser's endpoint since the subscriptions were read: nothing of this one goes there.
           if (target.held && !target.held()) {
-            for (const row of item.items) this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
+            for (const row of item.items)
+              this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
             return "dead";
           }
           try {
@@ -360,7 +510,8 @@ export class BackgroundWorker {
           } catch (error) {
             if (target.dead(error)) {
               target.drop();
-              for (const row of item.items) this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
+              for (const row of item.items)
+                this.store.markDelivered(row.id, deadEndpoint(target.endpoint));
               return "dead";
             }
             failed = target.describe(error);
@@ -371,41 +522,61 @@ export class BackgroundWorker {
         // Left quiet because the person is using another device: an iPhone still gets the new badge.
         // The badge is a courtesy, so its failure is never retried; a dead token is still dropped.
         const skip = async (target: DeliveryTarget) => {
-          if (marked(target.endpoint) || marked(skippedEndpoint(target.endpoint)) || marked(deadEndpoint(target.endpoint))) return;
-          try { await target.quiet?.(); } catch (error) {
+          if (
+            marked(target.endpoint) ||
+            marked(skippedEndpoint(target.endpoint)) ||
+            marked(deadEndpoint(target.endpoint))
+          )
+            return;
+          try {
+            await target.quiet?.();
+          } catch (error) {
             if (target.dead(error)) target.drop();
             else this.clears.failure(error);
           }
-          for (const row of item.items) this.store.markDelivered(row.id, skippedEndpoint(target.endpoint));
+          for (const row of item.items)
+            this.store.markDelivered(row.id, skippedEndpoint(target.endpoint));
         };
         // Only the devices the person is using get the alert, when one of them can take it. With none in
         // use, or none of those reachable, every device does, as before. Security alerts reach every
         // device, since the one in use could be the one the alert is about.
         const active = security ? new Set<string>() : this.store.activeDevices(item.user_id);
-        const focused = targets.filter(target => target.deviceId !== undefined && active.has(target.deviceId));
+        const focused = targets.filter(
+          (target) => target.deviceId !== undefined && active.has(target.deviceId),
+        );
         let reached = false;
         for (const target of focused) {
-          if (await attempt(target) === "sent") reached = true;
+          if ((await attempt(target)) === "sent") reached = true;
           if (revoked) break;
         }
         for (const target of revoked ? [] : targets) {
           if (focused.includes(target)) continue;
           if (reached) await skip(target);
-          else if (await attempt(target) === "revoked") break;
+          else if ((await attempt(target)) === "revoked") break;
         }
         if (revoked) continue;
         let abandoned = 0;
         for (const row of item.items) {
           if (failed === undefined) this.store.finishDelivery(row.id);
-          else if (this.store.retryDelivery(row.id, row.attempts + 1, failed.slice(0, 300))) abandoned++;
+          else if (this.store.retryDelivery(row.id, row.attempts + 1, failed.slice(0, 300)))
+            abandoned++;
         }
-        if (abandoned) this.log.warn({ notifications: abandoned, error: failed }, `Gave up delivering notifications after ${maxDeliveryAttempts} attempts`);
+        if (abandoned)
+          this.log.warn(
+            { notifications: abandoned, error: failed },
+            `Gave up delivering notifications after ${maxDeliveryAttempts} attempts`,
+          );
       } catch (error) {
         // One malformed notification must never block delivery of everything queued after it.
-        const message = `Delivery error: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300);
+        const message =
+          `Delivery error: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300);
         let abandoned = 0;
-        for (const row of item.items) if (this.store.retryDelivery(row.id, row.attempts + 1, message)) abandoned++;
-        this.log.error({ error: safeError(error), notifications: item.items.length, abandoned }, "Could not deliver a notification");
+        for (const row of item.items)
+          if (this.store.retryDelivery(row.id, row.attempts + 1, message)) abandoned++;
+        this.log.error(
+          { error: safeError(error), notifications: item.items.length, abandoned },
+          "Could not deliver a notification",
+        );
       }
     }
   }
@@ -414,12 +585,22 @@ export class BackgroundWorker {
     if (!this.sendClear || !this.config.apns) return;
     const environment = this.config.apns.environment;
     const roster = rosterOnce(this.runtime);
-    const byDevice = new Map<string, { device?: NativeDevice; userId: string; tags: string[]; rows: { id: string; endpoint: string }[] }>();
+    const byDevice = new Map<
+      string,
+      {
+        device?: NativeDevice;
+        userId: string;
+        tags: string[];
+        rows: { id: string; endpoint: string }[];
+      }
+    >();
     for (const row of this.store.readOnDevices()) {
       // A device left quiet showed nothing to remove, only a badge to lower.
       const skipped = row.endpoint.startsWith("skipped:");
       const endpoint = skipped ? row.endpoint.slice("skipped:".length) : row.endpoint;
-      const device = this.store.nativeDevices(row.user_id, environment).find(device => `apns:${device.environment}:${device.token}` === endpoint);
+      const device = this.store
+        .nativeDevices(row.user_id, environment)
+        .find((device) => `apns:${device.environment}:${device.token}` === endpoint);
       const entry = byDevice.get(endpoint) ?? { device, userId: row.user_id, tags: [], rows: [] };
       byDevice.set(endpoint, entry);
       entry.rows.push({ id: row.outbox_id, endpoint: row.endpoint });
@@ -429,16 +610,29 @@ export class BackgroundWorker {
     for (const entry of byDevice.values()) {
       // iOS throttles background pushes and drops them for a closed app, so a failed clear is
       // not retried. Opening the chat on that device clears the rest.
-      if (entry.device && entry.tags.length) try {
-        // Newest first, so the ones most likely still on screen fit.
-        // The read lowered the person's badge on every device, including this closed one.
-        await this.sendClear(entry.device, entry.tags.reverse(), badgeFor(await roster(), this.store, entry.userId));
-        this.clears.success();
-      } catch (error) { this.clears.failure(error); }
-      else if (entry.device && this.sendBadge) try {
-        const badge = badgeFor(await roster(), this.store, entry.userId);
-        if (badge !== undefined) { await this.sendBadge(entry.device, badge); this.clears.success(); }
-      } catch (error) { this.clears.failure(error); }
+      if (entry.device && entry.tags.length)
+        try {
+          // Newest first, so the ones most likely still on screen fit.
+          // The read lowered the person's badge on every device, including this closed one.
+          await this.sendClear(
+            entry.device,
+            entry.tags.reverse(),
+            badgeFor(await roster(), this.store, entry.userId),
+          );
+          this.clears.success();
+        } catch (error) {
+          this.clears.failure(error);
+        }
+      else if (entry.device && this.sendBadge)
+        try {
+          const badge = badgeFor(await roster(), this.store, entry.userId);
+          if (badge !== undefined) {
+            await this.sendBadge(entry.device, badge);
+            this.clears.success();
+          }
+        } catch (error) {
+          this.clears.failure(error);
+        }
       for (const row of entry.rows) this.store.markCleared(row.id, row.endpoint);
     }
   }

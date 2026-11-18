@@ -8,8 +8,19 @@ import { localLogin } from "./helpers/server.js";
 
 // Routines that also post in group chats: who may choose which room, and what each person sees.
 const origin = "http://127.0.0.1:3000";
-const base = { botId: "shared", name: "Morning", prompt: "Check the ranch", schedule: "1h", enabled: false, recipientIds: [] };
-const room = (room_id: string, profiles: string[]) => ({ room_id, name: room_id, members: profiles.map(profile => ({ member_id: profile, profile, handle: profile })) });
+const base = {
+  botId: "shared",
+  name: "Morning",
+  prompt: "Check the ranch",
+  schedule: "1h",
+  enabled: false,
+  recipientIds: [],
+};
+const room = (room_id: string, profiles: string[]) => ({
+  room_id,
+  name: room_id,
+  members: profiles.map((profile) => ({ member_id: profile, profile, handle: profile })),
+});
 let created: Awaited<ReturnType<typeof createApp>>;
 let rows: Routine[];
 let save: AnyMock;
@@ -23,50 +34,100 @@ const setRoutineEnabled = vi.fn(async () => {});
 const deleteRoutine = vi.fn(async (_id: string, _botId: string) => {});
 beforeEach(async () => {
   rows = [{ ...base, id: "abc123", roomIds: ["team", "secret"] }];
-  catalog = { supported: true, canSend: true, routineDelivery: true, rooms: [room("team", ["shared", "planner"]), room("secret", ["shared", "diary"]), room("mine", ["shared", "notes"]),
-    // Two rooms without the routine's assistant: one everyone can open, one only local-one's "keeper" keeps private.
-    room("crew", ["planner", "garden"]), room("den", ["planner", "keeper"]),
-    // Only local-two opens "lodge", through their "diary".
-    room("lodge", ["planner", "diary"])] };
+  catalog = {
+    supported: true,
+    canSend: true,
+    routineDelivery: true,
+    rooms: [
+      room("team", ["shared", "planner"]),
+      room("secret", ["shared", "diary"]),
+      room("mine", ["shared", "notes"]),
+      // Two rooms without the routine's assistant: one everyone can open, one only local-one's "keeper" keeps private.
+      room("crew", ["planner", "garden"]),
+      room("den", ["planner", "keeper"]),
+      // Only local-two opens "lodge", through their "diary".
+      room("lodge", ["planner", "diary"]),
+    ],
+  };
   save = vi.fn(async (input, id) => ({ ...input, id: id ?? "new" }));
   groupRequest = vi.fn(async () => catalog);
   assistants = ["shared", "planner", "diary", "notes", "garden", "keeper"];
-  saveBot = vi.fn(async (input, id) => { const botId = id ?? input.name; if (!assistants.includes(botId)) assistants.push(botId); return { ...input, id: botId, activity: "idle" }; });
+  saveBot = vi.fn(async (input, id) => {
+    const botId = id ?? input.name;
+    if (!assistants.includes(botId)) assistants.push(botId);
+    return { ...input, id: botId, activity: "idle" };
+  });
   const runtime = {
     status: async () => ({ connected: true }),
-    capabilities: async () => ({ routines: { supported: true }, botConfiguration: { supported: true }, avatarMetadata: { supported: false } }),
-    listBots: async () => assistants.map(id => ({ id, name: id, shared: true, activity: "idle" })),
-    deleteBot: async (id: string) => { assistants = assistants.filter(other => other !== id); },
+    capabilities: async () => ({
+      routines: { supported: true },
+      botConfiguration: { supported: true },
+      avatarMetadata: { supported: false },
+    }),
+    listBots: async () =>
+      assistants.map((id) => ({ id, name: id, shared: true, activity: "idle" })),
+    deleteBot: async (id: string) => {
+      assistants = assistants.filter((other) => other !== id);
+    },
     deleteRoutine,
-    setRoutineEnabled, experienceRequest: async () => ({ requestId: "r", routineId: "abc123", botId: "shared", status: "accepted" }),
+    setRoutineEnabled,
+    experienceRequest: async () => ({
+      requestId: "r",
+      routineId: "abc123",
+      botId: "shared",
+      status: "accepted",
+    }),
     // A read copies the routines when Hermes is asked. `slowRead` holds back the answer to the read after
     // `readsBeforeSlow` more, as a slow Hermes would.
     routines: async () => {
       const copy = structuredClone(rows);
-      if (slowRead && readsBeforeSlow-- === 0) { const wait = slowRead; slowRead = undefined; await wait; }
+      if (slowRead && readsBeforeSlow-- === 0) {
+        const wait = slowRead;
+        slowRead = undefined;
+        await wait;
+      }
       return copy;
-    }, saveRoutine: save, saveBot, groupRequest, close: async () => {},
+    },
+    saveRoutine: save,
+    saveBot,
+    groupRequest,
+    close: async () => {},
   } as unknown as Runtime;
-  created = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_ORIGIN: origin, APP_DATABASE: ":memory:" }), runtime, { background: false });
+  created = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_ORIGIN: origin, APP_DATABASE: ":memory:" }),
+    runtime,
+    { background: false },
+  );
   // "diary" is the other member's personal assistant, so its room is hidden from local-one.
   created.store.savePresentation("diary", { shared: false, ownerId: "local-two" });
   created.store.savePresentation("notes", { shared: false, ownerId: "local-one" });
   created.store.savePresentation("keeper", { shared: false, ownerId: "local-one" });
 });
-afterEach(async () => { await created?.app.close(); });
-const write = async (payload: object, id?: string, member = "one") => created.app.inject({ method: id ? "PUT" : "POST",
-  url: `/api/routines${id ? `/${id}` : ""}`, headers: await localLogin(created.app, origin, member), payload });
+afterEach(async () => {
+  await created?.app.close();
+});
+const write = async (payload: object, id?: string, member = "one") =>
+  created.app.inject({
+    method: id ? "PUT" : "POST",
+    url: `/api/routines${id ? `/${id}` : ""}`,
+    headers: await localLogin(created.app, origin, member),
+    payload,
+  });
 
 it("shows each person only the rooms they can open, and keeps the hidden ones on save", async () => {
   const headers = await localLogin(created.app, origin);
-  expect((await created.app.inject({ url: "/api/routines", headers })).json()[0].roomIds).toEqual(["team"]);
+  expect((await created.app.inject({ url: "/api/routines", headers })).json()[0].roomIds).toEqual([
+    "team",
+  ]);
   const response = await write({ ...rows[0], roomIds: ["mine"] }, "abc123");
   expect(response.statusCode).toBe(200);
   // local-one dropped "team", added "mine", and never saw "secret", which stays.
   expect(save.mock.calls[0][0].roomIds).toEqual(["secret", "mine"]);
   // The other member sees "team" and their own assistant's "secret".
   const other = await localLogin(created.app, origin, "two");
-  expect((await created.app.inject({ url: "/api/routines", headers: other })).json()[0].roomIds).toEqual(["team", "secret"]);
+  expect(
+    (await created.app.inject({ url: "/api/routines", headers: other })).json()[0].roomIds,
+  ).toEqual(["team", "secret"]);
   expect(response.json().roomIds).toEqual(["mine"]);
 });
 
@@ -97,14 +158,26 @@ it("posts a personal assistant's results only in rooms nobody else can open", as
 
 it("shows no rooms, rather than too many, when Hermes cannot list them", async () => {
   groupRequest.mockRejectedValue(new Error("Hermes is unreachable"));
-  const listed = (await created.app.inject({ url: "/api/routines", headers: await localLogin(created.app, origin) })).json();
+  const listed = (
+    await created.app.inject({
+      url: "/api/routines",
+      headers: await localLogin(created.app, origin),
+    })
+  ).json();
   expect(listed[0]).not.toHaveProperty("roomIds");
-  expect((await write({ ...base, roomIds: ["team"] }, "abc123")).statusCode).toBeGreaterThanOrEqual(500);
+  expect((await write({ ...base, roomIds: ["team"] }, "abc123")).statusCode).toBeGreaterThanOrEqual(
+    500,
+  );
   expect(save).not.toHaveBeenCalled();
 });
 
-const share = async (botId: string, shared: boolean) => created.app.inject({ method: "PATCH", url: `/api/bots/${botId}`, headers: await localLogin(created.app, origin),
-  payload: { name: botId, instructions: "", model: "test", shared, confirmPrivate: true } });
+const share = async (botId: string, shared: boolean) =>
+  created.app.inject({
+    method: "PATCH",
+    url: `/api/bots/${botId}`,
+    headers: await localLogin(created.app, origin),
+    payload: { name: botId, instructions: "", model: "test", shared, confirmPrivate: true },
+  });
 
 it("refuses to make an assistant personal while its routine posts in a room others can open", async () => {
   // The review's repro: a shared assistant's routine posts in a shared room it is not in.
@@ -118,13 +191,18 @@ it("refuses to make an assistant personal while its routine posts in a room othe
   // A room that has the assistant in it closes along with it, so that change goes ahead.
   rows = [{ ...base, id: "abc123", roomIds: ["team"] }];
   expect((await share("shared", false)).statusCode).toBe(200);
-  expect(created.store.presentation("shared")).toMatchObject({ shared: false, ownerId: "local-one" });
+  expect(created.store.presentation("shared")).toMatchObject({
+    shared: false,
+    ownerId: "local-one",
+  });
 });
 
 it("refuses to share the last personal member of a room a personal routine posts in", async () => {
   rows = [{ ...base, botId: "notes", id: "notes1", name: "Journal", roomIds: [] }];
   // "den" holds local-one's "keeper", so only local-one opens it and the personal routine may post there.
-  expect((await write({ ...base, botId: "notes", roomIds: ["den"] }, "notes1")).statusCode).toBe(200);
+  expect((await write({ ...base, botId: "notes", roomIds: ["den"] }, "notes1")).statusCode).toBe(
+    200,
+  );
   expect(save.mock.calls.at(-1)![0].roomIds).toEqual(["den"]);
   rows = [{ ...rows[0], roomIds: ["den"] }];
   const refused = await share("keeper", true);
@@ -148,24 +226,45 @@ it("refuses a sharing change it cannot check, and skips the check when sharing s
 it("names only rooms a person can open in a routine's errors", async () => {
   // Exact Hermes strings: cron/scheduler_delivery_room.py names the target and, on an authority conflict,
   // repeats the profile; cron/scheduler_delivery.py joins a run's errors with "; ".
-  const conflict = "room:secret@diary delivery failed: This Group Chat is managed by another gateway. @diary does not host it. If a profile's gateway hosts this room, deliver to room:secret@<that profile> (Room settings shows the exact target).";
+  const conflict =
+    "room:secret@diary delivery failed: This Group Chat is managed by another gateway. @diary does not host it. If a profile's gateway hosts this room, deliver to room:secret@<that profile> (Room settings shows the exact target).";
   const gone = "room:team: no live Group Chat with that id on this machine";
   rows = [
-    { ...base, id: "abc123", roomIds: ["team", "secret"], lastDeliveryError: `${conflict}; ${gone}`, lastError: "room:secret@diary: no profile named 'diary' on this machine (Room settings shows the exact target)" },
+    {
+      ...base,
+      id: "abc123",
+      roomIds: ["team", "secret"],
+      lastDeliveryError: `${conflict}; ${gone}`,
+      lastError:
+        "room:secret@diary: no profile named 'diary' on this machine (Room settings shows the exact target)",
+    },
     { ...base, id: "def456", roomIds: ["team"], lastDeliveryError: gone },
     // No room named, but the hidden assistant is.
-    { ...base, id: "ghi789", roomIds: [], lastDeliveryError: "bot-chat delivery to profile 'diary' unverified: no canonical Bot Chat" },
+    {
+      ...base,
+      id: "ghi789",
+      roomIds: [],
+      lastDeliveryError: "bot-chat delivery to profile 'diary' unverified: no canonical Bot Chat",
+    },
   ];
   const headers = await localLogin(created.app, origin);
   const listed = (await created.app.inject({ url: "/api/routines", headers })).json();
   expect(listed.map((row: Routine) => [row.lastDeliveryError, row.lastError])).toEqual([
-    ["Couldn't post in a group chat you can't open.", "Couldn't post in a group chat you can't open."],
+    [
+      "Couldn't post in a group chat you can't open.",
+      "Couldn't post in a group chat you can't open.",
+    ],
     [gone, undefined],
     ["Message from another member's assistant: This message is private.", undefined],
   ]);
   expect(JSON.stringify(listed)).not.toContain("diary");
   // The member who can open "secret" sees Hermes's words.
-  const other = (await created.app.inject({ url: "/api/routines", headers: await localLogin(created.app, origin, "two") })).json();
+  const other = (
+    await created.app.inject({
+      url: "/api/routines",
+      headers: await localLogin(created.app, origin, "two"),
+    })
+  ).json();
   expect(other[0].lastDeliveryError).toBe(`${conflict}; ${gone}`);
   // Without the room list, no error that names a room is shown.
   groupRequest.mockRejectedValue(new Error("Hermes is unreachable"));
@@ -174,17 +273,33 @@ it("names only rooms a person can open in a routine's errors", async () => {
   expect(blind[0]).not.toHaveProperty("roomIds");
 });
 
-const create = async (name: string, shared: boolean, member = "one") => created.app.inject({ method: "POST", url: "/api/bots", headers: await localLogin(created.app, origin, member),
-  payload: { name, instructions: "", model: "test", shared } });
+const create = async (name: string, shared: boolean, member = "one") =>
+  created.app.inject({
+    method: "POST",
+    url: "/api/bots",
+    headers: await localLogin(created.app, origin, member),
+    payload: { name, instructions: "", model: "test", shared },
+  });
 
 it("lets a room's last personal member be deleted, but refuses a shared assistant that would reopen the room under its ID", async () => {
   // The reported gap: a personal routine posts in "den", private only because of local-one's "keeper".
   rows = [{ ...base, botId: "notes", id: "notes1", name: "Journal", roomIds: ["den"] }];
   const headers = await localLogin(created.app, origin);
-  expect((await created.app.inject({ method: "DELETE", url: "/api/bots/keeper", headers })).statusCode).toBe(200);
+  expect(
+    (await created.app.inject({ method: "DELETE", url: "/api/bots/keeper", headers })).statusCode,
+  ).toBe(200);
   // A room listing a deleted assistant opens for nobody, so it is gone from every list.
   for (const member of ["one", "two"])
-    expect((await created.app.inject({ url: "/api/groups", headers: await localLogin(created.app, origin, member) })).json().rooms.map((row: { room_id: string }) => row.room_id)).not.toContain("den");
+    expect(
+      (
+        await created.app.inject({
+          url: "/api/groups",
+          headers: await localLogin(created.app, origin, member),
+        })
+      )
+        .json()
+        .rooms.map((row: { room_id: string }) => row.room_id),
+    ).not.toContain("den");
   // A new shared "keeper" would open "den" to the household while "Journal" still posts there.
   const refused = await create("keeper", true, "two");
   expect(refused.statusCode).toBe(409);
@@ -199,7 +314,7 @@ it("lets a room's last personal member be deleted, but refuses a shared assistan
 
 it("treats a room member that is no longer an assistant as closing the room", async () => {
   // "crew" is open to everyone while "garden" exists; without it, nobody can open the room.
-  assistants = assistants.filter(id => id !== "garden");
+  assistants = assistants.filter((id) => id !== "garden");
   rows = [{ ...base, id: "abc123", roomIds: ["crew"] }];
   expect((await share("shared", false)).statusCode).toBe(200);
 });
@@ -208,13 +323,16 @@ it("merges a routine save with the rooms it has when its turn comes, not when it
   // The re-review's repro: the shared assistant's routine posts in "team" and in "lodge", which only local-two opens.
   rows = [{ ...base, id: "abc123", roomIds: ["team", "lodge"] }];
   save.mockImplementation(async (input, id) => {
-    if (input.roomIds) rows = rows.map(row => row.id === id ? { ...row, roomIds: input.roomIds } : row);
+    if (input.roomIds)
+      rows = rows.map((row) => (row.id === id ? { ...row, roomIds: input.roomIds } : row));
     return { ...input, id };
   });
   // Save A, by local-one, adds "mine". The access check reads the routines first; Hermes is slow to answer
   // the save's own read, which captures the routine's rooms.
   let release!: () => void;
-  slowRead = new Promise(resolve => { release = resolve; });
+  slowRead = new Promise((resolve) => {
+    release = resolve;
+  });
   readsBeforeSlow = 1;
   const a = write({ ...base, roomIds: ["team", "mine"] }, "abc123");
   await vi.waitFor(() => expect(slowRead).toBeUndefined());
@@ -247,7 +365,9 @@ describe("a paused personal routine that posts in a room only another member can
   });
   it("cannot be enabled by a save that leaves its rooms alone", async () => {
     // The re-review's repro: its owner sees no rooms, and saves it enabled without naming any.
-    const [listed] = (await created.app.inject({ url: "/api/routines", headers: await headers() })).json();
+    const [listed] = (
+      await created.app.inject({ url: "/api/routines", headers: await headers() })
+    ).json();
     expect(listed.roomIds).toEqual([]);
     const refused = await write({ ...base, enabled: true }, "abc123");
     expect(refused.statusCode).toBe(409);
@@ -258,36 +378,84 @@ describe("a paused personal routine that posts in a room only another member can
   });
   it("cannot be resumed or run, but can be paused", async () => {
     setRoutineEnabled.mockClear();
-    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await headers(), payload: { enabled: true } });
+    const resumed = await created.app.inject({
+      method: "PATCH",
+      url: "/api/routines/abc123/state",
+      headers: await headers(),
+      payload: { enabled: true },
+    });
     expect(resumed.json().code).toBe("routine_rooms");
-    const run = await created.app.inject({ method: "POST", url: "/api/routines/abc123/run", headers: await headers(), payload: { requestId: crypto.randomUUID() } });
+    const run = await created.app.inject({
+      method: "POST",
+      url: "/api/routines/abc123/run",
+      headers: await headers(),
+      payload: { requestId: crypto.randomUUID() },
+    });
     expect(run.json().code).toBe("routine_rooms");
     expect(setRoutineEnabled).not.toHaveBeenCalled();
-    expect((await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await headers(), payload: { enabled: false } })).statusCode).toBe(200);
+    expect(
+      (
+        await created.app.inject({
+          method: "PATCH",
+          url: "/api/routines/abc123/state",
+          headers: await headers(),
+          payload: { enabled: false },
+        })
+      ).statusCode,
+    ).toBe(200);
     expect(setRoutineEnabled).toHaveBeenCalledWith("shared", "abc123", false);
   });
   it("is checked for a target written as room:<id>@<profile>, which the app never shows", async () => {
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared,room:lodge@diary" } }];
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: [],
+        delivery: { deliver: "bot-chat:shared,room:lodge@diary" },
+      },
+    ];
     expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
     // It is never sent to anyone.
-    const [listed] = (await created.app.inject({ url: "/api/routines", headers: await headers() })).json();
+    const [listed] = (
+      await created.app.inject({ url: "/api/routines", headers: await headers() })
+    ).json();
     expect(listed).not.toHaveProperty("delivery");
   });
 });
 
 describe("every delivery field Hermes honors, read as Hermes reads it", () => {
   // "shared" is local-one's personal assistant here, so a room local-two can open must never hear from it.
-  beforeEach(() => { created.store.savePresentation("shared", { shared: false, ownerId: "local-one" }); });
+  beforeEach(() => {
+    created.store.savePresentation("shared", { shared: false, ownerId: "local-one" });
+  });
   it("checks a room named for a profile even when the save removes the same room's plain token", async () => {
     // Re-review repro 1: "crew" is open to everyone; the app's token goes, "room:crew@keeper" stays.
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew,room:crew@keeper" } }];
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: ["crew"],
+        delivery: { deliver: "bot-chat:shared,room:crew,room:crew@keeper" },
+      },
+    ];
     const refused = await write({ ...base, enabled: true, roomIds: [] }, "abc123");
     expect(refused.json().code).toBe("routine_rooms");
     expect(save).not.toHaveBeenCalled();
   });
   it("refuses sharing a room's last personal member while a routine posts there for a profile", async () => {
     // Re-review repro 2: local-one's personal "notes" posts in "den" only through "room:den@keeper".
-    rows = [{ ...base, botId: "notes", id: "notes1", enabled: true, roomIds: [], delivery: { deliver: "bot-chat:notes,room:den@keeper" } }];
+    rows = [
+      {
+        ...base,
+        botId: "notes",
+        id: "notes1",
+        enabled: true,
+        roomIds: [],
+        delivery: { deliver: "bot-chat:notes,room:den@keeper" },
+      },
+    ];
     const refused = await share("keeper", true);
     expect(refused.statusCode).toBe(409);
     expect(refused.json().code).toBe("routine_rooms");
@@ -302,69 +470,150 @@ describe("every delivery field Hermes honors, read as Hermes reads it", () => {
   });
   it("checks failure_deliver, which Hermes uses for a failed run's notice", async () => {
     // Re-review repro 5.
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared", failure_deliver: "room:crew" } }];
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: [],
+        delivery: { deliver: "bot-chat:shared", failure_deliver: "room:crew" },
+      },
+    ];
     expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
-    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/abc123/state", headers: await localLogin(created.app, origin), payload: { enabled: true } });
+    const resumed = await created.app.inject({
+      method: "PATCH",
+      url: "/api/routines/abc123/state",
+      headers: await localLogin(created.app, origin),
+      payload: { enabled: true },
+    });
     expect(resumed.json().code).toBe("routine_rooms");
   });
   it("refuses to enable a routine whose delivery it cannot read", async () => {
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: { room: "crew" } } }];
-    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms_unknown");
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: [],
+        delivery: { deliver: { room: "crew" } },
+      },
+    ];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe(
+      "routine_rooms_unknown",
+    );
     // Paused, it still saves.
     expect((await write({ ...base, name: "Renamed" }, "abc123")).statusCode).toBe(200);
   });
 });
 
 describe("lookups, catalogs and whitespace exactly as Hermes has them", () => {
-  beforeEach(() => { created.store.savePresentation("shared", { shared: false, ownerId: "local-one" }); });
+  beforeEach(() => {
+    created.store.savePresentation("shared", { shared: false, ownerId: "local-one" });
+  });
   it("checks the named assistant's routine when another assistant has a job with the same ID", async () => {
     // A harmless copy on "planner" is listed first; "shared"'s copy posts in "crew", which everyone opens.
-    rows = [{ ...base, botId: "planner", id: "dup", enabled: false, roomIds: [] },
-      { ...base, id: "dup", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew" } }];
+    rows = [
+      { ...base, botId: "planner", id: "dup", enabled: false, roomIds: [] },
+      {
+        ...base,
+        id: "dup",
+        enabled: false,
+        roomIds: ["crew"],
+        delivery: { deliver: "bot-chat:shared,room:crew" },
+      },
+    ];
     expect((await write({ ...base, enabled: true }, "dup")).json().code).toBe("routine_rooms");
     // An ID-only route cannot tell two visible copies apart, so it changes neither.
-    const resumed = await created.app.inject({ method: "PATCH", url: "/api/routines/dup/state", headers: await localLogin(created.app, origin), payload: { enabled: true } });
+    const resumed = await created.app.inject({
+      method: "PATCH",
+      url: "/api/routines/dup/state",
+      headers: await localLogin(created.app, origin),
+      payload: { enabled: true },
+    });
     expect(resumed.json().code).toBe("routine_ambiguous");
     expect(save).not.toHaveBeenCalled();
   });
   it("refuses delivery and sharing changes when Hermes offers no room catalog", async () => {
     catalog = { supported: false, canSend: false, rooms: [] };
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: ["crew"], delivery: { deliver: "bot-chat:shared,room:crew" } }];
-    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms_unknown");
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: ["crew"],
+        delivery: { deliver: "bot-chat:shared,room:crew" },
+      },
+    ];
+    expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe(
+      "routine_rooms_unknown",
+    );
     expect((await share("planner", false)).json().code).toBe("routine_rooms_unknown");
     expect(save).not.toHaveBeenCalled();
   });
   it("reads a target Hermes trims with Python whitespace", async () => {
-    rows = [{ ...base, id: "abc123", enabled: false, roomIds: [], delivery: { deliver: "bot-chat:shared,\u001croom:\u0085crew" } }];
+    rows = [
+      {
+        ...base,
+        id: "abc123",
+        enabled: false,
+        roomIds: [],
+        delivery: { deliver: "bot-chat:shared,\u001croom:\u0085crew" },
+      },
+    ];
     expect((await write({ ...base, enabled: true }, "abc123")).json().code).toBe("routine_rooms");
   });
 });
 
 describe("routes that name only a routine ID, when two assistants hold jobs with it", () => {
   // "diary" is local-two's personal assistant, so its copy of "dup" is hidden from local-one.
-  beforeEach(() => { deleteRoutine.mockClear(); rows = [{ ...base, botId: "diary", id: "dup", roomIds: [] }, { ...base, botId: "planner", id: "dup", roomIds: [] }]; });
+  beforeEach(() => {
+    deleteRoutine.mockClear();
+    rows = [
+      { ...base, botId: "diary", id: "dup", roomIds: [] },
+      { ...base, botId: "planner", id: "dup", roomIds: [] },
+    ];
+  });
   it("deletes only once when two deletions of the visible copy race, never the hidden one", async () => {
     // As Hermes's _job_owner_profile does: the profile is a hint, and a job missing there is found elsewhere.
     deleteRoutine.mockImplementation(async (id: string, botId: string) => {
-      await new Promise(resolve => setTimeout(resolve, 5));
-      const hinted = rows.find(row => row.id === id && row.botId === botId) ?? rows.find(row => row.id === id);
-      rows = rows.filter(row => row !== hinted);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const hinted =
+        rows.find((row) => row.id === id && row.botId === botId) ??
+        rows.find((row) => row.id === id);
+      rows = rows.filter((row) => row !== hinted);
     });
-    const [first, second] = await Promise.all([1, 2].map(async () =>
-      created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })));
+    const [first, second] = await Promise.all(
+      [1, 2].map(async () =>
+        created.app.inject({
+          method: "DELETE",
+          url: "/api/routines/dup",
+          headers: await localLogin(created.app, origin),
+        }),
+      ),
+    );
     expect([first.statusCode, second.statusCode].sort((a, b) => a - b)).toEqual([200, 404]);
     expect(deleteRoutine).toHaveBeenCalledTimes(1);
-    expect(rows.map(row => row.botId)).toEqual(["diary"]);
+    expect(rows.map((row) => row.botId)).toEqual(["diary"]);
     deleteRoutine.mockImplementation(async () => {});
   });
   it("deletes the copy the person can see and tells Hermes its assistant", async () => {
     const headers = await localLogin(created.app, origin);
-    expect((await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers })).statusCode).toBe(200);
+    expect(
+      (await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers }))
+        .statusCode,
+    ).toBe(200);
     expect(deleteRoutine).toHaveBeenCalledWith("dup", "planner");
   });
   it("deletes nothing when the person can see both copies", async () => {
-    rows = [{ ...base, botId: "shared", id: "dup", roomIds: [] }, { ...base, botId: "planner", id: "dup", roomIds: [] }];
-    const refused = await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) });
+    rows = [
+      { ...base, botId: "shared", id: "dup", roomIds: [] },
+      { ...base, botId: "planner", id: "dup", roomIds: [] },
+    ];
+    const refused = await created.app.inject({
+      method: "DELETE",
+      url: "/api/routines/dup",
+      headers: await localLogin(created.app, origin),
+    });
     expect(refused.json().code).toBe("routine_ambiguous");
     expect(deleteRoutine).not.toHaveBeenCalled();
   });
@@ -372,8 +621,27 @@ describe("routes that name only a routine ID, when two assistants hold jobs with
     // local-two's trial of their "diary" copy is still running.
     created.store.user({ id: "local-two", name: "two", email: "two@example.invalid" });
     created.store.rememberRoutineTrial(crypto.randomUUID(), "local-two", "dup", "diary");
-    expect((await write({ ...base, botId: "planner", name: "Renamed" }, "dup")).statusCode).toBe(200);
-    expect((await created.app.inject({ method: "PATCH", url: "/api/routines/dup/state", headers: await localLogin(created.app, origin), payload: { enabled: false } })).statusCode).toBe(200);
-    expect((await created.app.inject({ method: "DELETE", url: "/api/routines/dup", headers: await localLogin(created.app, origin) })).statusCode).toBe(200);
+    expect((await write({ ...base, botId: "planner", name: "Renamed" }, "dup")).statusCode).toBe(
+      200,
+    );
+    expect(
+      (
+        await created.app.inject({
+          method: "PATCH",
+          url: "/api/routines/dup/state",
+          headers: await localLogin(created.app, origin),
+          payload: { enabled: false },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (
+        await created.app.inject({
+          method: "DELETE",
+          url: "/api/routines/dup",
+          headers: await localLogin(created.app, origin),
+        })
+      ).statusCode,
+    ).toBe(200);
   });
 });

@@ -5,7 +5,11 @@ import type { FastifyRequest } from "fastify";
 // does not start with "/api/".
 export function requestPath(req: FastifyRequest) {
   const raw = req.url.split("?")[0];
-  try { return decodeURIComponent(raw); } catch { return raw; }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
 }
 
 // The matched route pattern, such as "/api/bots/:id", or the decoded path when no route matched.

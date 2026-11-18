@@ -168,6 +168,7 @@ clone.
 
 Mutation checks, the same way: 28 lines broke and went red. Three survived the first pass,
 each a missing case rather than dead code, and went red after:
+
 - sending rosters one at a time needed a test where Hermes finishes the older send last;
 - main assistants' update, resume and run needed calls naming only their own chat;
 - confirming the run ended needed the case where the delete succeeds while the run continues.
@@ -233,11 +234,11 @@ Hermes `ed1afb0`, and both are fixed:
      assistants' chats, a shared one's only to household chats, and an agent message only to an
      assistant on its sender's roster. A delivery whose sender can't be told is held.
    - At share time, any conflicting routine now refuses the change, paused or running or not.
-   A test queues a private report through `ed1afb0`'s real `_deliver_to_bot_chat` and the real
-   mailbox, shares the destination, and sees the delivery held and never posted. With the
-   destination still personal, the same delivery is posted. Not covered at delivery time, and
-   documented: Bot Chats the add-on doesn't run (never opened in WildBots) and group rooms. For
-   those, the share-time refusal covers every routine that still exists.
+     A test queues a private report through `ed1afb0`'s real `_deliver_to_bot_chat` and the real
+     mailbox, shares the destination, and sees the delivery held and never posted. With the
+     destination still personal, the same delivery is posted. Not covered at delivery time, and
+     documented: Bot Chats the add-on doesn't run (never opened in WildBots) and group rooms. For
+     those, the share-time refusal covers every routine that still exists.
 2. Provider failures read as overrides. `unreachable_retry`, `quota_hold_until` and
    `quota_hold_cron_expr` are now bookkeeping. A real-Hermes test drives `mark_job_run` through a
    provider outage, a failed retry rung, a quota hold past the next run, a daily routine's quota
@@ -263,6 +264,7 @@ The coordinator moved the general routine-delivery enforcement to its own branch
 removes it here with ordinary edits. No history was rewritten.
 
 Removed. These records above are superseded by the removal:
+
 - The Bot Chat delivery-time sender check and the producer's sender stamp from round four, item 1.
   `src/hermes/bot_delivery.py` and its test are back to their `2bd6351` state.
 - The share-time routine refusals: round three, item 2, and the paused-routine rule from round
@@ -274,6 +276,7 @@ Removed. These records above are superseded by the removal:
 - The app routine routes' chat checks for other assistants, from round two, item 3.
 
 Kept:
+
 - Native roster filtering for every assistant: the Bot Mode section, `message_agent` targets,
   teammate lists, the versioned protocol and serialized publication.
 - For a main assistant: the update, resume and run refusals, the `origin` refusal, the field
@@ -283,6 +286,7 @@ Kept:
   real-Hermes fixture.
 
 New main-assistant restrictions. Each one fails closed:
+
 - Its routines deliver only to its own chat. Nothing else is accepted: another assistant's
   chat, a group room, `origin`, `all` or an outside platform. A missing or unreadable delivery
   is refused too. This applies at every entry point:
@@ -292,7 +296,7 @@ New main-assistant restrictions. Each one fails closed:
   - trial run;
   - event trigger;
   - the managed check-in.
-  The app returns 409 `routine_chats`.
+    The app returns 409 `routine_chats`.
 - Making an assistant main is refused while any of its routines delivers elsewhere. The 409
   `main_routine_delivery` names the routine. It is also refused when its routines can't be read.
 
@@ -300,6 +304,7 @@ The known limit is recorded in `docs/HouseholdExperience.md` (Privacy limits) an
 `docs/HermesCapabilityMatrix.md`.
 
 Mutation checks, the same way: 14 lines broke and all went red. They cover:
+
 - the save, resume and trial, and event trigger checks;
 - making an assistant main, and the case where its routines are unreadable;
 - each own-chat condition: outward, rooms, other chats, and an `origin` with no provenance;
@@ -308,6 +313,7 @@ Mutation checks, the same way: 14 lines broke and all went red. They cover:
 - the managed check-in's failure-delivery condition.
 
 Checks at `0efa0ee`:
+
 - `npm test`: 152 files and 2,147 tests passed.
 - Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
 - `npm run test:py`: 38 files passed.
@@ -329,9 +335,9 @@ three P1 issues, all on moving into and out of main, and all reproduced. Commit 
       rosters are saved.
    3. Its routines are checked.
    4. Only then is the choice recorded.
-   Any failure sends the roster back as it was and refuses with `main_activation_failed`,
-   `main_routine_delivery` or `main_routine_busy`. A test that adds a routine posting elsewhere
-   while the roster is on its way shows the check runs after Hermes holds the limits.
+      Any failure sends the roster back as it was and refuses with `main_activation_failed`,
+      `main_routine_delivery` or `main_routine_busy`. A test that adds a routine posting elsewhere
+      while the roster is on its way shows the check runs after Hermes holds the limits.
 2. Promotion missed copies held by work in flight. It is now refused while any of the
    assistant's routines meets one of these conditions, whatever its destination:
    - it is running (`live_execution`);
@@ -339,10 +345,10 @@ three P1 issues, all on moving into and out of main, and all reproduced. Commit 
      `last_delivery_queued`);
    - Hermes still holds a delivery from it: an unfinished row in `cron/deliveries.db`, or a
      parked output in `cron/bot_chat_pending`. These count even after the routine is deleted.
-   The add-on reads both stores through a new `agent-interface.routine_deliveries` RPC. If they
-   can't be read, or the runtime can't read them, promotion is refused. A real-Hermes test queues
-   and parks deliveries through `ed1afb0`'s own `cron.delivery_queue` and
-   `cron.bot_chat_legacy.defer`, and sees each until it is sent.
+     The add-on reads both stores through a new `agent-interface.routine_deliveries` RPC. If they
+     can't be read, or the runtime can't read them, promotion is refused. A real-Hermes test queues
+     and parks deliveries through `ed1afb0`'s own `cron.delivery_queue` and
+     `cron.bot_chat_legacy.defer`, and sees each until it is sent.
 3. Clearing main dropped protection from a check-in cleanup missed. Two fixes:
    - (a) An assistant stays main in Hermes while a check-in is on it. That covers ones recorded
      here and ones found by their signed marker that a pass failed to delete, and it holds from a
@@ -359,14 +365,16 @@ This matches `check_in_removal_pending` and needed no client change.
 
 Hand-breaks: 34 lines broke and all went red, across the API, adapter and add-on tests. Two
 runs needed fixing first:
+
 - The serialization mutants first ran with a syntax-breaking edit, so they were redone with a
   stand-in that keeps the syntax.
 - The activation one survived until its test held the roster send long enough for an
   unserialized trigger to finish first.
-Two lines added during the work were redundant with the current main's preference and could not
-fail a test, so they were removed.
+  Two lines added during the work were redundant with the current main's preference and could not
+  fail a test, so they were removed.
 
 Checks at `852fd69`:
+
 - `npm test`: 152 files and 2,157 tests passed. `tests/main-assistant-api.test.ts` passed five more
   runs in a row.
 - Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.
@@ -380,6 +388,7 @@ Checks at `852fd69`:
 After `main_clear_pending` the server had saved the change, but the web and iOS apps kept showing the
 old main assistant until their next reload. `check_in_removal_pending` and `check_in_unavailable`
 had the same gap. Commits `ae94388` and `bdf5dcc` close it:
+
 - The server's error body now carries `preferences`, the member's preferences as saved. It does so
   on `main_clear_pending`, on `check_in_removal_pending` from both check-ins and sharing, and on both
   `check_in_unavailable` cases.
@@ -389,6 +398,7 @@ had the same gap. Commits `ae94388` and `bdf5dcc` close it:
   generation. Bot settings applies them from a failed save.
 
 Tests that fail without the change:
+
 - Web: `tests/main-assistant-ui.test.ts` covers clearing main and turning check-ins off, each
   refused after saving. The saved preferences are applied and the message stays visible. A
   refusal that saved nothing applies nothing.
@@ -399,12 +409,14 @@ Tests that fail without the change:
 - iOS: `MainAssistantTests.testARefusalAfterTheServerSavedShowsWhatItSavedAndKeepsTheReason`.
 
 Hand-breaks: 10 lines broke and all went red.
+
 - Web and server, 9 lines: the web apply on failure, the error reader, the Bot settings reload,
   the error handler's `preferences` field, and each of the five throw sites.
 - iOS: `applyingSaved` stopped applying on the Mac copy. `MainAssistantTests` failed 3 assertions,
   exit 65, and the file was restored.
 
 Checks at `bdf5dcc`:
+
 - `npm test`: 152 files and 2,160 tests passed. Typecheck, lint, build and the e2e smoke suite (2)
   passed.
 - No Python changed, so the add-on tests were not rerun.
@@ -421,6 +433,7 @@ Checks at `bdf5dcc`:
 A final GPT-6.1 Sol review of `4edd56a..d1cb1f3` found three issues, all reproduced. Commit `dc9db64`
 applies one rule rather than patching each race. An assistant's Hermes roster marks it main while
 any of these holds:
+
 - it is a member's designated main;
 - the last successful routine inventory left a signed check-in on it, whether kept, just created,
   or one Hermes refused to delete;
@@ -457,6 +470,7 @@ main changes. A Hermes without routines counts as an inventory that found nothin
 The main-assistant API test setup now runs a reconciliation first, as the server's start does.
 
 Hand-breaks: 19 lines broke and all went red:
+
 - both request-ordering changes, failing on the race tests themselves;
 - the unknown-at-start rule, marking an inventory successful, the no-routines case, and adding kept,
   just-created and undeleted check-ins to the protected set;
@@ -467,6 +481,7 @@ Hand-breaks: 19 lines broke and all went red:
 - the three malformed-input guards.
 
 Checks at `dc9db64`:
+
 - `npm test`: 152 files and 2,165 tests passed. `tests/main-assistant-api.test.ts` passed five more
   runs in a row.
 - Typecheck, lint, build and Ruff passed.
@@ -496,12 +511,12 @@ The coordinator ruled the third out of scope; it is documented as a limit.
      check-ins off.
    - Another holds a failed setup's routine read while a newer change waits behind it: the newer
      frequency survives.
-   Audit of every other write to the main designation or check-in settings:
+     Audit of every other write to the main designation or check-in settings:
    - `PUT /preferences/main` and the main decision in sharing already ran in the lane.
    - The pass's `clearMain` and assistant deletion (`store.forgetBot`) also run in the lane.
    - `PATCH /preferences` and `PUT /preferences/models` read and write with no await between, and
      the first copies the stored designation and check-ins unchanged.
-   Nothing else writes them.
+     Nothing else writes them.
 3. Out of scope, documented: receipt discovery follows `last_delivery_queued`, which Hermes
    overwrites on each run, so an older run's unfinished delivery can stay hidden. Such a delivery
    carries content made under non-main rules and would deliver whether or not the assistant became
@@ -510,14 +525,16 @@ The coordinator ruled the third out of scope; it is documented as a limit.
    latest run. Recorded in docs/HouseholdExperience.md and the capability matrix.
 
 Hand-breaks: 4 lines broke and 3 went red, each on its own test:
+
 - treating unavailable routines as an inventory;
 - reading and writing settings outside the lane;
 - turning the switch back off over a newer change.
-One survived, as an equivalent mutant: reading preferences before rather than after the eligibility
-await inside the lane. Every other writer is excluded from the lane or never awaits, so the two
-reads cannot differ.
+  One survived, as an equivalent mutant: reading preferences before rather than after the eligibility
+  await inside the lane. Every other writer is excluded from the lane or never awaits, so the two
+  reads cannot differ.
 
 Checks at `098e84a`:
+
 - `npm test`: 152 files and 2,167 tests passed. `tests/main-assistant-api.test.ts` passed five more
   runs in a row.
 - Typecheck, lint, build, Ruff and the e2e smoke suite (2) passed.

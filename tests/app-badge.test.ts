@@ -8,33 +8,65 @@ import { mountRoot } from "./ui-harness";
 // The page's app badge goes through the service worker that controls it, which orders it with the
 // account words and the pushes, and is written by the page itself only where no worker answers.
 type Badging = { setAppBadge: ReturnType<typeof vi.fn>; clearAppBadge: ReturnType<typeof vi.fn> };
-type Posted = { message: { type: string; user?: unknown; count?: number }; ports: FakeChannel["port2"][] };
+type Posted = {
+  message: { type: string; user?: unknown; count?: number };
+  ports: FakeChannel["port2"][];
+};
 
 class FakeChannel {
   static all: FakeChannel[] = [];
-  readonly port1 = { onmessage: null as ((event: { data?: unknown }) => void) | null, closed: false, close: () => { this.port1.closed = true; } };
+  readonly port1 = {
+    onmessage: null as ((event: { data?: unknown }) => void) | null,
+    closed: false,
+    close: () => {
+      this.port1.closed = true;
+    },
+  };
   readonly port2 = { channel: this as FakeChannel };
-  constructor() { FakeChannel.all.push(this); }
+  constructor() {
+    FakeChannel.all.push(this);
+  }
 }
 
 let posted: Posted[];
 let badging: Badging;
 /** What the browser gives a page: a worker that controls it, or none, and whether a registration has an active worker. */
-function browser({ controlled = true, active = true, slow = false }: { controlled?: boolean; active?: boolean; slow?: boolean } = {}) {
+function browser({
+  controlled = true,
+  active = true,
+  slow = false,
+}: { controlled?: boolean; active?: boolean; slow?: boolean } = {}) {
   posted = [];
-  const record = (message: Posted["message"], ports: Posted["ports"] = []) => { posted.push({ message, ports }); };
+  const record = (message: Posted["message"], ports: Posted["ports"] = []) => {
+    posted.push({ message, ports });
+  };
   const registration = { active: active ? { postMessage: record } : null };
   // A slow registration is one the page waits on until `registered()` is called, as a browser still starting its worker makes it.
   let registered = () => {};
-  const ready = slow ? new Promise<void>(resolve => { registered = resolve; }) : Promise.resolve();
-  Object.defineProperty(navigator, "serviceWorker", { configurable: true, value: {
-    // A page that posted to its controller directly would not wait for the registration, and would overtake an earlier word.
-    controller: controlled ? { postMessage: record } : null,
-    getRegistration: async () => { await ready; return registration; }, addEventListener() {}, removeEventListener() {},
-  } });
+  const ready = slow
+    ? new Promise<void>((resolve) => {
+        registered = resolve;
+      })
+    : Promise.resolve();
+  Object.defineProperty(navigator, "serviceWorker", {
+    configurable: true,
+    value: {
+      // A page that posted to its controller directly would not wait for the registration, and would overtake an earlier word.
+      controller: controlled ? { postMessage: record } : null,
+      getRegistration: async () => {
+        await ready;
+        return registration;
+      },
+      addEventListener() {},
+      removeEventListener() {},
+    },
+  });
   return { registered: () => registered() };
 }
-const badgeMessages = () => posted.filter(({ message }) => message.type === "BADGE").map(({ message }) => [message.user, message.count]);
+const badgeMessages = () =>
+  posted
+    .filter(({ message }) => message.type === "BADGE")
+    .map(({ message }) => [message.user, message.count]);
 /** The worker answers the badge write posted at `index` among the badge messages, as it does by default, or says it cannot write one. A closed port hears nothing, as in a browser. */
 const answer = (index: number, data: { badge: boolean } = { badge: true }) => {
   const { port1 } = FakeChannel.all[index]!;
@@ -43,7 +75,10 @@ const answer = (index: number, data: { badge: boolean } = { badge: true }) => {
 /** Ends the account generation this page is in, as a refused session does. */
 async function endGeneration() {
   const epoch = await import("../src/app/account-epoch");
-  localStorage.setItem(authEpochKey, JSON.stringify({ id: "earlier", at: Date.now() - 60_000, user: "one" }));
+  localStorage.setItem(
+    authEpochKey,
+    JSON.stringify({ id: "earlier", at: Date.now() - 60_000, user: "one" }),
+  );
   epoch.accountStart();
   const before = epoch.accountGeneration();
   epoch.accountRefused(true);
@@ -54,9 +89,18 @@ async function load() {
   vi.resetModules();
   const { useAppBadge, BADGE_ANSWER_MS } = await import("../src/app/badge");
   const mount = mountRoot();
-  const Probe = ({ count, user }: { count: number; user?: string }) => { useAppBadge(count, user); return null; };
-  const show = async (count: number, user?: string) => { await mount.render(createElement(Probe, { count, user })); await vi.advanceTimersByTimeAsync(0); };
-  const leave = async () => { await act(async () => mount.root.unmount()); await vi.advanceTimersByTimeAsync(0); };
+  const Probe = ({ count, user }: { count: number; user?: string }) => {
+    useAppBadge(count, user);
+    return null;
+  };
+  const show = async (count: number, user?: string) => {
+    await mount.render(createElement(Probe, { count, user }));
+    await vi.advanceTimersByTimeAsync(0);
+  };
+  const leave = async () => {
+    await act(async () => mount.root.unmount());
+    await vi.advanceTimersByTimeAsync(0);
+  };
   return { show, leave, BADGE_ANSWER_MS };
 }
 
@@ -66,11 +110,13 @@ beforeEach(() => {
   vi.stubGlobal("MessageChannel", FakeChannel);
   badging = { setAppBadge: vi.fn(async () => {}), clearAppBadge: vi.fn(async () => {}) };
   Object.defineProperties(navigator, {
-    setAppBadge: { configurable: true, value: badging.setAppBadge }, clearAppBadge: { configurable: true, value: badging.clearAppBadge },
+    setAppBadge: { configurable: true, value: badging.setAppBadge },
+    clearAppBadge: { configurable: true, value: badging.clearAppBadge },
   });
 });
 afterEach(() => {
-  for (const name of ["setAppBadge", "clearAppBadge", "serviceWorker"]) Reflect.deleteProperty(navigator, name);
+  for (const name of ["setAppBadge", "clearAppBadge", "serviceWorker"])
+    Reflect.deleteProperty(navigator, name);
 });
 
 describe("with a worker that controls the page", () => {
@@ -80,7 +126,10 @@ describe("with a worker that controls the page", () => {
     const page = await load();
     await page.show(3, "one");
     await page.show(0, "one");
-    expect(badgeMessages()).toEqual([["one", 3], ["one", 0]]);
+    expect(badgeMessages()).toEqual([
+      ["one", 3],
+      ["one", 0],
+    ]);
     expect(badging.setAppBadge).not.toHaveBeenCalled();
     expect(badging.clearAppBadge).not.toHaveBeenCalled();
     // Each carries the port the worker answers on.
@@ -92,12 +141,19 @@ describe("with a worker that controls the page", () => {
     await page.show(0);
     await page.show(2, "one");
     await page.leave();
-    expect(badgeMessages()).toEqual([[null, 0], ["one", 2], ["one", 0]]);
+    expect(badgeMessages()).toEqual([
+      [null, 0],
+      ["one", 2],
+      ["one", 0],
+    ]);
   });
 
   it("says it after the account word this page sent, in that order, though the browser is slow to find the worker", async () => {
     const slow = browser({ slow: true });
-    localStorage.setItem(authEpochKey, JSON.stringify({ id: "out", at: Date.now(), signedOut: true, user: "one" }));
+    localStorage.setItem(
+      authEpochKey,
+      JSON.stringify({ id: "out", at: Date.now(), signedOut: true, user: "one" }),
+    );
     const page = await load();
     const epoch = await import("../src/app/account-epoch");
     epoch.accountStart();

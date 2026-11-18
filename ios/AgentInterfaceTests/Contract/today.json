@@ -9,9 +9,7 @@
         "prompt": "Prepare a morning brief.",
         "schedule": "0 7 * * *",
         "enabled": true,
-        "recipientIds": [
-          "local-one"
-        ],
+        "recipientIds": ["local-one"],
         "nextRunAt": "2026-10-02T07:00:00.000Z",
         "lastRunAt": "2026-10-01T07:00:00.000Z",
         "lastStatus": "ok",
@@ -40,15 +38,8 @@
             "detail": "Order 12 items from Grocer.",
             "status": "pending",
             "expiresAt": "2026-10-01T13:00:00.000Z",
-            "choices": [
-              "once",
-              "session",
-              "always",
-              "deny"
-            ],
-            "patterns": [
-              "grocery order"
-            ],
+            "choices": ["once", "session", "always", "deny"],
+            "patterns": ["grocery order"],
             "command": "grocer order --items 12"
           }
         ],
@@ -62,18 +53,12 @@
               {
                 "id": "store",
                 "prompt": "Which store should I use?",
-                "options": [
-                  "Market",
-                  "Co-op"
-                ]
+                "options": ["Market", "Co-op"]
               },
               {
                 "id": "extras",
                 "prompt": "Anything else?",
-                "options": [
-                  "Basil (Recommended)",
-                  "Bread"
-                ],
+                "options": ["Basil (Recommended)", "Bread"],
                 "multiple": true,
                 "recommended": 0
               }
@@ -206,8 +191,6 @@
         ]
       }
     ],
-    "unavailableBots": [
-      "archive"
-    ]
+    "unavailableBots": ["archive"]
   }
 }

@@ -1,5 +1,12 @@
 import { cloneElement, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { ComponentProps, ComponentType, KeyboardEvent, MouseEvent, ReactElement, TouchEvent } from "react";
+import type {
+  ComponentProps,
+  ComponentType,
+  KeyboardEvent,
+  MouseEvent,
+  ReactElement,
+  TouchEvent,
+} from "react";
 import type { BotMenuProps } from "./BotMenuPopup";
 
 /*
@@ -19,25 +26,44 @@ let touches = 0;
 // so rows right-clicked in turn while it loads open a single menu, for the last one.
 let pendingGesture: object | undefined;
 const listeners = new Set<() => void>();
-const notify = () => listeners.forEach(listener => listener());
-const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
-const ready = () => touches ? undefined : loaded;
-const touchStarted = () => { touches++; };
-const touchEnded = () => { touches--; if (!touches) notify(); };
+const notify = () => listeners.forEach((listener) => listener());
+const subscribe = (listener: () => void) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+const ready = () => (touches ? undefined : loaded);
+const touchStarted = () => {
+  touches++;
+};
+const touchEnded = () => {
+  touches--;
+  if (!touches) notify();
+};
 
 /** Starts loading the menu once; a failed load can be tried again by the next gesture. */
 export function preloadBotMenu() {
-  return loading ??= import("./BotMenuPopup").then(module => { loaded = module.BotMenuPopup; notify(); return loaded; }, error => {
-    loading = undefined;
-    throw error;
-  });
+  return (loading ??= import("./BotMenuPopup").then(
+    (module) => {
+      loaded = module.BotMenuPopup;
+      notify();
+      return loaded;
+    },
+    (error) => {
+      loading = undefined;
+      throw error;
+    },
+  ));
 }
 
 /** Loads the menu after first paint, so most first gestures find it ready. */
 function preloadWhenIdle() {
   if (scheduled || loading) return;
   scheduled = true;
-  const run = () => { preloadBotMenu().catch(() => {}); };
+  const run = () => {
+    preloadBotMenu().catch(() => {});
+  };
   if (typeof requestIdleCallback === "function") requestIdleCallback(run, { timeout: 5000 });
   else setTimeout(run, 2000);
 }
@@ -49,13 +75,19 @@ const MOVE_TOLERANCE = 10;
 const CLICK_GRACE_MS = 100;
 type Point = { x: number; y: number };
 
-export function BotMenu({ children, disabled = false, ...props }: Omit<BotMenuProps, "opensAt" | "restoreFocus"> & {
+export function BotMenu({
+  children,
+  disabled = false,
+  ...props
+}: Omit<BotMenuProps, "opensAt" | "restoreFocus"> & {
   /** The row's menu does not open, as on home drawn from this device before bootstrap answers. */
   disabled?: boolean;
 }) {
   const [opened, setOpened] = useState<{ Popup: Popup; at: Point } | null>(null);
   const swapped = useSyncExternalStore(subscribe, ready, ready);
-  const press = useRef<{ at: Point; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(null);
+  const press = useRef<{ at: Point; timer: ReturnType<typeof setTimeout>; fired: boolean } | null>(
+    null,
+  );
   const suppressTouchClick = useRef(false);
   const row = useRef<HTMLButtonElement>(null);
   const restoreFocus = useRef<boolean | null>(null);
@@ -83,24 +115,28 @@ export function BotMenu({ children, disabled = false, ...props }: Omit<BotMenuPr
   };
   const open = (at: Point) => {
     if (disabled) return;
-    const gesture = pendingGesture = {};
+    const gesture = (pendingGesture = {});
     const show = (Popup: Popup) => {
       if (!mounted.current) return;
       release();
       // A later gesture, on this row or another, has taken over.
       if (pendingGesture !== gesture) return;
       pendingGesture = undefined;
-      setOpened(current => current ?? { Popup, at });
+      setOpened((current) => current ?? { Popup, at });
     };
     if (loaded) show(loaded);
     else preloadBotMenu().then(show, () => {});
   };
 
-  const Popup = disabled ? undefined : opened?.Popup ?? swapped;
+  const Popup = disabled ? undefined : (opened?.Popup ?? swapped);
   if (Popup) {
     // A row focused when it is swapped keeps its focus, unless the menu is opening and takes it.
     restoreFocus.current ??= !opened && !!row.current && row.current === document.activeElement;
-    return <Popup {...props} opensAt={opened?.at} restoreFocus={restoreFocus.current}>{children}</Popup>;
+    return (
+      <Popup {...props} opensAt={opened?.at} restoreFocus={restoreFocus.current}>
+        {children}
+      </Popup>
+    );
   }
 
   const child = children as ReactElement<ComponentProps<"button">>;
@@ -118,7 +154,10 @@ export function BotMenu({ children, disabled = false, ...props }: Omit<BotMenuPr
   return cloneElement(child, {
     ref: row,
     // The browser's own menu must never win, even while the real one is still loading.
-    onContextMenu: (event: MouseEvent) => { event.preventDefault(); open({ x: event.clientX, y: event.clientY }); },
+    onContextMenu: (event: MouseEvent) => {
+      event.preventDefault();
+      open({ x: event.clientX, y: event.clientY });
+    },
     onKeyDown: (event: KeyboardEvent) => {
       if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
       event.preventDefault();
@@ -128,25 +167,42 @@ export function BotMenu({ children, disabled = false, ...props }: Omit<BotMenuPr
       suppressTouchClick.current = false;
       cancelPress();
       clearTimeout(settle.current);
-      if (!holding.current) { holding.current = true; touchStarted(); }
+      if (!holding.current) {
+        holding.current = true;
+        touchStarted();
+      }
       preloadBotMenu().catch(() => {});
       if (event.touches.length !== 1) return;
       const at = { x: event.touches[0].clientX, y: event.touches[0].clientY };
-      const started = { at, fired: false, timer: setTimeout(() => { started.fired = true; suppressTouchClick.current = true; }, LONG_PRESS_MS) };
+      const started = {
+        at,
+        fired: false,
+        timer: setTimeout(() => {
+          started.fired = true;
+          suppressTouchClick.current = true;
+        }, LONG_PRESS_MS),
+      };
       press.current = started;
     },
     onTouchMove: (event: TouchEvent) => {
       const started = press.current;
       if (!started || started.fired) return;
       const touch = event.touches[0];
-      if (event.touches.length !== 1 || Math.abs(touch.clientX - started.at.x) > MOVE_TOLERANCE || Math.abs(touch.clientY - started.at.y) > MOVE_TOLERANCE) cancelPress();
+      if (
+        event.touches.length !== 1 ||
+        Math.abs(touch.clientX - started.at.x) > MOVE_TOLERANCE ||
+        Math.abs(touch.clientY - started.at.y) > MOVE_TOLERANCE
+      )
+        cancelPress();
     },
     onTouchEnd: lift,
     onTouchCancel: lift,
     // The lift that ends a long press must not also select the row.
     onClickCapture: (event: MouseEvent) => {
       if (!suppressTouchClick.current) return;
-      event.preventDefault(); event.stopPropagation(); suppressTouchClick.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressTouchClick.current = false;
     },
     style: { WebkitTouchCallout: "none", ...child.props.style },
   });

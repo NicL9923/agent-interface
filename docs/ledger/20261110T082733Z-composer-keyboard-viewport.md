@@ -385,8 +385,7 @@ that is gone, the effect's dependency on `gone`, and found no `ResizeObserver` e
 ### Red proof
 
 With the tool's new frame and new rule and without the CSS change: 86 of 88, the 250 px frame failing with
-"explanation at 106-172 covered", the reviewer's numbers, and the 190 px frame failing against a least height of
-168. With the CSS change: 88 of 88, the 250 px frame's explanation at 27 to 93, the reviewer's numbers for its own
+"explanation at 106-172 covered", the reviewer's numbers, and the 190 px frame failing against a least height of 168. With the CSS change: 88 of 88, the 250 px frame's explanation at 27 to 93, the reviewer's numbers for its own
 trial of this fix.
 
 ### Checks

@@ -7,7 +7,9 @@ import type { Page } from "@playwright/test";
  */
 async function echo(page: Page, text: string) {
   await signIn(page);
-  await assistants(page).getByRole("button", { name: /Trail Cook/ }).click();
+  await assistants(page)
+    .getByRole("button", { name: /Trail Cook/ })
+    .click();
   await page.getByRole("textbox", { name: "Message Trail Cook" }).fill(`Echo: ${text}`);
   await page.getByRole("button", { name: "Send message" }).click();
   const row = conversation(page).locator('[data-message-id="trail-inflight"]');
@@ -21,26 +23,41 @@ type Box = { left: number; right: number; top: number; bottom: number };
  * The caret's box, the box of each grapheme of the last `word` in the reply's text, and the box of every
  * grapheme of the reply that is not a space.
  */
-const measure = (page: Page, word: string) => page.evaluate(word => {
-  const row = document.querySelector('[data-message-id="trail-inflight"]')!;
-  const box = (rect: DOMRect) => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom });
-  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-  const boxes = (node: Text, start: number, text: string) => [...segmenter.segment(text)].map(part => {
-    const range = document.createRange();
-    range.setStart(node, start + part.index);
-    range.setEnd(node, start + part.index + part.segment.length);
-    return { grapheme: part.segment, ...box(range.getBoundingClientRect()) };
-  });
-  const walker = document.createTreeWalker(row.querySelector(".message-markdown")!, NodeFilter.SHOW_TEXT);
-  let node: Text | null = null, found: Text | null = null;
-  const all: (Box & { grapheme: string })[] = [];
-  while ((node = walker.nextNode() as Text | null)) {
-    if (node.data.includes(word)) found = node;
-    all.push(...boxes(node, 0, node.data).filter(item => /\S/.test(item.grapheme)));
-  }
-  const graphemes = boxes(found!, found!.data.lastIndexOf(word), word);
-  return { caret: box(row.querySelector(".streaming-caret")!.getBoundingClientRect()), graphemes, all };
-}, word) as Promise<{ caret: Box; graphemes: Box[]; all: (Box & { grapheme: string })[] }>;
+const measure = (page: Page, word: string) =>
+  page.evaluate((word) => {
+    const row = document.querySelector('[data-message-id="trail-inflight"]')!;
+    const box = (rect: DOMRect) => ({
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+    });
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const boxes = (node: Text, start: number, text: string) =>
+      [...segmenter.segment(text)].map((part) => {
+        const range = document.createRange();
+        range.setStart(node, start + part.index);
+        range.setEnd(node, start + part.index + part.segment.length);
+        return { grapheme: part.segment, ...box(range.getBoundingClientRect()) };
+      });
+    const walker = document.createTreeWalker(
+      row.querySelector(".message-markdown")!,
+      NodeFilter.SHOW_TEXT,
+    );
+    let node: Text | null = null,
+      found: Text | null = null;
+    const all: (Box & { grapheme: string })[] = [];
+    while ((node = walker.nextNode() as Text | null)) {
+      if (node.data.includes(word)) found = node;
+      all.push(...boxes(node, 0, node.data).filter((item) => /\S/.test(item.grapheme)));
+    }
+    const graphemes = boxes(found!, found!.data.lastIndexOf(word), word);
+    return {
+      caret: box(row.querySelector(".streaming-caret")!.getBoundingClientRect()),
+      graphemes,
+      all,
+    };
+  }, word) as Promise<{ caret: Box; graphemes: Box[]; all: (Box & { grapheme: string })[] }>;
 
 // The caret sits 2 px past the text's logical end and is 2 px wide.
 function near(actual: number, expected: number) {
@@ -56,58 +73,116 @@ test.describe("a live reply's caret", () => {
   const cases = [
     { name: "right-to-left text", text: "مرحبا بالعالم", word: "بالعالم", side: "left" },
     { name: "left-to-right text", text: "Howdy, partner", word: "partner", side: "right" },
-    { name: "Hebrew followed by a Latin word", text: "השער נעול latched", word: "latched", side: "right" },
-    { name: "Arabic followed by a number", text: "البوابة مغلقة 2026", word: "2026", side: "right" },
-    { name: "Arabic followed by a number with no space", text: "عام2026", word: "عام2026", side: "line" },
-    { name: "Latin followed by Arabic with no space", text: "helloمرحبا", word: "helloمرحبا", side: "line" },
+    {
+      name: "Hebrew followed by a Latin word",
+      text: "השער נעול latched",
+      word: "latched",
+      side: "right",
+    },
+    {
+      name: "Arabic followed by a number",
+      text: "البوابة مغلقة 2026",
+      word: "2026",
+      side: "right",
+    },
+    {
+      name: "Arabic followed by a number with no space",
+      text: "عام2026",
+      word: "عام2026",
+      side: "line",
+    },
+    {
+      name: "Latin followed by Arabic with no space",
+      text: "helloمرحبا",
+      word: "helloمرحبا",
+      side: "line",
+    },
     // The final letter is the line's right end itself, so the caret must clear that letter too.
     { name: "Latin followed by one Arabic letter", text: "helloم", word: "helloم", side: "line" },
     { name: "Latin followed by one Hebrew letter", text: "helloש", word: "helloש", side: "line" },
     // Words on the line above the end do not count as taking the caret's room.
-    { name: "a wrapped line", text: `${"latchedthenorthgate openedtheeastgate ".repeat(4)}latchedthenorthgate partner`, word: "partner", side: "right" },
+    {
+      name: "a wrapped line",
+      text: `${"latchedthenorthgate openedtheeastgate ".repeat(4)}latchedthenorthgate partner`,
+      word: "partner",
+      side: "right",
+    },
   ] as const;
-  for (const { name, text, word, side } of cases) test(`sits at the logical end of ${name}`, async ({ page, browserName }) => {
-    const row = await echo(page, text);
-    const { caret, graphemes, all } = await measure(page, word);
-    // Wider than the row, since the caret after text flush with its left edge sits just outside it.
-    const bounds = (await row.boundingBox())!;
-    await page.screenshot({ path: test.info().outputPath("caret.png"), clip: { ...bounds, x: bounds.x - 16, width: bounds.width + 32 } });
-    const top = Math.min(...graphemes.map(item => item.top));
-    expect(caret.top).toBeGreaterThanOrEqual(top - 4);
-    // Never over a glyph of the reply, on either side of the text's end.
-    const apart = (a: Box, b: Box) => a.right <= b.left + 0.5 || a.left >= b.right - 0.5 || a.bottom <= b.top + 0.5 || a.top >= b.bottom - 0.5;
-    for (const grapheme of all) expect(apart(caret, grapheme), JSON.stringify({ caret, grapheme })).toBe(true);
-    if (side === "left") near(Math.min(...graphemes.map(item => item.left)), caret.right);
-    else {
-      const end = Math.max(...graphemes.map(item => item.right));
-      // WebKit’s font leaves less than the 4 px caret reach in this space, so the caret clears the line instead.
-      const tightGap = browserName === "webkit" && name === "Arabic followed by a number"
-        && all.some(item => item.left >= end && item.left < end + 4 && item.top < caret.bottom && item.bottom > caret.top);
-      near(caret.left, tightGap ? Math.max(...all.map(item => item.right)) : end);
-    }
-  });
+  for (const { name, text, word, side } of cases)
+    test(`sits at the logical end of ${name}`, async ({ page, browserName }) => {
+      const row = await echo(page, text);
+      const { caret, graphemes, all } = await measure(page, word);
+      // Wider than the row, since the caret after text flush with its left edge sits just outside it.
+      const bounds = (await row.boundingBox())!;
+      await page.screenshot({
+        path: test.info().outputPath("caret.png"),
+        clip: { ...bounds, x: bounds.x - 16, width: bounds.width + 32 },
+      });
+      const top = Math.min(...graphemes.map((item) => item.top));
+      expect(caret.top).toBeGreaterThanOrEqual(top - 4);
+      // Never over a glyph of the reply, on either side of the text's end.
+      const apart = (a: Box, b: Box) =>
+        a.right <= b.left + 0.5 ||
+        a.left >= b.right - 0.5 ||
+        a.bottom <= b.top + 0.5 ||
+        a.top >= b.bottom - 0.5;
+      for (const grapheme of all)
+        expect(apart(caret, grapheme), JSON.stringify({ caret, grapheme })).toBe(true);
+      if (side === "left") near(Math.min(...graphemes.map((item) => item.left)), caret.right);
+      else {
+        const end = Math.max(...graphemes.map((item) => item.right));
+        // WebKit’s font leaves less than the 4 px caret reach in this space, so the caret clears the line instead.
+        const tightGap =
+          browserName === "webkit" &&
+          name === "Arabic followed by a number" &&
+          all.some(
+            (item) =>
+              item.left >= end &&
+              item.left < end + 4 &&
+              item.top < caret.bottom &&
+              item.bottom > caret.top,
+          );
+        near(caret.left, tightGap ? Math.max(...all.map((item) => item.right)) : end);
+      }
+    });
 
   test("follows the text when a code block scrolls sideways at phone width", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
-    await echo(page, `\`\`\`\n${"north_gate_latched_at_six_by_the_ranch_hand; ".repeat(6).trim()}\nend`);
+    await echo(
+      page,
+      `\`\`\`\n${"north_gate_latched_at_six_by_the_ranch_hand; ".repeat(6).trim()}\nend`,
+    );
     const pre = conversation(page).locator('[data-message-id="trail-inflight"] pre');
     const before = await measure(page, "end");
     near(before.caret.left, before.graphemes.at(-1)!.right);
     // A short scroll keeps the last line in view, so the caret moves with it.
-    await pre.evaluate(element => { element.scrollLeft = 24; });
-    await expect.poll(async () => (await measure(page, "end")).graphemes.at(-1)!.right).toBeLessThan(before.graphemes.at(-1)!.right - 20);
-    await expect.poll(async () => {
-      const { caret, graphemes } = await measure(page, "end");
-      return caret.left - graphemes.at(-1)!.right;
-    }).toBeLessThanOrEqual(4.5);
+    await pre.evaluate((element) => {
+      element.scrollLeft = 24;
+    });
+    await expect
+      .poll(async () => (await measure(page, "end")).graphemes.at(-1)!.right)
+      .toBeLessThan(before.graphemes.at(-1)!.right - 20);
+    await expect
+      .poll(async () => {
+        const { caret, graphemes } = await measure(page, "end");
+        return caret.left - graphemes.at(-1)!.right;
+      })
+      .toBeLessThanOrEqual(4.5);
     const after = await measure(page, "end");
     near(after.caret.left, after.graphemes.at(-1)!.right);
     // Scrolled past the last line, the caret waits at the code block's visible edge instead of leaving it.
-    await pre.evaluate(element => { element.scrollLeft = element.scrollWidth; });
-    await expect.poll(async () => {
-      const [{ caret }, clip] = await Promise.all([measure(page, "end"), pre.evaluate(element => element.getBoundingClientRect().left)]);
-      return caret.left - clip;
-    }).toBeGreaterThanOrEqual(-0.5);
+    await pre.evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+    });
+    await expect
+      .poll(async () => {
+        const [{ caret }, clip] = await Promise.all([
+          measure(page, "end"),
+          pre.evaluate((element) => element.getBoundingClientRect().left),
+        ]);
+        return caret.left - clip;
+      })
+      .toBeGreaterThanOrEqual(-0.5);
     await conversation(page).screenshot({ path: test.info().outputPath("scrolled.png") });
   });
 });

@@ -64,6 +64,7 @@ fake socket blocks or `NATIVE` sleeps, so a 120 s wait costs nothing), the ticke
 guarded tool runs. The code under test runs for real, and a fake throws on any request a test did not script.
 
 `tests/hermes_upgrade_linux_test.py` `MaintenanceRpcTests` (10 new), the real `rpc` and `NATIVE`:
+
 - a capable add-on is asked first and sent 90 s with the acquire and none with the release; the capability read comes before the
   `acquiring` phase is saved;
 - an acquire that never answers exits 75, phase `rejected`, in under 5 s with no watch, and a socket that drops after 2 s waits out
@@ -90,49 +91,49 @@ A scratch runner applied each replacement, deleted every `__pycache__`, ran the 
 the real code before any break was made: JSON `1` equals `True` in Python, which `unsent()` had always accepted, so `marker()` now
 checks `is True`, and a `{"unsent": 1}` case joined the existing unsent test.
 
-| Broken | Red |
-| --- | --- |
-| `marker` accepts an equal value | the unsent and deadline-marker tests |
-| `NATIVE` does not wait out the rest of the wait | the dropped-socket, silence and finished-refusal tests |
-| `NATIVE` prints the marker after an answered error | the answered-error tests, in both files |
-| `NATIVE` skips its own `wait > deadline` guard | the no-room test |
-| `NATIVE` never sends the deadline | the capable and deadline-on-acquire tests |
-| `NATIVE` sends `capabilities` as a maintenance action | the capability and capable tests |
-| Worker `rpc` has no deadline guard | the not-shorter-than-the-wait test |
-| Worker `rpc` never raises `DeadlinePassed` | the finished-refusal, release and other-error tests |
-| Worker `rpc` raises it without a deadline | the exact-marker test |
-| Worker takes any truthy capability | the not-exactly-true test |
-| Worker lets a failed capability read raise | the failed-read tests |
-| Worker never sends the deadline to the acquire | the capable tests |
-| Worker reads capabilities after saving the phase | the read-before-phase test |
-| Worker has no `DeadlinePassed` refusal | the finished-refusal and release tests |
-| Deadline margin 10 s, in the worker file | the constants test |
-| Tool: marker accepts any key set | the exact-marker test |
-| Tool: marker accepts an equal value | the exact-marker test |
-| Tool: raises `DeadlinePassed` without a deadline | the exact-marker test |
-| Tool: no deadline guard | the not-shorter-than-the-wait test |
-| Tool takes any truthy capability | the not-exactly-true test and a guarded-tool test |
-| Tool lets any failed read raise | the failed-read tests |
-| Tool swallows every failure of the read (`except Exception`) | the not-swallowed test |
-| Tool reads capabilities after journaling the phase | the capable-order test |
-| Tool never sends the deadline to the acquire | the capable tests, in both files |
-| Tool has no `DeadlinePassed` refusal | the refusal and release tests |
-| Tool asks again after the deadline passes | the refusal test and the app's-own-poll test |
-| Deadline margin 10 s, in the tool file | the constants test |
-| The guarded tool's `rpc` drops the deadline | the capable and refusal tests |
+| Broken                                                       | Red                                                    |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| `marker` accepts an equal value                              | the unsent and deadline-marker tests                   |
+| `NATIVE` does not wait out the rest of the wait              | the dropped-socket, silence and finished-refusal tests |
+| `NATIVE` prints the marker after an answered error           | the answered-error tests, in both files                |
+| `NATIVE` skips its own `wait > deadline` guard               | the no-room test                                       |
+| `NATIVE` never sends the deadline                            | the capable and deadline-on-acquire tests              |
+| `NATIVE` sends `capabilities` as a maintenance action        | the capability and capable tests                       |
+| Worker `rpc` has no deadline guard                           | the not-shorter-than-the-wait test                     |
+| Worker `rpc` never raises `DeadlinePassed`                   | the finished-refusal, release and other-error tests    |
+| Worker `rpc` raises it without a deadline                    | the exact-marker test                                  |
+| Worker takes any truthy capability                           | the not-exactly-true test                              |
+| Worker lets a failed capability read raise                   | the failed-read tests                                  |
+| Worker never sends the deadline to the acquire               | the capable tests                                      |
+| Worker reads capabilities after saving the phase             | the read-before-phase test                             |
+| Worker has no `DeadlinePassed` refusal                       | the finished-refusal and release tests                 |
+| Deadline margin 10 s, in the worker file                     | the constants test                                     |
+| Tool: marker accepts any key set                             | the exact-marker test                                  |
+| Tool: marker accepts an equal value                          | the exact-marker test                                  |
+| Tool: raises `DeadlinePassed` without a deadline             | the exact-marker test                                  |
+| Tool: no deadline guard                                      | the not-shorter-than-the-wait test                     |
+| Tool takes any truthy capability                             | the not-exactly-true test and a guarded-tool test      |
+| Tool lets any failed read raise                              | the failed-read tests                                  |
+| Tool swallows every failure of the read (`except Exception`) | the not-swallowed test                                 |
+| Tool reads capabilities after journaling the phase           | the capable-order test                                 |
+| Tool never sends the deadline to the acquire                 | the capable tests, in both files                       |
+| Tool has no `DeadlinePassed` refusal                         | the refusal and release tests                          |
+| Tool asks again after the deadline passes                    | the refusal test and the app's-own-poll test           |
+| Deadline margin 10 s, in the tool file                       | the constants test                                     |
+| The guarded tool's `rpc` drops the deadline                  | the capable and refusal tests                          |
 
 ## Checks
 
 `.agents/tools/check-all --py always --keep-going` on the merged branch (`73853a1`, before this entry): all 7 passed in 14m19s, 7m29s of it
 queued for the machine's heavy slot behind another session.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 205 files, 3,668 tests passed |
-| `npm run build` | 892 modules |
-| `npm run test:e2e` | 40 tests passed (ports 24566, 24567) |
-| `npm run test:py` | 46 files passed in 5m12s |
+| Check                                    | Result                               |
+| ---------------------------------------- | ------------------------------------ |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                               |
+| `npm test`                               | 205 files, 3,668 tests passed        |
+| `npm run build`                          | 892 modules                          |
+| `npm run test:e2e`                       | 40 tests passed (ports 24566, 24567) |
+| `npm run test:py`                        | 46 files passed in 5m12s             |
 
 Per file, on the branch before the merge: `deploy_common_test` 61 tests (42 before), `hermes_upgrade_linux_test` 75 (65),
 `deploy_guarded_release_test` 15 (11), all passing.
@@ -194,22 +195,22 @@ followed by "Hermes is being upgraded" in the app, which the runbook's "no manua
 Each line was broken in the file, its tests run with `python3 -B` (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared), watched go
 red, and restored. `tests/hermes_upgrade_linux_test.py` `MaintenanceRpcTests` and `tests/deploy_common_test.py`.
 
-| Broken line | Result | Red tests |
-| --- | --- | --- |
-| Worker: no watch after the release | red, 5 | late lease released again, phase held for review during the watch, another operation's lease left alone, second release fails closed (2) |
-| Worker: no second release | red, 3 | late lease released again, second release fails closed (2) |
-| Worker: epoch never compared | red, 3 | restarted add-on held for review, with and without a lease |
-| Worker: epoch not required | red, 3 | no epoch, empty epoch, numeric epoch each get no deadline |
-| Worker: phase not saved before the watch | red, 2 | phase holds while the watch runs, second release fails closed |
-| Worker: second release unchecked | red, 1 | second release reporting the lease still held fails closed |
-| Worker: `DEADLINE_WATCH_GRACE` 0 | red, 1 | both tools' deadline constants test |
-| Tool: no watch | red, 7 | late lease released again, second release cannot clear (4 subtests) and more |
-| Tool: no second release | red, 1 | late lease released again |
-| Tool: epoch never compared | red, 4 | restart held for review (4 subtests, `Refused` instead of `Fence`) |
-| Tool: epoch not required | red, 3 | no epoch, empty epoch, numeric epoch |
-| Tool: `MAINTENANCE_OVERHEAD` 25 | red, 1 | both tools' deadline constants test |
-| Tool: `DEADLINE_WATCH_GRACE` 0 | red, 1 | both tools' deadline constants test |
-| Tool: status restored before the watch | red, 20 | status stays blocked until the watch ends, and the late-lease tests |
+| Broken line                              | Result  | Red tests                                                                                                                                |
+| ---------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Worker: no watch after the release       | red, 5  | late lease released again, phase held for review during the watch, another operation's lease left alone, second release fails closed (2) |
+| Worker: no second release                | red, 3  | late lease released again, second release fails closed (2)                                                                               |
+| Worker: epoch never compared             | red, 3  | restarted add-on held for review, with and without a lease                                                                               |
+| Worker: epoch not required               | red, 3  | no epoch, empty epoch, numeric epoch each get no deadline                                                                                |
+| Worker: phase not saved before the watch | red, 2  | phase holds while the watch runs, second release fails closed                                                                            |
+| Worker: second release unchecked         | red, 1  | second release reporting the lease still held fails closed                                                                               |
+| Worker: `DEADLINE_WATCH_GRACE` 0         | red, 1  | both tools' deadline constants test                                                                                                      |
+| Tool: no watch                           | red, 7  | late lease released again, second release cannot clear (4 subtests) and more                                                             |
+| Tool: no second release                  | red, 1  | late lease released again                                                                                                                |
+| Tool: epoch never compared               | red, 4  | restart held for review (4 subtests, `Refused` instead of `Fence`)                                                                       |
+| Tool: epoch not required                 | red, 3  | no epoch, empty epoch, numeric epoch                                                                                                     |
+| Tool: `MAINTENANCE_OVERHEAD` 25          | red, 1  | both tools' deadline constants test                                                                                                      |
+| Tool: `DEADLINE_WATCH_GRACE` 0           | red, 1  | both tools' deadline constants test                                                                                                      |
+| Tool: status restored before the watch   | red, 20 | status stays blocked until the watch ends, and the late-lease tests                                                                      |
 
 `tests/deploy_guarded_release_test.py` took the epoch in its fixture and gained one test of the real tool with a restarted add-on.
 `check-all` found its two stale tests (capabilities without an epoch) on the first run; fixed, not skipped.
@@ -218,13 +219,13 @@ red, and restored. `tests/hermes_upgrade_linux_test.py` `MaintenanceRpcTests` an
 
 `.agents/tools/check-all --py always --keep-going` on `ca41982`: all 7 passed in 10m27s, 3m37s of it queued behind another session.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 205 files, 3,668 tests passed |
-| `npm run build` | 892 modules |
-| `npm run test:e2e` | 40 tests passed (ports 24302, 24303) |
-| `npm run test:py` | 46 files passed in 5m17s |
+| Check                                    | Result                               |
+| ---------------------------------------- | ------------------------------------ |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                               |
+| `npm test`                               | 205 files, 3,668 tests passed        |
+| `npm run build`                          | 892 modules                          |
+| `npm run test:e2e`                       | 40 tests passed (ports 24302, 24303) |
+| `npm run test:py`                        | 46 files passed in 5m17s             |
 
 Per file: `deploy_common_test` 65 tests (61 before this round), `hermes_upgrade_linux_test` 81 (75), `deploy_guarded_release_test` 16 (15).
 
@@ -273,11 +274,11 @@ Claude Opus 5.5 re-reviewed `9859f80` and found it ready with three P3s. This ro
 
 ### Red proof
 
-| Broken | Result | Red tests |
-| --- | --- | --- |
+| Broken                                                                  | Result                                                             | Red tests                                                                                    |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
 | Tool: `range(DEADLINE_WATCH_SECONDS)` becomes `range(ACQUIRE_DEADLINE)` | red, 2 in `deploy_common_test`, 1 in `deploy_guarded_release_test` | the last-second lease, the watch after the release sees no lease, the guarded tool's refusal |
-| Tool: the last look after the loop returns `False` | red, 1 | the last-second lease |
-| Worker: `elif os.path.lexists(...)` becomes `elif False` | red, 2 subtests | a lease that is not this operation's, and one that cannot be read |
+| Tool: the last look after the loop returns `False`                      | red, 1                                                             | the last-second lease                                                                        |
+| Worker: `elif os.path.lexists(...)` becomes `elif False`                | red, 2 subtests                                                    | a lease that is not this operation's, and one that cannot be read                            |
 
 Each file was restored after its run; the tree then passed. Before the sums were strengthened, the first break stayed green, as the review said.
 
@@ -285,13 +286,13 @@ Each file was restored after its run; the tree then passed. Before the sums were
 
 `.agents/tools/check-all --py always --keep-going` on `cfbf61e`: all 7 passed in 7m56s, 53 s of it queued for heavy slots.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` | passed |
-| `npm test` | 208 files, 3,742 tests passed |
-| `npm run build` | 894 modules |
-| `npm run test:e2e` | 55 tests passed |
-| `npm run test:py` | 46 files passed in 4m43s |
+| Check                           | Result                        |
+| ------------------------------- | ----------------------------- |
+| typecheck, lint, `ruff check .` | passed                        |
+| `npm test`                      | 208 files, 3,742 tests passed |
+| `npm run build`                 | 894 modules                   |
+| `npm run test:e2e`              | 55 tests passed               |
+| `npm run test:py`               | 46 files passed in 4m43s      |
 
 ### Follow-up, not done here
 

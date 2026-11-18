@@ -26,17 +26,17 @@ It cannot promise that nothing breaks.
 This audit covers the repository and pinned upstream source. It does not inspect
 production accounts or measure how often Nicolas uses each feature.
 
-| Responsibility | Current owner | Replacement implications |
-| --- | --- | --- |
-| Identity, household allowlist, personal preferences, drafts and read positions | App server | Already independent of Hermes |
-| Notifications, recipient attribution and submission journal | App server | Preserve across a runtime change |
-| Profiles, shared instructions and model selection | Hermes | Reimplement persisted configuration and provider validation |
-| Canonical history, streaming, tool loop and context management | Hermes | Core execution work, including partial failures and compaction |
-| Steering, approvals, clarification, interruption and durable receipts | Hermes plus the extension | Must preserve the existing recovery contract |
-| Upload binding, generated files and authenticated delivery | Hermes plus app routes | Preserve provenance and access boundaries |
-| Memory, skills and their review processes | Hermes | Files are portable; learning policy and evaluation still need design |
-| Routines and scheduler execution | Hermes | Durable scheduling, missed runs, time zones, overlapping runs and delivery |
-| Discord and provider authentication | External Hermes configuration | Not exercised against live accounts by this audit |
+| Responsibility                                                                 | Current owner                 | Replacement implications                                                   |
+| ------------------------------------------------------------------------------ | ----------------------------- | -------------------------------------------------------------------------- |
+| Identity, household allowlist, personal preferences, drafts and read positions | App server                    | Already independent of Hermes                                              |
+| Notifications, recipient attribution and submission journal                    | App server                    | Preserve across a runtime change                                           |
+| Profiles, shared instructions and model selection                              | Hermes                        | Reimplement persisted configuration and provider validation                |
+| Canonical history, streaming, tool loop and context management                 | Hermes                        | Core execution work, including partial failures and compaction             |
+| Steering, approvals, clarification, interruption and durable receipts          | Hermes plus the extension     | Must preserve the existing recovery contract                               |
+| Upload binding, generated files and authenticated delivery                     | Hermes plus app routes        | Preserve provenance and access boundaries                                  |
+| Memory, skills and their review processes                                      | Hermes                        | Files are portable; learning policy and evaluation still need design       |
+| Routines and scheduler execution                                               | Hermes                        | Durable scheduling, missed runs, time zones, overlapping runs and delivery |
+| Discord and provider authentication                                            | External Hermes configuration | Not exercised against live accounts by this audit                          |
 
 The [Runtime interface](../src/shared/types.ts) and injected server dependency
 provide a useful place for a replacement experiment. The existing app does not

@@ -1,5 +1,13 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { avatarShapes, everydayFamilies, type Accessory, type ActivityState, type Avatar as AvatarConfig, type AvatarShape, type Eyes } from "../shared/types";
+import {
+  avatarShapes,
+  everydayFamilies,
+  type Accessory,
+  type ActivityState,
+  type Avatar as AvatarConfig,
+  type AvatarShape,
+  type Eyes,
+} from "../shared/types";
 import { Avatar, avatarColors, defaultAvatar, stateLabels } from "./Avatar";
 import "./avatar-editor.css";
 import { Icon } from "./Icon";
@@ -10,13 +18,24 @@ type Family = Extract<AvatarConfig, { mode: "mascot" }>["family"];
 
 const eyeStyles: Eyes[] = ["oval", "round", "visor", "spark"];
 const accessories: Accessory[] = ["none", "hat", "glasses"];
-const previewStates: ActivityState[] = ["idle", "thinking", "working", "waiting", "blocked", "done"];
+const previewStates: ActivityState[] = [
+  "idle",
+  "thinking",
+  "working",
+  "waiting",
+  "blocked",
+  "done",
+];
 const modes = [
   ["geometric", "Geometric"],
   ["mascot", "Mascot"],
   ["portrait", "Portrait"],
 ] as const;
-const accessoryNames: Record<Accessory, string> = { none: "None", hat: "Cowboy hat", glasses: "Glasses" };
+const accessoryNames: Record<Accessory, string> = {
+  none: "None",
+  hat: "Cowboy hat",
+  glasses: "Glasses",
+};
 const sliders = [
   ["eyeWidth", "Eye width"],
   ["eyeHeight", "Eye height"],
@@ -24,7 +43,13 @@ const sliders = [
 ] as const;
 const title = (value: string) => value[0].toUpperCase() + value.slice(1);
 
-function Choice({ group, checked, label, onSelect, children }: {
+function Choice({
+  group,
+  checked,
+  label,
+  onSelect,
+  children,
+}: {
   group: string;
   checked: boolean;
   label: string;
@@ -34,7 +59,9 @@ function Choice({ group, checked, label, onSelect, children }: {
   return (
     <label className="choice">
       <input className="sr-only" type="radio" name={group} checked={checked} onChange={onSelect} />
-      <span className="choice-art" aria-hidden="true">{children}</span>
+      <span className="choice-art" aria-hidden="true">
+        {children}
+      </span>
       <span className="choice-label">{label}</span>
     </label>
   );
@@ -44,7 +71,13 @@ function Choice({ group, checked, label, onSelect, children }: {
  * Visual avatar customization. Portrait upload and generation stay with the
  * caller, which owns storage; they render as `portraitControls`.
  */
-export function AvatarEditor({ avatar, onChange, name, portraitControls, compactPreview = false }: {
+export function AvatarEditor({
+  avatar,
+  onChange,
+  name,
+  portraitControls,
+  compactPreview = false,
+}: {
   avatar: AvatarConfig;
   onChange: (avatar: AvatarConfig) => void;
   name?: string;
@@ -72,37 +105,60 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
     else if (mode === "mascot") onChange({ ...shared, mode, family: lastFamily.current });
     else onChange(lastPortrait.current ?? { mode: "portrait", src: "", origin: "uploaded" });
   };
-  const update = (patch: Partial<DrawnAvatar>) => drawn && onChange({ ...drawn, ...patch } as DrawnAvatar);
+  const update = (patch: Partial<DrawnAvatar>) =>
+    drawn && onChange({ ...drawn, ...patch } as DrawnAvatar);
   return (
     <div className={`avatar-editor${compactPreview ? " avatar-editor--compact" : ""}`}>
       <div className="avatar-stage">
         {compactPreview && avatar.mode === "portrait" && !avatar.src ? (
-          <div className="avatar-portrait-empty" role="img" aria-label="No portrait selected"><Icon name="robot" size={compactPreview ? 36 : 56} /></div>
-        ) : <Avatar avatar={avatar} state={preview} size={compactPreview ? 64 : 124} name={name} />}
-        {compactPreview ? <div className="avatar-preview-controls">
-          <label>Preview state
-            <select aria-describedby={`${id}-preview-note`} disabled={avatar.mode === "portrait" && !avatar.src} value={preview} onChange={event => setPreview(event.target.value as ActivityState)}>
-              {previewStates.map(state => <option key={state} value={state}>{stateLabels[state]}</option>)}
-            </select>
-          </label>
-        </div> : <>
-        <div className="avatar-stage-states" role="group" aria-label="Preview a state">
-          {previewStates.map((state) => (
-            <button
-              type="button"
-              key={state}
-              disabled={avatar.mode === "portrait" && !avatar.src}
-              aria-pressed={preview === state}
-              onClick={() => setPreview(state)}
-            >
-              {stateLabels[state]}
-            </button>
-          ))}
-        </div>
-        <p>Preview only. The real state always comes from Hermes.</p>
-        </>}
+          <div className="avatar-portrait-empty" role="img" aria-label="No portrait selected">
+            <Icon name="robot" size={compactPreview ? 36 : 56} />
+          </div>
+        ) : (
+          <Avatar avatar={avatar} state={preview} size={compactPreview ? 64 : 124} name={name} />
+        )}
+        {compactPreview ? (
+          <div className="avatar-preview-controls">
+            <label>
+              Preview state
+              <select
+                aria-describedby={`${id}-preview-note`}
+                disabled={avatar.mode === "portrait" && !avatar.src}
+                value={preview}
+                onChange={(event) => setPreview(event.target.value as ActivityState)}
+              >
+                {previewStates.map((state) => (
+                  <option key={state} value={state}>
+                    {stateLabels[state]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : (
+          <>
+            <div className="avatar-stage-states" role="group" aria-label="Preview a state">
+              {previewStates.map((state) => (
+                <button
+                  type="button"
+                  key={state}
+                  disabled={avatar.mode === "portrait" && !avatar.src}
+                  aria-pressed={preview === state}
+                  onClick={() => setPreview(state)}
+                >
+                  {stateLabels[state]}
+                </button>
+              ))}
+            </div>
+            <p>Preview only. The real state always comes from Hermes.</p>
+          </>
+        )}
       </div>
-      {compactPreview && <p className="avatar-preview-note" id={`${id}-preview-note`}>Preview only. Real activity comes from Hermes.</p>}
+      {compactPreview && (
+        <p className="avatar-preview-note" id={`${id}-preview-note`}>
+          Preview only. Real activity comes from Hermes.
+        </p>
+      )}
       <fieldset className="segmented">
         <legend>Style</legend>
         {modes.map(([mode, label]) => (
@@ -125,9 +181,18 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
               <legend>Shape</legend>
               <div className="choice-grid">
                 {avatarShapes.map((shape) => (
-                  <Choice key={shape} group={`${id}-shape`} label={title(shape)}
-                    checked={drawn.shape === shape} onSelect={() => update({ shape })}>
-                    <Avatar avatar={{ ...drawn, shape, accessory: "none" }} size={44} reducedMotion />
+                  <Choice
+                    key={shape}
+                    group={`${id}-shape`}
+                    label={title(shape)}
+                    checked={drawn.shape === shape}
+                    onSelect={() => update({ shape })}
+                  >
+                    <Avatar
+                      avatar={{ ...drawn, shape, accessory: "none" }}
+                      size={44}
+                      reducedMotion
+                    />
                   </Choice>
                 ))}
               </div>
@@ -137,18 +202,37 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
               <legend>Character</legend>
               <div className="choice-grid">
                 {everydayFamilies.map((family) => (
-                  <Choice key={family} group={`${id}-family`} label={title(family)}
-                    checked={drawn.family === family} onSelect={() => update({ family })}>
-                    <Avatar avatar={{ ...drawn, family, accessory: "none" }} size={44} reducedMotion />
+                  <Choice
+                    key={family}
+                    group={`${id}-family`}
+                    label={title(family)}
+                    checked={drawn.family === family}
+                    onSelect={() => update({ family })}
+                  >
+                    <Avatar
+                      avatar={{ ...drawn, family, accessory: "none" }}
+                      size={44}
+                      reducedMotion
+                    />
                   </Choice>
                 ))}
               </div>
               <p className="choice-category">Seasonal</p>
               <div className="choice-grid">
                 {seasonalChoices.map(({ family, label }) => (
-                  <Choice key={family} group={`${id}-family`} label={label}
+                  <Choice
+                    key={family}
+                    group={`${id}-family`}
+                    label={label}
                     checked={drawn.family === family}
-                    onSelect={() => update({ ...seasonalAvatar(family), eyes: drawn.eyes, accessory: drawn.accessory })}>
+                    onSelect={() =>
+                      update({
+                        ...seasonalAvatar(family),
+                        eyes: drawn.eyes,
+                        accessory: drawn.accessory,
+                      })
+                    }
+                  >
                     <Avatar avatar={seasonalAvatar(family)} size={44} reducedMotion />
                   </Choice>
                 ))}
@@ -170,9 +254,19 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
                   />
                 </label>
               ))}
-              <label className="swatch swatch-custom" title="Custom color" data-selected={!avatarColors.some(color => color.toLowerCase() === drawn.color.toLowerCase())}>
+              <label
+                className="swatch swatch-custom"
+                title="Custom color"
+                data-selected={
+                  !avatarColors.some((color) => color.toLowerCase() === drawn.color.toLowerCase())
+                }
+              >
                 <span className="sr-only">Custom color</span>
-                <input type="color" value={drawn.color} onChange={(e) => update({ color: e.target.value })} />
+                <input
+                  type="color"
+                  value={drawn.color}
+                  onChange={(e) => update({ color: e.target.value })}
+                />
               </label>
             </div>
           </fieldset>
@@ -180,8 +274,13 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
             <legend>Eyes</legend>
             <div className="choice-grid">
               {eyeStyles.map((eyes) => (
-                <Choice key={eyes} group={`${id}-eyes`} label={title(eyes)}
-                  checked={drawn.eyes === eyes} onSelect={() => update({ eyes })}>
+                <Choice
+                  key={eyes}
+                  group={`${id}-eyes`}
+                  label={title(eyes)}
+                  checked={drawn.eyes === eyes}
+                  onSelect={() => update({ eyes })}
+                >
                   <Avatar avatar={{ ...drawn, eyes, accessory: "none" }} size={44} reducedMotion />
                 </Choice>
               ))}
@@ -191,8 +290,13 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
             <legend>Accessory</legend>
             <div className="choice-grid">
               {accessories.map((accessory) => (
-                <Choice key={accessory} group={`${id}-accessory`} label={accessoryNames[accessory]}
-                  checked={drawn.accessory === accessory} onSelect={() => update({ accessory })}>
+                <Choice
+                  key={accessory}
+                  group={`${id}-accessory`}
+                  label={accessoryNames[accessory]}
+                  checked={drawn.accessory === accessory}
+                  onSelect={() => update({ accessory })}
+                >
                   <Avatar avatar={{ ...drawn, accessory }} size={44} reducedMotion />
                 </Choice>
               ))}
@@ -221,7 +325,9 @@ export function AvatarEditor({ avatar, onChange, name, portraitControls, compact
               <button
                 type="button"
                 className="text-button"
-                onClick={() => update({ eyeWidth: undefined, eyeHeight: undefined, eyeSpacing: undefined })}
+                onClick={() =>
+                  update({ eyeWidth: undefined, eyeHeight: undefined, eyeSpacing: undefined })
+                }
               >
                 Reset eyes
               </button>

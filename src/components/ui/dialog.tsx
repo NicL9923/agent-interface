@@ -2,7 +2,11 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import type { ComponentProps, RefObject } from "react";
 import { OverlayContainerContext } from "../../lib/overlay-container";
 
-export type DialogFocusTarget = string | HTMLElement | RefObject<HTMLElement | null> | (() => HTMLElement | null);
+export type DialogFocusTarget =
+  | string
+  | HTMLElement
+  | RefObject<HTMLElement | null>
+  | (() => HTMLElement | null);
 export type DialogProps = Omit<ComponentProps<"dialog">, "open"> & {
   /** Defaults to open for conditionally mounted sheets. False keeps contents mounted. */
   open?: boolean;
@@ -18,7 +22,12 @@ function target(value: DialogFocusTarget | undefined, scope: ParentNode): HTMLEl
 }
 
 function usable(element: HTMLElement | null): element is HTMLElement {
-  return !!element?.isConnected && element !== element.ownerDocument.body && !element.closest("[inert], [hidden], [aria-hidden='true']") && !element.matches(":disabled");
+  return (
+    !!element?.isConnected &&
+    element !== element.ownerDocument.body &&
+    !element.closest("[inert], [hidden], [aria-hidden='true']") &&
+    !element.matches(":disabled")
+  );
 }
 
 function focus(element: HTMLElement | null) {
@@ -30,9 +39,10 @@ function focus(element: HTMLElement | null) {
 }
 
 /** Native top-layer dialog, with one lifecycle for mounted and persistent sheets. */
-export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog({
-  open = true, initialFocus, fallbackFocus, onClose, children, ...props
-}, ref) {
+export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog(
+  { open = true, initialFocus, fallbackFocus, onClose, children, ...props },
+  ref,
+) {
   const [element, setElement] = useState<HTMLDialogElement | null>(null);
   const previous = useRef<HTMLElement | null>(null);
   const options = useRef({ initialFocus, fallbackFocus });
@@ -41,7 +51,9 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
 
   function restoreFocus(dialog: HTMLDialogElement) {
     const document = dialog.ownerDocument;
-    const remaining = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]")).filter(item => item !== dialog).at(-1);
+    const remaining = Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]"))
+      .filter((item) => item !== dialog)
+      .at(-1);
     const requested = previous.current;
     const allowed = usable(requested) && (!remaining || remaining.contains(requested));
     const fallback = target(options.current.fallbackFocus, remaining ?? document);
@@ -54,12 +66,18 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
   useEffect(() => {
     if (!element) return;
     if (!open) {
-      if (element.open) { element.close(); restoreFocus(element); }
+      if (element.open) {
+        element.close();
+        restoreFocus(element);
+      }
       return;
     }
     let waiting: MutationObserver | undefined;
     const present = () => {
-      previous.current = element.ownerDocument.activeElement instanceof HTMLElement ? element.ownerDocument.activeElement : null;
+      previous.current =
+        element.ownerDocument.activeElement instanceof HTMLElement
+          ? element.ownerDocument.activeElement
+          : null;
       element.showModal();
       focus(target(options.current.initialFocus, element));
     };
@@ -85,14 +103,22 @@ export const Dialog = forwardRef<HTMLDialogElement, DialogProps>(function Dialog
     };
   }, [element, open]);
 
-  return <OverlayContainerContext value={element}>
-    <dialog {...props} ref={setElement} onClose={event => {
-      // StrictMode can queue close before immediately reopening the same node.
-      if (event.currentTarget.open) return;
-      onClose?.(event);
-      // A guarded editor may reopen after a noncancelable native dismissal.
-      if (event.currentTarget.open) return;
-      if (previous.current) restoreFocus(event.currentTarget);
-    }}>{children}</dialog>
-  </OverlayContainerContext>;
+  return (
+    <OverlayContainerContext value={element}>
+      <dialog
+        {...props}
+        ref={setElement}
+        onClose={(event) => {
+          // StrictMode can queue close before immediately reopening the same node.
+          if (event.currentTarget.open) return;
+          onClose?.(event);
+          // A guarded editor may reopen after a noncancelable native dismissal.
+          if (event.currentTarget.open) return;
+          if (previous.current) restoreFocus(event.currentTarget);
+        }}
+      >
+        {children}
+      </dialog>
+    </OverlayContainerContext>
+  );
 });

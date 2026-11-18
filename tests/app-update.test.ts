@@ -9,8 +9,16 @@ import { mountRoot } from "./ui-harness";
 class Target extends EventTarget {}
 let container: HTMLDivElement, root: Root, reload: ReturnType<typeof vi.fn>;
 let active: { postMessage: ReturnType<typeof vi.fn> };
-let worker: Target & { controller: object | null; register: ReturnType<typeof vi.fn>; ready: Promise<{ active: typeof active }> };
-let registration: Target & { waiting: { postMessage: ReturnType<typeof vi.fn> } | null; installing: (Target & { state: string }) | null; update: ReturnType<typeof vi.fn> };
+let worker: Target & {
+  controller: object | null;
+  register: ReturnType<typeof vi.fn>;
+  ready: Promise<{ active: typeof active }>;
+};
+let registration: Target & {
+  waiting: { postMessage: ReturnType<typeof vi.fn> } | null;
+  installing: (Target & { state: string }) | null;
+  update: ReturnType<typeof vi.fn>;
+};
 
 function Harness() {
   return createElement(UpdateNotice, { update: useAppInstall().update });
@@ -24,9 +32,17 @@ const button = () => container.querySelector<HTMLButtonElement>(".app-update but
 beforeEach(() => {
   vi.useFakeTimers();
   vi.stubEnv("PROD", true);
-  registration = Object.assign(new Target(), { waiting: null, installing: null, update: vi.fn(async () => undefined) });
+  registration = Object.assign(new Target(), {
+    waiting: null,
+    installing: null,
+    update: vi.fn(async () => undefined),
+  });
   active = { postMessage: vi.fn() };
-  worker = Object.assign(new Target(), { controller: {}, register: vi.fn(async () => registration), ready: Promise.resolve({ active }) });
+  worker = Object.assign(new Target(), {
+    controller: {},
+    register: vi.fn(async () => registration),
+    ready: Promise.resolve({ active }),
+  });
   vi.stubGlobal("navigator", { serviceWorker: worker });
   reload = vi.fn();
   vi.stubGlobal("location", { reload });

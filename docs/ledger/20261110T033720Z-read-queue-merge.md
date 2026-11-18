@@ -39,7 +39,7 @@ unchanged. Direct `handle_request` opens have no queue and report no `queued`.
 - The merge and queue tests ran 20 times in a row: 0 failures.
 - `npm run lint:py` with ruff 0.17.3 from `.github/requirements-ci.txt`: passed.
 - `npm ci`, then `npm run typecheck`: passed. `npx vitest run tests/hermes-adapter.test.ts
-  tests/hermes-qualification.test.ts`: 2 files, 220 tests passed.
+tests/hermes-qualification.test.ts`: 2 files, 220 tests passed.
 
 ## Red proof
 
@@ -103,11 +103,11 @@ failure.
 schema (see the `t3/open-row-memo` ledger), five interleaved rounds, each cell the median across rounds
 of one run's median. The benchmark calls the open handler directly, so the read queue is not in it.
 
-| Code | Open median | Open p90 | Activate median | Decorate median | Window median |
-| --- | --- | --- | --- | --- | --- |
-| `ec24b94` | 81.3 ms | 88.8 ms | 20.2 ms | 59.3 ms | 0.8 ms |
-| `t3/open-row-memo` at `0110552` | 21.6 ms | 26.1 ms | 5.2 ms | 15.1 ms | 1.0 ms |
-| This branch at `989a4de` | 22.7 ms | 29.2 ms | 5.6 ms | 15.4 ms | 1.1 ms |
+| Code                            | Open median | Open p90 | Activate median | Decorate median | Window median |
+| ------------------------------- | ----------- | -------- | --------------- | --------------- | ------------- |
+| `ec24b94`                       | 81.3 ms     | 88.8 ms  | 20.2 ms         | 59.3 ms         | 0.8 ms        |
+| `t3/open-row-memo` at `0110552` | 21.6 ms     | 26.1 ms  | 5.2 ms          | 15.1 ms         | 1.0 ms        |
+| This branch at `989a4de`        | 22.7 ms     | 29.2 ms  | 5.6 ms          | 15.4 ms         | 1.1 ms        |
 
 The 1 ms between the two branches is inside the run-to-run spread on this machine (minimums 21.3 and
 21.5 ms).
@@ -141,11 +141,11 @@ The same benchmark, now in WAL mode and timing `original_rows`, seven interleave
 run's median, or of its p90. The load average was about 10 throughout, so every build ran about 10%
 slower than in `t3/open-row-memo`'s own nine rounds; compare rows within this table.
 
-| Code | Open median | Open p90 | Decorate median | Decorate p90 | `original_rows` median |
-| --- | --- | --- | --- | --- | --- |
-| `origin/main` | 91.9 ms | 131.2 ms | 64.5 ms | 99.8 ms | 13.4 ms |
-| `t3/open-row-memo` at `50feeb7` | 36.1 ms | 48.2 ms | 27.1 ms | 38.6 ms | 13.1 ms |
-| This branch at the merge | 35.9 ms | 51.2 ms | 27.8 ms | 41.4 ms | 13.4 ms |
+| Code                            | Open median | Open p90 | Decorate median | Decorate p90 | `original_rows` median |
+| ------------------------------- | ----------- | -------- | --------------- | ------------ | ---------------------- |
+| `origin/main`                   | 91.9 ms     | 131.2 ms | 64.5 ms         | 99.8 ms      | 13.4 ms                |
+| `t3/open-row-memo` at `50feeb7` | 36.1 ms     | 48.2 ms  | 27.1 ms         | 38.6 ms      | 13.1 ms                |
+| This branch at the merge        | 35.9 ms     | 51.2 ms  | 27.8 ms         | 41.4 ms      | 13.4 ms                |
 
 The two branches are within run-to-run spread of each other; the benchmark does not go through the read
 queue.

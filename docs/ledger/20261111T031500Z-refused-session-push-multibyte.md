@@ -21,11 +21,11 @@ is `é`. Each asserts 409 with the endpoint, keys and device label still the hol
 Each mutation applied by hand to `src/server/store-notifications.ts`, `tests/push-status-api.test.ts` and `tests/notifications.test.ts`
 run, the file restored.
 
-| Mutation | Result |
-| --- | --- |
-| Length check back to `a.length === b.length` (characters) | failed: the two multibyte rows (2 of 38) |
-| Length check removed | failed: all five key refusals and the refresh test (6) |
-| `timingSafeEqual` replaced by `true` | failed: the same-length `auth` refusal (1) |
+| Mutation                                                  | Result                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------ |
+| Length check back to `a.length === b.length` (characters) | failed: the two multibyte rows (2 of 38)               |
+| Length check removed                                      | failed: all five key refusals and the refresh test (6) |
+| `timingSafeEqual` replaced by `true`                      | failed: the same-length `auth` refusal (1)             |
 
 ## Checks
 

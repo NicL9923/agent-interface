@@ -7,6 +7,7 @@ projection that, like Hermes's ``_history_to_messages``, labels each tool row fr
 assistant row named with its ID, hidden assistant rows included. The answer with no readable redaction
 state, which never memoizes, is the whole projection every memoized answer must equal.
 """
+
 import json
 import logging
 import os
@@ -23,7 +24,10 @@ from hermes_open_row_cache_test import TranscriptHermes
 
 
 def call(call_id, name, **arguments):
-    return {"id": call_id, "function": {"name": name, "arguments": json.dumps(arguments)}}
+    return {
+        "id": call_id,
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
 
 
 class ProjectingHermes(TranscriptHermes):
@@ -46,9 +50,28 @@ class ProjectingHermes(TranscriptHermes):
             method, params = request["method"], request.get("params") or {}
             self.native_calls.append((method, dict(params)))
             if method == "profiles.list":
-                return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": "stored"}}]})
-            messages = [] if params.get("omit_messages") else server._history_to_messages(list(self.session["history"]), **self.kwargs)
-            return server._ok(request["id"], {"session_id": "sid", "messages": messages})
+                return server._ok(
+                    request["id"],
+                    {
+                        "profiles": [
+                            {
+                                "name": "default",
+                                "canonical_session": {"resolved_id": "stored"},
+                            }
+                        ]
+                    },
+                )
+            messages = (
+                []
+                if params.get("omit_messages")
+                else server._history_to_messages(
+                    list(self.session["history"]), **self.kwargs
+                )
+            )
+            return server._ok(
+                request["id"], {"session_id": "sid", "messages": messages}
+            )
+
         server.handle_request = handle
 
     def __enter__(self):
@@ -63,16 +86,24 @@ class ProjectingHermes(TranscriptHermes):
         return super().__exit__(*exc)
 
     def project(self, history, *, profile_home=None, image_urls=True):
-        self.native_inputs.append([row.get("_row_id") if isinstance(row, dict) else None for row in history])
+        self.native_inputs.append(
+            [row.get("_row_id") if isinstance(row, dict) else None for row in history]
+        )
         config = Path(profile_home or "/nonexistent") / "config.yaml"
         language = config.read_text().strip() if config.exists() else "en"
-        secrets = [value for values in self.redact._VAULT_REDACTION_VALUES.values() for value in values]
+        secrets = [
+            value
+            for values in self.redact._VAULT_REDACTION_VALUES.values()
+            for value in values
+        ]
         # The native secret-source registry starts with env maps and classifies them lazily into value tuples.
         for home, values in list(self.source_values.items()):
             if isinstance(values, dict):
                 values = self.source_values[home] = tuple(values.values())
             secrets.extend(values)
-        enabled = getattr(self.redact, "_CONFIG_POLICY_BY_HOME", {}).get(str(profile_home), self.policy_enabled)
+        enabled = getattr(self.redact, "_CONFIG_POLICY_BY_HOME", {}).get(
+            str(profile_home), self.policy_enabled
+        )
         if not enabled:
             secrets = []
         calls, messages = {}, []
@@ -86,20 +117,37 @@ class ProjectingHermes(TranscriptHermes):
                 for named in row["tool_calls"]:
                     function = named.get("function", {})
                     if named.get("id", "") and function.get("name"):
-                        calls[named["id"]] = (function["name"], json.loads(function.get("arguments") or "{}"))
+                        calls[named["id"]] = (
+                            function["name"],
+                            json.loads(function.get("arguments") or "{}"),
+                        )
             if row.get("display_kind") == "hidden":
                 continue
             if row["role"] == "tool":
                 name, arguments = calls.get(row.get("tool_call_id") or "", (None, None))
-                message = {"role": "tool", "name": name or "tool", "label": f"{language}:{name or 'tool'}", "args": arguments or {},
-                           "tool_call_id": row["tool_call_id"], "timestamp": row["timestamp"]}
+                message = {
+                    "role": "tool",
+                    "name": name or "tool",
+                    "label": f"{language}:{name or 'tool'}",
+                    "args": arguments or {},
+                    "tool_call_id": row["tool_call_id"],
+                    "timestamp": row["timestamp"],
+                }
             else:
                 text = row["content"]
                 for secret in secrets:
                     text = text.replace(secret, "[REDACTED]")
-                message = {"role": row["role"], "text": text if image_urls else text.replace("![photo]", "[image]"), "timestamp": row["timestamp"],
-                           **({"row_id": row["_row_id"]} if "_row_id" in row else {}),
-                           **({"display_kind": row["display_kind"]} if row.get("display_kind") else {})}
+                message = {
+                    "role": row["role"],
+                    "text": text if image_urls else text.replace("![photo]", "[image]"),
+                    "timestamp": row["timestamp"],
+                    **({"row_id": row["_row_id"]} if "_row_id" in row else {}),
+                    **(
+                        {"display_kind": row["display_kind"]}
+                        if row.get("display_kind")
+                        else {}
+                    ),
+                }
             if self.numbered:
                 message["n"] = len(messages)
             messages.append(message)
@@ -120,27 +168,46 @@ class ProjectingHermes(TranscriptHermes):
 def turns(hermes):
     """Four turns that test every way a tool row reads a call named before it. Returns each turn's rows."""
     add = hermes.add
-    first = [add("user", "u1", "Read both. The token is hunter2."),
-             add("assistant", "a1", "", tool_calls=[call("c1", "read", path="a"), call("c2", "read", path="b")]),
-             add("tool", "t1", "a", tool_call_id="c1"),
-             # A steer delivered inside the tool batch: a user row that starts no turn.
-             add("user", "s1", "Also look at c", display_kind="steer"),
-             add("tool", "t2", "b", tool_call_id="c2"),
-             add("assistant", "a2", "Both read. ![photo]")]
-    second = [add("user", "u2", "Fetch it"),
-              # A hidden assistant row still names the call its tool row reads, after a steer.
-              add("assistant", "a3", "", display_kind="hidden", tool_calls=[call("c3", "fetch", url="x")]),
-              add("user", "s2", "Quickly", display_kind="steer"),
-              add("tool", "t3", "fetched", tool_call_id="c3"),
-              add("assistant", "a4", "Fetched.")]
+    first = [
+        add("user", "u1", "Read both. The token is hunter2."),
+        add(
+            "assistant",
+            "a1",
+            "",
+            tool_calls=[call("c1", "read", path="a"), call("c2", "read", path="b")],
+        ),
+        add("tool", "t1", "a", tool_call_id="c1"),
+        # A steer delivered inside the tool batch: a user row that starts no turn.
+        add("user", "s1", "Also look at c", display_kind="steer"),
+        add("tool", "t2", "b", tool_call_id="c2"),
+        add("assistant", "a2", "Both read. ![photo]"),
+    ]
+    second = [
+        add("user", "u2", "Fetch it"),
+        # A hidden assistant row still names the call its tool row reads, after a steer.
+        add(
+            "assistant",
+            "a3",
+            "",
+            display_kind="hidden",
+            tool_calls=[call("c3", "fetch", url="x")],
+        ),
+        add("user", "s2", "Quickly", display_kind="steer"),
+        add("tool", "t3", "fetched", tool_call_id="c3"),
+        add("assistant", "a4", "Fetched."),
+    ]
     # The model reuses c1; the next turn's late result reads this call, not the first one.
-    third = [add("user", "u3", "Write it"),
-             add("assistant", "a5", "", tool_calls=[call("c1", "write", path="c")]),
-             add("tool", "t4", "written", tool_call_id="c1"),
-             add("assistant", "a6", "Written.")]
-    fourth = [add("user", "u4", "Status?"),
-              add("tool", "t5", "late", tool_call_id="c1"),
-              add("assistant", "a7", "All done.")]
+    third = [
+        add("user", "u3", "Write it"),
+        add("assistant", "a5", "", tool_calls=[call("c1", "write", path="c")]),
+        add("tool", "t4", "written", tool_call_id="c1"),
+        add("assistant", "a6", "Written."),
+    ]
+    fourth = [
+        add("user", "u4", "Status?"),
+        add("tool", "t5", "late", tool_call_id="c1"),
+        add("assistant", "a7", "All done."),
+    ]
     return first, second, third, fourth
 
 
@@ -160,18 +227,33 @@ class EquivalenceTests(unittest.TestCase):
         with ProjectingHermes() as hermes:
             first, second, third, fourth = turns(hermes)
             value = self.assert_whole(hermes)
-            tools = [(m["name"], m["args"]) for m in value["messages"] if m["role"] == "tool"]
-            self.assertEqual(tools, [("read", {"path": "a"}), ("read", {"path": "b"}), ("fetch", {"url": "x"}),
-                                     ("write", {"path": "c"}), ("write", {"path": "c"})])
+            tools = [
+                (m["name"], m["args"]) for m in value["messages"] if m["role"] == "tool"
+            ]
+            self.assertEqual(
+                tools,
+                [
+                    ("read", {"path": "a"}),
+                    ("read", {"path": "b"}),
+                    ("fetch", {"url": "x"}),
+                    ("write", {"path": "c"}),
+                    ("write", {"path": "c"}),
+                ],
+            )
             # Nothing changed: no row is projected again.
             self.assertEqual(hermes.answer(), value)
             self.assertEqual(hermes.projected(), set())
             # An appended turn is the only piece projected, and so is the piece a row is appended to.
-            fifth = [hermes.add("user", "u5", "One more"), hermes.add("assistant", "a8", "Sure.")]
+            fifth = [
+                hermes.add("user", "u5", "One more"),
+                hermes.add("assistant", "a8", "Sure."),
+            ]
             hermes.answer()
             self.assertEqual(hermes.projected(), ids(fifth))
             self.assert_whole(hermes)
-            hermes.session["history"].append({"role": "assistant", "content": "Six.", "timestamp": 99.0})
+            hermes.session["history"].append(
+                {"role": "assistant", "content": "Six.", "timestamp": 99.0}
+            )
             hermes.answer()
             self.assertEqual(hermes.projected(), ids(fifth) | {None})
             # A middle row edited to text of the same length, under the same row ID: only its piece is projected again.
@@ -194,9 +276,12 @@ class EquivalenceTests(unittest.TestCase):
             value = self.assert_whole(hermes)
             self.assertEqual(value["messages"][-1]["text"], "Six!")
             # Compaction rewrites every kept row under a new ID, after a handoff.
-            hermes.compact(hermes.session["history"][len(first):])
+            hermes.compact(hermes.session["history"][len(first) :])
             value = self.assert_whole(hermes)
-            self.assertNotIn("Read both. The token is hunter2.", [m.get("text") for m in value["messages"]])
+            self.assertNotIn(
+                "Read both. The token is hunter2.",
+                [m.get("text") for m in value["messages"]],
+            )
             self.assertEqual(value["messages"][0]["row_id"], second[0]["_row_id"])
 
     def test_what_a_projection_reads_besides_its_rows_projects_again(self):
@@ -205,9 +290,17 @@ class EquivalenceTests(unittest.TestCase):
             hermes.answer()
             hermes.projected()
             changes = {
-                "a vault value registered mid-turn": lambda: hermes.redact._VAULT_REDACTION_VALUES.update({"/home/default": {"hunter2": None}}),
-                "the profile's language": lambda: (Path(hermes.home.name) / "config.yaml").write_text("fr"),
-                "the projection's arguments": lambda: hermes.kwargs.update(image_urls=False),
+                "a vault value registered mid-turn": lambda: (
+                    hermes.redact._VAULT_REDACTION_VALUES.update(
+                        {"/home/default": {"hunter2": None}}
+                    )
+                ),
+                "the profile's language": lambda: (
+                    Path(hermes.home.name) / "config.yaml"
+                ).write_text("fr"),
+                "the projection's arguments": lambda: hermes.kwargs.update(
+                    image_urls=False
+                ),
             }
             for name, change in changes.items():
                 with self.subTest(name):
@@ -222,7 +315,9 @@ class EquivalenceTests(unittest.TestCase):
             self.assertIn("fr:read", texts)
             self.assertIn("Both read. [image]", texts)
 
-    def test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not(self):
+    def test_one_home_as_a_path_or_a_string_reuses_every_piece_and_another_home_does_not(
+        self,
+    ):
         # Production on November 12: a resume projects with the profile home as a Path and every later activation with
         # the string Hermes stored, so each chat's second open after a restart projected all of its pieces again.
         with ProjectingHermes() as hermes:
@@ -239,7 +334,10 @@ class EquivalenceTests(unittest.TestCase):
             self.addCleanup(other.cleanup)
             hermes.kwargs["profile_home"] = other.name
             hermes.answer()
-            self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+            self.assertEqual(
+                hermes.projected(),
+                {row["_row_id"] for row in hermes.session["history"]},
+            )
 
     def test_without_readable_redaction_state_every_open_projects_every_row(self):
         with ProjectingHermes() as hermes:
@@ -247,34 +345,55 @@ class EquivalenceTests(unittest.TestCase):
             hermes.whole()
             hermes.projected()
             hermes.whole()
-            self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+            self.assertEqual(
+                hermes.projected(),
+                {row["_row_id"] for row in hermes.session["history"]},
+            )
 
-    def test_a_modular_vault_registry_reuses_history_and_invalidates_when_a_secret_is_registered(self):
+    def test_a_modular_vault_registry_reuses_history_and_invalidates_when_a_secret_is_registered(
+        self,
+    ):
         with ProjectingHermes() as hermes:
             turns(hermes)
             # Current Hermes re-exports the public functions but keeps the vault's lock and values in this module.
-            redact = types.SimpleNamespace(_registry_lock=hermes.redact._registry_lock,
-                                           _PLUGIN_PREFIX_PATTERNS=hermes.redact._PLUGIN_PREFIX_PATTERNS,
-                                           _REDACT_ENABLED=True)
-            with patch.dict(sys.modules, {"agent.redact": redact, "agent.redact_vault_values": hermes.redact}):
+            redact = types.SimpleNamespace(
+                _registry_lock=hermes.redact._registry_lock,
+                _PLUGIN_PREFIX_PATTERNS=hermes.redact._PLUGIN_PREFIX_PATTERNS,
+                _REDACT_ENABLED=True,
+            )
+            with patch.dict(
+                sys.modules,
+                {"agent.redact": redact, "agent.redact_vault_values": hermes.redact},
+            ):
                 first = hermes.answer()
                 hermes.projected()
                 self.assertEqual(hermes.answer(), first)
                 self.assertEqual(hermes.projected(), set())
-                hermes.redact._VAULT_REDACTION_VALUES[hermes.home.name] = {"hunter2": None}
+                hermes.redact._VAULT_REDACTION_VALUES[hermes.home.name] = {
+                    "hunter2": None
+                }
                 value = hermes.answer()
-                self.assertIn("Read both. The token is [REDACTED].", [m.get("text") for m in value["messages"]])
+                self.assertIn(
+                    "Read both. The token is [REDACTED].",
+                    [m.get("text") for m in value["messages"]],
+                )
 
-    def test_external_secret_sources_invalidate_cached_text_and_clearing_them_restores_it(self):
+    def test_external_secret_sources_invalidate_cached_text_and_clearing_them_restores_it(
+        self,
+    ):
         with ProjectingHermes() as hermes:
             first, *_ = turns(hermes)
             first[0]["content"] = "opaque-source-password"
             hermes.redact.redact_secret_source_values = lambda text: text
-            sources = types.SimpleNamespace(_LOCK=threading.Lock(), _VALUES_BY_HOME=hermes.source_values)
+            sources = types.SimpleNamespace(
+                _LOCK=threading.Lock(), _VALUES_BY_HOME=hermes.source_values
+            )
             with patch.dict(sys.modules, {"agent.redact_secret_sources": sources}):
                 hermes.answer()
                 hermes.projected()
-                hermes.source_values[hermes.home.name] = {"DATABASE_PASSWORD": "opaque-source-password"}
+                hermes.source_values[hermes.home.name] = {
+                    "DATABASE_PASSWORD": "opaque-source-password"
+                }
                 value = hermes.answer()
                 self.assertEqual(value["messages"][0]["text"], "[REDACTED]")
                 # Classification changes the registry once; subsequent opens reuse unchanged projections.
@@ -283,9 +402,13 @@ class EquivalenceTests(unittest.TestCase):
                 self.assertEqual(hermes.answer(), value)
                 self.assertEqual(hermes.projected(), set())
                 hermes.source_values.clear()
-                self.assertEqual(hermes.answer()["messages"][0]["text"], "opaque-source-password")
+                self.assertEqual(
+                    hermes.answer()["messages"][0]["text"], "opaque-source-password"
+                )
 
-    def test_redaction_policy_changes_invalidate_settled_history_and_restoring_policy_masks_it_again(self):
+    def test_redaction_policy_changes_invalidate_settled_history_and_restoring_policy_masks_it_again(
+        self,
+    ):
         with ProjectingHermes() as hermes:
             turns(hermes)
             hermes.session["running"] = False
@@ -317,21 +440,36 @@ class CopyTests(unittest.TestCase):
             with hermes.journal.db:
                 receipt(hermes.journal.db, "status", fourth[0]["_row_id"], 1)
             for _ in range(2):
-                message = next(m for m in hermes.answer()["messages"] if m.get("row_id") == fourth[0]["_row_id"])
+                message = next(
+                    m
+                    for m in hermes.answer()["messages"]
+                    if m.get("row_id") == fourth[0]["_row_id"]
+                )
                 self.assertEqual(message["app_request_id"], "status")
             with hermes.journal.db:
-                hermes.journal.db.execute("DELETE FROM receipts WHERE request_id='status'")
-            message = next(m for m in hermes.answer()["messages"] if m.get("row_id") == fourth[0]["_row_id"])
+                hermes.journal.db.execute(
+                    "DELETE FROM receipts WHERE request_id='status'"
+                )
+            message = next(
+                m
+                for m in hermes.answer()["messages"]
+                if m.get("row_id") == fourth[0]["_row_id"]
+            )
             self.assertNotIn("app_request_id", message)
 
 
 class BudgetTests(unittest.TestCase):
-    def test_a_history_beyond_the_budget_keeps_its_first_pieces_and_projects_the_rest(self):
+    def test_a_history_beyond_the_budget_keeps_its_first_pieces_and_projects_the_rest(
+        self,
+    ):
         with ProjectingHermes() as hermes:
             first, second, third, fourth = turns(hermes)
             # What the first two pieces keep: their rows, projections and tool rows.
             hermes.answer()
-            kept = [entry[3] for entry in hermes.bridge.row_caches["sid"].projections.pieces.values()]
+            kept = [
+                entry[3]
+                for entry in hermes.bridge.row_caches["sid"].projections.pieces.values()
+            ]
             with patch.object(extension, "PROJECTION_BUDGET", kept[0] + kept[1]):
                 hermes.bridge.row_caches.clear()
                 value = hermes.answer()
@@ -349,7 +487,10 @@ class BudgetTests(unittest.TestCase):
             hermes.projected()
             hermes.session["session_key"] = "stored-2"
             hermes.answer()
-            self.assertEqual(hermes.projected(), {row["_row_id"] for row in hermes.session["history"]})
+            self.assertEqual(
+                hermes.projected(),
+                {row["_row_id"] for row in hermes.session["history"]},
+            )
 
 
 class CacheCountTests(unittest.TestCase):
@@ -357,25 +498,45 @@ class CacheCountTests(unittest.TestCase):
         with ProjectingHermes() as hermes:
             turns(hermes)
             first = hermes.open()["app_cache"]
-            self.assertEqual((first["decorated"], first["pieces"], first["reused"], first["emptied"]), (0, 3, 0, 0))
+            self.assertEqual(
+                (
+                    first["decorated"],
+                    first["pieces"],
+                    first["reused"],
+                    first["emptied"],
+                ),
+                (0, 3, 0, 0),
+            )
             # With the turn over, an open fills the decorated history, which answers the next one. That open projected
             # nothing, so it carries no pieces, not the last projection's.
             hermes.session["running"] = False
             self.assertEqual(hermes.open()["app_cache"]["reused"], 3)
-            self.assertEqual(set(hermes.open()["app_cache"]), {"decorated", "emptied", "fill"})
+            self.assertEqual(
+                set(hermes.open()["app_cache"]), {"decorated", "emptied", "fill"}
+            )
             hermes.session["running"] = True
             hermes.add("user", "u5", "Again?")
             grown = hermes.open()["app_cache"]
-            self.assertEqual((grown["decorated"], grown["pieces"], grown["reused"]), (0, 4, 3))
+            self.assertEqual(
+                (grown["decorated"], grown["pieces"], grown["reused"]), (0, 4, 3)
+            )
             memo = hermes.bridge.row_caches["sid"].projections
             # Another chat's projection fills the budget this memo shares, so the shared budget empties this one.
             with patch.object(extension, "PROJECTION_BUDGET", 2 * memo.size):
                 self.assertEqual(hermes.bridge.projection_budget.fill(), 50)
                 other = extension.ProjectionMemo(hermes.bridge.projection_budget)
-                other.project([{"role": "user", "content": "x" * memo.size, "_row_id": 1}], lambda rows: ([], []), dict, "context")
+                other.project(
+                    [{"role": "user", "content": "x" * memo.size, "_row_id": 1}],
+                    lambda rows: ([], []),
+                    dict,
+                    "context",
+                )
                 hermes.add("user", "u6", "Still there?")
                 emptied = hermes.open()["app_cache"]
-                self.assertEqual((emptied["pieces"], emptied["reused"], emptied["emptied"]), (5, 0, 1))
+                self.assertEqual(
+                    (emptied["pieces"], emptied["reused"], emptied["emptied"]),
+                    (5, 0, 1),
+                )
 
 
 class SharedBudgetTests(unittest.TestCase):
@@ -383,7 +544,14 @@ class SharedBudgetTests(unittest.TestCase):
 
     @staticmethod
     def chat(name, count=3):
-        rows = [row for turn in range(count) for row in ({"role": "user", "content": f"{name} asks {turn}"}, {"role": "assistant", "content": f"{name} answers {turn}"})]
+        rows = [
+            row
+            for turn in range(count)
+            for row in (
+                {"role": "user", "content": f"{name} asks {turn}"},
+                {"role": "assistant", "content": f"{name} answers {turn}"},
+            )
+        ]
         return [{**row, "_row_id": index + 1} for index, row in enumerate(rows)]
 
     def setUp(self):
@@ -394,14 +562,18 @@ class SharedBudgetTests(unittest.TestCase):
 
     def project(self, rows):
         self.projected.extend(row["content"] for row in rows)
-        return [{"role": row["role"], "text": row["content"].upper()} for row in rows], [(("call", row["content"]), None, row["content"]) for row in rows]
+        return [
+            {"role": row["role"], "text": row["content"].upper()} for row in rows
+        ], [(("call", row["content"]), None, row["content"]) for row in rows]
 
     def kept(self, memo, history):
         """Characters a memo holding all of ``history`` keeps: input rows, projections and tool rows."""
         memo.project(history, self.project, dict, "context")
         return memo.size
 
-    def test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget(self):
+    def test_a_projection_empties_the_memo_used_least_recently_once_the_gateway_passes_its_budget(
+        self,
+    ):
         ranch, fence, barns = self.chat("ranch"), self.chat("fence"), self.chat("barns")
         whole = self.kept(extension.ProjectionMemo(extension.ProjectionBudget()), ranch)
         shared = extension.ProjectionBudget(budget=2 * whole + whole // 2)
@@ -413,20 +585,29 @@ class SharedBudgetTests(unittest.TestCase):
         self.assertEqual((first.size, second.size, third.size), (0, whole, whole))
         # Used again, the emptied memo projects its history anew, and the one now used least recently empties.
         self.projected.clear()
-        self.assertEqual(first.project(ranch, self.project, dict, "context")[0], self.project(ranch)[0])
+        self.assertEqual(
+            first.project(ranch, self.project, dict, "context")[0],
+            self.project(ranch)[0],
+        )
         self.assertEqual(len(self.projected), 2 * len(ranch))
         self.assertEqual((first.size, second.size, third.size), (whole, 0, whole))
         # A memo already empty is passed over, and only one that held pieces counts as emptied.
         fourth = extension.ProjectionMemo(shared)
         fourth.project(fence, self.project, dict, "context")
-        self.assertEqual((first.size, second.size, third.size, fourth.size), (whole, 0, 0, whole))
+        self.assertEqual(
+            (first.size, second.size, third.size, fourth.size), (whole, 0, 0, whole)
+        )
         self.assertEqual((first.emptied, second.emptied, third.emptied), (1, 1, 1))
 
     def test_kept_projections_and_tool_rows_count_toward_the_budget(self):
         ranch = self.chat("ranch")
         # Rows and projections fit exactly, so only counting the tool rows too leaves pieces out.
-        without_tools = extension.text_size(ranch) + extension.text_size(self.project(ranch)[0])
-        memo = extension.ProjectionMemo(extension.ProjectionBudget(budget=without_tools))
+        without_tools = extension.text_size(ranch) + extension.text_size(
+            self.project(ranch)[0]
+        )
+        memo = extension.ProjectionMemo(
+            extension.ProjectionBudget(budget=without_tools)
+        )
         memo.project(ranch, self.project, dict, "context")
         self.assertLessEqual(memo.size, without_tools)
         self.projected.clear()
@@ -435,11 +616,24 @@ class SharedBudgetTests(unittest.TestCase):
 
 
 class ShadowTests(unittest.TestCase):
-    def test_shadow_mode_answers_with_the_whole_projection_and_says_where_the_memo_differs(self):
-        with ProjectingHermes() as hermes, patch.dict(os.environ, {extension.PROJECTION_SHADOW: "1"}):
+    def test_shadow_mode_answers_with_the_whole_projection_and_says_where_the_memo_differs(
+        self,
+    ):
+        with (
+            ProjectingHermes() as hermes,
+            patch.dict(os.environ, {extension.PROJECTION_SHADOW: "1"}),
+        ):
             turns(hermes)
             value = hermes.answer()
-            self.assertEqual(value.pop("app_projection_shadow"), {"segments": 3, "reused": 0, "difference": None, "tool_difference": None})
+            self.assertEqual(
+                value.pop("app_projection_shadow"),
+                {
+                    "segments": 3,
+                    "reused": 0,
+                    "difference": None,
+                    "tool_difference": None,
+                },
+            )
             value = hermes.answer()
             self.assertEqual(value.pop("app_projection_shadow")["reused"], 3)
             self.assertEqual(value, hermes.whole())
@@ -450,37 +644,69 @@ class ShadowTests(unittest.TestCase):
                 value = hermes.answer()
             report = value.pop("app_projection_shadow")
             # The second piece starts at message 6 and numbers from 0 again.
-            self.assertEqual((report["difference"], report["tool_difference"]), (6, None))
+            self.assertEqual(
+                (report["difference"], report["tool_difference"]), (6, None)
+            )
             self.assertIn("differed from the whole one at message 6", logs.output[0])
-            self.assertEqual([m["n"] for m in value["messages"]], list(range(len(value["messages"]))))
+            self.assertEqual(
+                [m["n"] for m in value["messages"]], list(range(len(value["messages"])))
+            )
             self.assertEqual(value, hermes.whole())
 
     def test_shadow_mode_is_off_unless_set(self):
-        with ProjectingHermes() as hermes, patch.dict(os.environ, {extension.PROJECTION_SHADOW: "0"}):
+        with (
+            ProjectingHermes() as hermes,
+            patch.dict(os.environ, {extension.PROJECTION_SHADOW: "0"}),
+        ):
             turns(hermes)
             self.assertNotIn("app_projection_shadow", hermes.answer())
 
 
 class CutTests(unittest.TestCase):
     def test_a_history_is_cut_only_at_user_rows_no_later_tool_row_reads_across(self):
-        rows = [{"role": "user"}, {"role": "assistant", "tool_calls": [call("c1", "read")]}, {"role": "user", "display_kind": "steer"},
-                {"role": "tool", "tool_call_id": "c1"}, {"role": "user"}, {"role": "assistant", "tool_calls": [{"id": "c2", "function": {}}]},
-                {"role": "user"}, {"role": "tool", "tool_call_id": "c2"}, "not a row", {"role": "user"}]
+        rows = [
+            {"role": "user"},
+            {"role": "assistant", "tool_calls": [call("c1", "read")]},
+            {"role": "user", "display_kind": "steer"},
+            {"role": "tool", "tool_call_id": "c1"},
+            {"role": "user"},
+            {"role": "assistant", "tool_calls": [{"id": "c2", "function": {}}]},
+            {"role": "user"},
+            {"role": "tool", "tool_call_id": "c2"},
+            "not a row",
+            {"role": "user"},
+        ]
         # A call without a name names nothing for Hermes, so its tool row reads nothing.
         self.assertEqual(extension.projection_cuts(rows, dict, least=1), [0, 4, 6, 9])
         # A row Hermes's compaction projection hides names nothing.
-        self.assertEqual(extension.projection_cuts(rows[:4], lambda row: None if row.get("tool_calls") else dict(row), least=1), [0, 2])
+        self.assertEqual(
+            extension.projection_cuts(
+                rows[:4],
+                lambda row: None if row.get("tool_calls") else dict(row),
+                least=1,
+            ),
+            [0, 2],
+        )
 
-    def test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut(self):
-        rows = [{"role": "user" if index % 2 == 0 else "assistant"} for index in range(12)]
+    def test_each_piece_but_the_last_holds_the_least_rows_and_rows_added_later_move_no_cut(
+        self,
+    ):
+        rows = [
+            {"role": "user" if index % 2 == 0 else "assistant"} for index in range(12)
+        ]
         self.assertEqual(extension.projection_cuts(rows, dict, least=3), [0, 4, 8])
         self.assertEqual(extension.projection_cuts(rows[:9], dict, least=3), [0, 4, 8])
         self.assertEqual(extension.projection_cuts(rows, dict), [0])
 
     def test_a_call_hermes_cannot_read_raises_as_hermes_does(self):
-        for bad in (["not a call"], [{"id": ["unhashable"], "function": {"name": "read"}}]):
+        for bad in (
+            ["not a call"],
+            [{"id": ["unhashable"], "function": {"name": "read"}}],
+        ):
             with self.subTest(bad), self.assertRaises((AttributeError, TypeError)):
-                extension.projection_cuts([{"role": "assistant", "tool_calls": bad}], dict)
+                extension.projection_cuts(
+                    [{"role": "assistant", "tool_calls": bad}], dict
+                )
 
 
 if __name__ == "__main__":

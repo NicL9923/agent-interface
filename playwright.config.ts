@@ -12,7 +12,10 @@ export default defineConfig({
   // Full Chromium, not Playwright's headless shell: the shell crashes the page when a service worker calls the
   // badge API, which the worker does for every page it controls (see src/app/badge.ts), and it has no
   // back-forward cache. `npx playwright install chromium` installs both builds.
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium" } }, { name: "webkit", use: { ...devices["Desktop Safari"] } }],
+  projects: [
+    { name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chromium" } },
+    { name: "webkit", use: { ...devices["Desktop Safari"] } },
+  ],
   webServer: {
     command: "npx tsx e2e/server.ts",
     url: `http://127.0.0.1:${port}/api/auth/config`,

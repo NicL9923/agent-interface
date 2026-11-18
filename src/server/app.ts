@@ -41,14 +41,32 @@ import { GroupCatalogWatch } from "./group-catalog-watch.js";
 import { loggerOptions } from "./logging.js";
 import { EventLoopMonitor, installRequestLog } from "./request-log.js";
 import { errorHandler, httpError } from "./http-error.js";
-import { defaultMetadataProbe, HealthMonitor, installHealthRoutes, type MetadataProbe, type StatFs } from "./health.js";
+import {
+  defaultMetadataProbe,
+  HealthMonitor,
+  installHealthRoutes,
+  type MetadataProbe,
+  type StatFs,
+} from "./health.js";
 import { installEtags } from "./etag.js";
 import { installSecurityHeaders } from "./security-headers.js";
 import { installInlineUi } from "./inline-ui.js";
-import { immutableCacheControl, isHashedAsset, isPreviousAsset, mustRevalidate, previousAssetFile, readPreviousAssets } from "./static-cache.js";
+import {
+  immutableCacheControl,
+  isHashedAsset,
+  isPreviousAsset,
+  mustRevalidate,
+  previousAssetFile,
+  readPreviousAssets,
+} from "./static-cache.js";
 import { isApiRequest } from "./route-path.js";
 import { MAX_UPLOAD_BYTES } from "../shared/uploads.js";
-import { DirectRoutes, installDirectRouteGate, loadDirectIdentity, type DirectAddress } from "./direct-routes.js";
+import {
+  DirectRoutes,
+  installDirectRouteGate,
+  loadDirectIdentity,
+  type DirectAddress,
+} from "./direct-routes.js";
 import { apiRoute } from "./api-route.js";
 import { installShutdown } from "./shutdown.js";
 
@@ -99,7 +117,7 @@ export async function createApp(
   await app.register(cookie);
   // Large enough for a linked Mac's file read or screenshot. Every other socket refuses frames over
   // 256 KiB itself; see socketFrameLimit.
-  await app.register(websocket, {options: {maxPayload: MAX_FRAME}});
+  await app.register(websocket, { options: { maxPayload: MAX_FRAME } });
   await app.register(multipart, {
     limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
   });
@@ -112,19 +130,26 @@ export async function createApp(
   // Asked of the runtime the assistant runs on. A route that acts on no assistant passes undefined, for the default runtime.
   const requireCapability: RequireCapability = async (key, botId) => {
     const cap = (await runtime.capabilities(botId))[key];
-    if (!cap?.supported)
-      throw httpError(409, cap?.reason ?? `${key} is unavailable`);
+    if (!cap?.supported) throw httpError(409, cap?.reason ?? `${key} is unavailable`);
   };
   const directory = new BotDirectory(runtime, store);
   app.get("/api/health", async () => ({ ok: true }));
   // Listeners open in start(), after the primary origin listens; until then the app is told of none.
-  const directRoutes = config.directRoutes && new DirectRoutes(
-    config.directRoutes, loadDirectIdentity(config.directRoutes.stateDirectory, app.log),
-    (req, res) => app.routing(req, res), app.log, options.directAddresses);
+  const directRoutes =
+    config.directRoutes &&
+    new DirectRoutes(
+      config.directRoutes,
+      loadDirectIdentity(config.directRoutes.stateDirectory, app.log),
+      (req, res) => app.routing(req, res),
+      app.log,
+      options.directAddresses,
+    );
   apiRoute(app, "GET /native/routes", {}, async () => ({ routes: directRoutes?.routes() ?? [] }));
   installClientErrorRoutes(app);
   installUpgradeRoutes(app, upgrades);
-  const canManageIntegrations = (req: FastifyRequest) => config.localDevAuth && !config.production || Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
+  const canManageIntegrations = (req: FastifyRequest) =>
+    (config.localDevAuth && !config.production) ||
+    Boolean(config.integrationAdmins?.includes(signedIn(req).email.toLowerCase()));
   await installIntegrationsRoutes(app, runtime, {
     origin: config.origin,
     canManage: canManageIntegrations,
@@ -133,25 +158,64 @@ export async function createApp(
   await installTerminalRequestRoutes(app, config, store, runtime);
   installMacLink(app, config, store);
   await installExperienceRoutes(app, runtime, store, roster);
-  await installAutomationRoutes(app, runtime, store, () => upgrades.maintenance(), canManageIntegrations);
+  await installAutomationRoutes(
+    app,
+    runtime,
+    store,
+    () => upgrades.maintenance(),
+    canManageIntegrations,
+  );
   await installDiscoveryRoutes(app, runtime, store, roster);
   await installAccountUsageRoutes(app, runtime, store);
   const collaboration = await installCollaborationRoutes(app, runtime, store, roster);
   const groups = new GroupWatch(runtime);
   const catalogs = collaboration.catalogRead && new GroupCatalogWatch(collaboration.catalogRead);
   await installVaultRoutes(app, runtime);
-  await registerVoiceRoutes(app, runtime, { visible: (botId, userId) => visibleTo(store, botId, userId),
-    redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message) });
+  await registerVoiceRoutes(app, runtime, {
+    visible: (botId, userId) => visibleTo(store, botId, userId),
+    redact: async (message, userId) => (await redactAgents(store, roster, userId)).message(message),
+  });
   const snapshot = runtimeSnapshots(runtime);
   installBootstrapRoutes(app, { config, runtime, store, upgrades, directory, snapshot });
   const mains = new MainAssistants(runtime, store, config, app.log);
-  installMainAssistantRoutes(app, { runtime, store, mains, requireCapability, preferences: userId => visiblePreferences(store, userId) });
+  installMainAssistantRoutes(app, {
+    runtime,
+    store,
+    mains,
+    requireCapability,
+    preferences: (userId) => visiblePreferences(store, userId),
+  });
   installBotRoutes(app, { runtime, store, roster, directory, requireCapability, mains });
   const streams = new Set<() => void>();
-  const conversations = installConversationRoutes(app, { config, runtime, store, roster, streams, requireCapability });
-  installTalkRoutes(app, { runtime, store, roster, directory, requireCapability, send: conversations.send });
+  const conversations = installConversationRoutes(app, {
+    config,
+    runtime,
+    store,
+    roster,
+    streams,
+    requireCapability,
+  });
+  installTalkRoutes(app, {
+    runtime,
+    store,
+    roster,
+    directory,
+    requireCapability,
+    send: conversations.send,
+  });
   installSnapshotInvalidation(app, snapshot);
-  installEventRoutes(app, { config, runtime, store, roster, directory, snapshot, room: collaboration.room, groups, catalogs, streams });
+  installEventRoutes(app, {
+    config,
+    runtime,
+    store,
+    roster,
+    directory,
+    snapshot,
+    room: collaboration.room,
+    groups,
+    catalogs,
+    streams,
+  });
   installRoutineRoutes(app, { config, runtime, store, roster, requireCapability });
   // The worker owns the aggregate so a push and this read agree; handlers run after it exists.
   installPushRoutes(app, { config, runtime, store, live: () => worker.live });
@@ -160,20 +224,26 @@ export async function createApp(
   app.get("/.well-known/apple-app-site-association", (_req, reply) => {
     if (!config.apns) return reply.code(404).send({ error: "Not found" });
     const appID = `${config.apns.teamId}.${config.apns.topic}`;
-    return reply.type("application/json").header("Cache-Control", "public, max-age=3600").send(appleAppSiteAssociation(appID));
+    return reply
+      .type("application/json")
+      .header("Cache-Control", "public, max-age=3600")
+      .send(appleAppSiteAssociation(appID));
   });
   const clientRoot = options.clientRoot ?? resolve("dist/client");
   if (existsSync(clientRoot)) {
     // Beside the client root, so the default cannot name a different dist/ than the one the client is served from.
-    const previousFile = options.previousRelease ?? (options.clientRoot ? undefined : join(dirname(clientRoot), "previous-release.json"));
-    const previous = previousFile ? readPreviousAssets(previousFile, message => app.log.warn(message)) : undefined;
+    const previousFile =
+      options.previousRelease ??
+      (options.clientRoot ? undefined : join(dirname(clientRoot), "previous-release.json"));
+    const previous = previousFile
+      ? readPreviousAssets(previousFile, (message) => app.log.warn(message))
+      : undefined;
     await app.register(staticFiles, {
       root: clientRoot,
       cacheControl: true,
       maxAge: "1h",
       setHeaders: (reply, path) => {
-        if (mustRevalidate(clientRoot, path))
-          reply.header("Cache-Control", "no-cache");
+        if (mustRevalidate(clientRoot, path)) reply.header("Cache-Control", "no-cache");
         else if (isHashedAsset(clientRoot, path) || isPreviousAsset(previous, path))
           reply.header("Cache-Control", immutableCacheControl);
       },
@@ -182,8 +252,12 @@ export async function createApp(
     // each a ticket in the hash.
     // These handlers send without returning the reply: a returned reply is thenable, so Fastify
     // would add one more finished-watcher to every static response for nothing.
-    app.get("/native/computer", (_req, reply) => { reply.sendFile("native-computer.html"); });
-    app.get("/native/terminal", (_req, reply) => { reply.sendFile("native-terminal.html"); });
+    app.get("/native/computer", (_req, reply) => {
+      reply.sendFile("native-computer.html");
+    });
+    app.get("/native/terminal", (_req, reply) => {
+      reply.sendFile("native-terminal.html");
+    });
     app.setNotFoundHandler((req, reply) => {
       if (isApiRequest(req)) reply.code(404).send({ error: "API endpoint not found" });
       // A bundle a release retired, asked for by a page still running that release. The shell in its
@@ -193,18 +267,41 @@ export async function createApp(
       // A page that opened under the release this one replaced still asks for that release's files, so a
       // hashed one the previous release holds is sent from there, as long as the tooling names that directory.
       else if (req.url.startsWith("/assets/") || req.url.split("?")[0] === "/boot.js") {
-        const retired = req.method === "GET" || req.method === "HEAD" ? previousAssetFile(previous, req.url.split("?")[0]) : undefined;
-        if (retired) { req.log.info({ file: retired.name }, "Served a retired asset from the previous release"); reply.sendFile(retired.name, retired.root); }
-        else reply.code(404).header("Cache-Control", "no-store").type("text/plain; charset=utf-8").send("Not found");
-      }
-      else reply.type("text/html").sendFile("index.html");
+        const retired =
+          req.method === "GET" || req.method === "HEAD"
+            ? previousAssetFile(previous, req.url.split("?")[0])
+            : undefined;
+        if (retired) {
+          req.log.info({ file: retired.name }, "Served a retired asset from the previous release");
+          reply.sendFile(retired.name, retired.root);
+        } else
+          reply
+            .code(404)
+            .header("Cache-Control", "no-store")
+            .type("text/plain; charset=utf-8")
+            .send("Not found");
+      } else reply.type("text/html").sendFile("index.html");
     });
   }
-  const worker = new BackgroundWorker(store, runtime, config, undefined, options.sendApns, app.log, options.sendLiveActivity);
-  worker.identify = events => mains.identify(events);
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    config,
+    undefined,
+    options.sendApns,
+    app.log,
+    options.sendLiveActivity,
+  );
+  worker.identify = (events) => mains.identify(events);
   const health = new HealthMonitor({
-    store, runtime, worker, config, maintenance: () => upgrades.maintenance(), log: app.log,
-    metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config), statfs: options.statfs,
+    store,
+    runtime,
+    worker,
+    config,
+    maintenance: () => upgrades.maintenance(),
+    log: app.log,
+    metadataProbe: options.metadataProbe ?? defaultMetadataProbe(config),
+    statfs: options.statfs,
   });
   const eventLoop = new EventLoopMonitor(app.log);
   installHealthRoutes(app, health, eventLoop);
@@ -232,13 +329,19 @@ export async function createApp(
 export function appleAppSiteAssociation(appID: string) {
   return {
     applinks: {
-      details: [{
-        appIDs: [appID],
-        components: [
-          { "/": "/", "?": { bot: "?*" }, comment: "A chat, as notifications and the web link it" },
-          { "/": "/", "?": { view: "today" }, comment: "Today" },
-        ],
-      }],
+      details: [
+        {
+          appIDs: [appID],
+          components: [
+            {
+              "/": "/",
+              "?": { bot: "?*" },
+              comment: "A chat, as notifications and the web link it",
+            },
+            { "/": "/", "?": { view: "today" }, comment: "Today" },
+          ],
+        },
+      ],
     },
     activitycontinuation: { apps: [appID] },
   };

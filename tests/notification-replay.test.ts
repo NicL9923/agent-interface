@@ -6,20 +6,39 @@ import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
 // participants and new followers still hear about recent news. These pin what that replay must keep doing.
 const day = 86400000;
 const stores: Store[] = [];
-afterEach(() => { for (const store of stores.splice(0)) store.close(); vi.restoreAllMocks(); });
+afterEach(() => {
+  for (const store of stores.splice(0)) store.close();
+  vi.restoreAllMocks();
+});
 function seeded() {
   const store = new Store(":memory:");
   stores.push(store);
-  for (const id of ["one", "two", "three"]) store.user({ id, name: id, email: `${id}@example.test` });
+  for (const id of ["one", "two", "three"])
+    store.user({ id, name: id, email: `${id}@example.test` });
   return store;
 }
-const done = (id: string, extra: Partial<RuntimeEvent> = {}): RuntimeEvent =>
-  ({ id, botId: "shared", runId: `run-${id}`, kind: "completed", title: "Work complete", body: "**All** done", occurredAt: new Date().toISOString(), ...extra });
-const follow = (store: Store, userId: string, ...botIds: string[]) => store.savePreferences(userId, { ...defaultPreferences, followBots: botIds });
+const done = (id: string, extra: Partial<RuntimeEvent> = {}): RuntimeEvent => ({
+  id,
+  botId: "shared",
+  runId: `run-${id}`,
+  kind: "completed",
+  title: "Work complete",
+  body: "**All** done",
+  occurredAt: new Date().toISOString(),
+  ...extra,
+});
+const follow = (store: Store, userId: string, ...botIds: string[]) =>
+  store.savePreferences(userId, { ...defaultPreferences, followBots: botIds });
 const outbox = (store: Store) =>
-  store.db.prepare("SELECT event_id AS eventId,user_id AS userId,state FROM outbox ORDER BY event_id,user_id").all() as { eventId: string; userId: string; state: string }[];
+  store.db
+    .prepare(
+      "SELECT event_id AS eventId,user_id AS userId,state FROM outbox ORDER BY event_id,user_id",
+    )
+    .all() as { eventId: string; userId: string; state: string }[];
 const age = (store: Store, eventId: string, ms: number) =>
-  store.db.prepare("UPDATE notification_events SET created_at=? WHERE id=?").run(Date.now() - ms, eventId);
+  store.db
+    .prepare("UPDATE notification_events SET created_at=? WHERE id=?")
+    .run(Date.now() - ms, eventId);
 
 it("queues a recent event for a participant who joins its run after it was discovered", () => {
   const store = seeded();
@@ -29,8 +48,16 @@ it("queues a recent event for a participant who joins its run after it was disco
   store.enqueueKnownEvents();
   expect(outbox(store)).toEqual([{ eventId: "e1", userId: "one", state: "pending" }]);
   // The row a replay writes is the notification the event would have made on first sight.
-  const payload = JSON.parse((store.db.prepare("SELECT payload FROM outbox").get() as { payload: string }).payload);
-  expect(payload).toMatchObject({ title: "Work complete", kind: "completed", botId: "shared", tag: "e1", url: "/?bot=shared" });
+  const payload = JSON.parse(
+    (store.db.prepare("SELECT payload FROM outbox").get() as { payload: string }).payload,
+  );
+  expect(payload).toMatchObject({
+    title: "Work complete",
+    kind: "completed",
+    botId: "shared",
+    tag: "e1",
+    url: "/?bot=shared",
+  });
   expect(payload.body).toContain("All done");
   expect(payload.body).not.toContain("**");
 });
@@ -42,7 +69,10 @@ it("queues the last day for a new follower, and nothing older", () => {
   age(store, "edge", day - 60_000);
   follow(store, "two", "shared");
   store.enqueueKnownEvents();
-  expect(outbox(store)).toEqual([{ eventId: "edge", userId: "two", state: "pending" }, { eventId: "recent", userId: "two", state: "pending" }]);
+  expect(outbox(store)).toEqual([
+    { eventId: "edge", userId: "two", state: "pending" },
+    { eventId: "recent", userId: "two", state: "pending" },
+  ]);
 });
 
 it("never queues a private assistant's event for anyone but its owner, whoever follows or joined in", () => {
@@ -63,8 +93,17 @@ it("keeps a quiet check-in run out of the outbox on every replay, and still noti
   const store = seeded();
   store.checkIns.track({ botId: "main", jobId: "job", userId: "one" });
   follow(store, "one", "main");
-  const checkIn = (id: string, body?: string) => done(id, { botId: "main", routineId: "job", body });
-  store.recordEvents([checkIn("silent", "[SILENT]"), checkIn("empty", "  "), checkIn("found", "The roof leaks"), { ...checkIn("failed"), kind: "failed" }], "c");
+  const checkIn = (id: string, body?: string) =>
+    done(id, { botId: "main", routineId: "job", body });
+  store.recordEvents(
+    [
+      checkIn("silent", "[SILENT]"),
+      checkIn("empty", "  "),
+      checkIn("found", "The roof leaks"),
+      { ...checkIn("failed"), kind: "failed" },
+    ],
+    "c",
+  );
   store.enqueueKnownEvents();
   store.enqueueKnownEvents();
   expect(outbox(store)).toEqual([{ eventId: "found", userId: "one", state: "pending" }]);
@@ -74,7 +113,9 @@ it("does not queue a delivered or failed event again, or change its state", () =
   const store = seeded();
   follow(store, "one", "shared");
   store.recordEvents([done("e1"), done("e2")], "c");
-  const [first, second] = (store.db.prepare("SELECT id FROM outbox ORDER BY event_id").all() as { id: string }[]).map(row => row.id);
+  const [first, second] = (
+    store.db.prepare("SELECT id FROM outbox ORDER BY event_id").all() as { id: string }[]
+  ).map((row) => row.id);
   store.markDelivered(first, "apns:device");
   store.finishDelivery(first);
   store.retryDelivery(second, 12, "gone");
@@ -83,7 +124,10 @@ it("does not queue a delivered or failed event again, or change its state", () =
   store.enqueueKnownEvents();
   // A row in any state is a row: the replay has nothing to build for it.
   expect(names).not.toHaveBeenCalled();
-  expect(outbox(store)).toEqual([{ eventId: "e1", userId: "one", state: "delivered" }, { eventId: "e2", userId: "one", state: "failed" }]);
+  expect(outbox(store)).toEqual([
+    { eventId: "e1", userId: "one", state: "delivered" },
+    { eventId: "e2", userId: "one", state: "failed" },
+  ]);
 });
 
 it("builds a notification's copy only when a replay will queue it for someone new", () => {
@@ -97,16 +141,26 @@ it("builds a notification's copy only when a replay will queue it for someone ne
   follow(store, "two", "shared");
   store.enqueueKnownEvents();
   expect(names.mock.calls).toEqual([["shared"], ["shared"]]);
-  expect(outbox(store).map(row => `${row.eventId}:${row.userId}`)).toEqual(["e1:one", "e1:two", "e2:one", "e2:two"]);
+  expect(outbox(store).map((row) => `${row.eventId}:${row.userId}`)).toEqual([
+    "e1:one",
+    "e1:two",
+    "e2:one",
+    "e2:two",
+  ]);
 });
 
 it("keeps a recipient who already has a row out of the copy when a new one joins the same event", () => {
   const store = seeded();
   follow(store, "one", "shared");
   store.recordEvents([done("e1")], "c");
-  const original = (store.db.prepare("SELECT id,payload FROM outbox").get() as { id: string; payload: string });
+  const original = store.db.prepare("SELECT id,payload FROM outbox").get() as {
+    id: string;
+    payload: string;
+  };
   follow(store, "two", "shared");
   store.enqueueKnownEvents();
-  expect(outbox(store).map(row => row.userId)).toEqual(["one", "two"]);
-  expect(store.db.prepare("SELECT payload FROM outbox WHERE id=?").get(original.id)).toEqual({ payload: original.payload });
+  expect(outbox(store).map((row) => row.userId)).toEqual(["one", "two"]);
+  expect(store.db.prepare("SELECT payload FROM outbox WHERE id=?").get(original.id)).toEqual({
+    payload: original.payload,
+  });
 });

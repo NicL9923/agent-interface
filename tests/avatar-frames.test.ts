@@ -17,12 +17,12 @@ function refresh(milliseconds = 1000 / 60) {
   now += milliseconds;
   const callbacks = [...queued.values()];
   queued = new Map();
-  callbacks.forEach(callback => callback(now));
+  callbacks.forEach((callback) => callback(now));
 }
 /** A fake avatar that answers every frame with the same pause. */
 function avatar(pause: number | null | (() => number | null)) {
   const animation = {
-    advance: vi.fn((_now: number) => typeof pause === "function" ? pause() : pause),
+    advance: vi.fn((_now: number) => (typeof pause === "function" ? pause() : pause)),
     commit: vi.fn(),
   } satisfies FrameAnimation;
   stops.push(startFrames(animation));
@@ -41,10 +41,16 @@ beforeEach(() => {
     return requests;
   });
   vi.stubGlobal("cancelAnimationFrame", (handle: number) => queued.delete(handle));
-  vi.stubGlobal("queueMicrotask", (callback: () => void) => { try { callback(); } catch (error) { reported.push(error); } });
+  vi.stubGlobal("queueMicrotask", (callback: () => void) => {
+    try {
+      callback();
+    } catch (error) {
+      reported.push(error);
+    }
+  });
 });
 afterEach(() => {
-  stops.splice(0).forEach(stop => stop());
+  stops.splice(0).forEach((stop) => stop());
   vi.useRealTimers();
 });
 
@@ -139,7 +145,9 @@ describe("shared avatar frame loop", () => {
   });
 
   it("stops an avatar that throws without stopping the rest", () => {
-    const broken = avatar(() => { throw new Error("bad pose"); });
+    const broken = avatar(() => {
+      throw new Error("bad pose");
+    });
     const fine = avatar(0);
     refresh();
     refresh();

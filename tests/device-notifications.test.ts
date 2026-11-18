@@ -4,13 +4,20 @@ import type { Root } from "react-dom/client";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ApiError, write } from "../src/client-api";
 import { useDeviceNotifications } from "../src/components/use-device-notifications";
-import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
+import {
+  NotificationSettings,
+  NotificationOnboarding,
+} from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { deviceIdPattern } from "../src/shared/device-activity";
 import { mockOf, type AnyMock } from "./helpers/mock-of";
 
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(
-  { write: vi.fn(), ApiError: (await original<typeof import("../src/client-api")>()).ApiError }));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest({
+    write: vi.fn(),
+    ApiError: (await original<typeof import("../src/client-api")>()).ApiError,
+  }),
+);
 let container: HTMLDivElement, root: Root;
 let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
@@ -24,43 +31,93 @@ const endpoint = "https://push.example.invalid/device";
 const vapid = "ZmFrZS1wdWJsaWMta2V5";
 function Harness({ userId = "one" }: { userId?: string }) {
   notifications = useDeviceNotifications(userId, vapid);
-  return createElement("div", {}, createElement(NotificationSettings, { notifications }), createElement(NotificationOnboarding, { notifications }));
+  return createElement(
+    "div",
+    {},
+    createElement(NotificationSettings, { notifications }),
+    createElement(NotificationOnboarding, { notifications }),
+  );
 }
-const render = async (userId = "one") => { await act(async () => root.render(createElement(Harness, { userId }))); };
+const render = async (userId = "one") => {
+  await act(async () => root.render(createElement(Harness, { userId })));
+};
 const toggle = () => container.querySelector<HTMLInputElement>('[role="switch"]')!;
-const fakeSubscription = () => ({ endpoint, toJSON: () => ({ endpoint, keys: { auth: "key", p256dh: "key" } }), unsubscribe } as unknown as PushSubscription);
+const fakeSubscription = () =>
+  ({
+    endpoint,
+    toJSON: () => ({ endpoint, keys: { auth: "key", p256dh: "key" } }),
+    unsubscribe,
+  }) as unknown as PushSubscription;
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("isSecureContext", true);
-  vi.stubGlobal("PushManager", function() {});
+  vi.stubGlobal("PushManager", function () {});
   stubMatchMedia();
-  permission = "default"; subscription = null; registered = false;
-  requestPermission = vi.fn(async () => { permission = "granted"; return permission; });
-  vi.stubGlobal("Notification", { get permission() { return permission; }, requestPermission });
-  unsubscribe = vi.fn(async () => { subscription = null; return true; });
-  subscribe = vi.fn(async () => { subscription = fakeSubscription(); return subscription; });
-  worker = { active: {}, pushManager: { getSubscription: vi.fn(async () => subscription), subscribe } } as unknown as ServiceWorkerRegistration;
-  vi.stubGlobal("navigator", { userAgent: "Desktop fixture", platform: "Fixture", maxTouchPoints: 0,
-    serviceWorker: { getRegistration: vi.fn(async () => worker), addEventListener: vi.fn(), removeEventListener: vi.fn() } });
-  vi.mocked(write).mockReset().mockImplementation(async <T>(path: string, _value: unknown, method?: string) => {
-    if (path.endsWith("/status")) return { registered } as T;
-    registered = method !== "DELETE";
-    return { ok: true } as T;
+  permission = "default";
+  subscription = null;
+  registered = false;
+  requestPermission = vi.fn(async () => {
+    permission = "granted";
+    return permission;
   });
+  vi.stubGlobal("Notification", {
+    get permission() {
+      return permission;
+    },
+    requestPermission,
+  });
+  unsubscribe = vi.fn(async () => {
+    subscription = null;
+    return true;
+  });
+  subscribe = vi.fn(async () => {
+    subscription = fakeSubscription();
+    return subscription;
+  });
+  worker = {
+    active: {},
+    pushManager: { getSubscription: vi.fn(async () => subscription), subscribe },
+  } as unknown as ServiceWorkerRegistration;
+  vi.stubGlobal("navigator", {
+    userAgent: "Desktop fixture",
+    platform: "Fixture",
+    maxTouchPoints: 0,
+    serviceWorker: {
+      getRegistration: vi.fn(async () => worker),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
+  });
+  vi.mocked(write)
+    .mockReset()
+    .mockImplementation(async <T>(path: string, _value: unknown, method?: string) => {
+      if (path.endsWith("/status")) return { registered } as T;
+      registered = method !== "DELETE";
+      return { ok: true } as T;
+    });
   ({ container, root } = mountRoot());
 });
 
 it("asks an older server, which refuses the device ID, again without it instead of reporting a broken registration", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   // The status route before device IDs is strict: an extra field is a 400.
   vi.mocked(write).mockImplementation(async <T>(path: string, value: unknown) => {
-    if (path.endsWith("/status") && Object.hasOwn(value as object, "deviceId")) throw new ApiError("Invalid request", 400);
+    if (path.endsWith("/status") && Object.hasOwn(value as object, "deviceId"))
+      throw new ApiError("Invalid request", 400);
     return { registered } as T;
   });
   await render();
   expect(toggle().checked).toBe(true);
   expect(toggle().disabled).toBe(false);
-  expect(vi.mocked(write).mock.calls.map(([, body]) => Object.keys(body as object).sort().join())).toEqual(["deviceId,endpoint", "endpoint"]);
+  expect(
+    vi.mocked(write).mock.calls.map(([, body]) =>
+      Object.keys(body as object)
+        .sort()
+        .join(),
+    ),
+  ).toEqual(["deviceId,endpoint", "endpoint"]);
   // Any other failure is still a failure, asked once.
   vi.mocked(write).mockReset().mockRejectedValue(new ApiError("Server error", 500));
   await act(async () => notifications.refresh());
@@ -73,18 +130,30 @@ it("remembers an answered invitation for its account without requesting permissi
   expect(container.textContent).toContain("Enable notifications on this device?");
   expect(container.textContent).toContain("Get alerts for finished work");
   expect(requestPermission).not.toHaveBeenCalled();
-  await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!.click());
+  await act(async () =>
+    container
+      .querySelector<HTMLButtonElement>(".notification-onboarding button:last-child")!
+      .click(),
+  );
   await render("two");
   expect(container.querySelector(".notification-onboarding")).not.toBeNull();
-  await act(async () => { root.unmount(); root.render(createElement(Harness)); });
+  await act(async () => {
+    root.unmount();
+    root.render(createElement(Harness));
+  });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
 });
 
 it("uses browser permission, subscription and this user's server registration together for a truthful toggle", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render();
   expect(toggle().checked).toBe(true);
-  expect(write).toHaveBeenCalledExactlyOnceWith("/push/subscriptions/status", { endpoint, deviceId: expect.stringMatching(deviceIdPattern) });
+  expect(write).toHaveBeenCalledExactlyOnceWith("/push/subscriptions/status", {
+    endpoint,
+    deviceId: expect.stringMatching(deviceIdPattern),
+  });
   expect(container.querySelector(".notification-onboarding")).toBeNull();
   registered = false;
   await act(async () => notifications.refresh());
@@ -108,7 +177,10 @@ it("requests permission directly from the enable gesture and registers before ch
     expect(requestPermission).toHaveBeenCalledOnce();
     expect(toggle().checked).toBe(false);
   });
-  expect(subscribe).toHaveBeenCalledWith({ userVisibleOnly: true, applicationServerKey: expect.any(Uint8Array) });
+  expect(subscribe).toHaveBeenCalledWith({
+    userVisibleOnly: true,
+    applicationServerKey: expect.any(Uint8Array),
+  });
   expect(write).toHaveBeenCalledWith("/push/subscriptions", expect.objectContaining({ endpoint }));
   expect(toggle().checked).toBe(true);
   expect(container.querySelector(".notification-onboarding")).toBeNull();
@@ -117,7 +189,8 @@ it("requests permission directly from the enable gesture and registers before ch
 it("respects denied permission and explains how to unblock it without asking again", async () => {
   permission = "denied";
   await render();
-  expect(toggle().checked).toBe(false); expect(toggle().disabled).toBe(true);
+  expect(toggle().checked).toBe(false);
+  expect(toggle().disabled).toBe(true);
   expect(container.textContent).toContain("browser or device settings");
   expect(container.querySelector(".notification-toggle")?.textContent).toBe("Blocked");
   expect(container.querySelector(".notification-attention")).not.toBeNull();
@@ -126,11 +199,16 @@ it("respects denied permission and explains how to unblock it without asking aga
 });
 
 it("keeps the switch off when the user declines the permission request", async () => {
-  requestPermission.mockImplementationOnce(async () => { permission = "denied"; return permission; });
+  requestPermission.mockImplementationOnce(async () => {
+    permission = "denied";
+    return permission;
+  });
   await render();
   await act(async () => toggle().click());
-  expect(toggle().checked).toBe(false); expect(toggle().disabled).toBe(true);
-  expect(subscribe).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+  expect(toggle().checked).toBe(false);
+  expect(toggle().disabled).toBe(true);
+  expect(subscribe).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
 });
 
 it("cleans up a newly created browser subscription after failed registration", async () => {
@@ -144,49 +222,72 @@ it("cleans up a newly created browser subscription after failed registration", a
 });
 
 it("preserves an existing subscription when another account owns its server registration", async () => {
-  permission = "granted"; subscription = fakeSubscription();
+  permission = "granted";
+  subscription = fakeSubscription();
   await render();
-  vi.mocked(write).mockRejectedValueOnce(new Error("This subscription belongs to another household member"));
+  vi.mocked(write).mockRejectedValueOnce(
+    new Error("This subscription belongs to another household member"),
+  );
   await act(async () => toggle().click());
-  expect(unsubscribe).not.toHaveBeenCalled(); expect(subscribe).not.toHaveBeenCalled();
+  expect(unsubscribe).not.toHaveBeenCalled();
+  expect(subscribe).not.toHaveBeenCalled();
   expect(toggle().checked).toBe(false);
   expect(container.textContent).toContain("another household member");
 });
 
 it("removes the server registration before unsubscribing the browser", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render();
-  unsubscribe.mockImplementationOnce(async () => { expect(registered).toBe(false); subscription = null; return true; });
+  unsubscribe.mockImplementationOnce(async () => {
+    expect(registered).toBe(false);
+    subscription = null;
+    return true;
+  });
   await act(async () => toggle().click());
   expect(write).toHaveBeenLastCalledWith("/push/subscriptions", { endpoint }, "DELETE");
-  expect(toggle().checked).toBe(false); expect(unsubscribe).toHaveBeenCalledOnce();
+  expect(toggle().checked).toBe(false);
+  expect(unsubscribe).toHaveBeenCalledOnce();
 });
 
 it("shows disabled after server removal even when the browser fails to unsubscribe", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render();
   unsubscribe.mockResolvedValueOnce(false);
   await act(async () => toggle().click());
-  expect(registered).toBe(false); expect(toggle().checked).toBe(false);
+  expect(registered).toBe(false);
+  expect(toggle().checked).toBe(false);
   expect(container.textContent).toContain("browser couldn't remove its subscription");
 });
 
 it("keeps enabled and explains a failed server removal without orphaning a browser subscription", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render();
   vi.mocked(write).mockRejectedValueOnce(new Error("Couldn't remove registration"));
   await act(async () => toggle().click());
-  expect(toggle().checked).toBe(true); expect(unsubscribe).not.toHaveBeenCalled();
+  expect(toggle().checked).toBe(true);
+  expect(unsubscribe).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Couldn't remove registration");
 });
 
 it("rechecks an uncertain server removal before claiming this device is still enabled", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render();
-  vi.mocked(write).mockImplementationOnce(async () => { registered = false; throw new Error("Response lost"); });
+  vi.mocked(write).mockImplementationOnce(async () => {
+    registered = false;
+    throw new Error("Response lost");
+  });
   await act(async () => toggle().click());
   expect(write).toHaveBeenLastCalledWith("/push/subscriptions/status", { endpoint });
-  expect(toggle().checked).toBe(false); expect(unsubscribe).not.toHaveBeenCalled();
+  expect(toggle().checked).toBe(false);
+  expect(unsubscribe).not.toHaveBeenCalled();
   expect(container.textContent).toContain("Response lost");
 });
 
@@ -200,16 +301,25 @@ it("explains the iPhone installation step and leaves notification permission unt
 
 it("refreshes the new account after a pending permission operation settles without registering to the wrong user", async () => {
   let finish!: (permission: NotificationPermission) => void;
-  requestPermission.mockReturnValueOnce(new Promise<NotificationPermission>((resolve) => { finish = resolve; }));
+  requestPermission.mockReturnValueOnce(
+    new Promise<NotificationPermission>((resolve) => {
+      finish = resolve;
+    }),
+  );
   await render();
   await act(async () => toggle().click());
   expect(notifications.busy).toBe(true);
   await render("two");
   expect(notifications.checking).toBe(true);
-  await act(async () => { permission = "granted"; finish("granted"); });
+  await act(async () => {
+    permission = "granted";
+    finish("granted");
+  });
   expect(notifications.checking).toBe(false);
-  expect(toggle().disabled).toBe(false); expect(toggle().checked).toBe(false);
-  expect(subscribe).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+  expect(toggle().disabled).toBe(false);
+  expect(toggle().checked).toBe(false);
+  expect(subscribe).not.toHaveBeenCalled();
+  expect(write).not.toHaveBeenCalled();
 });
 
 it("keeps an unanswered invitation through a reload and records an Enable answer", async () => {
@@ -218,14 +328,18 @@ it("keeps an unanswered invitation through a reload and records an Enable answer
   await render();
   expect(container.querySelector(".notification-onboarding")).not.toBeNull();
   requestPermission.mockImplementationOnce(async () => "default");
-  await act(async () => container.querySelector<HTMLButtonElement>(".notification-onboarding .primary")!.click());
+  await act(async () =>
+    container.querySelector<HTMLButtonElement>(".notification-onboarding .primary")!.click(),
+  );
   await act(async () => root.unmount());
   await render();
   expect(container.querySelector(".notification-onboarding")).toBeNull();
 });
 
 it("offers another account its own invitation when browser permission was already granted", async () => {
-  permission = "granted"; subscription = fakeSubscription(); registered = true;
+  permission = "granted";
+  subscription = fakeSubscription();
+  registered = true;
   await render("one");
   expect(container.querySelector(".notification-onboarding")).toBeNull();
   registered = false;
@@ -238,15 +352,27 @@ it("offers another account its own invitation when browser permission was alread
 it("leaves checking after Enable supersedes a refresh and then fails", async () => {
   await render();
   let finishRead!: (subscription: PushSubscription | null) => void;
-  mockOf(worker.pushManager, "getSubscription").mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve; }));
+  mockOf(worker.pushManager, "getSubscription").mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishRead = resolve;
+      }),
+  );
   let refresh!: Promise<void>;
-  await act(async () => { refresh = notifications.refresh(); });
+  await act(async () => {
+    refresh = notifications.refresh();
+  });
   expect(notifications.checking).toBe(true);
   subscribe.mockRejectedValueOnce(new Error("Push service unavailable"));
-  await act(async () => { await notifications.enable(); });
+  await act(async () => {
+    await notifications.enable();
+  });
   expect(notifications.checking).toBe(false);
   expect(notifications.busy).toBe(false);
   expect(notifications.error).toBe("Push service unavailable");
-  await act(async () => { finishRead(null); await refresh; });
+  await act(async () => {
+    finishRead(null);
+    await refresh;
+  });
   expect(notifications.checking).toBe(false);
 });

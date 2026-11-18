@@ -21,6 +21,7 @@ The consumer also runs on Hermes with the native consumer, for its own records
 only. A rollback to such a Hermes leaves add-on receipts pinned to no native lease,
 which native claims can never match, so the add-on still delivers each once.
 """
+
 import contextlib
 import json
 import logging
@@ -38,11 +39,42 @@ POLL_SECONDS = 2.0
 # Native terminal receipt states, the same set Hermes's waiters treat as settled.
 _TERMINAL = frozenset({"settled", "failed", "cancelled", "ambiguous"})
 _OWNER_KEYS = ("profile_home", "session_id", "lease_id", "live_session_id")
-_BUSY = ("running", "_closing", "_finalized", "queued_prompt", "queued_prompts", "_auto_continue_scheduled")
-_MAILBOX_SEAMS = ("_root", "_locked", "_read", "_write", "_scan_read", "_next_sequence", "_delivery_id",
-                  "has_mailbox", "complete_delivery", "find_canonical_live_owner", "deliver_to_live_owner")
-_CONSUMER_MAILBOX = ("_root", "_locked", "_read", "_write", "_scan_read", "has_mailbox", "complete_delivery")
-_CONSUMER_SERVER = ("_ensure_active_session_slot", "_session_turn_admission", "_run_prompt_submit", "_notif_release_turn")
+_BUSY = (
+    "running",
+    "_closing",
+    "_finalized",
+    "queued_prompt",
+    "queued_prompts",
+    "_auto_continue_scheduled",
+)
+_MAILBOX_SEAMS = (
+    "_root",
+    "_locked",
+    "_read",
+    "_write",
+    "_scan_read",
+    "_next_sequence",
+    "_delivery_id",
+    "has_mailbox",
+    "complete_delivery",
+    "find_canonical_live_owner",
+    "deliver_to_live_owner",
+)
+_CONSUMER_MAILBOX = (
+    "_root",
+    "_locked",
+    "_read",
+    "_write",
+    "_scan_read",
+    "has_mailbox",
+    "complete_delivery",
+)
+_CONSUMER_SERVER = (
+    "_ensure_active_session_slot",
+    "_session_turn_admission",
+    "_run_prompt_submit",
+    "_notif_release_turn",
+)
 log = logging.getLogger("agent_interface.bot_delivery")
 
 
@@ -60,9 +92,13 @@ def scan_ticket(mailbox, path):
     """
     try:
         record = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         record = None
-    if isinstance(record, dict) and "owner" not in record and ("principal_id" in record or "admission_id" in record):
+    if (
+        isinstance(record, dict)
+        and "owner" not in record
+        and ("principal_id" in record or "admission_id" in record)
+    ):
         return None
     return mailbox._scan_read(path)
 
@@ -81,30 +117,45 @@ def ensure_helpers(mailbox):
     if not callable(getattr(mailbox, "has_mailbox", None)):
         mailbox.has_mailbox = lambda profile_home: mailbox._root(profile_home).is_dir()
     if not callable(getattr(mailbox, "_scan_read", None)):
+
         def _scan_read(path):
             # One unreadable or malformed ticket must not wedge a directory scan.
             shape = getattr(mailbox, "_ticket_shape_error", None)
             try:
                 record = mailbox._read(path)
-                problem = None if record is None or not callable(shape) else shape(path, record)
+                problem = (
+                    None
+                    if record is None or not callable(shape)
+                    else shape(path, record)
+                )
             except (OSError, ValueError) as exc:
                 record, problem = None, str(exc)
             if problem is not None:
-                log.debug("skipping unreadable delivery ticket %s (%s)", path.name, problem)
+                log.debug(
+                    "skipping unreadable delivery ticket %s (%s)", path.name, problem
+                )
                 return None
             return record
+
         mailbox._scan_read = _scan_read
     if not callable(getattr(mailbox, "_next_sequence", None)):
+
         def _next_sequence(root):
             # Called under the directory lock. The counter file outlives unreadable tickets,
             # so a sequence is never handed out twice or lower.
             counter = Path(root) / _SEQUENCE_FILE
             try:
                 persisted = int(counter.read_text(encoding="utf-8-sig"))
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 persisted = 0
-            scanned = max((record.get("sequence", record["created_at"]) for candidate in Path(root).glob("*.json")
-                           if (record := scan_ticket(mailbox, candidate)) is not None), default=0)
+            scanned = max(
+                (
+                    record.get("sequence", record["created_at"])
+                    for candidate in Path(root).glob("*.json")
+                    if (record := scan_ticket(mailbox, candidate)) is not None
+                ),
+                default=0,
+            )
             sequence = max(persisted, scanned) + 1
             temporary = counter.with_name(f"{_SEQUENCE_FILE}.{uuid.uuid4().hex}.tmp")
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -115,9 +166,13 @@ def ensure_helpers(mailbox):
                 os.close(fd)
             os.replace(temporary, counter)
             return sequence
+
         mailbox._next_sequence = _next_sequence
     if not callable(getattr(mailbox, "complete_delivery", None)):
-        def complete_delivery(profile_home, delivery_id, *, status, reply="", error="", reason=""):
+
+        def complete_delivery(
+            profile_home, delivery_id, *, status, reply="", error="", reason=""
+        ):
             # An immutable terminal receipt; a duplicate identical completion is safe.
             key = mailbox._delivery_id(delivery_id)
             terminal = getattr(mailbox, "_TERMINAL", _TERMINAL)
@@ -130,14 +185,19 @@ def ensure_helpers(mailbox):
                 if record is None:
                     raise FileNotFoundError(f"delivery not found: {key}")
                 if record["status"] in terminal:
-                    if any(record.get(name) != value for name, value in outcome.items()):
-                        raise ValueError("delivery already has a different terminal receipt")
+                    if any(
+                        record.get(name) != value for name, value in outcome.items()
+                    ):
+                        raise ValueError(
+                            "delivery already has a different terminal receipt"
+                        )
                     return record
                 if record["status"] != "claimed":
                     raise ValueError("delivery must be claimed before completion")
                 record.update(outcome, completed_at=time.time_ns())
                 mailbox._write(path, record)
                 return record
+
         mailbox.complete_delivery = complete_delivery
 
 
@@ -149,15 +209,20 @@ def bridge_required(mailbox, server=None):
     """
     ensure_helpers(mailbox)
     authority = callable(getattr(mailbox, "authority_delivery", None))
-    if server is not None and authority == callable(getattr(server, "_poll_bot_live_delivery_once", None)):
+    if server is not None and authority == callable(
+        getattr(server, "_poll_bot_live_delivery_once", None)
+    ):
         raise RuntimeError("Native Bot Chat delivery seams require qualification")
-    if authority and not all(callable(getattr(mailbox, name, None)) for name in _MAILBOX_SEAMS):
+    if authority and not all(
+        callable(getattr(mailbox, name, None)) for name in _MAILBOX_SEAMS
+    ):
         raise RuntimeError("Native Bot Chat mailbox seams require qualification")
     return authority
 
 
 def open_session_db(home):
     from hermes_state import SessionDB
+
     return SessionDB(db_path=Path(home) / "state.db", read_only=True)
 
 
@@ -179,7 +244,11 @@ def canonical_target(home, open_db=open_session_db):
     finally:
         db.close()
     # Authority-bound sessions carry a route; the add-on's in-process chats never do.
-    return True, tip, any(target.get(key) for key in ("session_key", "chat_id", "origin_json"))
+    return (
+        True,
+        tip,
+        any(target.get(key) for key in ("session_key", "chat_id", "origin_json")),
+    )
 
 
 def owned_owner(home, open_db=open_session_db):
@@ -188,33 +257,65 @@ def owned_owner(home, open_db=open_session_db):
     present, tip, authority_owned = canonical_target(home, open_db)
     if not present or authority_owned:
         return None
-    return {"profile_home": str(home), "session_id": tip or UNOPENED, "lease_id": CONSUMER,
-            "live_session_id": CONSUMER, "consumer": CONSUMER}
+    return {
+        "profile_home": str(home),
+        "session_id": tip or UNOPENED,
+        "lease_id": CONSUMER,
+        "live_session_id": CONSUMER,
+        "consumer": CONSUMER,
+    }
 
 
-def admit(mailbox, profile_home, owner, message, *, delivery_id=None, author=None, notification_category="result"):
+def admit(
+    mailbox,
+    profile_home,
+    owner,
+    message,
+    *,
+    delivery_id=None,
+    author=None,
+    notification_category="result",
+):
     """Queue one delivery for the add-on consumer. A replayed id returns its receipt."""
     home = Path(profile_home).resolve()
     pinned = {key: owner.get(key) for key in _OWNER_KEYS}
-    if not all(isinstance(value, str) and value for value in pinned.values()) or pinned["profile_home"] != str(home):
+    if not all(isinstance(value, str) and value for value in pinned.values()) or pinned[
+        "profile_home"
+    ] != str(home):
         raise ValueError("owner belongs to a different profile home")
     if not isinstance(message, str):
         raise ValueError("message must be a string")
     if notification_category not in ("result", "diagnostic"):
         raise ValueError("invalid notification category")
-    key = mailbox._delivery_id(delivery_id if delivery_id is not None else uuid.uuid4().hex)
+    key = mailbox._delivery_id(
+        delivery_id if delivery_id is not None else uuid.uuid4().hex
+    )
     with mailbox._locked(home) as root:
         path = root / f"{key}.json"
         existing = mailbox._read(path)
         if existing is not None:
             # The pin may move from UNOPENED to the created chat between replays.
-            if (existing.get("consumer") != CONSUMER or existing.get("message") != message or existing.get("author") != author
-                    or existing.get("notification_category", "result") != notification_category):
+            if (
+                existing.get("consumer") != CONSUMER
+                or existing.get("message") != message
+                or existing.get("author") != author
+                or existing.get("notification_category", "result")
+                != notification_category
+            ):
                 raise ValueError("delivery id already belongs to a different payload")
             return existing
-        record = dict(delivery_id=key, id=key, owner=pinned, **pinned, consumer=CONSUMER, message=message,
-                      status="queued", created_at=time.time_ns(), sequence=mailbox._next_sequence(root),
-                      **({"author": dict(author)} if author else {}))
+        record = dict(
+            delivery_id=key,
+            id=key,
+            owner=pinned,
+            **pinned,
+            consumer=CONSUMER,
+            message=message,
+            status="queued",
+            created_at=time.time_ns(),
+            sequence=mailbox._next_sequence(root),
+            **({"author": dict(author)} if author else {}),
+        )
         if notification_category == "diagnostic":
             record["notification_category"] = notification_category
         mailbox._write(path, record)
@@ -227,18 +328,42 @@ def install_producer(mailbox, open_db=open_session_db):
         return False
     if getattr(mailbox, "_agent_interface_bridge", False):
         return True
-    native_find, native_deliver = mailbox.find_canonical_live_owner, mailbox.deliver_to_live_owner
+    native_find, native_deliver = (
+        mailbox.find_canonical_live_owner,
+        mailbox.deliver_to_live_owner,
+    )
 
     def find_canonical_live_owner(profile_home):
         owner = owned_owner(profile_home, open_db)
         return owner if owner is not None else native_find(profile_home)
 
-    def deliver_to_live_owner(profile_home, owner, message, *, delivery_id=None, author=None, notification_category="result"):
+    def deliver_to_live_owner(
+        profile_home,
+        owner,
+        message,
+        *,
+        delivery_id=None,
+        author=None,
+        notification_category="result",
+    ):
         if isinstance(owner, dict) and owner.get("consumer") == CONSUMER:
-            return admit(mailbox, profile_home, owner, message, delivery_id=delivery_id, author=author,
-                         notification_category=notification_category)
-        return native_deliver(profile_home, owner, message, delivery_id=delivery_id, author=author,
-                              notification_category=notification_category)
+            return admit(
+                mailbox,
+                profile_home,
+                owner,
+                message,
+                delivery_id=delivery_id,
+                author=author,
+                notification_category=notification_category,
+            )
+        return native_deliver(
+            profile_home,
+            owner,
+            message,
+            delivery_id=delivery_id,
+            author=author,
+            notification_category=notification_category,
+        )
 
     mailbox.find_canonical_live_owner = find_canonical_live_owner
     mailbox.deliver_to_live_owner = deliver_to_live_owner
@@ -250,8 +375,16 @@ def runnable(record, native_records=True):
     """A never-started delivery the add-on may run: its own, or, once the native
     consumer is gone, a live-owner record Hermes 6ebd92d queued before an update.
     Authority admissions belong to the gateway."""
-    return (record is not None and record.get("status") == "queued" and not record.get("admission_id")
-            and (record.get("consumer") == CONSUMER or native_records and isinstance(record.get("owner"), dict)))
+    return (
+        record is not None
+        and record.get("status") == "queued"
+        and not record.get("admission_id")
+        and (
+            record.get("consumer") == CONSUMER
+            or native_records
+            and isinstance(record.get("owner"), dict)
+        )
+    )
 
 
 def _pending(mailbox, root, stored, open_db, home, native_records=True):
@@ -273,7 +406,13 @@ def _pending(mailbox, root, stored, open_db, home, native_records=True):
             if tips[pinned] != stored:
                 continue
         found.append(record)
-    return sorted(found, key=lambda item: (item.get("sequence", item["created_at"]), item["delivery_id"]))
+    return sorted(
+        found,
+        key=lambda item: (
+            item.get("sequence", item["created_at"]),
+            item["delivery_id"],
+        ),
+    )
 
 
 def claim(mailbox, home, stored, open_db=open_session_db, native_records=True):
@@ -295,7 +434,11 @@ def unclaim(mailbox, home, claimed):
     with mailbox._locked(home) as root:
         path = root / f"{claimed['delivery_id']}.json"
         record = mailbox._read(path)
-        if record is None or record.get("status") != "claimed" or record.get("claimed_at") != claimed["claimed_at"]:
+        if (
+            record is None
+            or record.get("status") != "claimed"
+            or record.get("claimed_at") != claimed["claimed_at"]
+        ):
             return False
         record["status"] = "queued"
         record.pop("claimed_at", None)
@@ -309,13 +452,31 @@ class Consumer:
     ``native_records`` also runs live-owner records, only where Hermes has no native consumer.
     """
 
-    def __init__(self, server, mailbox, homes, open_canonical, admission, open_db=open_session_db, classify=None,
-                 native_records=True):
-        if not all(callable(getattr(mailbox, name, None)) for name in _CONSUMER_MAILBOX) or not all(
-                callable(getattr(server, name, None)) for name in _CONSUMER_SERVER):
-            raise RuntimeError("Native Bot Chat delivery turn seams require qualification")
+    def __init__(
+        self,
+        server,
+        mailbox,
+        homes,
+        open_canonical,
+        admission,
+        open_db=open_session_db,
+        classify=None,
+        native_records=True,
+    ):
+        if not all(
+            callable(getattr(mailbox, name, None)) for name in _CONSUMER_MAILBOX
+        ) or not all(
+            callable(getattr(server, name, None)) for name in _CONSUMER_SERVER
+        ):
+            raise RuntimeError(
+                "Native Bot Chat delivery turn seams require qualification"
+            )
         self.server, self.mailbox, self.homes = server, mailbox, homes
-        self.open_canonical, self.admission, self.open_db = open_canonical, admission, open_db
+        self.open_canonical, self.admission, self.open_db = (
+            open_canonical,
+            admission,
+            open_db,
+        )
         self.classify, self.native_records = classify, native_records
         self.idle = {}
         self.warned = 0.0
@@ -346,16 +507,30 @@ class Consumer:
         if session is None:
             return False
         with self.admission(sid) as allowed:
-            if not allowed or any(session.get(key) for key in _BUSY) or session.get("agent") is None:
+            if (
+                not allowed
+                or any(session.get(key) for key in _BUSY)
+                or session.get("agent") is None
+            ):
                 return False
             # Own the session before claiming. Another CLI or Desktop owner refuses
             # here, and the delivery stays queued until that owner lets go.
             if self.server._ensure_active_session_slot(sid, session) is not None:
                 return False
             with self.server._session_turn_admission(session) as admitted:
-                if not admitted or any(session.get(key) for key in _BUSY) or session.get("agent") is None:
+                if (
+                    not admitted
+                    or any(session.get(key) for key in _BUSY)
+                    or session.get("agent") is None
+                ):
                     return False
-                claimed = claim(self.mailbox, home, session.get("session_key"), self.open_db, self.native_records)
+                claimed = claim(
+                    self.mailbox,
+                    home,
+                    session.get("session_key"),
+                    self.open_db,
+                    self.native_records,
+                )
                 if claimed is None:
                     return False
                 session["running"] = True
@@ -371,23 +546,44 @@ class Consumer:
             if status not in ("settled", "cancelled"):
                 reason = self.classify(error) if self.classify else ""
             # A failed write propagates: the turn keeps its crash marker without a receipt.
-            self.mailbox.complete_delivery(home, delivery_id, status=status,
-                                           reply=str(terminal.get("text") or "") if status == "settled" else "",
-                                           error=error, reason=reason)
+            self.mailbox.complete_delivery(
+                home,
+                delivery_id,
+                status=status,
+                reply=str(terminal.get("text") or "") if status == "settled" else "",
+                error=error,
+                reason=reason,
+            )
 
         # Native roles serve the model. Carry separate provenance to client history.
         metadata = {}
         if claimed.get("notification_category") == "diagnostic":
             metadata = {"notification_category": "diagnostic"}
         else:
-            scheduled = re.match(r'^\[Cronjob "([^\n]+)" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]', claimed["message"])
+            scheduled = re.match(
+                r'^\[Cronjob "([^\n]+)" output [—-] scheduled job,? not the user\. Review it, act on anything that needs action, and summarize for the chat\.\]',
+                claimed["message"],
+            )
             if scheduled:
-                metadata = {"origin": {"kind": "scheduled", "visibility": "activity", "title": scheduled[1][:160]}}
+                metadata = {
+                    "origin": {
+                        "kind": "scheduled",
+                        "visibility": "activity",
+                        "title": scheduled[1][:160],
+                    }
+                }
         extra = {"display_metadata": metadata} if metadata else {}
         try:
-            started = self.server._run_prompt_submit(f"__bot_dm__{delivery_id}", sid, session, claimed["message"],
-                                                     image_paths=[], terminal_callback=terminal_receipt,
-                                                     turn_author=claimed.get("author") or None, **extra)
+            started = self.server._run_prompt_submit(
+                f"__bot_dm__{delivery_id}",
+                sid,
+                session,
+                claimed["message"],
+                image_paths=[],
+                terminal_callback=terminal_receipt,
+                turn_author=claimed.get("author") or None,
+                **extra,
+            )
         except Exception as exc:
             self.server._notif_release_turn(session)
             terminal_receipt({"status": "failed", "error": str(exc)})
@@ -407,14 +603,21 @@ class Consumer:
                 now = time.monotonic()
                 if now - self.warned >= 60:
                     self.warned = now
-                    log.warning("Bot Chat delivery poll failed for profile %s", profile, exc_info=True)
+                    log.warning(
+                        "Bot Chat delivery poll failed for profile %s",
+                        profile,
+                        exc_info=True,
+                    )
 
     def start(self, interval=POLL_SECONDS):
         def loop():
             while True:
                 self.poll()
                 time.sleep(interval)
-        thread = threading.Thread(target=loop, name="agent-interface-bot-delivery", daemon=True)
+
+        thread = threading.Thread(
+            target=loop, name="agent-interface-bot-delivery", daemon=True
+        )
         thread.start()
         return thread
 
@@ -422,10 +625,12 @@ class Consumer:
 def profile_homes(root):
     """Every served profile home: the root as default, plus each named profile."""
     root = Path(root).resolve()
+
     def homes():
         yield "default", root
         with contextlib.suppress(OSError):
             for path in sorted((root / "profiles").iterdir()):
                 if path.is_dir() and not path.is_symlink():
                     yield path.name, path
+
     return homes

@@ -11,20 +11,35 @@ import { quietLog, type Log } from "./logging.js";
 import type { EventLoopMonitor } from "./request-log.js";
 
 export type CheckStatus = "ok" | "warn" | "fail" | "unconfigured";
-export interface Check { status: CheckStatus; detail: string }
+export interface Check {
+  status: CheckStatus;
+  detail: string;
+}
 type Name = "database" | "hermes" | "worker" | "push" | "backup" | "disk" | "metadataFloor";
 export type Readiness = { ok: boolean; checks: Record<Name, Check> };
 // Completed copies written by .agents/tools/backup-app.mjs; never its .partial files.
 export const backupName = /^agent-interface-\d{4}-\d{2}-\d{2}T[\d.-]+Z-[a-f0-9-]{36}\.sqlite$/;
-const minute = 60_000, hour = 60 * minute;
+const minute = 60_000,
+  hour = 60 * minute;
 // Only these make the app unready. Push, backup and disk problems alert but never fail readiness.
 const required: Name[] = ["database", "hermes", "worker", "metadataFloor"];
 const labels: Record<Name, string> = {
-  database: "The app database", hermes: "The Hermes connection", worker: "The background worker",
-  push: "Push delivery", backup: "App backups", disk: "Free disk space", metadataFloor: "The metadata egress floor",
+  database: "The app database",
+  hermes: "The Hermes connection",
+  worker: "The background worker",
+  push: "Push delivery",
+  backup: "App backups",
+  disk: "Free disk space",
+  metadataFloor: "The metadata egress floor",
 };
-const ago = (ms: number) => ms < 2 * minute ? `${Math.round(ms / 1000)} s` : ms < 2 * hour ? `${Math.round(ms / minute)} min` : `${Math.round(ms / hour)} h`;
-const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200);
+const ago = (ms: number) =>
+  ms < 2 * minute
+    ? `${Math.round(ms / 1000)} s`
+    : ms < 2 * hour
+      ? `${Math.round(ms / minute)} min`
+      : `${Math.round(ms / hour)} h`;
+const reason = (error: unknown) =>
+  (error instanceof Error ? error.message : String(error)).slice(0, 200);
 const errorCode = (error: unknown) => (error as NodeJS.ErrnoException).code ?? reason(error);
 const GiB = 1024 ** 3;
 const gb = (bytes: number) => `${Number((bytes / GiB).toFixed(1))} GB`;
@@ -50,19 +65,38 @@ export function metadataVerdict({ outcome, ms }: Pick<MetadataAttempt, "outcome"
   return noRoute.has(outcome) ? "no-route" : "inconclusive";
 }
 /** IPv4 metadata, plus the IPv6 address scoped to every interface with a link-local address. */
-export function metadataTargets(interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces()) {
+export function metadataTargets(
+  interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
+) {
   const scoped = Object.entries(interfaces)
-    .filter(([, addresses]) => addresses?.some(address => address.family === "IPv6" && !address.internal && address.address.toLowerCase().startsWith("fe80:")))
+    .filter(([, addresses]) =>
+      addresses?.some(
+        (address) =>
+          address.family === "IPv6" &&
+          !address.internal &&
+          address.address.toLowerCase().startsWith("fe80:"),
+      ),
+    )
     .map(([name]) => ({ target: `${metadataService.v6}%${name}`, family: 6 as const }));
   return [{ target: metadataService.v4, family: 4 as const }, ...scoped];
 }
 /** One TCP connect attempt and how it ended: connected, timeout, or the socket error code. */
-export function attemptConnect(host: string, port: number, { timeoutMs = 1500, open = (h: string, p: number) => connect({ host: h, port: p }) }:
-  { timeoutMs?: number; open?: (host: string, port: number) => Socket } = {}) {
+export function attemptConnect(
+  host: string,
+  port: number,
+  {
+    timeoutMs = 1500,
+    open = (h: string, p: number) => connect({ host: h, port: p }),
+  }: { timeoutMs?: number; open?: (host: string, port: number) => Socket } = {},
+) {
   const started = performance.now();
-  return new Promise<{ outcome: string; ms: number }>(resolve => {
+  return new Promise<{ outcome: string; ms: number }>((resolve) => {
     let socket: Socket | undefined;
-    const finish = (outcome: string) => { clearTimeout(timer); socket?.destroy(); resolve({ outcome, ms: Math.round(performance.now() - started) }); };
+    const finish = (outcome: string) => {
+      clearTimeout(timer);
+      socket?.destroy();
+      resolve({ outcome, ms: Math.round(performance.now() - started) });
+    };
     const timer = setTimeout(() => finish("timeout"), timeoutMs);
     try {
       socket = open(host, port);
@@ -74,7 +108,13 @@ export function attemptConnect(host: string, port: number, { timeoutMs = 1500, o
   });
 }
 export const probeMetadata: MetadataProbe = () =>
-  Promise.all(metadataTargets().map(async ({ target, family }) => ({ target, family, ...await attemptConnect(target, metadataService.port) })));
+  Promise.all(
+    metadataTargets().map(async ({ target, family }) => ({
+      target,
+      family,
+      ...(await attemptConnect(target, metadataService.port)),
+    })),
+  );
 /** Only the production host has the floor; tests inject a probe, and development reports unconfigured. */
 export const defaultMetadataProbe = (config: Config): MetadataProbe | undefined =>
   config.production ? probeMetadata : undefined;
@@ -87,30 +127,49 @@ export class HealthMonitor {
   private incidents = new Map<Name, { since: number; alerted: boolean }>();
   private pending?: Promise<Readiness>;
   private timer?: ReturnType<typeof setInterval>;
-  constructor(private deps: {
-    store: Store; runtime: Runtime; worker: BackgroundWorker; config: Config;
-    maintenance: () => boolean; log?: Log; metadataProbe?: MetadataProbe; statfs?: StatFs;
-  }) {}
+  constructor(
+    private deps: {
+      store: Store;
+      runtime: Runtime;
+      worker: BackgroundWorker;
+      config: Config;
+      maintenance: () => boolean;
+      log?: Log;
+      metadataProbe?: MetadataProbe;
+      statfs?: StatFs;
+    },
+  ) {}
   start() {
     this.timer = setInterval(() => void this.evaluate(), minute);
     this.timer.unref();
   }
-  stop() { clearInterval(this.timer); }
+  stop() {
+    clearInterval(this.timer);
+  }
   /** Concurrent callers share one evaluation, so public probes cannot multiply Hermes checks. */
   evaluate(now = Date.now()): Promise<Readiness> {
-    this.pending ??= this.run(now).finally(() => { this.pending = undefined; });
+    this.pending ??= this.run(now).finally(() => {
+      this.pending = undefined;
+    });
     return this.pending;
   }
   private async run(now: number): Promise<Readiness> {
     const settle = (check: () => Check | Promise<Check>) =>
-      Promise.resolve().then(check).catch((error): Check => ({ status: "fail", detail: reason(error) }));
+      Promise.resolve()
+        .then(check)
+        .catch((error): Check => ({ status: "fail", detail: reason(error) }));
     const [database, hermes, worker, push, backup, disk, metadataFloor] = await Promise.all([
-      settle(() => this.database()), settle(() => this.hermes(now)), settle(() => this.worker(now)),
-      settle(() => this.push(now)), settle(() => this.backup(now)), settle(() => this.disk()), settle(() => this.metadataFloor(now)),
+      settle(() => this.database()),
+      settle(() => this.hermes(now)),
+      settle(() => this.worker(now)),
+      settle(() => this.push(now)),
+      settle(() => this.backup(now)),
+      settle(() => this.disk()),
+      settle(() => this.metadataFloor(now)),
     ]);
     const checks = { database, hermes, worker, push, backup, disk, metadataFloor };
     this.track(checks, now);
-    return { ok: required.every(name => checks[name].status !== "fail"), checks };
+    return { ok: required.every((name) => checks[name].status !== "fail"), checks };
   }
   private database(): Check {
     this.deps.store.db.prepare("SELECT 1").get();
@@ -123,43 +182,75 @@ export class HealthMonitor {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const status = await Promise.race([
       this.deps.runtime.status(),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The status check timed out")), 5000); }),
-    ]).catch(error => ({ connected: false, detail: reason(error) })).finally(() => clearTimeout(timer));
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("The status check timed out")), 5000);
+      }),
+    ])
+      .catch((error) => ({ connected: false, detail: reason(error) }))
+      .finally(() => clearTimeout(timer));
     if (status.connected) {
       this.hermesDownSince = undefined;
       return { status: "ok", detail: "Connected" };
     }
     const down = now - (this.hermesDownSince ??= now);
     // Gateway restarts and deploy drains reconnect within a few minutes.
-    return { status: down < 5 * minute ? "warn" : "fail", detail: `Disconnected for ${ago(down)}: ${status.detail ?? "no detail"}` };
+    return {
+      status: down < 5 * minute ? "warn" : "fail",
+      detail: `Disconnected for ${ago(down)}: ${status.detail ?? "no detail"}`,
+    };
   }
   private worker(now: number): Check {
     const { loop, createdAt } = this.deps.worker;
     const last = loop.lastSuccessAt;
-    if (last !== undefined && now - last < 2 * minute) return { status: "ok", detail: `Last successful pass ${ago(now - last)} ago` };
-    if (last === undefined && now - createdAt < 2 * minute) return { status: "ok", detail: "Starting" };
+    if (last !== undefined && now - last < 2 * minute)
+      return { status: "ok", detail: `Last successful pass ${ago(now - last)} ago` };
+    if (last === undefined && now - createdAt < 2 * minute)
+      return { status: "ok", detail: "Starting" };
     const error = loop.lastError ? `: ${loop.lastError}` : "";
-    return { status: "fail", detail: `No successful pass ${last === undefined ? "since start" : `for ${ago(now - last)}`}${error}` };
+    return {
+      status: "fail",
+      detail: `No successful pass ${last === undefined ? "since start" : `for ${ago(now - last)}`}${error}`,
+    };
   }
   private push(now: number): Check {
-    if (!this.deps.config.vapidPublicKey && !this.deps.config.apns) return { status: "unconfigured", detail: "Neither Web Push nor APNs is configured" };
+    if (!this.deps.config.vapidPublicKey && !this.deps.config.apns)
+      return { status: "unconfigured", detail: "Neither Web Push nor APNs is configured" };
     const { lastSuccessAt, lastFailureAt, lastError } = this.deps.worker.push;
-    if (lastFailureAt !== undefined && lastFailureAt > (lastSuccessAt ?? 0) && now - lastFailureAt < 24 * hour)
-      return { status: "warn", detail: `Last delivery failed ${ago(now - lastFailureAt)} ago: ${lastError}` };
-    return { status: "ok", detail: lastSuccessAt === undefined ? "No deliveries since start" : `Last delivery ${ago(now - lastSuccessAt)} ago` };
+    if (
+      lastFailureAt !== undefined &&
+      lastFailureAt > (lastSuccessAt ?? 0) &&
+      now - lastFailureAt < 24 * hour
+    )
+      return {
+        status: "warn",
+        detail: `Last delivery failed ${ago(now - lastFailureAt)} ago: ${lastError}`,
+      };
+    return {
+      status: "ok",
+      detail:
+        lastSuccessAt === undefined
+          ? "No deliveries since start"
+          : `Last delivery ${ago(now - lastSuccessAt)} ago`,
+    };
   }
   private async backup(now: number): Promise<Check> {
     const directory = this.deps.config.backupDirectory;
     if (!directory) return { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" };
     let newest = 0;
     try {
-      for (const file of (await readdir(directory)).filter(name => backupName.test(name)))
+      for (const file of (await readdir(directory)).filter((name) => backupName.test(name)))
         newest = Math.max(newest, (await stat(join(directory, file))).mtimeMs);
     } catch (error) {
-      return { status: "warn", detail: `Cannot read the backup directory: ${(error as NodeJS.ErrnoException).code ?? reason(error)}` };
+      return {
+        status: "warn",
+        detail: `Cannot read the backup directory: ${(error as NodeJS.ErrnoException).code ?? reason(error)}`,
+      };
     }
     if (!newest) return { status: "warn", detail: "No completed backups" };
-    return { status: now - newest < 36 * hour ? "ok" : "warn", detail: `Newest backup is ${ago(now - newest)} old` };
+    return {
+      status: now - newest < 36 * hour ? "ok" : "warn",
+      detail: `Newest backup is ${ago(now - newest)} old`,
+    };
   }
   /**
    * The Hermes update worker refuses to stage a check unless its stage root has minimumFreeBytes
@@ -169,16 +260,25 @@ export class HealthMonitor {
    */
   private async disk(): Promise<Check> {
     const { config, statfs: measure = statfs } = this.deps;
-    let floor = defaultMinimumFreeBytes, problem = "";
+    let floor = defaultMinimumFreeBytes,
+      problem = "";
     let path = config.database === ":memory:" ? process.cwd() : dirname(resolve(config.database));
     if (config.hermesUpgrade) {
       try {
         const text = await readFile(config.hermesUpgrade.workerConfig, "utf8");
         let settings: unknown;
-        try { settings = JSON.parse(text); } catch { throw new Error("it is not valid JSON"); }
-        if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("it is not a JSON object");
+        try {
+          settings = JSON.parse(text);
+        } catch {
+          throw new Error("it is not valid JSON");
+        }
+        if (!settings || typeof settings !== "object" || Array.isArray(settings))
+          throw new Error("it is not a JSON object");
         const { minimumFreeBytes, stageRoot } = settings as Record<string, unknown>;
-        if (minimumFreeBytes !== undefined && (typeof minimumFreeBytes !== "number" || !Number.isFinite(minimumFreeBytes)))
+        if (
+          minimumFreeBytes !== undefined &&
+          (typeof minimumFreeBytes !== "number" || !Number.isFinite(minimumFreeBytes))
+        )
           throw new Error("its minimumFreeBytes is not a number");
         if (typeof minimumFreeBytes === "number") floor = minimumFreeBytes;
         if (typeof stageRoot === "string" && stageRoot.startsWith("/")) path = stageRoot;
@@ -194,12 +294,21 @@ export class HealthMonitor {
         free = bavail * bsize;
         break;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT" && dirname(path) !== path) { path = dirname(path); continue; }
-        return { status: "warn", detail: `${problem}Cannot measure free space at ${path}: ${errorCode(error)}` };
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" && dirname(path) !== path) {
+          path = dirname(path);
+          continue;
+        }
+        return {
+          status: "warn",
+          detail: `${problem}Cannot measure free space at ${path}: ${errorCode(error)}`,
+        };
       }
     }
     // The worker refuses only below its floor, so exactly the floor is enough.
-    return { status: problem !== "" || free < floor ? "warn" : "ok", detail: `${problem}${gb(free)} free at ${path}; a Hermes update check needs ${gb(floor)}` };
+    return {
+      status: problem !== "" || free < floor ? "warn" : "ok",
+      detail: `${problem}${gb(free)} free at ${path}; a Hermes update check needs ${gb(floor)}`,
+    };
   }
   private async metadataFloor(now: number): Promise<Check> {
     const probe = this.deps.metadataProbe;
@@ -207,17 +316,27 @@ export class HealthMonitor {
     const cached = this.metadataChecked;
     if (cached && now >= cached.at && now - cached.at < metadataCacheMs) return cached.check;
     const attempts = await probe();
-    const describe = (attempt: MetadataAttempt) => `${attempt.target} port ${metadataService.port} ${attempt.outcome} in ${attempt.ms} ms`;
-    const connected = attempts.filter(attempt => metadataVerdict(attempt) === "connected");
-    const unproven = attempts.filter(attempt => {
+    const describe = (attempt: MetadataAttempt) =>
+      `${attempt.target} port ${metadataService.port} ${attempt.outcome} in ${attempt.ms} ms`;
+    const connected = attempts.filter((attempt) => metadataVerdict(attempt) === "connected");
+    const unproven = attempts.filter((attempt) => {
       const verdict = metadataVerdict(attempt);
       return verdict === "inconclusive" || (verdict === "no-route" && attempt.family === 4);
     });
     const check: Check = connected.length
-      ? { status: "fail", detail: `Connected: ${connected.map(describe).join("; ")}. Install the host's metadata egress floor; see docs/Hosting.md` }
+      ? {
+          status: "fail",
+          detail: `Connected: ${connected.map(describe).join("; ")}. Install the host's metadata egress floor; see docs/Hosting.md`,
+        }
       : unproven.length
-        ? { status: "fail", detail: `Could not confirm the floor refuses metadata: ${unproven.map(describe).join("; ")}` }
-        : { status: "ok", detail: `Blocked: ${attempts.map(attempt => `${attempt.target} ${attempt.outcome}`).join("; ")}` };
+        ? {
+            status: "fail",
+            detail: `Could not confirm the floor refuses metadata: ${unproven.map(describe).join("; ")}`,
+          }
+        : {
+            status: "ok",
+            detail: `Blocked: ${attempts.map((attempt) => `${attempt.target} ${attempt.outcome}`).join("; ")}`,
+          };
     this.metadataChecked = { at: now, check };
     return check;
   }
@@ -232,26 +351,50 @@ export class HealthMonitor {
         if (!incident) continue;
         this.incidents.delete(name);
         log.info({ check: name, since: incident.since }, "Readiness check recovered");
-        if (incident.alerted) this.notify(`health:${name}:${incident.since}:recovered`, "WildBots recovered", `${labels[name]} is working again.`);
+        if (incident.alerted)
+          this.notify(
+            `health:${name}:${incident.since}:recovered`,
+            "WildBots recovered",
+            `${labels[name]} is working again.`,
+          );
       } else if (!incident) {
         this.incidents.set(name, { since: now, alerted: false });
         log.warn({ check: name, status, detail }, "Readiness check degraded");
       } else if (!incident.alerted && now - incident.since >= 10 * minute) {
         incident.alerted = true;
-        log.error({ check: name, status, detail, since: incident.since }, "Readiness check degraded for 10 minutes; alerting administrators");
-        this.notify(`health:${name}:${incident.since}`, "WildBots needs attention", `${labels[name]} needs attention. ${detail}`);
+        log.error(
+          { check: name, status, detail, since: incident.since },
+          "Readiness check degraded for 10 minutes; alerting administrators",
+        );
+        this.notify(
+          `health:${name}:${incident.since}`,
+          "WildBots needs attention",
+          `${labels[name]} needs attention. ${detail}`,
+        );
       }
     }
   }
   private notify(eventId: string, title: string, body: string) {
     const { store, config, log = quietLog } = this.deps;
-    const admins = new Set([...config.hermesUpgrade?.adminEmails ?? [], ...config.integrationAdmins ?? []]);
+    const admins = new Set([
+      ...(config.hermesUpgrade?.adminEmails ?? []),
+      ...(config.integrationAdmins ?? []),
+    ]);
     try {
-      const recipients = store.users().filter(user => admins.has(user.email.toLowerCase()) && allowedIdentity(config, user));
-      if (!recipients.length) log.warn({ eventId }, "No signed-in administrator can receive health alerts");
+      const recipients = store
+        .users()
+        .filter((user) => admins.has(user.email.toLowerCase()) && allowedIdentity(config, user));
+      if (!recipients.length)
+        log.warn({ eventId }, "No signed-in administrator can receive health alerts");
       // kind "failed" skips digest batching.
       for (const user of recipients)
-        store.queueNotification(eventId, user.id, { title, body: body.slice(0, 300), url: "/", tag: eventId, kind: "failed" });
+        store.queueNotification(eventId, user.id, {
+          title,
+          body: body.slice(0, 300),
+          url: "/",
+          tag: eventId,
+          kind: "failed",
+        });
     } catch (error) {
       log.error({ eventId, error: reason(error) }, "Could not queue a health alert");
     }
@@ -260,13 +403,20 @@ export class HealthMonitor {
 
 // Proxied callers (Caddy adds X-Forwarded-For) see only the verdict; operators on the host see why.
 const directLoopback = (req: FastifyRequest) =>
-  !["x-forwarded-for", "forwarded", "x-real-ip"].some(header => req.headers[header] !== undefined) &&
-  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
+  !["x-forwarded-for", "forwarded", "x-real-ip"].some(
+    (header) => req.headers[header] !== undefined,
+  ) && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "");
 
-export function installHealthRoutes(app: FastifyInstance, monitor: HealthMonitor, eventLoop?: EventLoopMonitor) {
+export function installHealthRoutes(
+  app: FastifyInstance,
+  monitor: HealthMonitor,
+  eventLoop?: EventLoopMonitor,
+) {
   app.get("/api/health/ready", async (req, reply) => {
     const { ok, checks } = await monitor.evaluate();
     reply.code(ok ? 200 : 503);
-    return directLoopback(req) ? { ok, checks, eventLoopP99Ms: eventLoop?.lastP99Ms ?? null } : { ok };
+    return directLoopback(req)
+      ? { ok, checks, eventLoopP99Ms: eventLoop?.lastP99Ms ?? null }
+      : { ok };
   });
 }

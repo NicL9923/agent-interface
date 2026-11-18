@@ -30,23 +30,30 @@ const failures = new Map<string, number>();
  * copy. Afterwards one rule holds: a copy left unsaved with no save in flight saves again, from
  * the persistence effect for the open draft (`settle`), or here for a draft no longer shown.
  */
-async function saveDraft(options: {
-  userId: string;
-  botId: string;
-  draft: Draft;
-  setDraft: SetDraft;
-  /** False once the identity changed, so nothing is written for the wrong person. */
-  live: () => boolean;
-  shown: () => boolean;
-  /** Lets the open draft's persistence effect check the rule again. */
-  settle?(): void;
-  keepalive?: boolean;
-}, retries = 3): Promise<void> {
+async function saveDraft(
+  options: {
+    userId: string;
+    botId: string;
+    draft: Draft;
+    setDraft: SetDraft;
+    /** False once the identity changed, so nothing is written for the wrong person. */
+    live: () => boolean;
+    shown: () => boolean;
+    /** Lets the open draft's persistence effect check the rule again. */
+    settle?(): void;
+    keepalive?: boolean;
+  },
+  retries = 3,
+): Promise<void> {
   const { userId, botId, draft, setDraft, live, shown, keepalive } = options;
   if (!live()) return;
   const key = draftKey(userId, botId);
   const seq = draft.seq ?? 0;
-  const body = { text: draft.text, attachments: draft.attachments, baseRevision: draft.baseRevision ?? 0 };
+  const body = {
+    text: draft.text,
+    attachments: draft.attachments,
+    baseRevision: draft.baseRevision ?? 0,
+  };
   let server: SavedDraft;
   let conflict = false;
   inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
@@ -54,21 +61,32 @@ async function saveDraft(options: {
   const budgeted = keepalive && keepaliveBytes + bytes <= KEEPALIVE_BYTES;
   if (budgeted) keepaliveBytes += bytes;
   try {
-    server = savedDraft(await (budgeted
-      // This save uses write() to preserve its explicit keepalive budget.
-      ? write<ApiResponse<"PUT /bots/:id/draft">>(routeUrl("PUT /bots/:id/draft", { id: botId }), body, "PUT", { keepalive: true })
-      : request("PUT /bots/:id/draft", { params: { id: botId }, body })));
+    server = savedDraft(
+      await (budgeted
+        ? // This save uses write() to preserve its explicit keepalive budget.
+          write<ApiResponse<"PUT /bots/:id/draft">>(
+            routeUrl("PUT /bots/:id/draft", { id: botId }),
+            body,
+            "PUT",
+            { keepalive: true },
+          )
+        : request("PUT /bots/:id/draft", { params: { id: botId }, body })),
+    );
   } catch (e) {
     if (!(e instanceof ApiError && e.code === "draft_conflict")) {
       // A failed or timed-out save leaves the copy unsaved: check the rule again after a backoff.
       const count = (failures.get(key) ?? 0) + 1;
       failures.set(key, count);
-      setTimeout(() => {
-        if (!live()) return;
-        options.settle?.();
-        const cached = localRead<Draft>(key);
-        if (cached?.dirty && !inFlight.has(key) && !shown()) void saveDraft({ ...options, draft: cached }, retries);
-      }, Math.min(30_000, 1000 * 2 ** (count - 1)));
+      setTimeout(
+        () => {
+          if (!live()) return;
+          options.settle?.();
+          const cached = localRead<Draft>(key);
+          if (cached?.dirty && !inFlight.has(key) && !shown())
+            void saveDraft({ ...options, draft: cached }, retries);
+        },
+        Math.min(30_000, 1000 * 2 ** (count - 1)),
+      );
       return;
     }
     server = savedDraft(e.data?.draft);
@@ -76,23 +94,34 @@ async function saveDraft(options: {
   } finally {
     if (budgeted) keepaliveBytes -= bytes;
     const left = (inFlight.get(key) ?? 1) - 1;
-    if (left > 0) inFlight.set(key, left); else inFlight.delete(key);
+    if (left > 0) inFlight.set(key, left);
+    else inFlight.delete(key);
   }
   failures.delete(key);
   if (!live()) return;
   const settled = !inFlight.has(key);
   // Applied to the copy as it is now. A 409 for the latest edit is the server's word, even if older.
   const update = (local: Draft) =>
-    mergeDraft(local, server, { settled, authoritative: conflict && settled && (local.seq ?? 0) === seq }).draft;
+    mergeDraft(local, server, {
+      settled,
+      authoritative: conflict && settled && (local.seq ?? 0) === seq,
+    }).draft;
   const cached = localRead<Draft>(key);
   const next = cached ? update(cached) : undefined;
   if (next) localSave(key, next);
-  setDraft(current => current.botId === botId && current.userId === userId ? update(current) : current);
+  setDraft((current) =>
+    current.botId === botId && current.userId === userId ? update(current) : current,
+  );
   options.settle?.();
   if (next?.dirty && !inFlight.has(key) && retries > 0 && !shown())
     await saveDraft({ ...options, draft: next }, retries - 1);
 }
-export function useDraft({ botId, userId, identityEpoch, setError }: {
+export function useDraft({
+  botId,
+  userId,
+  identityEpoch,
+  setError,
+}: {
   botId: string;
   userId?: string;
   identityEpoch: Epoch;
@@ -100,10 +129,16 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
 }) {
   const [draft, setDraftState] = useState<Draft>({ text: "", attachments: [] });
   // A change that leaves the copy unsaved with new content is a local edit and gets a new sequence.
-  const setDraft = useCallback((update: Draft | ((current: Draft) => Draft)) => setDraftState(current => {
-    const next = typeof update === "function" ? update(current) : update;
-    return next !== current && next.dirty && !sameDraft(next, current) ? { ...next, seq: nextSeq() } : next;
-  }), []);
+  const setDraft = useCallback(
+    (update: Draft | ((current: Draft) => Draft)) =>
+      setDraftState((current) => {
+        const next = typeof update === "function" ? update(current) : update;
+        return next !== current && next.dirty && !sameDraft(next, current)
+          ? { ...next, seq: nextSeq() }
+          : next;
+      }),
+    [],
+  );
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => {
     if (!botId || !userId) return;
@@ -124,13 +159,21 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     /** Reconciles the copy with the server's draft, from a draft read or a conversation read. Older ones change nothing. */
     const apply = (saved: SavedDraft) => {
       draftLoaded = true;
-      setDraft(current => mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft);
+      setDraft(
+        (current) =>
+          mergeDraft(current, saved, { settled: !inFlight.has(draftKey(userId, botId)) }).draft,
+      );
       setDraftReady(true);
-      setError(previous => previous.startsWith("Your saved draft could not be loaded.") ? "" : previous);
+      setError((previous) =>
+        previous.startsWith("Your saved draft could not be loaded.") ? "" : previous,
+      );
     };
     // Personal drafts remain available even when the separate executor is down.
     const loadDraft = async () => {
-      if (loadingDraft) { loadAgain = true; return; }
+      if (loadingDraft) {
+        loadAgain = true;
+        return;
+      }
       loadingDraft = true;
       try {
         const saved = savedDraft(await request("GET /bots/:id/draft", { params: { id: botId } }));
@@ -140,10 +183,14 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
       } catch (e) {
         // Unsaved text on screen is already the person's draft, and a loaded draft stays usable;
         // keep retrying quietly.
-        if (live && !draftLoaded && !cached?.dirty) setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
+        if (live && !draftLoaded && !cached?.dirty)
+          setError(`Your saved draft could not be loaded. Retrying. ${(e as Error).message}`);
       } finally {
         loadingDraft = false;
-        if (loadAgain && live) { loadAgain = false; void loadDraft(); }
+        if (loadAgain && live) {
+          loadAgain = false;
+          void loadDraft();
+        }
       }
     };
     void loadDraft();
@@ -153,11 +200,19 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     // The chat's event stream announces each new revision; a copy that already has it skips the read.
     // A conversation read brings the draft itself, which is applied without a read of its own.
     const announced = (event: Event) => {
-      const { botId: changed, revision, draft: carried } = (event as CustomEvent<DraftNotice>).detail;
+      const {
+        botId: changed,
+        revision,
+        draft: carried,
+      } = (event as CustomEvent<DraftNotice>).detail;
       const shown = latestDraft.current;
       if (changed !== botId || shown.botId !== botId || shown.userId !== userId) return;
-      if (carried !== undefined) { apply(savedDraft(carried)); return; }
-      if (!Number.isSafeInteger(revision) || draftLoaded && revision <= (shown.baseRevision ?? 0)) return;
+      if (carried !== undefined) {
+        apply(savedDraft(carried));
+        return;
+      }
+      if (!Number.isSafeInteger(revision) || (draftLoaded && revision <= (shown.baseRevision ?? 0)))
+        return;
       wake();
     };
     // The chat's stream announces each revision, and every conversation read carries the draft. This poll
@@ -187,22 +242,36 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const [previews, setPreviews] = useState<Record<string, { url: string; botId: string }>>({});
   // Why a photo could not be attached, by the assistant whose draft it was meant for. Like a failed upload's chip, a
   // refusal belongs to that draft: it waits there while the person is in another chat, and shows again on return.
-  const [refusals, setRefusals] = useState<{ botId: string; userId: string; problem: string }[]>([]);
+  const [refusals, setRefusals] = useState<{ botId: string; userId: string; problem: string }[]>(
+    [],
+  );
   const controllers = useRef(new Map<string, AbortController>());
   const queue = useRef(Promise.resolve());
   const patch = (id: string, change: Partial<LocalUpload>) =>
-    setUploads(current => current.map(item => item.id === id ? { ...item, ...change } : item));
+    setUploads((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...change } : item)),
+    );
   // Returns false when the upload was canceled or the account changed meanwhile, so nothing was written.
-  const attach = async (uploadUser: string, uploadBot: string, result: FileRef, live: () => boolean) => {
-    const shown = () => latestDraft.current.botId === uploadBot && latestDraft.current.userId === uploadUser;
+  const attach = async (
+    uploadUser: string,
+    uploadBot: string,
+    result: FileRef,
+    live: () => boolean,
+  ) => {
+    const shown = () =>
+      latestDraft.current.botId === uploadBot && latestDraft.current.userId === uploadUser;
     // A draft still loading from the server would replace a file added to it now.
     const settle = async () => {
-      while (live() && shown() && !ready.current) await new Promise(resolve => setTimeout(resolve, 250));
+      while (live() && shown() && !ready.current)
+        await new Promise((resolve) => setTimeout(resolve, 250));
     };
     const visible = () => {
       if (!live() || !shown() || !ready.current) return false;
-      setDraft(previous => previous.botId === uploadBot && previous.userId === uploadUser
-        ? { ...previous, attachments: [...previous.attachments, result], dirty: true } : previous);
+      setDraft((previous) =>
+        previous.botId === uploadBot && previous.userId === uploadUser
+          ? { ...previous, attachments: [...previous.attachments, result], dirty: true }
+          : previous,
+      );
       return true;
     };
     await settle();
@@ -212,12 +281,19 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     const key = draftKey(uploadUser, uploadBot);
     let saved = localRead<Draft>(key);
     if (!saved) {
-      const loaded = savedDraft(await request("GET /bots/:id/draft", { params: { id: uploadBot } }));
+      const loaded = savedDraft(
+        await request("GET /bots/:id/draft", { params: { id: uploadBot } }),
+      );
       // They may have come back while the saved draft loaded.
       await settle();
       if (!live()) return false;
       if (visible()) return true;
-      saved = localRead<Draft>(key) ?? { text: loaded.text, attachments: loaded.attachments, baseRevision: loaded.revision, baseHash: contentHash(loaded) };
+      saved = localRead<Draft>(key) ?? {
+        text: loaded.text,
+        attachments: loaded.attachments,
+        baseRevision: loaded.revision,
+        baseHash: contentHash(loaded),
+      };
     }
     const target = { ...saved, attachments: [...saved.attachments, result], dirty: true };
     if (!live()) return false;
@@ -230,17 +306,38 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     patch(item.id, { status: "uploading", progress: 0, error: undefined });
     try {
       // Multipart, so the mapped route is posted through uploadFile.
-      const result = await uploadFile<ApiResponse<"POST /bots/:id/uploads">>(routeUrl("POST /bots/:id/uploads", { id: item.botId }), item.file, {
-        signal: controller.signal,
-        onProgress: sent => patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
-      });
+      const result = await uploadFile<ApiResponse<"POST /bots/:id/uploads">>(
+        routeUrl("POST /bots/:id/uploads", { id: item.botId }),
+        item.file,
+        {
+          signal: controller.signal,
+          onProgress: (sent) =>
+            patch(item.id, sent >= 1 ? { progress: 1, status: "processing" } : { progress: sent }),
+        },
+      );
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
       const live = () => !controller.signal.aborted && epoch === identityEpoch.current;
-      if (!await attach(item.userId, item.botId, { ...result, size: result.size ?? item.file.size }, live)) return;
+      if (
+        !(await attach(
+          item.userId,
+          item.botId,
+          { ...result, size: result.size ?? item.file.size },
+          live,
+        ))
+      )
+        return;
       // The shrunk size is known without waiting for the chip's picture to load.
-      if (item.dimensions) rememberImageSize(result.id, { naturalWidth: item.dimensions.width, naturalHeight: item.dimensions.height });
-      if (item.preview) setPreviews(current => ({ ...current, [result.id]: { url: item.preview!, botId: item.botId } }));
-      setUploads(current => current.filter(entry => entry.id !== item.id));
+      if (item.dimensions)
+        rememberImageSize(result.id, {
+          naturalWidth: item.dimensions.width,
+          naturalHeight: item.dimensions.height,
+        });
+      if (item.preview)
+        setPreviews((current) => ({
+          ...current,
+          [result.id]: { url: item.preview!, botId: item.botId },
+        }));
+      setUploads((current) => current.filter((entry) => entry.id !== item.id));
     } catch (e) {
       if (controller.signal.aborted || epoch !== identityEpoch.current) return;
       patch(item.id, { status: "failed", error: (e as Error).message });
@@ -258,13 +355,34 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     if (controller.signal.aborted || epoch !== identityEpoch.current) return;
     if ("error" in result) {
       controllers.current.delete(item.id);
-      setUploads(current => current.filter(entry => entry.id !== item.id));
-      setRefusals(current => current.some(entry => entry.botId === item.botId && entry.userId === item.userId && entry.problem === result.error)
-        ? current : [...current, { botId: item.botId, userId: item.userId, problem: result.error }]);
+      setUploads((current) => current.filter((entry) => entry.id !== item.id));
+      setRefusals((current) =>
+        current.some(
+          (entry) =>
+            entry.botId === item.botId &&
+            entry.userId === item.userId &&
+            entry.problem === result.error,
+        )
+          ? current
+          : [...current, { botId: item.botId, userId: item.userId, problem: result.error }],
+      );
       return;
     }
-    const prepared: LocalUpload = { ...item, file: result.file, dimensions: result.size, prepared: true, status: "queued", preview: URL.createObjectURL(result.file) };
-    patch(item.id, { file: prepared.file, dimensions: prepared.dimensions, prepared: true, status: "queued", preview: prepared.preview });
+    const prepared: LocalUpload = {
+      ...item,
+      file: result.file,
+      dimensions: result.size,
+      prepared: true,
+      status: "queued",
+      preview: URL.createObjectURL(result.file),
+    };
+    patch(item.id, {
+      file: prepared.file,
+      dimensions: prepared.dimensions,
+      prepared: true,
+      status: "queued",
+      preview: prepared.preview,
+    });
     return prepared;
   };
   const start = (item: LocalUpload) => {
@@ -272,7 +390,10 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
     controllers.current.set(item.id, controller);
     const epoch = identityEpoch.current;
     // Photos shrink one at a time, so ten of them never sit decoded together, and the next shrinks while the last uploads.
-    const shrunk = !item.prepared && needsPreparation(item.file) ? preparing.current.then(() => prepare(item, controller, epoch)) : undefined;
+    const shrunk =
+      !item.prepared && needsPreparation(item.file)
+        ? preparing.current.then(() => prepare(item, controller, epoch))
+        : undefined;
     if (shrunk) preparing.current = shrunk.then(() => {});
     // One at a time keeps a batch in the order it was added. A retried file joins after those already uploaded.
     queue.current = queue.current.then(async () => {
@@ -284,59 +405,117 @@ export function useDraft({ botId, userId, identityEpoch, setError }: {
   const upload = (files: File[], target: string) => {
     if (!userId || !files.length) return;
     const added = files.map((file): LocalUpload => ({
-      id: crypto.randomUUID(), botId: target, userId, file, status: "queued", progress: 0,
+      id: crypto.randomUUID(),
+      botId: target,
+      userId,
+      file,
+      status: "queued",
+      progress: 0,
       // A photo to shrink shows its preview once it is shrunk, which also spares a HEIC the browser can't draw.
-      preview: file.type.startsWith("image/") && !needsPreparation(file) ? URL.createObjectURL(file) : undefined,
+      preview:
+        file.type.startsWith("image/") && !needsPreparation(file)
+          ? URL.createObjectURL(file)
+          : undefined,
     }));
-    setUploads(current => [...current, ...added]);
+    setUploads((current) => [...current, ...added]);
     added.forEach(start);
   };
   const retryUpload = (id: string) => {
-    const item = uploads.find(entry => entry.id === id);
+    const item = uploads.find((entry) => entry.id === id);
     if (!item || item.status !== "failed") return;
     patch(id, { status: "queued", progress: 0, error: undefined });
     start(item);
   };
   const cancelUpload = (id: string) => {
     controllers.current.get(id)?.abort();
-    setUploads(current => {
-      const item = current.find(entry => entry.id === id);
+    setUploads((current) => {
+      const item = current.find((entry) => entry.id === id);
       if (item?.preview) URL.revokeObjectURL(item.preview);
-      return current.filter(entry => entry.id !== id);
+      return current.filter((entry) => entry.id !== id);
     });
   };
-  const dismissRefusals = () => setRefusals(current => current.filter(entry => entry.botId !== botId || entry.userId !== userId));
+  const dismissRefusals = () =>
+    setRefusals((current) =>
+      current.filter((entry) => entry.botId !== botId || entry.userId !== userId),
+    );
   const clearUploads = () => {
     setRefusals([]);
-    controllers.current.forEach(controller => controller.abort());
+    controllers.current.forEach((controller) => controller.abort());
     controllers.current.clear();
-    setUploads(current => { current.forEach(item => item.preview && URL.revokeObjectURL(item.preview)); return []; });
-    setPreviews(current => { Object.values(current).forEach(item => URL.revokeObjectURL(item.url)); return {}; });
+    setUploads((current) => {
+      current.forEach((item) => item.preview && URL.revokeObjectURL(item.preview));
+      return [];
+    });
+    setPreviews((current) => {
+      Object.values(current).forEach((item) => URL.revokeObjectURL(item.url));
+      return {};
+    });
   };
   const latest = useRef({ uploads, previews });
   latest.current = { uploads, previews };
-  useEffect(() => () => {
-    controllers.current.forEach(controller => controller.abort());
-    latest.current.uploads.forEach(item => item.preview && URL.revokeObjectURL(item.preview));
-    Object.values(latest.current.previews).forEach(item => URL.revokeObjectURL(item.url));
-  }, []);
+  useEffect(
+    () => () => {
+      controllers.current.forEach((controller) => controller.abort());
+      latest.current.uploads.forEach((item) => item.preview && URL.revokeObjectURL(item.preview));
+      Object.values(latest.current.previews).forEach((item) => URL.revokeObjectURL(item.url));
+    },
+    [],
+  );
   // Release previews once their attachment leaves this assistant's draft, by removal or by sending.
   useEffect(() => {
     if (!draft.botId) return;
-    const kept = new Set(draft.attachments.map(file => file.id));
-    const stale = Object.entries(previews).filter(([id, item]) => item.botId === draft.botId && !kept.has(id));
+    const kept = new Set(draft.attachments.map((file) => file.id));
+    const stale = Object.entries(previews).filter(
+      ([id, item]) => item.botId === draft.botId && !kept.has(id),
+    );
     if (!stale.length) return;
     stale.forEach(([, item]) => URL.revokeObjectURL(item.url));
-    setPreviews(current => Object.fromEntries(Object.entries(current).filter(([id]) => !stale.some(([staleId]) => staleId === id))));
+    setPreviews((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([id]) => !stale.some(([staleId]) => staleId === id)),
+      ),
+    );
   }, [draft, previews]);
   // A failed file still blocks sending, so a message never goes out quietly missing it.
-  const uploading = uploads.some(item => item.botId === botId);
+  const uploading = uploads.some((item) => item.botId === botId);
   // One array per change, so the composer is not handed a new list every render.
-  const shownUploads = useMemo(() => uploads.filter(item => item.botId === botId), [uploads, botId]);
-  const shownRefusals = useMemo(() => refusals.filter(entry => entry.botId === botId && entry.userId === userId).map(entry => entry.problem), [refusals, botId, userId]);
-  return { draft, setDraft, draftReady, uploads: shownUploads, refusals: shownRefusals, dismissRefusals, previews, uploading, upload, retryUpload, cancelUpload, clearUploads };
+  const shownUploads = useMemo(
+    () => uploads.filter((item) => item.botId === botId),
+    [uploads, botId],
+  );
+  const shownRefusals = useMemo(
+    () =>
+      refusals
+        .filter((entry) => entry.botId === botId && entry.userId === userId)
+        .map((entry) => entry.problem),
+    [refusals, botId, userId],
+  );
+  return {
+    draft,
+    setDraft,
+    draftReady,
+    uploads: shownUploads,
+    refusals: shownRefusals,
+    dismissRefusals,
+    previews,
+    uploading,
+    upload,
+    retryUpload,
+    cancelUpload,
+    clearUploads,
+  };
 }
-export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId, identityEpoch, offline, appUnavailable, pending }: {
+export function useDraftPersistence({
+  draft,
+  setDraft,
+  draftReady,
+  botId,
+  userId,
+  identityEpoch,
+  offline,
+  appUnavailable,
+  pending,
+}: {
   draft: Draft;
   setDraft: SetDraft;
   draftReady: boolean;
@@ -353,17 +532,17 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
   // Advanced after every save response, so the effect checks again whether the draft needs one.
   const [settled, setSettled] = useState(0);
   useEffect(() => {
-    if (
-      !userId ||
-      !botId ||
-      !draftReady ||
-      draft.botId !== botId ||
-      draft.userId !== userId
-    )
+    if (!userId || !botId || !draftReady || draft.botId !== botId || draft.userId !== userId)
       return;
     const user = userId;
     localSave(draftKey(user, botId), draft);
-    if (!draft.dirty || offline || appUnavailable || pending && pending.botId === botId && isSentCopy(draft) && sameDraft(pending, draft)) return;
+    if (
+      !draft.dirty ||
+      offline ||
+      appUnavailable ||
+      (pending && pending.botId === botId && isSentCopy(draft) && sameDraft(pending, draft))
+    )
+      return;
     const epoch = identityEpoch.current;
     let saved = false;
     const save = (keepalive = false) => {
@@ -371,15 +550,21 @@ export function useDraftPersistence({ draft, setDraft, draftReady, botId, userId
       saved = true;
       stop();
       void saveDraft({
-        userId: user, botId, draft, setDraft, keepalive,
+        userId: user,
+        botId,
+        draft,
+        setDraft,
+        keepalive,
         live: () => epoch === identityEpoch.current,
         shown: () => open.current.botId === botId && open.current.userId === user,
-        settle: () => setSettled(count => count + 1),
+        settle: () => setSettled((count) => count + 1),
       });
     };
     // A closing or hidden page may never run the timer.
     const leave = () => save(true);
-    const hide = () => { if (document.visibilityState === "hidden") save(true); };
+    const hide = () => {
+      if (document.visibilityState === "hidden") save(true);
+    };
     // One save at a time: a save in flight checks again when its response is merged.
     const timer = inFlight.has(draftKey(user, botId)) ? undefined : setTimeout(save, 350);
     window.addEventListener("pagehide", leave);

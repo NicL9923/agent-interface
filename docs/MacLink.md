@@ -25,7 +25,7 @@ refuse a request early, but it can never allow more than the Mac allows.
    - **Screenshot**: an image of the main display, including every visible app.
    - **Also when unattended**: allow the above in scheduled and messaging runs, when
      nobody is in a WildBots chat with the assistant.
-   Nothing is allowed until you allow it.
+     Nothing is allowed until you allow it.
 5. In WildBots, open the assistant's settings and turn on the **WildBots Mac** tools.
 
 Only your own personal assistants can use your Mac. Shared assistants, other
@@ -118,16 +118,14 @@ have at most 5 linked Macs. The app then signs its native session out with
 `{ "available": true, "devices": [{ "id", "name", "model", "osVersion",
 "appVersion", "createdAt", "lastSeenAt", "online", "state" }] }`. `available` is
 false with a `reason` when the server has no link key. `DELETE
-/api/mac/devices/:id` revokes one of your own Macs; another person's Mac answers
-404. Web requests use the usual CSRF checks.
+/api/mac/devices/:id` revokes one of your own Macs; another person's Mac answers 404. Web requests use the usual CSRF checks.
 
 ### Link socket
 
 `GET /api/mac/link` upgrades to a WebSocket with the header
 `Authorization: Device <deviceId>.<credential>` and no `Origin` or `Cookie`. A
 missing, malformed, unknown or revoked credential closes with 4401; a person no
-longer in the household closes with 4403; link keys not configured closes with
-4404. Frames are JSON text, at most 8 MiB.
+longer in the household closes with 4403; link keys not configured closes with 4404. Frames are JSON text, at most 8 MiB.
 
 A new socket for a device replaces the old one, which closes with 4409. Every
 message the server handles belongs to its socket's generation, so a late close of
@@ -141,8 +139,8 @@ Mac to server:
   results it has not had acknowledged.
 - `{"type":"state","state":{…}}` whenever the state changes. State is
   `{"paused":false,"screenLocked":false,"screenPermission":"granted"|"denied"|"unknown",
-  "folders":[{"name":"dev","path":"/Users/nic/dev"}],
-  "grants":[{"assistantId":"patch","abilities":["files_read","files_write","run","screenshot"],"unattended":true}]}`.
+"folders":[{"name":"dev","path":"/Users/nic/dev"}],
+"grants":[{"assistantId":"patch","abilities":["files_read","files_write","run","screenshot"],"unattended":true}]}`.
 - `{"type":"result","id":"…","ok":true,"value":{…}}` or
   `{"type":"result","id":"…","ok":false,"error":{"code":"…","message":"…"}}`.
 
@@ -173,13 +171,13 @@ asleep or offline.
 
 ### Actions
 
-| Action | Ability | Arguments | Result |
-| --- | --- | --- | --- |
-| `run` | `run` | `command` (1 to 16384 characters), `cwd` (absolute, or relative to the first folder; default the first folder), `timeoutSeconds` (1 to 600, default 120) | `exitCode`, `timedOut`, `stdout`, `stderr`, `stdoutTruncated`, `stderrTruncated`, `durationMs`, `cwd`. Each stream keeps its last 64 KiB. |
-| `read_file` | `files_read` | `path`, `offset` (default 0), `length` (1 to 1048576, default 262144) | `path`, `size`, `sha256` of the whole file, `offset`, `encoding` (`utf8` or `base64`), `content`, `eof` |
-| `write_file` | `files_write` | `path`, `content`, `encoding` (`utf8` default or `base64`), `expectedSha256` (replace only that version), `createOnly` (fail if it exists). Content up to 1 MiB decoded. Its folder must already exist. | `path`, `size`, `sha256`, `created` |
-| `list_dir` | `files_read` | `path` (default the first folder), `offset` (default 0), `limit` (1 to 500, default 200) | `path`, `entries` of `name`, `type` (`file`, `dir`, `link`, `other`), `size`, `modified`; `total`; `nextOffset` when more remain |
-| `screenshot` | `screenshot` | none | `pngBase64`, `width`, `height`, at most 1920 pixels wide |
+| Action       | Ability       | Arguments                                                                                                                                                                                               | Result                                                                                                                                    |
+| ------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `run`        | `run`         | `command` (1 to 16384 characters), `cwd` (absolute, or relative to the first folder; default the first folder), `timeoutSeconds` (1 to 600, default 120)                                                | `exitCode`, `timedOut`, `stdout`, `stderr`, `stdoutTruncated`, `stderrTruncated`, `durationMs`, `cwd`. Each stream keeps its last 64 KiB. |
+| `read_file`  | `files_read`  | `path`, `offset` (default 0), `length` (1 to 1048576, default 262144)                                                                                                                                   | `path`, `size`, `sha256` of the whole file, `offset`, `encoding` (`utf8` or `base64`), `content`, `eof`                                   |
+| `write_file` | `files_write` | `path`, `content`, `encoding` (`utf8` default or `base64`), `expectedSha256` (replace only that version), `createOnly` (fail if it exists). Content up to 1 MiB decoded. Its folder must already exist. | `path`, `size`, `sha256`, `created`                                                                                                       |
+| `list_dir`   | `files_read`  | `path` (default the first folder), `offset` (default 0), `limit` (1 to 500, default 200)                                                                                                                | `path`, `entries` of `name`, `type` (`file`, `dir`, `link`, `other`), `size`, `modified`; `total`; `nextOffset` when more remain          |
+| `screenshot` | `screenshot`  | none                                                                                                                                                                                                    | `pngBase64`, `width`, `height`, at most 1920 pixels wide                                                                                  |
 
 Paths are absolute or start with `~/`; relative paths resolve against the first
 folder. A file over 1 GiB is `too_large`, because its whole content is hashed. The

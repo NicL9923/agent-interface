@@ -9,7 +9,10 @@ import { onAccountEnd } from "./account-epoch";
  */
 export function messageCloses(request: AttentionRequest, userId: string) {
   if (request.kind === "official") return false;
-  const requester = request.secure?.method === "vault.save_login" ? request.secure.explicit?.requestedBy : undefined;
+  const requester =
+    request.secure?.method === "vault.save_login"
+      ? request.secure.explicit?.requestedBy
+      : undefined;
   return !requester || requester.id === userId;
 }
 
@@ -17,8 +20,14 @@ export function messageCloses(request: AttentionRequest, userId: string) {
 export function waitingPlaceholder(conversation: Conversation | undefined | null, userId: string) {
   if (conversation?.activity.state !== "blocked") return undefined;
   const requests = conversation.attention ?? [];
-  if (requests.some(request => messageCloses(request, userId))) return "Or reply here instead…";
-  const owner = requests.map(request => request.secure?.method === "vault.save_login" ? request.secure.explicit?.requestedBy : undefined).find(Boolean);
+  if (requests.some((request) => messageCloses(request, userId))) return "Or reply here instead…";
+  const owner = requests
+    .map((request) =>
+      request.secure?.method === "vault.save_login"
+        ? request.secure.explicit?.requestedBy
+        : undefined,
+    )
+    .find(Boolean);
   return owner ? `Your message waits for ${owner.name ?? "the person who asked"}…` : undefined;
 }
 
@@ -26,12 +35,23 @@ export function waitingPlaceholder(conversation: Conversation | undefined | null
  * A request this tab just settled, shown as one line after Hermes stops listing it, so the
  * outcome stays visible a moment instead of vanishing with the card. Never holds entered values.
  */
-export interface SettledRequest { botId: string; requestId: string; text: string; until: number }
+export interface SettledRequest {
+  botId: string;
+  requestId: string;
+  text: string;
+  until: number;
+}
 const settled = new Map<string, SettledRequest>();
 const listeners = new Set<() => void>();
 let snapshot: SettledRequest[] = [];
-const publish = () => { snapshot = [...settled.values()]; for (const listener of listeners) listener(); };
-onAccountEnd(() => { settled.clear(); publish(); });
+const publish = () => {
+  snapshot = [...settled.values()];
+  for (const listener of listeners) listener();
+};
+onAccountEnd(() => {
+  settled.clear();
+  publish();
+});
 /** How long a receipt stays after it settles, if Hermes already stopped listing the request. */
 export const RECEIPT_MS = 2500;
 
@@ -40,11 +60,22 @@ export function rememberSettled(botId: string, requestId: string, text: string) 
   settled.set(key, { botId, requestId, text, until: Date.now() + RECEIPT_MS });
   publish();
   setTimeout(() => {
-    if ((settled.get(key)?.until ?? Infinity) <= Date.now()) { settled.delete(key); publish(); }
+    if ((settled.get(key)?.until ?? Infinity) <= Date.now()) {
+      settled.delete(key);
+      publish();
+    }
   }, RECEIPT_MS + 50);
 }
 
 export function useSettledRequests(botId: string) {
-  const all = useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => snapshot);
-  return all.filter(item => item.botId === botId);
+  const all = useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    () => snapshot,
+  );
+  return all.filter((item) => item.botId === botId);
 }

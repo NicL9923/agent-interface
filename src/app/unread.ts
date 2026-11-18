@@ -4,7 +4,13 @@ import { latestMessageAt, type ReadThrough } from "../shared/unread";
 import { useSavedMessages } from "./use-saved-messages";
 
 // The unread rule is shared with the server, which counts the app badge with it.
-export { badgeCount, decisionStates, isUnread, latestMessageAt, type ReadThrough } from "../shared/unread";
+export {
+  badgeCount,
+  decisionStates,
+  isUnread,
+  latestMessageAt,
+  type ReadThrough,
+} from "../shared/unread";
 
 const time = (value: string | undefined) => {
   const parsed = Date.parse(value ?? "");
@@ -12,14 +18,21 @@ const time = (value: string | undefined) => {
 };
 
 /** Records how far the chat on screen has been read, so home stops marking it once the person leaves. */
-export function useReadThrough(userId: string | undefined, shownBotId: string | undefined, latest: string | undefined) {
+export function useReadThrough(
+  userId: string | undefined,
+  shownBotId: string | undefined,
+  latest: string | undefined,
+) {
   const [readThrough, setReadThrough] = useState<ReadThrough>({});
   // Another account's reads never apply.
   useEffect(() => setReadThrough({}), [userId]);
   useEffect(() => {
     if (!shownBotId || !latest) return;
-    setReadThrough(previous => (time(previous[shownBotId]) ?? -Infinity) >= (time(latest) ?? -Infinity)
-      ? previous : { ...previous, [shownBotId]: latest });
+    setReadThrough((previous) =>
+      (time(previous[shownBotId]) ?? -Infinity) >= (time(latest) ?? -Infinity)
+        ? previous
+        : { ...previous, [shownBotId]: latest },
+    );
   }, [shownBotId, latest]);
   return readThrough;
 }
@@ -30,5 +43,5 @@ export function useReadThrough(userId: string | undefined, shownBotId: string | 
  */
 export function useLatestMessageAt(bot: Bot | undefined, messages: Message[] | undefined) {
   const saved = useSavedMessages(messages);
-  return useMemo(() => bot ? latestMessageAt(bot, saved) : undefined, [bot, saved]);
+  return useMemo(() => (bot ? latestMessageAt(bot, saved) : undefined), [bot, saved]);
 }

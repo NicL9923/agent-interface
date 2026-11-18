@@ -21,9 +21,7 @@
         "eyes": "oval",
         "accessory": "none"
       },
-      "enabledMcpServers": [
-        "existing-calendar"
-      ]
+      "enabledMcpServers": ["existing-calendar"]
     }
   ],
   "preferences": {
@@ -66,9 +64,7 @@
     "providers": [
       {
         "id": "house",
-        "aliases": [
-          "custom:house"
-        ],
+        "aliases": ["custom:house"],
         "name": "Household provider",
         "authenticated": true,
         "models": [

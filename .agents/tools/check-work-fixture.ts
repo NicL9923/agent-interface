@@ -5,20 +5,52 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { decodeAutomation } from "../../src/server/hermes-operation-contracts";
 
-const fixture = JSON.parse(readFileSync(new URL("../fixtures/work-design.json", import.meta.url), "utf8"));
-const sorted = (value: any): any => Array.isArray(value) ? value.map(sorted) : value && typeof value === "object"
-  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value;
-const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(sorted(value))).digest("hex");
+const fixture = JSON.parse(
+  readFileSync(new URL("../fixtures/work-design.json", import.meta.url), "utf8"),
+);
+const sorted = (value: any): any =>
+  Array.isArray(value)
+    ? value.map(sorted)
+    : value && typeof value === "object"
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, sorted(value[key])]),
+        )
+      : value;
+const digest = (value: unknown) =>
+  createHash("sha256")
+    .update(JSON.stringify(sorted(value)))
+    .digest("hex");
 const bots = new Set(fixture.bots.map((bot: any) => bot.id));
-const routines = new Set(fixture.routines.filter((routine: any) => routine.botId === "ranch").map((routine: any) => routine.id));
-const taskStatuses = new Set(["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done"]);
+const routines = new Set(
+  fixture.routines
+    .filter((routine: any) => routine.botId === "ranch")
+    .map((routine: any) => routine.id),
+);
+const taskStatuses = new Set([
+  "triage",
+  "todo",
+  "scheduled",
+  "ready",
+  "running",
+  "blocked",
+  "review",
+  "done",
+]);
 for (const [name, value] of Object.entries<any>({ loaded: fixture.work, ...fixture.workStates })) {
   const { canManageTriggers, canManageLearningPolicy, ...payload } = value;
   assert.equal(typeof canManageTriggers, "boolean", name);
   assert.equal(canManageTriggers, canManageLearningPolicy, name);
-  assert.deepEqual(decodeAutomation("overview", payload), payload, `${name}: exact production schema`);
-  if (payload.goals.goal) assert.ok(["active", "paused", "done"].includes(payload.goals.goal.status), name);
-  if (payload.goals.resume?.status === "accepted") assert.equal(payload.goals.resume.message, undefined);
+  assert.deepEqual(
+    decodeAutomation("overview", payload),
+    payload,
+    `${name}: exact production schema`,
+  );
+  if (payload.goals.goal)
+    assert.ok(["active", "paused", "done"].includes(payload.goals.goal.status), name);
+  if (payload.goals.resume?.status === "accepted")
+    assert.equal(payload.goals.resume.message, undefined);
   const tasks = new Map<string, any>(payload.tasks.items.map((task: any) => [task.id, task]));
   assert.equal(tasks.size, payload.tasks.items.length);
   for (const task of tasks.values()) {
@@ -39,7 +71,8 @@ for (const [name, value] of Object.entries<any>({ loaded: fixture.work, ...fixtu
     assert.equal(trigger.url, `https://hooks.example.invalid/p/ranch/webhooks/${trigger.id}`);
     assert.ok(routines.has(trigger.routineId));
     assert.match(trigger.revision, /^[a-f0-9]{64}$/);
-    assert.ok(!revisions.has(trigger.revision)); revisions.add(trigger.revision);
+    assert.ok(!revisions.has(trigger.revision));
+    revisions.add(trigger.revision);
     assert.equal("secret" in trigger, false);
   }
 }
@@ -54,21 +87,40 @@ for (const [index, route] of fixture.workFixture.triggerRoutes.entries()) {
   assert.equal(Boolean(route.secret), trigger.secretSet);
 }
 const secret = fixture.workFixture.syntheticSecret;
-assert.match(secret, /^[A-Za-z0-9_-]{43}$/); assert.ok(secret.includes("SYNTHETIC"));
+assert.match(secret, /^[A-Za-z0-9_-]{43}$/);
+assert.ok(secret.includes("SYNTHETIC"));
 const subscription = fixture.work.triggers.items[0];
-for (const [operation, response] of [["trigger_create", { subscription, secret }], ["trigger_update", { subscription }]] as const) {
+for (const [operation, response] of [
+  ["trigger_create", { subscription, secret }],
+  ["trigger_update", { subscription }],
+] as const) {
   assert.deepEqual(decodeAutomation(operation, response), response);
 }
-const source = [readFileSync("src/hermes/automation.py", "utf8"), ...readdirSync("src/server").filter(name => name.endsWith(".ts")).map(name => readFileSync(`src/server/${name}`, "utf8"))].join("\n");
-for (const [name, message] of Object.entries<string>(fixture.workMessages)) assert.ok(source.includes(message), `${name}: missing source text`);
+const source = [
+  readFileSync("src/hermes/automation.py", "utf8"),
+  ...readdirSync("src/server")
+    .filter((name) => name.endsWith(".ts"))
+    .map((name) => readFileSync(`src/server/${name}`, "utf8")),
+].join("\n");
+for (const [name, message] of Object.entries<string>(fixture.workMessages))
+  assert.ok(source.includes(message), `${name}: missing source text`);
 const template = "This Hermes revision cannot expose {key}. Update and qualify its integration.";
 assert.ok(source.includes(template));
-for (const key of ["goals", "tasks", "triggers"]) assert.equal(fixture.workStates["sections-unsupported"][key].reason, template.replace("{key}", key));
-const external = { ...fixture.workFixture.triggerRoutes[0], description: fixture.workFixture.externalTriggerEdit.description };
+for (const key of ["goals", "tasks", "triggers"])
+  assert.equal(
+    fixture.workStates["sections-unsupported"][key].reason,
+    template.replace("{key}", key),
+  );
+const external = {
+  ...fixture.workFixture.triggerRoutes[0],
+  description: fixture.workFixture.externalTriggerEdit.description,
+};
 assert.equal(digest(external), fixture.workFixture.externalTriggerEdit.revision);
 assert.notEqual(digest(external), subscription.revision);
 assert.deepEqual(fixture.workFixture.newTask.dependencies, ["t_00000004", "t_00000003"]);
 assert.ok(bots.has(fixture.workFixture.newTask.assignee));
 assert.ok(routines.has(fixture.workFixture.newTrigger.routineId));
 assert.equal(fixture.workFixture.editTaskAssignee, null);
-console.log("Work fixture matches the production decoder and checked native assumptions. Production Hermes 41dfcf2c remains unverified.");
+console.log(
+  "Work fixture matches the production decoder and checked native assumptions. Production Hermes 41dfcf2c remains unverified.",
+);

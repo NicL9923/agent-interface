@@ -115,10 +115,19 @@ The platform configuration can live at
   "verificationSeconds": 120,
   "regressionPython": "/usr/bin/python3",
   "regressionCommands": {
-    "sharedOAuth": ["/usr/bin/python3", "/home/installer/private-tests/shared-oauth.py"],
-    "googleAuth": ["/usr/bin/python3", "/home/installer/private-tests/google-auth.py"]
+    "sharedOAuth": [
+      "/usr/bin/python3",
+      "/home/installer/private-tests/shared-oauth.py"
+    ],
+    "googleAuth": [
+      "/usr/bin/python3",
+      "/home/installer/private-tests/google-auth.py"
+    ]
   },
-  "googleVerificationCommand": ["/usr/bin/python3", "/home/installer/private-tests/live-google-check.py"]
+  "googleVerificationCommand": [
+    "/usr/bin/python3",
+    "/home/installer/private-tests/live-google-check.py"
+  ]
 }
 ```
 
@@ -137,7 +146,7 @@ issued-ticket WebSocket through the original Google authentication path. It must
 print exactly this JSON and exit successfully only when both checks pass:
 
 ```json
-{"authenticatedHttp": true, "freshWebsocket": true}
+{ "authenticatedHttp": true, "freshWebsocket": true }
 ```
 
 It must never print session values, refresh tokens, cookies, or ticket values.
@@ -400,19 +409,19 @@ restarted since the capability read: the handler can still be running, and an ac
 can still write the lease. Each way the
 acquire ends:
 
-| Acquire ends with | Hook | `platform.json` phase | Lease | The app shows |
-| --- | --- | --- | --- | --- |
-| This operation's lease, no busy work | Drains the gateway and continues | `quiescent` | Held | The install continues |
-| The add-on's exact busy answer | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| A success answer that fails the hook's checks | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| The service ticket or the socket failed before the request was sent | Releases, proves nothing changed, exits `75`; a release that also fails exits `1` | `rejected`, or `acquiring` after the `1` | None | Stopped before installation, Hermes open; or failed, held for review |
-| Any other error answer | Exits `1` without a release; the log names the error code | `acquiring` | None from this operation | Failed, held for review |
-| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch` and no lease in the 100 s after a confirmed release | Releases, watches, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| The same, and this operation's lease shows in that watch | Releases again, confirms, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| The same, and a lease that is not this operation's, or cannot be read, appears in that watch | Releases once, leaves the file alone, exits `76` | `acquire_unanswered` | Another operation's, or unreadable | Failed, held: "Hermes did not answer the request to pause…" |
-| The same, and the epoch differs or the second capability read fails | Treated as no deadline: watches five minutes for a lease as below, exits `76` without a release when none shows | `acquire_unanswered` | None yet | Failed, held: "Hermes did not answer the request to pause…" |
-| No deadline sent (an add-on without the capability, or a capability read that failed), no answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75` | `rejected` | None | Stopped before installation, Hermes open |
-| No deadline sent, no answer, and by then no lease, or a lease that names another operation or cannot be read | Exits `76` without a release, and never touches that lease | `acquire_unanswered` | None yet, or another operation's | Failed, held: "Hermes did not answer the request to pause…" |
+| Acquire ends with                                                                                                                                 | Hook                                                                                                            | `platform.json` phase                    | Lease                              | The app shows                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------- | -------------------------------------------------------------------- |
+| This operation's lease, no busy work                                                                                                              | Drains the gateway and continues                                                                                | `quiescent`                              | Held                               | The install continues                                                |
+| The add-on's exact busy answer                                                                                                                    | Releases, proves nothing changed, exits `75`                                                                    | `rejected`                               | None                               | Stopped before installation, Hermes open                             |
+| A success answer that fails the hook's checks                                                                                                     | Releases, proves nothing changed, exits `75`                                                                    | `rejected`                               | None                               | Stopped before installation, Hermes open                             |
+| The service ticket or the socket failed before the request was sent                                                                               | Releases, proves nothing changed, exits `75`; a release that also fails exits `1`                               | `rejected`, or `acquiring` after the `1` | None                               | Stopped before installation, Hermes open; or failed, held for review |
+| Any other error answer                                                                                                                            | Exits `1` without a release; the log names the error code                                                       | `acquiring`                              | None from this operation           | Failed, held for review                                              |
+| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch` and no lease in the 100 s after a confirmed release     | Releases, watches, proves nothing changed, exits `75`                                                           | `rejected`                               | None                               | Stopped before installation, Hermes open                             |
+| The same, and this operation's lease shows in that watch                                                                                          | Releases again, confirms, exits `75`                                                                            | `rejected`                               | None                               | Stopped before installation, Hermes open                             |
+| The same, and a lease that is not this operation's, or cannot be read, appears in that watch                                                      | Releases once, leaves the file alone, exits `76`                                                                | `acquire_unanswered`                     | Another operation's, or unreadable | Failed, held: "Hermes did not answer the request to pause…"          |
+| The same, and the epoch differs or the second capability read fails                                                                               | Treated as no deadline: watches five minutes for a lease as below, exits `76` without a release when none shows | `acquire_unanswered`                     | None yet                           | Failed, held: "Hermes did not answer the request to pause…"          |
+| No deadline sent (an add-on without the capability, or a capability read that failed), no answer, then this operation's lease within five minutes | Releases, proves nothing changed, exits `75`                                                                    | `rejected`                               | None                               | Stopped before installation, Hermes open                             |
+| No deadline sent, no answer, and by then no lease, or a lease that names another operation or cannot be read                                      | Exits `76` without a release, and never touches that lease                                                      | `acquire_unanswered`                     | None yet, or another operation's   | Failed, held: "Hermes did not answer the request to pause…"          |
 
 A failed ticket or connection that fails the same way for the release (a wrong
 service key, a dashboard that is down) exits `1` at once, with no five-minute
@@ -471,7 +480,6 @@ Run them with:
 ```sh
 python3 -m unittest discover -s tests -p hermes_upgrade_linux_test.py
 ```
-
 
 ## Failed updates and recovery controls
 
@@ -708,19 +716,19 @@ status, journals `maintenance-refused` and exits 75. Nothing stopped, so the hou
 finishes as usual; `release-app.py activate` leaves the stage prepared to run again. An unsent
 acquire whose release is unsent too cannot prove that, and exits 2 like a failed release.
 
-| The tool ends with | Exit | The app and the stage |
-| --- | --- | --- |
-| Preflight finds Hermes busy, or the status request is never sent | `75` (`1` under `--check`) | Nothing changed; stage stays `prepared` |
-| Any other preflight failure: a lease held by another operation, a stale gateway heartbeat, the gateway not running, a git or repair mismatch, a status request that failed with no marker or answered an error | `1` | Nothing changed; `release-app.py` marks the stage `needs-review` |
-| The add-on's exact busy answer on three attempts | `75` after a release | Saved status back, app running; stage stays `prepared` |
-| A success answer that fails the tool's checks | `75` after a release | The same |
-| The gateway counts an agent or lists work after the lease | `75` after a release | The same |
-| The acquire request was never sent | `75` after a release | The same; if the release is unsent too, exit `2` |
-| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch`, and no lease in 100 s after the release | `75` after a release and a watch | The same; a lease in the watch is released again first, and if a release cannot prove it, exit `2` |
-| The same with a different `executor_epoch`, or a second capability read that fails | `2`, after one release attempt | Blocked status kept, held for review; see below |
-| An acquire with no deadline sent and no answer | `2`, after one release attempt | Blocked status kept, held for review; see below |
-| Any other error answer, a failed release or fence | `2` | Blocked status kept, held for review |
-| Activation finished | `0` | Stage `activated` |
+| The tool ends with                                                                                                                                                                                             | Exit                             | The app and the stage                                                                              |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Preflight finds Hermes busy, or the status request is never sent                                                                                                                                               | `75` (`1` under `--check`)       | Nothing changed; stage stays `prepared`                                                            |
+| Any other preflight failure: a lease held by another operation, a stale gateway heartbeat, the gateway not running, a git or repair mismatch, a status request that failed with no marker or answered an error | `1`                              | Nothing changed; `release-app.py` marks the stage `needs-review`                                   |
+| The add-on's exact busy answer on three attempts                                                                                                                                                               | `75` after a release             | Saved status back, app running; stage stays `prepared`                                             |
+| A success answer that fails the tool's checks                                                                                                                                                                  | `75` after a release             | The same                                                                                           |
+| The gateway counts an agent or lists work after the lease                                                                                                                                                      | `75` after a release             | The same                                                                                           |
+| The acquire request was never sent                                                                                                                                                                             | `75` after a release             | The same; if the release is unsent too, exit `2`                                                   |
+| An acquire sent with a deadline, no answer for the whole 120 s, the same `executor_epoch`, and no lease in 100 s after the release                                                                             | `75` after a release and a watch | The same; a lease in the watch is released again first, and if a release cannot prove it, exit `2` |
+| The same with a different `executor_epoch`, or a second capability read that fails                                                                                                                             | `2`, after one release attempt   | Blocked status kept, held for review; see below                                                    |
+| An acquire with no deadline sent and no answer                                                                                                                                                                 | `2`, after one release attempt   | Blocked status kept, held for review; see below                                                    |
+| Any other error answer, a failed release or fence                                                                                                                                                              | `2`                              | Blocked status kept, held for review                                                               |
+| Activation finished                                                                                                                                                                                            | `0`                              | Stage `activated`                                                                                  |
 
 Any other failure journals `maintenance-held-needs-review`, exits 2 and keeps the blocked status,
 with the app possibly still running behind it. That includes a failed release, any other error

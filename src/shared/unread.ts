@@ -25,7 +25,8 @@ export function unreadSince(lastMessageAt: string | undefined, readAt: number | 
  */
 export function isUnread(bot: Bot, shownBotId: string | undefined, readThrough: ReadThrough) {
   if (!bot.unread || bot.id === shownBotId) return false;
-  const latest = time(bot.lastMessage?.at), read = time(readThrough[bot.id]);
+  const latest = time(bot.lastMessage?.at),
+    read = time(readThrough[bot.id]);
   return latest === undefined || read === undefined || latest > read;
 }
 
@@ -36,8 +37,16 @@ export const decisionStates: ReadonlySet<Bot["activity"]> = new Set(["waiting", 
  * The app badge: visible assistants marked unread, plus those waiting on a decision that are
  * not already counted. Pass the bots this person can see and the unread rule that applies.
  */
-export function badgeCount(bots: Pick<Bot, "id" | "activity">[], unread: (botId: string) => boolean, pending: (botId: string) => boolean = () => false) {
-  return new Set(bots.filter(bot => unread(bot.id) || decisionStates.has(bot.activity) || pending(bot.id)).map(bot => bot.id)).size;
+export function badgeCount(
+  bots: Pick<Bot, "id" | "activity">[],
+  unread: (botId: string) => boolean,
+  pending: (botId: string) => boolean = () => false,
+) {
+  return new Set(
+    bots
+      .filter((bot) => unread(bot.id) || decisionStates.has(bot.activity) || pending(bot.id))
+      .map((bot) => bot.id),
+  ).size;
 }
 
 /** The newest time among a chat's roster preview and its loaded messages. */

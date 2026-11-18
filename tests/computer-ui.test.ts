@@ -9,42 +9,97 @@ import type { ComputerStatus } from "../src/shared/computer";
 import { button, click, mountRoot, stubMatchMedia, typeInto } from "./ui-harness";
 
 const mocks = vi.hoisted(() => ({
-  desktops: [] as Array<EventTarget & { viewOnly: boolean; disconnect: ReturnType<typeof vi.fn>; sendKey: ReturnType<typeof vi.fn>; clipboardPasteFrom: ReturnType<typeof vi.fn> }>,
-  terminals: [] as Array<{ write: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn>; paste: ReturnType<typeof vi.fn>; type: (data: string) => void }>,
+  desktops: [] as Array<
+    EventTarget & {
+      viewOnly: boolean;
+      disconnect: ReturnType<typeof vi.fn>;
+      sendKey: ReturnType<typeof vi.fn>;
+      clipboardPasteFrom: ReturnType<typeof vi.fn>;
+    }
+  >,
+  terminals: [] as Array<{
+    write: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+    paste: ReturnType<typeof vi.fn>;
+    type: (data: string) => void;
+  }>,
 }));
-vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async original => ({ ...await original<typeof import("../src/client-api")>(), api: vi.fn(), write: vi.fn() }))(original)));
-vi.mock("@novnc/novnc", () => ({ default: class extends EventTarget {
-  viewOnly = false;
-  scaleViewport = false;
-  resizeSession = true;
-  disconnect = vi.fn();
-  focus = vi.fn(); sendKey = vi.fn(); clipboardPasteFrom = vi.fn();
-  _handleMouseButton = vi.fn(); _handleMouseMove = vi.fn();
-  constructor() { super(); mocks.desktops.push(this); }
-} }));
-vi.mock("@xterm/xterm", () => ({ Terminal: class {
-  cols = 80; rows = 24;
-  write = vi.fn(); focus = vi.fn(); dispose = vi.fn();
-  callback = (_data: string) => {};
-  paste = vi.fn((data: string) => this.callback(data));
-  type = (data: string) => this.callback(data);
-  constructor() { mocks.terminals.push(this); }
-  loadAddon() {}
-  open() {}
-  onData(callback: (data: string) => void) { this.callback = callback; }
-} }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+vi.mock("../src/client-api", async (original) =>
+  (await import("./helpers/request-mock")).withRequest(
+    await (async (original) => ({
+      ...(await original<typeof import("../src/client-api")>()),
+      api: vi.fn(),
+      write: vi.fn(),
+    }))(original),
+  ),
+);
+vi.mock("@novnc/novnc", () => ({
+  default: class extends EventTarget {
+    viewOnly = false;
+    scaleViewport = false;
+    resizeSession = true;
+    disconnect = vi.fn();
+    focus = vi.fn();
+    sendKey = vi.fn();
+    clipboardPasteFrom = vi.fn();
+    _handleMouseButton = vi.fn();
+    _handleMouseMove = vi.fn();
+    constructor() {
+      super();
+      mocks.desktops.push(this);
+    }
+  },
+}));
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    cols = 80;
+    rows = 24;
+    write = vi.fn();
+    focus = vi.fn();
+    dispose = vi.fn();
+    callback = (_data: string) => {};
+    paste = vi.fn((data: string) => this.callback(data));
+    type = (data: string) => this.callback(data);
+    constructor() {
+      mocks.terminals.push(this);
+    }
+    loadAddon() {}
+    open() {}
+    onData(callback: (data: string) => void) {
+      this.callback = callback;
+    }
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    fit() {}
+  },
+}));
 
 class Socket extends EventTarget {
   static OPEN = 1;
   static instances: Socket[] = [];
   readyState = 0;
   sent: unknown[] = [];
-  constructor(public url: string) { super(); Socket.instances.push(this); }
-  send(data: string) { this.sent.push(JSON.parse(data)); }
-  close() { this.readyState = 3; this.dispatchEvent(new Event("close")); }
-  open() { this.readyState = 1; this.dispatchEvent(new Event("open")); }
-  receive(data: unknown) { this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) })); }
+  constructor(public url: string) {
+    super();
+    Socket.instances.push(this);
+  }
+  send(data: string) {
+    this.sent.push(JSON.parse(data));
+  }
+  close() {
+    this.readyState = 3;
+    this.dispatchEvent(new Event("close"));
+  }
+  open() {
+    this.readyState = 1;
+    this.dispatchEvent(new Event("open"));
+  }
+  receive(data: unknown) {
+    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) }));
+  }
 }
 let status: ComputerStatus;
 let container: HTMLDivElement;
@@ -52,28 +107,69 @@ let root: Root;
 let ticket = 0;
 const onClose = vi.fn();
 beforeEach(() => {
-  vi.useFakeTimers(); vi.clearAllMocks();
-  mocks.desktops.splice(0); mocks.terminals.splice(0); Socket.instances = []; ticket = 0;
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  mocks.desktops.splice(0);
+  mocks.terminals.splice(0);
+  Socket.instances = [];
+  ticket = 0;
   vi.stubGlobal("WebSocket", Socket);
   stubMatchMedia(false);
   localStorage.clear();
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function(this: HTMLDialogElement) { this.open = true; } });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", { configurable: true, value: function(this: HTMLDialogElement) { this.open = false; } });
-  status = { available: true, running: true, browserReady: true, label: "Family VPS", control: { kind: "idle" }, terminal: { available: true, target: "nicolas@hermes" } };
-  vi.mocked(api).mockImplementation(async path => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.open = true;
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.open = false;
+    },
+  });
+  status = {
+    available: true,
+    running: true,
+    browserReady: true,
+    label: "Family VPS",
+    control: { kind: "idle" },
+    terminal: { available: true, target: "nicolas@hermes" },
+  };
+  vi.mocked(api).mockImplementation(async (path) => {
     if (path === "/computer") return status as never;
-    if (path === "/computer/desktop") return { path: `/api/computer/desktop/ws?ticket=desktop-${++ticket}`, viewerId: "viewer-1", expiresAt: "future" } as never;
-    if (path === "/computer/terminal") return { path: `/api/computer/terminal/ws?ticket=terminal-${++ticket}`, sessionId: "private-shell", target: "nicolas@hermes", expiresAt: "future" } as never;
+    if (path === "/computer/desktop")
+      return {
+        path: `/api/computer/desktop/ws?ticket=desktop-${++ticket}`,
+        viewerId: "viewer-1",
+        expiresAt: "future",
+      } as never;
+    if (path === "/computer/terminal")
+      return {
+        path: `/api/computer/terminal/ws?ticket=terminal-${++ticket}`,
+        sessionId: "private-shell",
+        target: "nicolas@hermes",
+        expiresAt: "future",
+      } as never;
     throw new Error("Unexpected request " + path);
   });
   vi.mocked(write).mockImplementation(async (path, body) => {
-    if (path === "/computer/control") status = { ...status, control: (body as { action: string }).action === "take" ? { kind: "human", mine: true, name: "Nicolas" } : { kind: "idle" } };
+    if (path === "/computer/control")
+      status = {
+        ...status,
+        control:
+          (body as { action: string }).action === "take"
+            ? { kind: "human", mine: true, name: "Nicolas" }
+            : { kind: "idle" },
+      };
     return status as never;
   });
   ({ container, root } = mountRoot());
 });
 async function render(open = true, key = "same-user", initialTab?: "desktop" | "terminal") {
-  await act(async () => { root.render(createElement(ComputerPanel, { open, onClose, key, initialTab })); });
+  await act(async () => {
+    root.render(createElement(ComputerPanel, { open, onClose, key, initialTab }));
+  });
 }
 async function connectedDesktop() {
   await render();
@@ -81,7 +177,8 @@ async function connectedDesktop() {
   return mocks.desktops.at(-1)!;
 }
 async function connectedTerminal() {
-  await render(); await click("Terminal");
+  await render();
+  await click("Terminal");
   const client = Socket.instances.at(-1)!;
   await act(async () => client.open());
   return client;
@@ -100,34 +197,49 @@ describe("shared computer", () => {
       expect(mocks.desktops).toHaveLength(0);
       await click("Desktop");
       expect(mocks.desktops).toHaveLength(1);
-    } finally { history.replaceState(null, "", "/"); }
+    } finally {
+      history.replaceState(null, "", "/");
+    }
   });
 
   it("uses the remote framebuffer shape and follows resolution changes", async () => {
     await render();
     const canvas = document.createElement("canvas");
-    canvas.width = 1600; canvas.height = 900;
+    canvas.width = 1600;
+    canvas.height = 900;
     await act(async () => {
       container.querySelector(".computer-screen")!.append(canvas);
       mocks.desktops.at(-1)!.dispatchEvent(new Event("connect"));
     });
     const stage = container.querySelector<HTMLElement>(".desktop-stage")!;
     expect(Number(stage.style.getPropertyValue("--desktop-aspect"))).toBe(1600 / 900);
-    await act(async () => { canvas.height = 1200; });
+    await act(async () => {
+      canvas.height = 1200;
+    });
     expect(Number(stage.style.getPropertyValue("--desktop-aspect"))).toBe(1600 / 1200);
   });
 
   it("provides Unicode desktop text and navigation keys only after takeover and clears text on lost control", async () => {
     const desktop = await connectedDesktop();
     expect(button("Type text").disabled).toBe(true);
-    await click("Take over"); await click("Type text");
+    await click("Take over");
+    await click("Type text");
     const field = container.querySelector<HTMLTextAreaElement>("#desktop-text-input")!;
     await typeInto(field, "a🌵");
-    await act(async () => container.querySelector("#desktop-text")!.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true})));
-    expect(desktop.sendKey.mock.calls.map(call => call[0])).toEqual([97, 0x0101f335]);
-    await click("Enter"); await click("Tab"); await click("Backspace");
-    expect(desktop.sendKey.mock.calls.slice(-3).map(call => call[0])).toEqual([0xff0d, 0xff09, 0xff08]);
-    await click("Type text"); await click("Hand back");
+    await act(async () =>
+      container
+        .querySelector("#desktop-text")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    expect(desktop.sendKey.mock.calls.map((call) => call[0])).toEqual([97, 0x0101f335]);
+    await click("Enter");
+    await click("Tab");
+    await click("Backspace");
+    expect(desktop.sendKey.mock.calls.slice(-3).map((call) => call[0])).toEqual([
+      0xff0d, 0xff09, 0xff08,
+    ]);
+    await click("Type text");
+    await click("Hand back");
     expect(container.querySelector("#desktop-text-input")).toBeNull();
     expect(button("Enter").disabled).toBe(true);
   });
@@ -141,12 +253,14 @@ describe("shared computer", () => {
     await click("Copy to device");
     expect(clipboard.writeText).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Nothing is copied on the desktop yet.");
-    await act(async () => desktop.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "from the desktop" } })));
+    await act(async () =>
+      desktop.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "from the desktop" } })),
+    );
     await click("Copy to device");
     expect(clipboard.writeText).toHaveBeenCalledWith("from the desktop");
     await click("Paste from device");
     expect(desktop.clipboardPasteFrom).toHaveBeenCalledWith("hi\n");
-    expect(desktop.sendKey.mock.calls.map(call => call[0])).toEqual([0x68, 0x69, 0xff0d]);
+    expect(desktop.sendKey.mock.calls.map((call) => call[0])).toEqual([0x68, 0x69, 0xff0d]);
     // A browser that won't share its clipboard gets the Type text box, which takes a normal paste.
     clipboard.readText.mockRejectedValueOnce(new Error("NotAllowedError"));
     await click("Paste from device");
@@ -156,29 +270,45 @@ describe("shared computer", () => {
   it("offers touch help, trackpad mode and zoom reset only on a touch screen, and remembers trackpad mode", async () => {
     await connectedDesktop();
     expect(container.querySelector("[aria-label='How to use the desktop']")).toBeNull();
-    expect([...container.querySelectorAll("button")].some(item => item.textContent === "Trackpad")).toBe(false);
+    expect(
+      [...container.querySelectorAll("button")].some((item) => item.textContent === "Trackpad"),
+    ).toBe(false);
     await render(false);
-    stubMatchMedia(query => query === "(any-pointer: coarse)");
+    stubMatchMedia((query) => query === "(any-pointer: coarse)");
     await render(true, "touch-screen");
     await click("Trackpad");
     expect(button("Trackpad").getAttribute("aria-pressed")).toBe("true");
     expect(localStorage.getItem("computer.trackpad")).toBe("1");
     expect(button("Recenter pointer")).toBeDefined();
-    expect([...container.querySelectorAll("button")].some(item => item.textContent === "Reset zoom")).toBe(false);
-    await act(async () => container.querySelector<HTMLButtonElement>("[aria-label='How to use the desktop']")!.click());
+    expect(
+      [...container.querySelectorAll("button")].some((item) => item.textContent === "Reset zoom"),
+    ).toBe(false);
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>("[aria-label='How to use the desktop']")!.click(),
+    );
     const help = container.querySelector<HTMLDialogElement>("dialog.computer-help")!;
     expect(help.open).toBe(true);
     expect(help.querySelector("h2")!.textContent).toBe("Using the computer");
-    expect([...help.querySelectorAll("h3")].map(heading => heading.textContent)).toEqual(["Taking control", "Touching the screen", "Typing and the clipboard", "When a pointer is easier"]);
+    expect([...help.querySelectorAll("h3")].map((heading) => heading.textContent)).toEqual([
+      "Taking control",
+      "Touching the screen",
+      "Typing and the clipboard",
+      "When a pointer is easier",
+    ]);
     // Every item draws an icon the web has.
-    expect([...help.querySelectorAll("li svg path")].every(path => !!path.getAttribute("d"))).toBe(true);
-    await act(async () => help.querySelector<HTMLButtonElement>("[aria-label='Close help']")!.click());
+    expect(
+      [...help.querySelectorAll("li svg path")].every((path) => !!path.getAttribute("d")),
+    ).toBe(true);
+    await act(async () =>
+      help.querySelector<HTMLButtonElement>("[aria-label='Close help']")!.click(),
+    );
     expect(help.open).toBe(false);
     await click("Trackpad");
     expect(localStorage.getItem("computer.trackpad")).toBeNull();
   });
   it("explains a browser recovery fence while keeping the desktop available to watch", async () => {
-    status.reason = "An interrupted browser action needs recovery before anyone can control the computer.";
+    status.reason =
+      "An interrupted browser action needs recovery before anyone can control the computer.";
     await connectedDesktop();
     expect(container.textContent).toContain(status.reason);
     expect(button("Take over").disabled).toBe(false);
@@ -188,16 +318,22 @@ describe("shared computer", () => {
     expect(desktop.viewOnly).toBe(true);
     expect(write).not.toHaveBeenCalled();
     await click("Take over");
-    expect(write).toHaveBeenCalledWith("/computer/control", { action: "take", viewerId: "viewer-1" });
+    expect(write).toHaveBeenCalledWith("/computer/control", {
+      action: "take",
+      viewerId: "viewer-1",
+    });
     expect(desktop.viewOnly).toBe(false);
     expect(container.textContent).toContain("Assistants are paused");
-    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(true);
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(
+      true,
+    );
     await click("Hand back");
     expect(desktop.viewOnly).toBe(true);
   });
 
   it("reconnects with a fresh ticket in watch mode without replaying a takeover", async () => {
-    const desktop = await connectedDesktop(); await click("Take over");
+    const desktop = await connectedDesktop();
+    await click("Take over");
     await act(async () => desktop.dispatchEvent(new Event("disconnect")));
     expect(desktop.viewOnly).toBe(true);
     await act(async () => vi.advanceTimersByTimeAsync(2500));
@@ -205,7 +341,12 @@ describe("shared computer", () => {
     expect(replacement).not.toBe(desktop);
     expect(replacement.viewOnly).toBe(true);
     expect(write).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop").at(-1)?.[1]).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
+    expect(
+      vi
+        .mocked(api)
+        .mock.calls.filter(([path]) => path === "/computer/desktop")
+        .at(-1)?.[1],
+    ).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
     await act(async () => replacement.dispatchEvent(new Event("connect")));
     expect(button("Take over").disabled).toBe(false);
     expect(button("Hand back").disabled).toBe(false);
@@ -215,7 +356,11 @@ describe("shared computer", () => {
   it("does not enable an old desktop if takeover finishes after its socket disconnects", async () => {
     const desktop = await connectedDesktop();
     let finish!: (value: ComputerStatus) => void;
-    vi.mocked(write).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    vi.mocked(write).mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
     await click("Take over");
     await act(async () => desktop.dispatchEvent(new Event("disconnect")));
     await act(async () => finish({ ...status, control: { kind: "human", mine: true } }));
@@ -224,12 +369,15 @@ describe("shared computer", () => {
   });
 
   it("removes input on lost ownership and prevents taking another household member's lease", async () => {
-    const desktop = await connectedDesktop(); await click("Take over");
+    const desktop = await connectedDesktop();
+    await click("Take over");
     status = { ...status, control: { kind: "human", mine: false, name: "Jordan" } };
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     expect(desktop.viewOnly).toBe(true);
     expect(container.textContent).toContain("Jordan has control");
-    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(false);
+    expect(container.querySelector(".desktop-stage")?.classList.contains("is-controlling")).toBe(
+      false,
+    );
     expect(container.textContent).toContain("Take over is available after they hand back.");
     expect(button("Take over").disabled).toBe(true);
   });
@@ -239,9 +387,17 @@ describe("shared computer", () => {
     await render(false);
     expect(desktop.disconnect).toHaveBeenCalledOnce();
     await render();
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop").at(-1)?.[1]).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
+    expect(
+      vi
+        .mocked(api)
+        .mock.calls.filter(([path]) => path === "/computer/desktop")
+        .at(-1)?.[1],
+    ).toEqual(expect.objectContaining({ body: JSON.stringify({ viewerId: "viewer-1" }) }));
     await render(true, "different-user");
-    expect(api).toHaveBeenLastCalledWith("/computer/desktop", expect.objectContaining({ body: "{}" }));
+    expect(api).toHaveBeenLastCalledWith(
+      "/computer/desktop",
+      expect.objectContaining({ body: "{}" }),
+    );
   });
 
   it("shows independent terminal availability and supports keyboard-operated tabs", async () => {
@@ -250,30 +406,39 @@ describe("shared computer", () => {
     expect(container.textContent).toContain(status.reason);
     expect(api).not.toHaveBeenCalledWith("/computer/desktop", expect.anything());
     const tab = container.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
-    await act(async () => tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })));
+    await act(async () =>
+      tab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })),
+    );
     expect(document.activeElement).toBe(button("Terminal"));
     expect(button("Terminal").getAttribute("aria-selected")).toBe("true");
     expect(Socket.instances).toHaveLength(1);
   });
 
   it("restores focus to its opener and closes through Escape", async () => {
-    const opener = document.createElement("button"); document.body.append(opener); opener.focus();
+    const opener = document.createElement("button");
+    document.body.append(opener);
+    opener.focus();
     await render();
-    await act(async () => container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true })));
+    await act(async () =>
+      container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true })),
+    );
     expect(onClose).toHaveBeenCalledOnce();
     await render(false);
-    expect(document.activeElement).toBe(opener); opener.remove();
+    expect(document.activeElement).toBe(opener);
+    opener.remove();
   });
 
   it("stops automatic retries for expired authentication and offers reconnect", async () => {
-    vi.mocked(api).mockImplementation(async path => {
+    vi.mocked(api).mockImplementation(async (path) => {
       if (path === "/computer") return status as never;
       throw new ApiError("Sign in again to use the computer.", 401);
     });
     await render();
     const calls = vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop").length;
     await act(async () => vi.advanceTimersByTimeAsync(6000));
-    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop")).toHaveLength(calls);
+    expect(vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/desktop")).toHaveLength(
+      calls,
+    );
     expect(button("Reconnect")).toBeDefined();
   });
 });
@@ -309,9 +474,11 @@ describe("system terminal", () => {
     const client = await connectedTerminal();
     const text = "a".repeat(16383) + "🌵".repeat(5000);
     mocks.terminals.at(-1)!.type(text);
-    const input = client.sent.filter(item => (item as {type: string}).type === "input") as {data: string}[];
+    const input = client.sent.filter((item) => (item as { type: string }).type === "input") as {
+      data: string;
+    }[];
     expect(input.length).toBeGreaterThan(1);
-    expect(input.map(item => item.data).join("")).toBe(text);
+    expect(input.map((item) => item.data).join("")).toBe(text);
     for (const message of input) {
       expect(new TextEncoder().encode(message.data).length).toBeLessThanOrEqual(16384);
       expect(message.data).not.toMatch(/[\uD800-\uDBFF]$/);
@@ -334,7 +501,17 @@ describe("system terminal", () => {
 
   describe("opened from an assistant's terminal card", () => {
     const open = (terminal: { at: number; command?: string }, key = "card") =>
-      act(async () => { root.render(createElement(ComputerPanel, { open: true, onClose, key, terminal, initialTab: "terminal" })); });
+      act(async () => {
+        root.render(
+          createElement(ComputerPanel, {
+            open: true,
+            onClose,
+            key,
+            terminal,
+            initialTab: "terminal",
+          }),
+        );
+      });
 
     it("offers the suggested command and pastes it only when the person asks, without running it", async () => {
       await open({ at: 1000, command: "sudo systemctl restart hermes" });
@@ -342,12 +519,16 @@ describe("system terminal", () => {
       await act(async () => client.open());
       // The shell may be running a program waiting for one key, so nothing arrives on its own.
       expect(mocks.terminals.at(-1)!.paste).not.toHaveBeenCalled();
-      expect(client.sent.filter(message => (message as { type?: string }).type === "input")).toEqual([]);
-      expect(container.querySelector(".terminal-offer code")?.textContent).toBe("sudo systemctl restart hermes");
+      expect(
+        client.sent.filter((message) => (message as { type?: string }).type === "input"),
+      ).toEqual([]);
+      expect(container.querySelector(".terminal-offer code")?.textContent).toBe(
+        "sudo systemctl restart hermes",
+      );
       await click("Paste at prompt");
       expect(mocks.terminals.at(-1)!.paste).toHaveBeenCalledWith("sudo systemctl restart hermes");
       expect(client.sent).toContainEqual({ type: "input", data: "sudo systemctl restart hermes" });
-      expect(client.sent.some(message => JSON.stringify(message).includes("\\r"))).toBe(false);
+      expect(client.sent.some((message) => JSON.stringify(message).includes("\\r"))).toBe(false);
       expect(container.querySelector(".terminal-offer")).toBeNull();
     });
 
@@ -361,7 +542,16 @@ describe("system terminal", () => {
     it("moves a panel that is already open on the desktop to the Terminal tab with the command offered", async () => {
       await render(true, "already-open");
       expect(button("Desktop").getAttribute("aria-selected")).toBe("true");
-      await act(async () => { root.render(createElement(ComputerPanel, { open: true, onClose, key: "already-open", terminal: { at: 3000, command: "id" } })); });
+      await act(async () => {
+        root.render(
+          createElement(ComputerPanel, {
+            open: true,
+            onClose,
+            key: "already-open",
+            terminal: { at: 3000, command: "id" },
+          }),
+        );
+      });
       expect(button("Terminal").getAttribute("aria-selected")).toBe("true");
       await act(async () => Socket.instances.at(-1)!.open());
       await click("Dismiss");
@@ -371,8 +561,10 @@ describe("system terminal", () => {
   });
 
   it("keeps both attachments across tabs and never allocates a second shell just to switch tabs", async () => {
-    const client = await connectedTerminal(); const desktop = mocks.desktops.at(-1)!;
-    await click("Desktop"); await click("Terminal");
+    const client = await connectedTerminal();
+    const desktop = mocks.desktops.at(-1)!;
+    await click("Desktop");
+    await click("Terminal");
     expect(Socket.instances).toHaveLength(1);
     expect(client.readyState).toBe(1);
     expect(desktop.disconnect).not.toHaveBeenCalled();
@@ -405,14 +597,19 @@ describe("system terminal", () => {
     expect(write).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Running commands will stop");
     await click("End this shell");
-    expect(write).toHaveBeenCalledExactlyOnceWith("/computer/terminal/end", { sessionId: "private-shell" });
+    expect(write).toHaveBeenCalledExactlyOnceWith("/computer/terminal/end", {
+      sessionId: "private-shell",
+    });
     expect(client.readyState).toBe(3);
     expect(container.textContent).toContain("Your shell has ended");
   });
 });
 
 describe("terminal confirmation", () => {
-  function withAuth(config: { localDevAuth: boolean; googleClientId?: string }, userId = "google-one") {
+  function withAuth(
+    config: { localDevAuth: boolean; googleClientId?: string },
+    userId = "google-one",
+  ) {
     const fallback = vi.mocked(api).getMockImplementation()!;
     vi.mocked(api).mockImplementation(async (path, init) => {
       if (path === "/auth/config") return config as never;
@@ -420,19 +617,27 @@ describe("terminal confirmation", () => {
       return fallback(path, init);
     });
   }
-  const ticketRequests = () => vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/terminal").length;
+  const ticketRequests = () =>
+    vi.mocked(api).mock.calls.filter(([path]) => path === "/computer/terminal").length;
 
   it("asks for a fresh Google sign-in before the first shell and opens it after confirming", async () => {
     status.terminal = { ...status.terminal, confirmationRequired: true };
     withAuth({ localDevAuth: false, googleClientId: "household-client" });
     let respond!: (result: { credential: string }) => void;
-    const initialize = vi.fn((options: { callback: typeof respond }) => { respond = options.callback; });
-    const renderButton = vi.fn((element: HTMLElement) => { element.textContent = "Sign in with Google"; });
+    const initialize = vi.fn((options: { callback: typeof respond }) => {
+      respond = options.callback;
+    });
+    const renderButton = vi.fn((element: HTMLElement) => {
+      element.textContent = "Sign in with Google";
+    });
     vi.stubGlobal("google", { accounts: { id: { initialize, renderButton } } });
-    await render(); await click("Terminal");
+    await render();
+    await click("Terminal");
     expect(container.textContent).toContain("Confirm it's you");
     expect(ticketRequests()).toBe(0);
-    expect(initialize).toHaveBeenCalledWith(expect.objectContaining({ client_id: "household-client" }));
+    expect(initialize).toHaveBeenCalledWith(
+      expect.objectContaining({ client_id: "household-client" }),
+    );
     expect(container.querySelector("dialog")!.contains(renderButton.mock.calls[0][0])).toBe(true);
     await act(async () => respond({ credential: "fresh-token" }));
     expect(write).toHaveBeenCalledWith("/auth/confirm", { credential: "fresh-token" });
@@ -449,8 +654,17 @@ describe("terminal confirmation", () => {
     expect(client.readyState).toBe(1);
     expect(container.textContent).not.toContain("Confirm it's you");
     const fallback = vi.mocked(api).getMockImplementation()!;
-    vi.mocked(api).mockImplementation(async (path, init) => path === "/computer/terminal"
-      ? Promise.reject(new ApiError("Confirm it's you to open the terminal.", 401, "reauthentication_required")) : fallback(path, init));
+    vi.mocked(api).mockImplementation(async (path, init) =>
+      path === "/computer/terminal"
+        ? Promise.reject(
+            new ApiError(
+              "Confirm it's you to open the terminal.",
+              401,
+              "reauthentication_required",
+            ),
+          )
+        : fallback(path, init),
+    );
     await act(async () => client.close());
     await act(async () => vi.advanceTimersByTimeAsync(2500));
     expect(container.textContent).toContain("Confirm it's you");
@@ -463,7 +677,15 @@ describe("terminal confirmation", () => {
   it("finishes confirming under development Strict Mode effect replays", async () => {
     status.terminal = { ...status.terminal, confirmationRequired: true };
     withAuth({ localDevAuth: true }, "local-one");
-    await act(async () => { root.render(createElement(StrictMode, null, createElement(ComputerPanel, { open: true, onClose, key: "same-user" }))); });
+    await act(async () => {
+      root.render(
+        createElement(
+          StrictMode,
+          null,
+          createElement(ComputerPanel, { open: true, onClose, key: "same-user" }),
+        ),
+      );
+    });
     await click("Terminal");
     expect(container.textContent).toContain("Confirm it's you");
     await click("Confirm local member one");
@@ -474,9 +696,16 @@ describe("terminal confirmation", () => {
   });
 
   it("explains that the shell is limited to administrators without requesting a ticket", async () => {
-    status.terminal = { available: false, target: "", reason: "The system terminal is limited to household administrators." };
-    await render(); await click("Terminal");
-    expect(container.querySelector("#computer-terminal")!.textContent).toContain("Terminal unavailable");
+    status.terminal = {
+      available: false,
+      target: "",
+      reason: "The system terminal is limited to household administrators.",
+    };
+    await render();
+    await click("Terminal");
+    expect(container.querySelector("#computer-terminal")!.textContent).toContain(
+      "Terminal unavailable",
+    );
     expect(container.textContent).toContain("limited to household administrators");
     expect(ticketRequests()).toBe(0);
     expect(mocks.desktops).toHaveLength(1);

@@ -19,7 +19,7 @@ and the line was restored:
   per-rule cases failed, including the fence still open at the end.
 - Restoring the old `text.includes("[^")` fallback: the footnote cases and the regex case failed.
 - Dropping the rule that a backtick fence's info string cannot hold a backtick: the case where
-  a line such as ```` ```js``` is inline. ```` precedes a definition failed.
+  a line such as ` ```js``` is inline. ` precedes a definition failed.
 - Narrowing `spansReply` back to the margin (`^ {0,3}`): the footnote definition in a quote failed.
 
 ## Not exercised
@@ -72,7 +72,7 @@ broken by hand and restored:
 
 ## Review round 2
 
-GPT-6.1 Sol reviewed `7aa08d8` and found one more divergence: in "- Code:\n\n    ```\n    x\n\n> Next"
+GPT-6.1 Sol reviewed `7aa08d8` and found one more divergence: in "- Code:\n\n ```\n x\n\n> Next"
 the live code block held "x\n" and the saved one "x\n\n". The fence sits four spaces in, inside
 the list item, where the tracker reads it as indented code, so the splitter cut before the quote
 that ends the item and dropped a blank line from the open fence.

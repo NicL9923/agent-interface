@@ -10,7 +10,8 @@ export const LATEST_READS_AT_ONCE = 4;
 /** The longest preview sent to home. The row shows two lines at most. */
 export const LATEST_TEXT_CHARS = 160;
 
-const isMessage = (event: GroupEvent) => event.kind === "message.user" || event.kind === "message.member";
+const isMessage = (event: GroupEvent) =>
+  event.kind === "message.user" || event.kind === "message.member";
 
 /** The newest message among a room's trailing events, or none. */
 export function newestMessage(events: GroupEvent[]) {
@@ -21,7 +22,12 @@ export function newestMessage(events: GroupEvent[]) {
  * Words one event for a viewer. A person's own message reads "You", as in the room itself;
  * `person` names the household member who sent a message, when one is on record.
  */
-export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, person: (userId: string) => string | undefined): GroupLatest {
+export function previewOf(
+  event: GroupEvent,
+  room: GroupRoom,
+  viewerId: string,
+  person: (userId: string) => string | undefined,
+): GroupLatest {
   const raw = typeof event.payload?.text === "string" ? event.payload.text : "";
   // Home shows the preview as plain text, so it carries the message's words without its Markdown.
   const text = markdownPlain(raw);
@@ -30,13 +36,23 @@ export function previewOf(event: GroupEvent, room: GroupRoom, viewerId: string, 
   if (routine) author = routine.name;
   else if (event.kind === "message.user") {
     const sender = event.sender?.id || event.actor?.id;
-    author = sender === viewerId ? "You" : event.sender?.name || person(sender ?? "") || "Household member";
+    author =
+      sender === viewerId
+        ? "You"
+        : event.sender?.name || person(sender ?? "") || "Household member";
   } else {
     const id = event.actor?.id ?? event.payload?.member_id;
-    const member = room.members.find(item => item.member_id === id || item.member_id === event.payload?.member_id);
+    const member = room.members.find(
+      (item) => item.member_id === id || item.member_id === event.payload?.member_id,
+    );
     author = member?.display_name || member?.profile || "Assistant";
   }
-  return { text: text.length > LATEST_TEXT_CHARS ? `${cutText(text, LATEST_TEXT_CHARS - 1).trimEnd()}…` : text, at: new Date(event.created_at * 1000).toISOString(), author };
+  return {
+    text:
+      text.length > LATEST_TEXT_CHARS ? `${cutText(text, LATEST_TEXT_CHARS - 1).trimEnd()}…` : text,
+    at: new Date(event.created_at * 1000).toISOString(),
+    author,
+  };
 }
 
 type Read = (roomId: string, since: number) => Promise<GroupPage>;
@@ -57,23 +73,40 @@ export class GroupLatestCache {
    * evicts a room only someone else can see.
    */
   async refresh(rooms: GroupRoom[], catalog: GroupRoom[] = rooms) {
-    const live = new Set(catalog.map(room => room.room_id));
+    const live = new Set(catalog.map((room) => room.room_id));
     for (const id of [...this.seen.keys()]) if (!live.has(id)) this.seen.delete(id);
-    const stale = rooms.filter(room => typeof room.latest_seq === "number" && room.latest_seq > 0 && this.seen.get(room.room_id)?.seq !== room.latest_seq);
+    const stale = rooms.filter(
+      (room) =>
+        typeof room.latest_seq === "number" &&
+        room.latest_seq > 0 &&
+        this.seen.get(room.room_id)?.seq !== room.latest_seq,
+    );
     const queue = [...stale];
-    await Promise.all(Array.from({ length: Math.min(LATEST_READS_AT_ONCE, queue.length) }, async () => {
-      for (let room = queue.shift(); room; room = queue.shift()) await this.load(room);
-    }));
+    await Promise.all(
+      Array.from({ length: Math.min(LATEST_READS_AT_ONCE, queue.length) }, async () => {
+        for (let room = queue.shift(); room; room = queue.shift()) await this.load(room);
+      }),
+    );
   }
   /** The newest message known for a room, or none. */
-  latest(roomId: string) { return this.seen.get(roomId)?.event; }
+  latest(roomId: string) {
+    return this.seen.get(roomId)?.event;
+  }
   private load(room: GroupRoom) {
     const seq = room.latest_seq!;
     let reading = this.reading.get(room.room_id);
     if (!reading) {
-      reading = this.read(room.room_id, Math.max(0, seq - LATEST_LOOKBACK)).then(page => {
-        this.seen.set(room.room_id, { seq, event: Array.isArray(page.events) ? newestMessage(page.events) : undefined });
-      }, () => {}).finally(() => this.reading.delete(room.room_id));
+      reading = this.read(room.room_id, Math.max(0, seq - LATEST_LOOKBACK))
+        .then(
+          (page) => {
+            this.seen.set(room.room_id, {
+              seq,
+              event: Array.isArray(page.events) ? newestMessage(page.events) : undefined,
+            });
+          },
+          () => {},
+        )
+        .finally(() => this.reading.delete(room.room_id));
       this.reading.set(room.room_id, reading);
     }
     return reading;

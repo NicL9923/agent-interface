@@ -34,7 +34,8 @@ export class FakeEventSource extends EventTarget {
   static notifyAll() {
     for (const stream of FakeEventSource.streams) {
       const url = new URL(stream.url, "http://localhost");
-      if (url.pathname !== "/api/events" || url.searchParams.has("group")) stream.emit("message", "change");
+      if (url.pathname !== "/api/events" || url.searchParams.has("group"))
+        stream.emit("message", "change");
     }
   }
   connect() {

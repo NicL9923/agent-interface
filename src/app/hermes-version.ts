@@ -7,7 +7,9 @@ const hash = /^[0-9a-f]{12,64}$/i;
 export function revisionDate(value: string | undefined, locale?: string) {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
 }
 
 /** A readable version name: release names stay, full hashes shrink to seven characters. */
@@ -17,6 +19,10 @@ export function shortRevision(value: string | undefined) {
 }
 
 /** The one line that names a Hermes build: its date when known, else its version or short hash. */
-export function hermesVersionLabel(version: string | undefined, date: string | undefined, locale?: string) {
+export function hermesVersionLabel(
+  version: string | undefined,
+  date: string | undefined,
+  locale?: string,
+) {
   return revisionDate(date, locale) || shortRevision(version);
 }

@@ -54,17 +54,17 @@ committed. No server, Python, iOS or Hermes code changed.
 Item 3 before the fix: both cases failed at `showsSavedHome()`: the page showed sign-in with the
 copies deleted.
 
-| Mutation | Result |
-| --- | --- |
-| The write not read back | failed: the case where storage silently drops it |
-| No `undo` when the record was not kept | failed: both cases, the record left as the under-way mark |
-| No word to the person | failed: both cases |
-| `signOutHere` without `ownTree` | failed: the case where another tab already signed member two in |
-| The button without its refusal handler | the run failed on an unhandled rejection |
-| No cover on `pagehide` | failed: both saved-home cache cases |
-| The saved home counts the copy's unread marks | failed: `(3) WildBots` |
-| A read for Today at the tap | failed: `GET /today` before bootstrap |
-| Assistant, section or group name bound back at 255; empty assistant or blank group name allowed | each failed its own case |
+| Mutation                                                                                        | Result                                                          |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| The write not read back                                                                         | failed: the case where storage silently drops it                |
+| No `undo` when the record was not kept                                                          | failed: both cases, the record left as the under-way mark       |
+| No word to the person                                                                           | failed: both cases                                              |
+| `signOutHere` without `ownTree`                                                                 | failed: the case where another tab already signed member two in |
+| The button without its refusal handler                                                          | the run failed on an unhandled rejection                        |
+| No cover on `pagehide`                                                                          | failed: both saved-home cache cases                             |
+| The saved home counts the copy's unread marks                                                   | failed: `(3) WildBots`                                          |
+| A read for Today at the tap                                                                     | failed: `GET /today` before bootstrap                           |
+| Assistant, section or group name bound back at 255; empty assistant or blank group name allowed | each failed its own case                                        |
 
 ## Checks
 
@@ -100,15 +100,15 @@ and `origin/main` at `e7cd5ac`. Their changes and red runs are in
 
 How the address resolves on this branch, the saved home included:
 
-| Case | Address |
-| --- | --- |
-| Same account put back by another tab's failed sign-in | kept, with its chat and fragment |
-| Another account settles | reset before it draws |
-| Sign-out, online or offline, from any screen | reset before sign-in draws |
-| Address opened while signed out | kept for the next sign-in |
-| Connecting screen under a record that names an account | reset at the next account or sign-out |
-| Saved home, with or without a record naming its account | reset at the next account or sign-out |
-| Saved home drawn, bootstrap names another account | the generation ends and the address resets |
+| Case                                                    | Address                                    |
+| ------------------------------------------------------- | ------------------------------------------ |
+| Same account put back by another tab's failed sign-in   | kept, with its chat and fragment           |
+| Another account settles                                 | reset before it draws                      |
+| Sign-out, online or offline, from any screen            | reset before sign-in draws                 |
+| Address opened while signed out                         | kept for the next sign-in                  |
+| Connecting screen under a record that names an account  | reset at the next account or sign-out      |
+| Saved home, with or without a record naming its account | reset at the next account or sign-out      |
+| Saved home drawn, bootstrap names another account       | the generation ends and the address resets |
 
 ### Finding 4, the push subscription at sign-out
 
@@ -137,12 +137,12 @@ the names alone, which a row's text mixes with its description.
 
 ### Red runs
 
-| Mutation | Result |
-| --- | --- |
-| The saved home does not mark its account | failed: the bootstrap-as-someone-else test and the no-record sign-out test |
-| `accountNamed` ignores the saved home's account | failed: the bootstrap-as-someone-else test |
-| The offline sign-out keeps the subscription | failed: the offline sign-out test; the next test failed after it, since the first stopped before ending the server's session |
-| The subscription ends before the record sticks | failed: the refused-storage test |
+| Mutation                                        | Result                                                                                                                       |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| The saved home does not mark its account        | failed: the bootstrap-as-someone-else test and the no-record sign-out test                                                   |
+| `accountNamed` ignores the saved home's account | failed: the bootstrap-as-someone-else test                                                                                   |
+| The offline sign-out keeps the subscription     | failed: the offline sign-out test; the next test failed after it, since the first stopped before ending the server's session |
+| The subscription ends before the record sticks  | failed: the refused-storage test                                                                                             |
 
 ### Checks on the final head
 
@@ -175,11 +175,11 @@ are the same here as on the base.
 This branch adds one record to the page-side table, the offline sign-out's
 `{ signedOut, logout, user }`:
 
-| This tab | Record | Address | Test |
-| --- | --- | --- | --- |
-| The tab that signs out offline | its own `logout` record | dropped | saved-roster-ui: "leaves nothing of member one's for the next member: no address, fragment or push subscription" |
-| Showing member one in another tab | `logout` record | dropped: it is a sign-out to `accountOf` | same branch as the logout-record rows of the base table |
-| Opening during a sign-in that began from a `logout` record | the mark carries `fromSignedOut` | kept for the next sign-in, as after any sign-out | the writer's sign-out row in account-epoch.test.ts: `previous.signedOut` is the branch for both |
+| This tab                                                   | Record                           | Address                                          | Test                                                                                                             |
+| ---------------------------------------------------------- | -------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| The tab that signs out offline                             | its own `logout` record          | dropped                                          | saved-roster-ui: "leaves nothing of member one's for the next member: no address, fragment or push subscription" |
+| Showing member one in another tab                          | `logout` record                  | dropped: it is a sign-out to `accountOf`         | same branch as the logout-record rows of the base table                                                          |
+| Opening during a sign-in that began from a `logout` record | the mark carries `fromSignedOut` | kept for the next sign-in, as after any sign-out | the writer's sign-out row in account-epoch.test.ts: `previous.signedOut` is the branch for both                  |
 
 ### Red runs on this branch
 
@@ -227,29 +227,29 @@ Changes, all in `src/app/account-epoch.ts`:
 
 The page-side table gains rows:
 
-| This tab | Record | Address | Test |
-| --- | --- | --- | --- |
-| Opening | Fresh mark that carries `logout` | waits; owes nothing yet | account-epoch: "waits on a fresh mark that carries it" |
-| Opening | The same mark, gone stale | none; signed-out start, logout owed | account-epoch: "starts signed out, and owes the logout, once a mark that carries it goes stale"; saved-roster-ui: "still reads nothing as member one when a sign-in begun over the offline sign-out hangs" |
-| Opening | A stale mark begun over another tab's mark that carried it | none; signed-out start, logout owed | account-epoch: "owes it for a stale mark begun over another tab's mark too" |
-| Opening | A stale mark without the flag | as before: bootstrap decides | account-epoch: "lets bootstrap decide for a stale mark that carries no flag" |
+| This tab | Record                                                     | Address                             | Test                                                                                                                                                                                                       |
+| -------- | ---------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opening  | Fresh mark that carries `logout`                           | waits; owes nothing yet             | account-epoch: "waits on a fresh mark that carries it"                                                                                                                                                     |
+| Opening  | The same mark, gone stale                                  | none; signed-out start, logout owed | account-epoch: "starts signed out, and owes the logout, once a mark that carries it goes stale"; saved-roster-ui: "still reads nothing as member one when a sign-in begun over the offline sign-out hangs" |
+| Opening  | A stale mark begun over another tab's mark that carried it | none; signed-out start, logout owed | account-epoch: "owes it for a stale mark begun over another tab's mark too"                                                                                                                                |
+| Opening  | A stale mark without the flag                              | as before: bootstrap decides        | account-epoch: "lets bootstrap decide for a stale mark that carries no flag"                                                                                                                               |
 
 ### Red runs
 
 Each protecting line broken by hand, `tests/account-epoch.test.ts` and `tests/saved-roster-ui.test.ts`
 run, the line restored:
 
-| Mutation | Result |
-| --- | --- |
-| The mark drops `logout` (the reviewer's sequence) | failed: the UI sequence and both writer rows over a record that carries it |
-| The mark carries it only over a settled sign-out | failed: the writer row over another tab's mark |
-| The mark carries it over every record | failed: the writer rows over a server-taken sign-out and over member one signed in |
-| `owesLogout` ignores a stale mark | failed: the stale-mark tests and the UI sequence |
-| `owesLogout` counts a fresh mark | failed: the fresh-mark test |
-| `accountStart`'s signed-out rule ignores a stale mark | failed: the stale-mark tests and the UI sequence |
-| `pendingSignOut` ignores a stale mark | failed: the stale-mark tests and the UI sequence |
-| `signOutFinished` ignores a stale mark | failed: the stale-mark test and the UI sequence |
-| `accountStart` does not tell the worker for such a mark | failed: the new worker-word test |
+| Mutation                                                | Result                                                                             |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| The mark drops `logout` (the reviewer's sequence)       | failed: the UI sequence and both writer rows over a record that carries it         |
+| The mark carries it only over a settled sign-out        | failed: the writer row over another tab's mark                                     |
+| The mark carries it over every record                   | failed: the writer rows over a server-taken sign-out and over member one signed in |
+| `owesLogout` ignores a stale mark                       | failed: the stale-mark tests and the UI sequence                                   |
+| `owesLogout` counts a fresh mark                        | failed: the fresh-mark test                                                        |
+| `accountStart`'s signed-out rule ignores a stale mark   | failed: the stale-mark tests and the UI sequence                                   |
+| `pendingSignOut` ignores a stale mark                   | failed: the stale-mark tests and the UI sequence                                   |
+| `signOutFinished` ignores a stale mark                  | failed: the stale-mark test and the UI sequence                                    |
+| `accountStart` does not tell the worker for such a mark | failed: the new worker-word test                                                   |
 
 Every mutation in the account-transitions fifth round's table, run again on this branch's merged
 code: the same result for each, with the same counts in the enumeration (4,000 orders from seed 1:
@@ -263,7 +263,6 @@ the reads, 4 of 40,000 four-word orders).
 tests. `npm run build`: pass. `npm run test:e2e`: 38 passed. Orderings, no order broke an invariant:
 three words, 20,000 orders each from seeds 1, 100001 and 200001; four words, 40,000 orders each from
 the same seeds. Ran on the commit before this ledger entry, after a real `npm ci`.
-
 
 ## Sixth review: Claude Opus 5.5 on `e211c13`
 

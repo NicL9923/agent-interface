@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 
-// All four checks own their prerequisites. None consumes another check's output.
-const checks = ["lint", "typecheck", "build", "test"];
+// All five checks own their prerequisites. None consumes another check's output.
+const checks = ["lint", "format:check", "typecheck", "build", "test"];
 const results = await Promise.allSettled(
   checks.map(
     (name) =>

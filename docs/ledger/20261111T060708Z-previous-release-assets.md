@@ -69,27 +69,27 @@ previous release without assets; a first release writes nothing; an unwritable n
 A scratch runner applied each replacement, ran the file (`vitest run`, or `python3 -B -m unittest` with
 `PYTHONDONTWRITEBYTECODE=1` and every `__pycache__` removed), and restored it. All 19 went red; the restored tree then passed.
 
-| Broken | Red |
-| --- | --- |
-| `setHeaders` ignores the previous release's files | the served-file test and the linked-directory test |
-| The 404 handler never looks in the previous release | the same two |
-| Any method may read the previous release | the POST test |
-| No hashed-name rule | the name-rule test |
-| No containment check | the links test |
-| A directory named like an asset is served | the name-rule test |
-| The configured directory is not resolved with `realpath` | the linked-directory test |
-| A relative path in the file is accepted | the bad-file test |
-| A non-string `assets` is accepted (`String(x)`) | the bad-file test, after a case with an array was added: it first survived |
-| An unreadable file is silent | the bad-file test |
-| A missing file warns | the bad-file test |
-| The app reads another file name | the contract test and the default-path test |
-| The tooling writes another file name | the contract test |
-| `switch` does not name the previous release | 4 tests |
-| A switch to the live release names itself | the stale-name test |
-| A previous release without assets is named | the stale-name test |
-| A stale name is never removed | the stale-name test |
-| A failed write stops the cutover | the unwritable-name test |
-| The release root is named, not its assets directory | the naming test and the stale-name test |
+| Broken                                                   | Red                                                                        |
+| -------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `setHeaders` ignores the previous release's files        | the served-file test and the linked-directory test                         |
+| The 404 handler never looks in the previous release      | the same two                                                               |
+| Any method may read the previous release                 | the POST test                                                              |
+| No hashed-name rule                                      | the name-rule test                                                         |
+| No containment check                                     | the links test                                                             |
+| A directory named like an asset is served                | the name-rule test                                                         |
+| The configured directory is not resolved with `realpath` | the linked-directory test                                                  |
+| A relative path in the file is accepted                  | the bad-file test                                                          |
+| A non-string `assets` is accepted (`String(x)`)          | the bad-file test, after a case with an array was added: it first survived |
+| An unreadable file is silent                             | the bad-file test                                                          |
+| A missing file warns                                     | the bad-file test                                                          |
+| The app reads another file name                          | the contract test and the default-path test                                |
+| The tooling writes another file name                     | the contract test                                                          |
+| `switch` does not name the previous release              | 4 tests                                                                    |
+| A switch to the live release names itself                | the stale-name test                                                        |
+| A previous release without assets is named               | the stale-name test                                                        |
+| A stale name is never removed                            | the stale-name test                                                        |
+| A failed write stops the cutover                         | the unwritable-name test                                                   |
+| The release root is named, not its assets directory      | the naming test and the stale-name test                                    |
 
 Four breaks were equivalent and the code they guarded was deleted rather than tested: a NUL and a backslash refusal in
 `previousAssetFile` (`fs` already throws on a NUL and Linux has no backslash separator), an `Array.isArray` check (an array has no
@@ -101,13 +101,13 @@ Four breaks were equivalent and the code they guarded was deleted rather than te
 `.agents/tools/check-all --py always --keep-going` on the tree before the documentation sentences were corrected: all 7 passed in
 6m35s, 18.8 s of it queued for the machine's heavy slot.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 205 files, 3,680 tests passed |
-| `npm run build` | 892 modules |
-| `npm run test:e2e` | 40 tests passed (ports 24826, 24827) |
-| `npm run test:py` | 46 files passed in 4m21s |
+| Check                                    | Result                               |
+| ---------------------------------------- | ------------------------------------ |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                               |
+| `npm test`                               | 205 files, 3,680 tests passed        |
+| `npm run build`                          | 892 modules                          |
+| `npm run test:e2e`                       | 40 tests passed (ports 24826, 24827) |
+| `npm run test:py`                        | 46 files passed in 4m21s             |
 
 ## Production compression, read from the repository only
 
@@ -162,9 +162,9 @@ the production host was not touched.
 Each line was broken, `npx vitest run tests/static-cache.test.ts` run, and the file restored from a copy (a `git checkout` restore
 once reverted uncommitted edits during this session; none were committed that way).
 
-| Broken line | Result |
-| --- | --- |
-| `isPreviousAsset` without the name test | red, 1: "counts a hashed name there and nothing else" |
+| Broken line                                                 | Result                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isPreviousAsset` without the name test                     | red, 1: "counts a hashed name there and nothing else"                                                                                                                                                                                                    |
 | the default back to `resolve("dist/previous-release.json")` | red, 1: "reads the file the deploy tooling writes, in the place the tooling writes it". The two paths are the same when the client root is `dist/client`, so only the source-text contract tells them apart; the by-construction derivation is the guard |
 
 The saving of the syscall itself is not asserted: it is the same early return, and spying on `node:fs` in ESM would test the spy.
@@ -173,12 +173,12 @@ The saving of the syscall itself is not asserted: it is the same early return, a
 
 `.agents/tools/check-all --py always --keep-going` on `3ddd3e4`: all 7 passed in 9m12s, 3m01s of it queued behind another session.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 205 files, 3,684 tests passed |
-| `npm run build` | 892 modules |
-| `npm run test:e2e` | 40 tests passed (ports 24302, 24303) |
-| `npm run test:py` | 46 files passed in 4m37s |
+| Check                                    | Result                               |
+| ---------------------------------------- | ------------------------------------ |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                               |
+| `npm test`                               | 205 files, 3,684 tests passed        |
+| `npm run build`                          | 892 modules                          |
+| `npm run test:e2e`                       | 40 tests passed (ports 24302, 24303) |
+| `npm run test:py`                        | 46 files passed in 4m37s             |
 
 Independent review of this commit is owed: the implementer is Claude Sonnet 5.5 and the previous head was reviewed by Claude Opus 5.5.

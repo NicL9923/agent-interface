@@ -11,7 +11,9 @@ export const deviceTimezone = () => Intl.DateTimeFormat().resolvedOptions().time
  */
 export function savedPreferences(error: unknown): Preferences | undefined {
   const value = error instanceof ApiError ? error.data?.preferences : undefined;
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Preferences : undefined;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Preferences)
+    : undefined;
 }
 
 /** Applies what the server saved, whether the request succeeded or failed after saving; a failure still rejects with its message. */
@@ -28,11 +30,22 @@ async function applying(work: Promise<Preferences>, apply: (value: Preferences) 
 }
 
 /** Makes an assistant this person's main one, or clears it with null, and applies what was saved. */
-export const chooseMain = (botId: string | null, apply: (value: Preferences) => void): Promise<Preferences> =>
-  applying(request("PUT /preferences/main", { body: { botId } }), apply);
+export const chooseMain = (
+  botId: string | null,
+  apply: (value: Preferences) => void,
+): Promise<Preferences> => applying(request("PUT /preferences/main", { body: { botId } }), apply);
 
 /** Turns check-ins on or off, or changes how often they run, keeping the other setting, and applies what was saved. */
-export function saveCheckIns(current: Preferences["checkIns"], change: Partial<CheckInSettings>, apply: (value: Preferences) => void): Promise<Preferences> {
-  const body: CheckInSettings = { enabled: current?.enabled ?? false, everyHours: current?.everyHours ?? CHECK_IN_HOURS.default, timezone: deviceTimezone(), ...change };
+export function saveCheckIns(
+  current: Preferences["checkIns"],
+  change: Partial<CheckInSettings>,
+  apply: (value: Preferences) => void,
+): Promise<Preferences> {
+  const body: CheckInSettings = {
+    enabled: current?.enabled ?? false,
+    everyHours: current?.everyHours ?? CHECK_IN_HOURS.default,
+    timezone: deviceTimezone(),
+    ...change,
+  };
   return applying(request("PUT /preferences/check-ins", { body }), apply);
 }

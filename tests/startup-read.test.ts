@@ -18,12 +18,13 @@ const LEAN = "/bootstrap?roster=lean";
 type Call = { url: string; init: RequestInit };
 let calls: Call[];
 let answers: (() => Promise<Response>)[];
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const bootstrap = { user: { id: "one" }, bots: [] };
 const leanBootstrap = () => request("GET /bootstrap", { query: { roster: "lean" } });
 type Read = { path: string; abort(): void };
 const startup = () => window.__wildbotsStartup as { version: number; reads: Read[] } | undefined;
-const paths = () => startup()?.reads.map(read => read.path);
+const paths = () => startup()?.reads.map((read) => read.path);
 
 beforeEach(() => {
   vi.useFakeTimers({ now: NOW });
@@ -33,12 +34,15 @@ beforeEach(() => {
   document.documentElement.setAttribute("data-theme", "system");
   calls = [];
   answers = [];
-  vi.stubGlobal("fetch", vi.fn((url: string, init: RequestInit = {}) => {
-    calls.push({ url, init });
-    const next = answers.shift();
-    if (!next) throw new Error(`Unexpected request ${url}`);
-    return next();
-  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string, init: RequestInit = {}) => {
+      calls.push({ url, init });
+      const next = answers.shift();
+      if (!next) throw new Error(`Unexpected request ${url}`);
+      return next();
+    }),
+  );
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -56,7 +60,12 @@ describe("the read boot.js starts", () => {
     const early = calls.shift()!;
     expect(early.url).toBe(own.url);
     // Everything the server sees: method, cookie, cache mode and headers. api() sends none on a GET it has no copy of.
-    const sent = ({ init }: Call) => ({ method: init.method ?? "GET", credentials: init.credentials, cache: init.cache, headers: [...new Headers(init.headers)] });
+    const sent = ({ init }: Call) => ({
+      method: init.method ?? "GET",
+      credentials: init.credentials,
+      cache: init.cache,
+      headers: [...new Headers(init.headers)],
+    });
     expect(sent(early)).toEqual(sent(own));
     expect(paths()).toEqual([LEAN]);
   });
@@ -65,7 +74,7 @@ describe("the read boot.js starts", () => {
     answers.push(async () => json(bootstrap));
     runBoot();
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
-    expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`]);
+    expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`]);
     // Taken once: the next bootstrap reads again.
     answers.push(async () => json({ ...bootstrap, bots: [{ id: "later" }] }));
     await expect(leanBootstrap()).resolves.toMatchObject({ bots: [{ id: "later" }] });
@@ -74,7 +83,10 @@ describe("the read boot.js starts", () => {
 
   it("is taken once, so the read after an error answer asks the server again", async () => {
     // An error is not cached, so nothing else stops the next read from taking the spent one.
-    answers.push(async () => json({ error: "Hermes is restarting" }, 503), async () => json(bootstrap));
+    answers.push(
+      async () => json({ error: "Hermes is restarting" }, 503),
+      async () => json(bootstrap),
+    );
     runBoot();
     await expect(leanBootstrap()).rejects.toMatchObject({ status: 503 });
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
@@ -82,11 +94,20 @@ describe("the read boot.js starts", () => {
   });
 
   it.each([
-    { state: "device-only sign-out", record: { id: "out", at: NOW, signedOut: true, logout: true, user: "one" } },
-    { state: "an abandoned sign-in carrying pending logout", record: { id: "abandoned", at: NOW - 70_000, changing: true, logout: true } },
+    {
+      state: "device-only sign-out",
+      record: { id: "out", at: NOW, signedOut: true, logout: true, user: "one" },
+    },
+    {
+      state: "an abandoned sign-in carrying pending logout",
+      record: { id: "abandoned", at: NOW - 70_000, changing: true, logout: true },
+    },
   ])("does not read with the old cookie or restore its theme after $state", ({ record }) => {
     localStorage.setItem(authEpochKey, JSON.stringify(record));
-    localStorage.setItem(signInHintKey, JSON.stringify({ until: NOW + 60_000, user: "one", bots: ["ranch"] }));
+    localStorage.setItem(
+      signInHintKey,
+      JSON.stringify({ until: NOW + 60_000, user: "one", bots: ["ranch"] }),
+    );
     localStorage.setItem(savedThemeKey, JSON.stringify({ v: 1, user: "one", theme: "dark" }));
     history.replaceState(null, "", "/?bot=ranch");
     try {
@@ -94,17 +115,22 @@ describe("the read boot.js starts", () => {
       expect(calls).toEqual([]);
       expect(window.__wildbotsStartup).toBeUndefined();
       expect(document.documentElement.getAttribute("data-theme")).toBe("system");
-    } finally { history.replaceState(null, "", "/"); }
+    } finally {
+      history.replaceState(null, "", "/");
+    }
   });
 
   it.each([
     { state: "a completed server sign-out", fields: { signedOut: true, logout: false } },
-    { state: "a logout flag with no signed-out or changing state", fields: { logout: true, signedOut: false, changing: false } },
+    {
+      state: "a logout flag with no signed-out or changing state",
+      fields: { logout: true, signedOut: false, changing: false },
+    },
   ])("still reads when $state does not owe logout", ({ fields }) => {
     localStorage.setItem(authEpochKey, JSON.stringify({ id: "settled", at: NOW, ...fields }));
     answers.push(async () => json(bootstrap));
     runBoot();
-    expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`]);
+    expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`]);
     expect(paths()).toEqual([LEAN]);
   });
 
@@ -117,12 +143,15 @@ describe("the read boot.js starts", () => {
 
   it.each([
     ["a network failure", () => Promise.reject(new TypeError("Failed to fetch"))],
-    ["an abort", () => Promise.reject(new DOMException("The operation was aborted.", "AbortError"))],
+    [
+      "an abort",
+      () => Promise.reject(new DOMException("The operation was aborted.", "AbortError")),
+    ],
   ])("hands over to the app's own read after %s", async (_name, failure) => {
     answers.push(failure, async () => json(bootstrap));
     runBoot();
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
-    expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`, `/api${LEAN}`]);
+    expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`, `/api${LEAN}`]);
   });
 
   it("is judged as the app's own answer would be: a refused session is the sign-in, read once", async () => {
@@ -139,10 +168,13 @@ describe("the read boot.js starts", () => {
   });
 
   it("is left for its own path: another read of bootstrap reads for itself", async () => {
-    answers.push(async () => json(bootstrap), async () => json({ user: { id: "one" } }));
+    answers.push(
+      async () => json(bootstrap),
+      async () => json({ user: { id: "one" } }),
+    );
     runBoot();
     await request("GET /bootstrap");
-    expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`, "/api/bootstrap"]);
+    expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`, "/api/bootstrap"]);
     expect(paths()).toEqual([LEAN]);
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
     expect(calls).toHaveLength(2);
@@ -150,16 +182,35 @@ describe("the read boot.js starts", () => {
 
   type Startup = { version: number; epoch: string; reads: object[] };
   it.each<[string, (startup: Startup) => unknown]>([
-    ["a version from the future", startup => ({ ...startup, version: STARTUP_READ_VERSION + 1 })],
-    ["a read with no response", startup => ({ ...startup, reads: [{ ...startup.reads[0], response: undefined }] })],
-    ["a read whose path is not text", startup => ({ ...startup, reads: [{ ...startup.reads[0], path: 1 }] })],
-    ["a read with no way to abort it, beside a good one", startup => ({ ...startup, reads: [...startup.reads, { path: "/groups", response: Promise.resolve(json({})) }] })],
-    ["reads that are not a list", startup => ({ ...startup, reads: startup.reads[0] })],
+    ["a version from the future", (startup) => ({ ...startup, version: STARTUP_READ_VERSION + 1 })],
+    [
+      "a read with no response",
+      (startup) => ({ ...startup, reads: [{ ...startup.reads[0], response: undefined }] }),
+    ],
+    [
+      "a read whose path is not text",
+      (startup) => ({ ...startup, reads: [{ ...startup.reads[0], path: 1 }] }),
+    ],
+    [
+      "a read with no way to abort it, beside a good one",
+      (startup) => ({
+        ...startup,
+        reads: [...startup.reads, { path: "/groups", response: Promise.resolve(json({})) }],
+      }),
+    ],
+    ["reads that are not a list", (startup) => ({ ...startup, reads: startup.reads[0] })],
     // An older release's boot.js left one read, with its own abort.
-    ["the shape an older release left", startup => ({ version: STARTUP_READ_VERSION - 1, ...startup.reads[0] })],
+    [
+      "the shape an older release left",
+      (startup) => ({ version: STARTUP_READ_VERSION - 1, ...startup.reads[0] }),
+    ],
   ])("is dropped, and aborted, when it has %s", async (_name, change) => {
     const abort = vi.fn();
-    window.__wildbotsStartup = change({ version: STARTUP_READ_VERSION, epoch: "", reads: [{ path: LEAN, response: Promise.resolve(json({ user: { id: "stale" } })), abort }] });
+    window.__wildbotsStartup = change({
+      version: STARTUP_READ_VERSION,
+      epoch: "",
+      reads: [{ path: LEAN, response: Promise.resolve(json({ user: { id: "stale" } })), abort }],
+    });
     answers.push(async () => json(bootstrap));
     await expect(leanBootstrap()).resolves.toEqual(bootstrap);
     expect(abort).toHaveBeenCalled();
@@ -186,12 +237,18 @@ describe("the read boot.js starts", () => {
 
   it("counts toward the app's deadline, which aborts it without a second read", async () => {
     let signal: AbortSignal | undefined;
-    answers.push(() => new Promise<Response>((_resolve, reject) => {
-      signal = calls[0].init.signal!;
-      signal.addEventListener("abort", () => reject(signal!.reason), { once: true });
-    }));
+    answers.push(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          signal = calls[0].init.signal!;
+          signal.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        }),
+    );
     runBoot();
-    const failure = expect(leanBootstrap()).rejects.toMatchObject({ status: 504, code: "CONNECTION_UNAVAILABLE" });
+    const failure = expect(leanBootstrap()).rejects.toMatchObject({
+      status: 504,
+      code: "CONNECTION_UNAVAILABLE",
+    });
     await vi.advanceTimersByTimeAsync(20_000);
     await failure;
     expect(signal?.aborted).toBe(true);
@@ -204,20 +261,33 @@ describe("the read boot.js starts", () => {
       response.writeHead(200, { "Content-Type": "application/json" });
       response.write('{"user":');
     });
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Expected a loopback port");
     let headersArrived!: () => void;
-    const headers = new Promise<void>(resolve => { headersArrived = resolve; });
-    let settled = false, failure: unknown;
+    const headers = new Promise<void>((resolve) => {
+      headersArrived = resolve;
+    });
+    let settled = false,
+      failure: unknown;
     answers.push(async () => {
-      const response = await networkFetch(`http://127.0.0.1:${address.port}/api${LEAN}`, { signal: calls[0].init.signal });
+      const response = await networkFetch(`http://127.0.0.1:${address.port}/api${LEAN}`, {
+        signal: calls[0].init.signal,
+      });
       headersArrived();
       return response;
     });
     try {
       runBoot();
-      void leanBootstrap().then(() => { settled = true; }, error => { failure = error; settled = true; });
+      void leanBootstrap().then(
+        () => {
+          settled = true;
+        },
+        (error) => {
+          failure = error;
+          settled = true;
+        },
+      );
       await headers;
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(19_999);
@@ -226,28 +296,46 @@ describe("the read boot.js starts", () => {
       await nextTurn();
       await vi.waitFor(() => expect(settled).toBe(true), { timeout: 500 });
       expect(failure).toMatchObject({ status: 504, code: "CONNECTION_UNAVAILABLE" });
-      expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`]);
+      expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`]);
       expect(calls[0].init.signal?.aborted).toBe(true);
     } finally {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
     }
   });
 
   describe("for a linked chat", () => {
     const linked = (url = "/?bot=ranch", bots = ["ranch"]) => {
-      localStorage.setItem(signInHintKey, JSON.stringify({ until: NOW + 60_000, user: "one", bots }));
+      localStorage.setItem(
+        signInHintKey,
+        JSON.stringify({ until: NOW + 60_000, user: "one", bots }),
+      );
       history.replaceState(null, "", url);
     };
-    const chatPage = () => request("GET /bots/:id/conversation", { params: { id: "ranch" }, query: firstQuery });
-    const page = { botId: "ranch", messages: [], approvals: [], files: [], activity: { state: "idle" } };
-    afterEach(() => { history.replaceState(null, "", "/"); vi.restoreAllMocks(); });
+    const chatPage = () =>
+      request("GET /bots/:id/conversation", { params: { id: "ranch" }, query: firstQuery });
+    const page = {
+      botId: "ranch",
+      messages: [],
+      approvals: [],
+      files: [],
+      activity: { state: "idle" },
+    };
+    afterEach(() => {
+      history.replaceState(null, "", "/");
+      vi.restoreAllMocks();
+    });
 
     it("reads the chat's first page beside bootstrap, at the path the bundle reads it, and each is taken once on its own", async () => {
       linked();
-      answers.push(async () => json(bootstrap), async () => json(page));
+      answers.push(
+        async () => json(bootstrap),
+        async () => json(page),
+      );
       runBoot();
-      expect(calls.map(call => call.url)).toEqual([`/api${LEAN}`, `/api${firstPage("ranch")}`]);
+      expect(calls.map((call) => call.url)).toEqual([`/api${LEAN}`, `/api${firstPage("ranch")}`]);
       await expect(chatPage()).resolves.toEqual(page);
       expect(paths()).toEqual([LEAN]);
       await expect(leanBootstrap()).resolves.toEqual(bootstrap);
@@ -256,7 +344,10 @@ describe("the read boot.js starts", () => {
     });
 
     it.each<[string, () => void]>([
-      ["a hidden page, which reads no chat ahead", () => vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden")],
+      [
+        "a hidden page, which reads no chat ahead",
+        () => vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden"),
+      ],
       ["an offline browser", () => vi.spyOn(navigator, "onLine", "get").mockReturnValue(false)],
       ["a chat this browser's sign-in does not list", () => linked("/?bot=ranch", ["home"])],
       ["a link to one message", () => linked("/?bot=ranch&message=ranch-1")],
@@ -270,31 +361,46 @@ describe("the read boot.js starts", () => {
 
     it("is dropped with bootstrap's when the account changes before the app asks for either", async () => {
       linked();
-      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      answers.push(
+        () => new Promise<Response>(() => {}),
+        () => new Promise<Response>(() => {}),
+      );
       runBoot();
-      const signals = calls.map(call => call.init.signal!);
+      const signals = calls.map((call) => call.init.signal!);
       clearResponseCache();
-      expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
+      expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
       expect(startup()).toBeUndefined();
     });
 
     it("is not taken under another account record, and nor is bootstrap's", async () => {
       linked();
-      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      answers.push(
+        () => new Promise<Response>(() => {}),
+        () => new Promise<Response>(() => {}),
+      );
       runBoot();
-      localStorage.setItem("agent-interface:auth-epoch", JSON.stringify({ id: "elsewhere", at: NOW, user: "two" }));
+      localStorage.setItem(
+        "agent-interface:auth-epoch",
+        JSON.stringify({ id: "elsewhere", at: NOW, user: "two" }),
+      );
       answers.push(async () => json(page));
       await expect(chatPage()).resolves.toEqual(page);
-      expect(calls.map(call => call.init.signal!.aborted)).toEqual([true, true, false]);
+      expect(calls.map((call) => call.init.signal!.aborted)).toEqual([true, true, false]);
       expect(startup()).toBeUndefined();
     });
 
     it("lets both go after a minute when no bundle asks for them", async () => {
       linked();
-      answers.push(() => new Promise<Response>(() => {}), () => new Promise<Response>(() => {}));
+      answers.push(
+        () => new Promise<Response>(() => {}),
+        () => new Promise<Response>(() => {}),
+      );
       runBoot();
       await vi.advanceTimersByTimeAsync(60_000);
-      expect([startup(), calls.map(call => call.init.signal!.aborted)]).toEqual([undefined, [true, true]]);
+      expect([startup(), calls.map((call) => call.init.signal!.aborted)]).toEqual([
+        undefined,
+        [true, true],
+      ]);
     });
   });
 
@@ -310,11 +416,24 @@ describe("the read boot.js starts", () => {
 });
 
 describe("the theme boot.js applies before the bundle", () => {
-  const hint = (value: Record<string, unknown> = {}) => ({ until: NOW + 60_000, user: "one", bots: [], ...value });
-  const theme = (value: Record<string, unknown> = {}) => ({ v: 1, user: "one", theme: "dark", ...value });
-  const store = (key: string, value: unknown) => localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
+  const hint = (value: Record<string, unknown> = {}) => ({
+    until: NOW + 60_000,
+    user: "one",
+    bots: [],
+    ...value,
+  });
+  const theme = (value: Record<string, unknown> = {}) => ({
+    v: 1,
+    user: "one",
+    theme: "dark",
+    ...value,
+  });
+  const store = (key: string, value: unknown) =>
+    localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
   const shown = () => document.documentElement.getAttribute("data-theme");
-  beforeEach(() => { answers.push(async () => json(bootstrap)); });
+  beforeEach(() => {
+    answers.push(async () => json(bootstrap));
+  });
 
   it("is the one this device last showed the account its sign-in names", () => {
     store(signInHintKey, hint());
@@ -355,7 +474,9 @@ describe("the theme boot.js applies before the bundle", () => {
   });
 
   it("leaves the default, and still starts the read, when storage is blocked", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new DOMException("Blocked", "SecurityError"); });
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new DOMException("Blocked", "SecurityError");
+    });
     runBoot();
     expect([shown(), calls.length]).toEqual(["system", 1]);
   });

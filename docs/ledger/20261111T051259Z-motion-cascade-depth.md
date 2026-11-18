@@ -17,11 +17,11 @@ on the dev server. `tests/motion-css-order.test.ts` listed five such collisions,
 menus, Settings, the command palette and a chat, light and dark, build against the Vite dev server, motion reduced,
 transitions off. Differences per run, at 900 px and at 390 px (identical both times):
 
-| | main | this branch |
-| --- | --- | --- |
-| differing lines | 70 | 0 |
-| light | `box-shadow` on `.bot-menu`, `.home-new-menu` (account menu), `.settings-sheet`, `.command-palette`; Settings `p.muted` font-size 12px (build) / 13px (dev), margins 6px 0 0 / 7px, `label.notification-toggle` gap 10px / 9px, and the heights and widths they move | none |
-| dark | the same, plus `aside.bot-rail` `background-image` none (build) / the grain (dev), on every screen | none |
+|                 | main                                                                                                                                                                                                                                                                 | this branch |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| differing lines | 70                                                                                                                                                                                                                                                                   | 0           |
+| light           | `box-shadow` on `.bot-menu`, `.home-new-menu` (account menu), `.settings-sheet`, `.command-palette`; Settings `p.muted` font-size 12px (build) / 13px (dev), margins 6px 0 0 / 7px, `label.notification-toggle` gap 10px / 9px, and the heights and widths they move | none        |
+| dark            | the same, plus `aside.bot-rail` `background-image` none (build) / the grain (dev), on every screen                                                                                                                                                                   | none        |
 
 `.agents/tools/sample-entrance-animations.mjs`, build and dev, motion allowed and reduced: byte-identical before and after
 (this change touches no animation), and the build equals dev in both.
@@ -85,20 +85,20 @@ transitions off. Differences per run, at 900 px and at 390 px (identical both ti
 
 Each protecting line broken by hand, the guard run, the line restored.
 
-| Broken | Result |
-| --- | --- |
-| `box-shadow` back on `.bot-menu` in `home.css` | motion-css-order: "leaves each property it sets on a selector to it alone" red |
-| `box-shadow` back on `.command-palette` in `shell.css` | the same test red |
-| `.bot-rail` base `background-color` back to `background` | the same test red |
-| phone `.bot-rail` `background-color` back to `background` | the same test red |
-| the longhand rule removed from `overlap` | the same test red (rail color against grain) |
-| `.jump-latest` back in the shared edge list | "lists in the lit-edge rule only selectors no other sheet gives a shadow" red |
-| `(min-width: 621px)` back in `artifacts.css` | "pairs the phone layout's width with a range that has no gap" red |
-| all of main's four CSS files restored | stylesheet-order e2e red, light and dark: palette, menus and Settings `box-shadow`, rail `background-image` |
-| Settings' three rules back to their short selectors | stylesheet-order e2e red, light and dark: `p.muted` font-size 12px -> 13px, the toggle's gap and the sizes they move |
-| the new blocked-toggle color rule removed from `home.css` (built) | stylesheet-order e2e, "Settings with notifications blocked", light and dark red: `color rgb(105, 114, 104) -> rgb(155, 103, 51)` (dark `rgb(166, 180, 167) -> rgb(235, 193, 136)`) and the colors that follow it |
-| the new blocked-switch opacity rule removed from `home.css` (built) | the same two tests red: `input opacity 0.45 -> 1` |
-| `.jump-latest`'s own rule removed, then cut to the edge alone | jump-button e2e red: `rgba(0,0,0,0.14) 0px 6px 22px` without an inset, then the inset without the drop |
+| Broken                                                              | Result                                                                                                                                                                                                           |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `box-shadow` back on `.bot-menu` in `home.css`                      | motion-css-order: "leaves each property it sets on a selector to it alone" red                                                                                                                                   |
+| `box-shadow` back on `.command-palette` in `shell.css`              | the same test red                                                                                                                                                                                                |
+| `.bot-rail` base `background-color` back to `background`            | the same test red                                                                                                                                                                                                |
+| phone `.bot-rail` `background-color` back to `background`           | the same test red                                                                                                                                                                                                |
+| the longhand rule removed from `overlap`                            | the same test red (rail color against grain)                                                                                                                                                                     |
+| `.jump-latest` back in the shared edge list                         | "lists in the lit-edge rule only selectors no other sheet gives a shadow" red                                                                                                                                    |
+| `(min-width: 621px)` back in `artifacts.css`                        | "pairs the phone layout's width with a range that has no gap" red                                                                                                                                                |
+| all of main's four CSS files restored                               | stylesheet-order e2e red, light and dark: palette, menus and Settings `box-shadow`, rail `background-image`                                                                                                      |
+| Settings' three rules back to their short selectors                 | stylesheet-order e2e red, light and dark: `p.muted` font-size 12px -> 13px, the toggle's gap and the sizes they move                                                                                             |
+| the new blocked-toggle color rule removed from `home.css` (built)   | stylesheet-order e2e, "Settings with notifications blocked", light and dark red: `color rgb(105, 114, 104) -> rgb(155, 103, 51)` (dark `rgb(166, 180, 167) -> rgb(235, 193, 136)`) and the colors that follow it |
+| the new blocked-switch opacity rule removed from `home.css` (built) | the same two tests red: `input opacity 0.45 -> 1`                                                                                                                                                                |
+| `.jump-latest`'s own rule removed, then cut to the edge alone       | jump-button e2e red: `rgba(0,0,0,0.14) 0px 6px 22px` without an inset, then the inset without the drop                                                                                                           |
 
 ## Checks
 

@@ -14,10 +14,10 @@ depended on when jsdom's move ran. GPT-6.1 Sol's review reproduced the second pa
 
 ## Red runs
 
-| Break | Test | Failure |
-| --- | --- | --- |
-| Refresh status back to `disabled` | `keeps Refresh status focusable while a change is busy, without refreshing on a press` | focus stayed on the title input |
-| Press guard removed | `waits for the create review result before moving focus from Refresh status` | a second read: 4 calls, expected 3 |
-| Refresh status back to `disabled` | `waits for the create review result ...` | `aria-disabled` null, expected `true` |
+| Break                             | Test                                                                                   | Failure                               |
+| --------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- |
+| Refresh status back to `disabled` | `keeps Refresh status focusable while a change is busy, without refreshing on a press` | focus stayed on the title input       |
+| Press guard removed               | `waits for the create review result before moving focus from Refresh status`           | a second read: 4 calls, expected 3    |
+| Refresh status back to `disabled` | `waits for the create review result ...`                                               | `aria-disabled` null, expected `true` |
 
 Each file was restored and `tests/automation-ui.test.ts` passed 71 of 71.

@@ -5,10 +5,18 @@ const caret = /^\^(\d+)\.(\d+)\.(\d+)$/;
 
 export function satisfiesEngine(version, range) {
   const [major, minor, patch] = version.replace(/^v/, "").split(".").map(Number);
-  return range.split("||").map(part => part.trim()).some(part => {
-    const match = caret.exec(part);
-    if (!match) throw new Error(`engines.node uses "${part}"; scripts/node-engine.mjs only understands ^MAJOR.MINOR.PATCH alternatives.`);
-    const [, wantMajor, wantMinor, wantPatch] = match.map(Number);
-    return major === wantMajor && (minor > wantMinor || (minor === wantMinor && patch >= wantPatch));
-  });
+  return range
+    .split("||")
+    .map((part) => part.trim())
+    .some((part) => {
+      const match = caret.exec(part);
+      if (!match)
+        throw new Error(
+          `engines.node uses "${part}"; scripts/node-engine.mjs only understands ^MAJOR.MINOR.PATCH alternatives.`,
+        );
+      const [, wantMajor, wantMinor, wantPatch] = match.map(Number);
+      return (
+        major === wantMajor && (minor > wantMinor || (minor === wantMinor && patch >= wantPatch))
+      );
+    });
 }

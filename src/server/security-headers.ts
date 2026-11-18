@@ -32,11 +32,15 @@ const field = (value: unknown) =>
 /** Reads report-uri (application/csp-report) and Reporting API (application/reports+json) bodies. */
 export function cspViolations(body: unknown) {
   const reports: unknown[] = Array.isArray(body)
-    ? body.filter(item => item?.type === "csp-violation").map(item => item.body)
+    ? body.filter((item) => item?.type === "csp-violation").map((item) => item.body)
     : [(body as { "csp-report"?: unknown } | null)?.["csp-report"]];
-  return reports.filter((item): item is Record<string, unknown> => !!item && typeof item === "object").slice(0, 10)
-    .map(item => ({
-      directive: field(item.effectiveDirective ?? item["effective-directive"] ?? item["violated-directive"]),
+  return reports
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .slice(0, 10)
+    .map((item) => ({
+      directive: field(
+        item.effectiveDirective ?? item["effective-directive"] ?? item["violated-directive"],
+      ),
       blocked: field(item.blockedURL ?? item["blocked-uri"]),
       document: field(item.documentURL ?? item["document-uri"]),
       source: field(item.sourceFile ?? item["source-file"]),
@@ -45,7 +49,8 @@ export function cspViolations(body: unknown) {
 }
 
 export function installSecurityHeaders(app: FastifyInstance, origin: string) {
-  const documentPolicy = contentSecurityPolicy(origin), https = new URL(origin).protocol === "https:";
+  const documentPolicy = contentSecurityPolicy(origin),
+    https = new URL(origin).protocol === "https:";
   app.addHook("onRequest", async (_req, reply) => {
     reply
       .header("X-Content-Type-Options", "nosniff")
@@ -58,18 +63,32 @@ export function installSecurityHeaders(app: FastifyInstance, origin: string) {
     // Native sign-in and the OAuth callback set their own nonce policies.
     if (reply.hasHeader("content-security-policy")) return payload;
     if (!isApiRequest(req)) reply.header("Content-Security-Policy", documentPolicy);
-    else if (!routePattern(req).startsWith("/api/files/") && String(reply.getHeader("content-type") ?? "").startsWith("application/json"))
+    else if (
+      !routePattern(req).startsWith("/api/files/") &&
+      String(reply.getHeader("content-type") ?? "").startsWith("application/json")
+    )
       reply.header("Content-Security-Policy", apiPolicy);
     return payload;
   });
-  app.addContentTypeParser(["application/csp-report", "application/reports+json"], { parseAs: "string" }, (_req, body, done) => {
-    try { done(null, JSON.parse(body as string)); }
-    catch { done(httpError(400, "Invalid violation report"), undefined); }
-  });
+  app.addContentTypeParser(
+    ["application/csp-report", "application/reports+json"],
+    { parseAs: "string" },
+    (_req, body, done) => {
+      try {
+        done(null, JSON.parse(body as string));
+      } catch {
+        done(httpError(400, "Invalid violation report"), undefined);
+      }
+    },
+  );
   const seen = new Set<string>();
-  let windowStart = 0, reports = 0;
+  let windowStart = 0,
+    reports = 0;
   app.post("/api/csp-report", { bodyLimit: 16 * 1024 }, async (req, reply) => {
-    if (Date.now() - windowStart > 60_000) { windowStart = Date.now(); reports = 0; }
+    if (Date.now() - windowStart > 60_000) {
+      windowStart = Date.now();
+      reports = 0;
+    }
     if (++reports > 30) return reply.code(429).send({ error: "Too many reports" });
     for (const violation of cspViolations(req.body)) {
       const key = `${violation.directive}|${violation.blocked}|${violation.source}`;

@@ -50,22 +50,22 @@ Slow 4G (150 ms, 1.6 Mbps down) and 4x CPU, dark theme on a light system.
 
 Run 2, medians (first to third quartile), ms from navigation start, n = 30 each:
 
-| Load | Build | Bootstrap sent | First paint | Theme | Roster painted | Light shown |
-| --- | --- | --- | --- | --- | --- | --- |
-| No worker, cold cache | base | 5596 (5593 to 5617) | 2454 (2452 to 2460) | 5953 | 5956 (5946 to 5989) | 3501 |
-| | branch | 3296 (3286 to 3304) | 2384 (2369 to 2399) | 453 | 5852 (5840 to 6070) | 0 |
-| No worker, warm cache | base | 484 (476 to 498) | 216 (212 to 231) | 836 | 837 (826 to 854) | 619 |
-| | branch | 333 (331 to 337) | 344 (340 to 356) | 333 | 836 (816 to 853) | 0 |
-| Worker's cached shell | base | 326 (319 to 334) | 60 (56 to 71) | 679 | 681 (668 to 694) | 618 |
-| | branch | 57 (53 to 66) | 78 (64 to 88) | 57 | 561 (544 to 666) | 0 |
+| Load                  | Build  | Bootstrap sent      | First paint         | Theme | Roster painted      | Light shown |
+| --------------------- | ------ | ------------------- | ------------------- | ----- | ------------------- | ----------- |
+| No worker, cold cache | base   | 5596 (5593 to 5617) | 2454 (2452 to 2460) | 5953  | 5956 (5946 to 5989) | 3501        |
+|                       | branch | 3296 (3286 to 3304) | 2384 (2369 to 2399) | 453   | 5852 (5840 to 6070) | 0           |
+| No worker, warm cache | base   | 484 (476 to 498)    | 216 (212 to 231)    | 836   | 837 (826 to 854)    | 619         |
+|                       | branch | 333 (331 to 337)    | 344 (340 to 356)    | 333   | 836 (816 to 853)    | 0           |
+| Worker's cached shell | base   | 326 (319 to 334)    | 60 (56 to 71)       | 679   | 681 (668 to 694)    | 618         |
+|                       | branch | 57 (53 to 66)       | 78 (64 to 88)       | 57    | 561 (544 to 666)    | 0           |
 
 Branch minus base, difference of medians with its 95% bootstrap interval:
 
-| Load | Roster painted | First paint | Light shown |
-| --- | --- | --- | --- |
-| No worker, cold cache | -104 (-125 to -13) | -70 (-80 to -60) | -3501 |
-| No worker, warm cache | -1 (-23 to 12), within noise | +128 (116 to 136), later | -619 |
-| Worker's cached shell | -120 (-129 to -77) | +18 (6 to 28), later | -618 |
+| Load                  | Roster painted               | First paint              | Light shown |
+| --------------------- | ---------------------------- | ------------------------ | ----------- |
+| No worker, cold cache | -104 (-125 to -13)           | -70 (-80 to -60)         | -3501       |
+| No worker, warm cache | -1 (-23 to 12), within noise | +128 (116 to 136), later | -619        |
+| Worker's cached shell | -120 (-129 to -77)           | +18 (6 to 28), later     | -618        |
 
 What this supports:
 
@@ -86,7 +86,6 @@ For `t3/saved-roster`, from run 2: roster painted 5648 cold, 567 warm and 300 un
 
 Every load in every build counted two bootstrap reads within 800 ms after bootstrap answered: the
 first, and the one the household stream makes as it connects, by design. None counted more.
-
 
 ## Application tests
 
@@ -111,15 +110,15 @@ first, and the one the household stream makes as it connects, by design. None co
   stayed while member two's bootstrap was on its way).
 - The worker case against the old rule: timed out on the network that never answers.
 
-| Mutation | Result |
-| --- | --- |
-| The claim check on the record removed | failed: the reviewer's case |
-| `boot.js` ignores a changing mark | failed: the changing-mark case |
-| `boot.js` stale bound moved by 1 ms | failed: the 65-second case |
-| `boot.js` records no record text | failed: the read taken and then outrun |
-| `api()`'s answer check removed | failed: the two-tab sign-in case; the read taken and then outrun still passed, because bootstrap's own account check refuses the answer too |
-| Theme not reset at a change | failed: the theme case |
-| Worker back to the network once the shell is out of date | failed: the never-answering network case |
+| Mutation                                                 | Result                                                                                                                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| The claim check on the record removed                    | failed: the reviewer's case                                                                                                                 |
+| `boot.js` ignores a changing mark                        | failed: the changing-mark case                                                                                                              |
+| `boot.js` stale bound moved by 1 ms                      | failed: the 65-second case                                                                                                                  |
+| `boot.js` records no record text                         | failed: the read taken and then outrun                                                                                                      |
+| `api()`'s answer check removed                           | failed: the two-tab sign-in case; the read taken and then outrun still passed, because bootstrap's own account check refuses the answer too |
+| Theme not reset at a change                              | failed: the theme case                                                                                                                      |
+| Worker back to the network once the shell is out of date | failed: the never-answering network case                                                                                                    |
 
 A completion check on the record inside `src/startup-read.ts` survived, since `api()` makes the same
 check for every answer; it was removed as dead code. So was a `typeof epoch` parse check, which the

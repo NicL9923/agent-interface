@@ -24,19 +24,44 @@ const ELEMENTS = [
   { label: ".settings-sheet[open]", tag: "dialog", className: "settings-sheet", open: true },
 ];
 const TIMES = [0, 40, 80, 140, 200, 260, 320, 380, 420];
-const port = Number(process.env.E2E_PORT) || 4199, api = `http://127.0.0.1:${port}`;
+const port = Number(process.env.E2E_PORT) || 4199,
+  api = `http://127.0.0.1:${port}`;
 const dev = process.env.MODE === "dev";
-const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "ignore", "inherit"], detached: true, env: { ...process.env, E2E_PORT: String(port) } });
+const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+  stdio: ["ignore", "ignore", "inherit"],
+  detached: true,
+  env: { ...process.env, E2E_PORT: String(port) },
+});
 let vite;
-process.on("exit", () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch {} });
-for (let i = 0; ; i++) { try { if ((await fetch(`${api}/api/auth/config`)).ok) break; } catch {} if (i > 120) throw new Error("no server"); await sleep(250); }
+process.on("exit", () => {
+  try {
+    if (server.pid) process.kill(-server.pid, "SIGTERM");
+  } catch {}
+});
+for (let i = 0; ; i++) {
+  try {
+    if ((await fetch(`${api}/api/auth/config`)).ok) break;
+  } catch {}
+  if (i > 120) throw new Error("no server");
+  await sleep(250);
+}
 let base = api;
 if (dev) {
   const { createServer } = await import("vite");
   const devPort = Number(process.env.DEV_PORT) || 5199;
   // The server refuses a write whose Origin is not its own, so the proxy presents the app server's origin.
-  const configure = proxy => proxy.on("proxyReq", request => { if (request.getHeader("origin")) request.setHeader("origin", api); });
-  vite = await createServer({ logLevel: "silent", server: { port: devPort, strictPort: true, proxy: { "/api": { target: api, ws: true, configure }, "/inline-ui": api } } });
+  const configure = (proxy) =>
+    proxy.on("proxyReq", (request) => {
+      if (request.getHeader("origin")) request.setHeader("origin", api);
+    });
+  vite = await createServer({
+    logLevel: "silent",
+    server: {
+      port: devPort,
+      strictPort: true,
+      proxy: { "/api": { target: api, ws: true, configure }, "/inline-ui": api },
+    },
+  });
   await vite.listen();
   base = `http://127.0.0.1:${devPort}`;
 }
@@ -44,37 +69,74 @@ if (dev) {
 const browser = await chromium.launch();
 const out = { mode: dev ? "dev" : "production", width: Number(process.env.WIDTH) || 900 };
 for (const motion of ["no-preference", "reduce"]) {
-  const context = await browser.newContext({ baseURL: base, serviceWorkers: "block", viewport: { width: Number(process.env.WIDTH) || 900, height: 700 }, reducedMotion: motion });
+  const context = await browser.newContext({
+    baseURL: base,
+    serviceWorkers: "block",
+    viewport: { width: Number(process.env.WIDTH) || 900, height: 700 },
+    reducedMotion: motion,
+  });
   const page = await context.newPage();
   await page.goto("/");
   await page.getByRole("button", { name: "Enter local workspace" }).click();
   const assistants = page.getByRole("region", { name: "Your assistants" });
   await assistants.getByRole("button", { name: /Ranch Hand/ }).waitFor();
-  out[motion] = await page.evaluate(({ elements, times }) => Object.fromEntries(elements.map(({ label, tag, className, open }) => {
-    const element = document.body.appendChild(document.createElement(tag));
-    element.className = className;
-    if (open) element.setAttribute("open", "");
-    const style = getComputedStyle(element);
-    const [animation] = element.getAnimations();
-    const samples = [];
-    if (animation) {
-      animation.pause();
-      for (const t of times) { animation.currentTime = t; const s = getComputedStyle(element); samples.push(`${t}ms ${(+s.opacity).toFixed(3)} ${s.transform}`); }
-    }
-    const result = { name: style.animationName, duration: style.animationDuration, easing: style.animationTimingFunction.slice(0, 40), samples };
-    element.remove();
-    return [label, result];
-  })), { elements: ELEMENTS, times: TIMES });
+  out[motion] = await page.evaluate(
+    ({ elements, times }) =>
+      Object.fromEntries(
+        elements.map(({ label, tag, className, open }) => {
+          const element = document.body.appendChild(document.createElement(tag));
+          element.className = className;
+          if (open) element.setAttribute("open", "");
+          const style = getComputedStyle(element);
+          const [animation] = element.getAnimations();
+          const samples = [];
+          if (animation) {
+            animation.pause();
+            for (const t of times) {
+              animation.currentTime = t;
+              const s = getComputedStyle(element);
+              samples.push(`${t}ms ${(+s.opacity).toFixed(3)} ${s.transform}`);
+            }
+          }
+          const result = {
+            name: style.animationName,
+            duration: style.animationDuration,
+            easing: style.animationTimingFunction.slice(0, 40),
+            samples,
+          };
+          element.remove();
+          return [label, result];
+        }),
+      ),
+    { elements: ELEMENTS, times: TIMES },
+  );
   if (process.env.SHOT) {
     // The real menu and toast: right-click an assistant, then pin it from the menu. Each frame holds the element's
     // own animations paused at a fixed time, so two builds' frames compare at the same moment.
     const frames = async (selector, label) => {
       const element = page.locator(selector);
       for (const t of [40, 140, 260]) {
-        await element.evaluate((node, time) => node.getAnimations().forEach(animation => { animation.pause(); animation.currentTime = time; }), t);
-        await page.screenshot({ path: `${process.env.SHOT}-${motion}-${label}-${t}ms.png`, clip: await element.boundingBox().then(box => ({ x: box.x - 24, y: box.y - 24, width: box.width + 48, height: box.height + 48 })) });
+        await element.evaluate(
+          (node, time) =>
+            node.getAnimations().forEach((animation) => {
+              animation.pause();
+              animation.currentTime = time;
+            }),
+          t,
+        );
+        await page.screenshot({
+          path: `${process.env.SHOT}-${motion}-${label}-${t}ms.png`,
+          clip: await element.boundingBox().then((box) => ({
+            x: box.x - 24,
+            y: box.y - 24,
+            width: box.width + 48,
+            height: box.height + 48,
+          })),
+        });
       }
-      await element.evaluate(node => node.getAnimations().forEach(animation => animation.finish()));
+      await element.evaluate((node) =>
+        node.getAnimations().forEach((animation) => animation.finish()),
+      );
     };
     await assistants.getByRole("button", { name: /Trail Cook/ }).click({ button: "right" });
     await frames(".bot-menu", "menu");

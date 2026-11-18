@@ -17,7 +17,8 @@ export function savedDraft(value: unknown): SavedDraft {
 /** A fingerprint of a draft's content (cyrb53), kept with a cached copy to tell whether it changed since its base. */
 export function contentHash(draft: Pick<Draft, "text" | "attachments">): string {
   const value = draftContent(draft);
-  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  let h1 = 0xdeadbeef,
+    h2 = 0x41c6ce57;
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
     h1 = Math.imul(h1 ^ code, 2654435761);
@@ -44,13 +45,26 @@ export function contentHash(draft: Pick<Draft, "text" | "attachments">): string 
  * - Otherwise unsaved edits here are new work and win. `push` asks the caller to save them on
  *   the new base.
  */
-export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = false, settled = true } = {}): { draft: Draft; push: boolean } {
+export function mergeDraft(
+  local: Draft,
+  server: SavedDraft,
+  { authoritative = false, settled = true } = {},
+): { draft: Draft; push: boolean } {
   const base = local.baseRevision ?? 0;
   if (!authoritative && server.revision < base) return { draft: local, push: false };
   const hash = contentHash(server);
   // The server's copy is never this device's sent copy, so the send's sequence comes along to say so.
   const adopt = {
-    draft: { text: server.text, attachments: server.attachments, botId: local.botId, userId: local.userId, baseRevision: server.revision, baseHash: hash, dirty: false, sentSeq: local.sentSeq },
+    draft: {
+      text: server.text,
+      attachments: server.attachments,
+      botId: local.botId,
+      userId: local.userId,
+      baseRevision: server.revision,
+      baseHash: hash,
+      dirty: false,
+      sentSeq: local.sentSeq,
+    },
     push: false,
   };
   // The guard for this device's send lasts until the server shows that send completed.
@@ -58,20 +72,46 @@ export function mergeDraft(local: Draft, server: SavedDraft, { authoritative = f
   if (!local.dirty) {
     if (local.sentHash === hash && !sendShown) return { draft: local, push: false };
     // Nothing changed: the same object lets a refresh skip rendering.
-    if (local.baseRevision === server.revision && local.baseHash === hash && !local.sentHash && sameDraft(local, server))
+    if (
+      local.baseRevision === server.revision &&
+      local.baseHash === hash &&
+      !local.sentHash &&
+      sameDraft(local, server)
+    )
       return { draft: local, push: false };
     return adopt;
   }
   const mine = contentHash(local);
   // Typed since this device's send, the copy is new work whatever words it shares with the send.
   const untouched = local.sentHash === undefined || isSentCopy(local);
-  if (untouched && server.sentRevision > base && (mine === local.baseHash || sendShown && mine === local.sentHash)) return adopt;
+  if (
+    untouched &&
+    server.sentRevision > base &&
+    (mine === local.baseHash || (sendShown && mine === local.sentHash))
+  )
+    return adopt;
   const current = sendShown ? { ...local, sentHash: undefined, sentBase: undefined } : local;
   if (sameDraft(local, server)) {
     // Saved as it is: the copy stays this device's sent copy until the server shows the send.
-    if (settled) return sendShown || local.sentHash === undefined ? adopt
-      : { draft: { ...adopt.draft, seq: local.seq, sentHash: local.sentHash, sentBase: local.sentBase }, push: false };
-    return { draft: server.revision === base ? current : { ...current, baseRevision: server.revision, baseHash: hash }, push: false };
+    if (settled)
+      return sendShown || local.sentHash === undefined
+        ? adopt
+        : {
+            draft: {
+              ...adopt.draft,
+              seq: local.seq,
+              sentHash: local.sentHash,
+              sentBase: local.sentBase,
+            },
+            push: false,
+          };
+    return {
+      draft:
+        server.revision === base
+          ? current
+          : { ...current, baseRevision: server.revision, baseHash: hash },
+      push: false,
+    };
   }
   if (server.revision === base) return { draft: current, push: false };
   return { draft: { ...current, baseRevision: server.revision, baseHash: hash }, push: true };

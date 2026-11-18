@@ -171,7 +171,7 @@ darker metadata and the iPad width limit, but code still rendered with
 proportional glyphs. Passing the capture test did not establish the visual fix.
 The next revision moves the monospaced request from the surrounding `Group`
 onto both code `Text` branches, using Apple's
-[`Text.monospaced`](https://developer.apple.com/documentation/swiftui/text/monospaced(_:)).
+[`Text.monospaced`](<https://developer.apple.com/documentation/swiftui/text/monospaced(_:)>).
 Its native fingerprint is
 `sha256:0f8ebc3ae06d2ec5bd84c7c5453a7385ecc2b89da200cd3b617e7ef60bf92654`.
 
@@ -306,7 +306,6 @@ The final iPhone capture and existing question interaction test passed in
 `.private/ios-test-20261026T120958Z-88331.xcresult`. The separate iPad capture
 passed in `.private/ios-test-20261026T121559Z-91256.xcresult` with the same inputs.
 
-
 The final question UI also explains the required answers and uses a large native
 Send button. Its measured target is at least 44 points. The common native error
 banner now uses the passing danger token, has a 44-point dismiss target, and
@@ -337,7 +336,6 @@ question fixture is
 `sha256:4cc69dd7ed8ff46d89de393d1a234de75c5165cf3b3ca623840cba2ca413f4f4`.
 Six annotated comparisons cover web opening and writing, native opening, large
 text, retry cleanup, and iPad fields. Independent review 09 is next.
-
 
 ### Questions, review 09 fixes
 
@@ -376,7 +374,6 @@ The same two iPhone checks passed in
 fingerprint:
 `sha256:9e574d794e07a81f659c95eb5fb537d8a6556bcd11d5623540688259c105a17a`.
 
-
 Opus recheck 10 closed all three must-fix findings and scored web desktop,
 web phone and iPad 9/10. iPhone was conditional on a first-choice capture.
 That capture passed without app changes in
@@ -394,7 +391,6 @@ including this added test is
 `sha256:0086586826dfe59b702aeffe4a116c5b4e88361aff17e8c822e43afb7d74e857`.
 Questions can proceed to Approvals. Seven annotated comparisons and the extra
 first-choice screenshot are staged for the final PR attachments.
-
 
 ## Approvals
 
@@ -443,7 +439,6 @@ The annotation renderer now wraps narrow panel titles instead of clipping them.
 Ruff passed, and existing comparisons are being regenerated. This only affects
 review evidence, not app rendering.
 
-
 Opus diagnosed the opening failure without running builds or tests. The old
 "card fits" branch could cancel the queued scroll before it ran because it
 combined values from separate geometry callbacks. The revised
@@ -468,14 +463,12 @@ capture driver and approval fixture fingerprint is
 The earlier 55 behavioral tests remain applicable because only CSS and capture
 assertions changed afterward.
 
-
 The final phone run passed all five selected checks in
 `.private/ios-test-20261026T133602Z-33663.xcresult`: approval captures with full
 button/reason bounds, question captures, the short-question long-reply check,
 multiple-answer submission and find across unloaded history. All use the same
 native fingerprint `18abe53f...` above. The iPad capture and corresponding
 question regressions are running next. No native source changed between them.
-
 
 The final iPad run passed all four checks in
 `.private/ios-test-20261026T133951Z-36765.xcresult`: full approvals and questions
@@ -490,7 +483,6 @@ Eight annotated approval comparisons cover web card hierarchy, unavailable
 controls, retry cleanup, native opening, large-text actions, unsupported controls,
 retry cleanup and iPad actions. Review 11 is next. Expired-server transitions,
 physical devices and manual VoiceOver were not exercised by these fixtures.
-
 
 ### Approvals, review 11 fixes
 
@@ -525,7 +517,6 @@ passed in `.private/ios-test-20261026T140234Z-50502.xcresult`. The shared style
 preserves control size, tint, role and the button trigger. Full approval and
 question runs will check interaction as well as rendering.
 
-
 The final phone rerun passed three checks in
 `.private/ios-test-20261026T140511Z-51708.xcresult`: approval captures including
 held approved/declined states, Questions including an enabled dark Send action,
@@ -536,12 +527,12 @@ style, and existing 44-point and frame assertions pass.
 
 The web production build and 58 tests pass. `approvals-v2-after.json` retains
 16 images with no overflow, measured 14-pixel expiry and confirmations at opacity
-1. `questions-approvals-v2-regression.json` recaptures all 21 question states,
-including desktop/phone openings, with no overflow and no initial jump overlay.
-These are fresh after the shared-shell fix. The current source, tests, capture
-driver and approval fixture fingerprint is
-`sha256:0c07b28281d76e24d57d611cf2fd91f8481aaf488b49a1334cb488ac1da73b5a`.
 
+1. `questions-approvals-v2-regression.json` recaptures all 21 question states,
+   including desktop/phone openings, with no overflow and no initial jump overlay.
+   These are fresh after the shared-shell fix. The current source, tests, capture
+   driver and approval fixture fingerprint is
+   `sha256:0c07b28281d76e24d57d611cf2fd91f8481aaf488b49a1334cb488ac1da73b5a`.
 
 The matching iPad rerun passed all three checks in
 `.private/ios-test-20261026T140949Z-55869.xcresult` with the same native fingerprint.
@@ -554,7 +545,6 @@ system appearance, role, tint, control size and trigger are retained.
 Ten annotated approval comparisons now include the dark-label contrast and the
 visible sent confirmation. All existing comparisons are refreshed from current
 raw captures. Review 12 will recheck M1 to M3 and the newly changed shared style.
-
 
 ### Approvals, review 12 disabled-label correction
 
@@ -575,7 +565,6 @@ carries the confirmation. The iPad matching capture is running. Web checks are
 reused because no web source changed. The contrast annotation's marker now sits
 off the button label.
 
-
 The iPad approval and question rerun passed in
 `.private/ios-test-20261026T143540Z-68274.xcresult` with the same native fingerprint.
 Both devices' held light, held dark, unsupported and disabled dark Questions
@@ -586,7 +575,6 @@ those samples are in `reviews/13-enabled-samples.txt`. The restored disabled
 labels are contrast-exempt, and the full-contrast sent-status text remains.
 No web source or checks changed after its accepted review 12 score of 9/10.
 The final native R1 recheck is next.
-
 
 Review 13 independently reproduced the native pixel samples and closed R1.
 Both native layouts score 9/10; web's accepted 9/10 is unchanged. No obvious

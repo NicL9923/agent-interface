@@ -2,13 +2,15 @@
  * Display names for models. Hermes's own models.dev cache supplies the name when it has one, read
  * through the add-on without the network. Otherwise the slug is formatted here, the way T3 Code does.
  */
-import type { ModelChoice } from '../shared/types.js';
-import { formatModelSlugName } from '../shared/model-name.js';
+import type { ModelChoice } from "../shared/types.js";
+import { formatModelSlugName } from "../shared/model-name.js";
 
 // The formatter is shared with the web client, which names the model a T3 Code thread runs on.
 export { formatModelSlugName };
 
-export interface ModelNameRow extends ModelChoice { name: string | null }
+export interface ModelNameRow extends ModelChoice {
+  name: string | null;
+}
 type Lookup = (models: ModelChoice[]) => Promise<ModelNameRow[]>;
 
 const KEPT_MS = 10 * 60_000;
@@ -26,35 +28,65 @@ type ChoiceLike = { provider?: string; model: string };
 export function createModelNames(lookup: (() => Lookup) | undefined, now = () => Date.now()) {
   const kept = new Map<string, { name: string | null; until: number }>();
   const asking = new Map<string, Promise<void>>();
-  const name = (model: ChoiceLike) => (model.provider ? kept.get(key(model))?.name : undefined) ?? formatModelSlugName(model.model);
+  const name = (model: ChoiceLike) =>
+    (model.provider ? kept.get(key(model))?.name : undefined) ?? formatModelSlugName(model.model);
   async function load(models: ChoiceLike[]) {
     const ask = lookup?.();
     if (!ask) return;
     // A model with no provider has no catalog entry to read.
-    const missing = [...new Map(models.filter((model): model is ModelChoice => !!model.provider && !!model.model && (kept.get(key(model))?.until ?? 0) <= now())
-      .map(model => [key(model), { provider: model.provider, model: model.model }])).values()];
+    const missing = [
+      ...new Map(
+        models
+          .filter(
+            (model): model is ModelChoice =>
+              !!model.provider && !!model.model && (kept.get(key(model))?.until ?? 0) <= now(),
+          )
+          .map((model) => [key(model), { provider: model.provider, model: model.model }]),
+      ).values(),
+    ];
     if (!missing.length) return;
-    const waiting = missing.filter(model => !asking.has(key(model)));
+    const waiting = missing.filter((model) => !asking.has(key(model)));
     if (waiting.length) {
       const batch = (async () => {
         try {
           const rows = await ask(waiting);
           const answered = new Set<string>();
           for (const row of rows) {
-            if (typeof row?.provider !== 'string' || typeof row.model !== 'string') continue;
+            if (typeof row?.provider !== "string" || typeof row.model !== "string") continue;
             answered.add(key(row));
-            kept.set(key(row), { name: typeof row.name === 'string' && row.name.trim() ? row.name.trim().slice(0, 200) : null, until: now() + KEPT_MS });
+            kept.set(key(row), {
+              name:
+                typeof row.name === "string" && row.name.trim()
+                  ? row.name.trim().slice(0, 200)
+                  : null,
+              until: now() + KEPT_MS,
+            });
           }
-          for (const model of waiting) if (!answered.has(key(model))) kept.set(key(model), { name: null, until: now() + RETRY_MS });
+          for (const model of waiting)
+            if (!answered.has(key(model)))
+              kept.set(key(model), { name: null, until: now() + RETRY_MS });
         } catch {
-          for (const model of waiting) kept.set(key(model), { name: null, until: now() + RETRY_MS });
+          for (const model of waiting)
+            kept.set(key(model), { name: null, until: now() + RETRY_MS });
         }
       })();
       for (const model of waiting) asking.set(key(model), batch);
-      void batch.finally(() => { for (const model of waiting) asking.delete(key(model)); });
+      void batch.finally(() => {
+        for (const model of waiting) asking.delete(key(model));
+      });
     }
-    const pending = [...new Set(missing.map(model => asking.get(key(model))).filter((value): value is Promise<void> => !!value))];
-    if (pending.length) await Promise.race([Promise.all(pending), new Promise(done => setTimeout(done, WAIT_MS).unref?.())]);
+    const pending = [
+      ...new Set(
+        missing
+          .map((model) => asking.get(key(model)))
+          .filter((value): value is Promise<void> => !!value),
+      ),
+    ];
+    if (pending.length)
+      await Promise.race([
+        Promise.all(pending),
+        new Promise((done) => setTimeout(done, WAIT_MS).unref?.()),
+      ]);
   }
   return { name, load };
 }

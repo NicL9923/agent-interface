@@ -4,7 +4,13 @@ import type { AttentionRequest } from "../shared/types";
 import { request as apiRequest } from "../client-api";
 import { Icon } from "../components/Icon";
 import { reactAvatar } from "../components/avatar-attention";
-import { attentionAnchor, joinAnswer, nextUnanswered, optionForKey, toggleOption } from "./transcript-logic";
+import {
+  attentionAnchor,
+  joinAnswer,
+  nextUnanswered,
+  optionForKey,
+  toggleOption,
+} from "./transcript-logic";
 import { optionLabel } from "../shared/recommended";
 
 type Question = NonNullable<AttentionRequest["questions"]>[number];
@@ -15,48 +21,83 @@ const empty: Draft = { selected: [], own: false, text: "" };
 export function answerText(question: Question, draft: Draft = empty) {
   if (!question.options?.length) return draft.text;
   if (question.multiple) return joinAnswer(draft.selected, draft.own ? draft.text : "");
-  return draft.own ? draft.text : draft.selected[0] ?? "";
+  return draft.own ? draft.text : (draft.selected[0] ?? "");
 }
 
-export function AttentionCard({ request, botId, report, disconnected = false }: { request: AttentionRequest; botId: string; report: (message: string) => void; disconnected?: boolean }) {
+export function AttentionCard({
+  request,
+  botId,
+  report,
+  disconnected = false,
+}: {
+  request: AttentionRequest;
+  botId: string;
+  report: (message: string) => void;
+  disconnected?: boolean;
+}) {
   // Hermes's recommended option starts chosen for a single-choice question, so one tap or Enter sends it.
   // Several picks are the person's to make, so a multi-select question starts empty.
-  const [drafts, setDrafts] = useState<Record<string, Draft>>(() => Object.fromEntries((request.questions ?? [])
-    .flatMap(question => !question.multiple && question.recommended !== undefined && question.options?.[question.recommended] !== undefined
-      ? [[question.id, { ...empty, selected: [question.options[question.recommended]] }]] : [])));
+  const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
+    Object.fromEntries(
+      (request.questions ?? []).flatMap((question) =>
+        !question.multiple &&
+        question.recommended !== undefined &&
+        question.options?.[question.recommended] !== undefined
+          ? [[question.id, { ...empty, selected: [question.options[question.recommended]] }]]
+          : [],
+      ),
+    ),
+  );
   const [busy, setBusy] = useState(false);
   const [settled, setSettled] = useState(false);
   const guidance = useId();
   const questions = request.questions ?? [];
-  const answers = Object.fromEntries(questions.map(question => [question.id, answerText(question, drafts[question.id])]));
+  const answers = Object.fromEntries(
+    questions.map((question) => [question.id, answerText(question, drafts[question.id])]),
+  );
   const card = useRef<HTMLElement>(null);
   // A pointer choice or a number key moves on; arrow keys stay so options can be browsed.
   const pointer = useRef(false);
   const update = (question: Question, change: (draft: Draft) => Draft) =>
-    setDrafts(current => ({ ...current, [question.id]: change(current[question.id] ?? empty) }));
+    setDrafts((current) => ({ ...current, [question.id]: change(current[question.id] ?? empty) }));
   const advance = (index: number, next: Record<string, string>) => {
     const following = nextUnanswered(questions, next, index);
     // The DOM settles first, so a revealed field or the enabled Send button can take focus.
     requestAnimationFrame(() => {
       const root = card.current;
       if (!root) return;
-      const target = following === undefined
-        ? root.querySelector<HTMLElement>("button[type=submit]")
-        : root.querySelector<HTMLElement>(`[data-question="${following}"] input:checked, [data-question="${following}"] input, [data-question="${following}"] textarea`);
+      const target =
+        following === undefined
+          ? root.querySelector<HTMLElement>("button[type=submit]")
+          : root.querySelector<HTMLElement>(
+              `[data-question="${following}"] input:checked, [data-question="${following}"] input, [data-question="${following}"] textarea`,
+            );
       target?.focus();
     });
   };
-  const field = (index: number) => requestAnimationFrame(() =>
-    card.current?.querySelector<HTMLTextAreaElement>(`[data-question="${index}"] textarea`)?.focus());
+  const field = (index: number) =>
+    requestAnimationFrame(() =>
+      card.current
+        ?.querySelector<HTMLTextAreaElement>(`[data-question="${index}"] textarea`)
+        ?.focus(),
+    );
   // Choosing "Write my own answer" goes to its field. A single choice moves on to the next question.
   const choose = (question: Question, index: number, option: string | null, moveOn: boolean) => {
     const draft = drafts[question.id] ?? empty;
     if (question.multiple) {
-      update(question, current => option === null ? { ...current, own: !current.own } : { ...current, selected: toggleOption(question.options!, current.selected, option) });
+      update(question, (current) =>
+        option === null
+          ? { ...current, own: !current.own }
+          : { ...current, selected: toggleOption(question.options!, current.selected, option) },
+      );
       if (option === null && !draft.own) field(index);
       return;
     }
-    update(question, current => option === null ? { ...current, own: true, selected: [] } : { ...current, own: false, selected: [option] });
+    update(question, (current) =>
+      option === null
+        ? { ...current, own: true, selected: [] }
+        : { ...current, own: false, selected: [option] },
+    );
     if (option === null) field(index);
     else if (moveOn) advance(index, { ...answers, [question.id]: option });
   };
@@ -68,61 +109,154 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
     const pick = optionForKey(event.key, options.length + 1);
     if (pick === undefined) return;
     event.preventDefault();
-    if (question.multiple && pick < options.length) card.current?.querySelectorAll<HTMLInputElement>(`[data-question="${index}"] .option-card input`)[pick]?.focus();
+    if (question.multiple && pick < options.length)
+      card.current
+        ?.querySelectorAll<HTMLInputElement>(`[data-question="${index}"] .option-card input`)
+        [pick]?.focus();
     choose(question, index, pick < options.length ? options[pick] : null, true);
   };
   return (
-    <article className="approval-card attention-card" ref={card} {...attentionAnchor(request.kind, request.id)}>
-      <p className="eyebrow">{request.kind === "clarify" ? "A question for you" : "Continue in Hermes"}</p>
+    <article
+      className="approval-card attention-card"
+      ref={card}
+      {...attentionAnchor(request.kind, request.id)}
+    >
+      <p className="eyebrow">
+        {request.kind === "clarify" ? "A question for you" : "Continue in Hermes"}
+      </p>
       <h2>{request.title}</h2>
       <p>{request.detail}</p>
       {request.kind === "clarify" && (
-        <form aria-busy={busy || undefined} onSubmit={(event) => {
-          event.preventDefault();
-          if (disconnected || busy || settled) return;
-          setBusy(true);
-          report("");
-          void apiRequest("POST /bots/:id/requests/:approvalId", { params: { id: botId, approvalId: request.id }, body: { answers, answerFormat: "json" } })
-            .then(() => { setSettled(true); reactAvatar(botId, "cheer"); })
-            .catch((error) => report(error.message))
-            .finally(() => setBusy(false));
-        }}>
+        <form
+          aria-busy={busy || undefined}
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (disconnected || busy || settled) return;
+            setBusy(true);
+            report("");
+            void apiRequest("POST /bots/:id/requests/:approvalId", {
+              params: { id: botId, approvalId: request.id },
+              body: { answers, answerFormat: "json" },
+            })
+              .then(() => {
+                setSettled(true);
+                reactAvatar(botId, "cheer");
+              })
+              .catch((error) => report(error.message))
+              .finally(() => setBusy(false));
+          }}
+        >
           {questions.map((question, index) => {
             const draft = drafts[question.id] ?? empty;
             const options = question.options ?? [];
             // Every question carries its index, so moving on can focus a free-text one too.
-            if (!options.length) return <label className="question-field" key={question.id} data-question={index}>
-              {question.prompt}
-              <textarea rows={2} required disabled={settled} aria-label={question.prompt} placeholder="Your answer" maxLength={10000} value={draft.text}
-                onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />
-            </label>;
+            if (!options.length)
+              return (
+                <label className="question-field" key={question.id} data-question={index}>
+                  {question.prompt}
+                  <textarea
+                    rows={2}
+                    required
+                    disabled={settled}
+                    aria-label={question.prompt}
+                    placeholder="Your answer"
+                    maxLength={10000}
+                    value={draft.text}
+                    onChange={(event) =>
+                      update(question, (current) => ({ ...current, text: event.target.value }))
+                    }
+                  />
+                </label>
+              );
             const kind = question.multiple ? "checkbox" : "radio";
             const name = `${request.id}:${question.id}`;
-            return <fieldset className="question" key={question.id} disabled={settled} data-question={index} onKeyDown={keys(question, index)}
-              onPointerDown={() => { pointer.current = true; }}>
-              <legend>{question.prompt}{question.multiple && <span className="muted"> Choose any that apply.</span>}</legend>
-              <div className="option-cards">
-                {[...options, null].map((option, position) => {
-                  const checked = option === null ? draft.own : draft.selected.includes(option);
-                  return <label className={`option-card${checked ? " checked" : ""}`} key={position}>
-                    <input type={kind} name={name} checked={checked} onChange={() => {
-                      const moveOn = pointer.current;
-                      pointer.current = false;
-                      choose(question, index, option, moveOn);
-                    }} />
-                    <span className="option-mark" aria-hidden="true">{checked && <Icon name="check" size={14} />}</span>
-                    <span className="option-label">{option === null ? "Write my own answer" : optionLabel(question, position)}</span>
-                    {option !== null && position === question.recommended && <span className="option-tag">Recommended</span>}
-                    {position < 9 && <kbd className="option-key" aria-hidden="true">{position + 1}</kbd>}
-                  </label>;
-                })}
-              </div>
-              {draft.own && <textarea rows={2} className="own-answer" required aria-label={`Your answer: ${question.prompt}`} placeholder="Your answer" maxLength={10000}
-                value={draft.text} onChange={(event) => update(question, current => ({ ...current, text: event.target.value }))} />}
-            </fieldset>;
+            return (
+              <fieldset
+                className="question"
+                key={question.id}
+                disabled={settled}
+                data-question={index}
+                onKeyDown={keys(question, index)}
+                onPointerDown={() => {
+                  pointer.current = true;
+                }}
+              >
+                <legend>
+                  {question.prompt}
+                  {question.multiple && <span className="muted"> Choose any that apply.</span>}
+                </legend>
+                <div className="option-cards">
+                  {[...options, null].map((option, position) => {
+                    const checked = option === null ? draft.own : draft.selected.includes(option);
+                    return (
+                      <label className={`option-card${checked ? " checked" : ""}`} key={position}>
+                        <input
+                          type={kind}
+                          name={name}
+                          checked={checked}
+                          onChange={() => {
+                            const moveOn = pointer.current;
+                            pointer.current = false;
+                            choose(question, index, option, moveOn);
+                          }}
+                        />
+                        <span className="option-mark" aria-hidden="true">
+                          {checked && <Icon name="check" size={14} />}
+                        </span>
+                        <span className="option-label">
+                          {option === null
+                            ? "Write my own answer"
+                            : optionLabel(question, position)}
+                        </span>
+                        {option !== null && position === question.recommended && (
+                          <span className="option-tag">Recommended</span>
+                        )}
+                        {position < 9 && (
+                          <kbd className="option-key" aria-hidden="true">
+                            {position + 1}
+                          </kbd>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+                {draft.own && (
+                  <textarea
+                    rows={2}
+                    className="own-answer"
+                    required
+                    aria-label={`Your answer: ${question.prompt}`}
+                    placeholder="Your answer"
+                    maxLength={10000}
+                    value={draft.text}
+                    onChange={(event) =>
+                      update(question, (current) => ({ ...current, text: event.target.value }))
+                    }
+                  />
+                )}
+              </fieldset>
+            );
           })}
-          <p className="question-guidance" id={guidance} role="status">{settled ? "Answers sent." : disconnected ? "Reconnect before sending. Your answers remain here." : questions.some(question => !answers[question.id]?.trim()) ? "Answer every question to send." : "Ready to send."}</p>
-          <button type="submit" className="primary with-progress" aria-describedby={guidance} disabled={disconnected || busy || settled || questions.some(question => !answers[question.id]?.trim())}>
+          <p className="question-guidance" id={guidance} role="status">
+            {settled
+              ? "Answers sent."
+              : disconnected
+                ? "Reconnect before sending. Your answers remain here."
+                : questions.some((question) => !answers[question.id]?.trim())
+                  ? "Answer every question to send."
+                  : "Ready to send."}
+          </p>
+          <button
+            type="submit"
+            className="primary with-progress"
+            aria-describedby={guidance}
+            disabled={
+              disconnected ||
+              busy ||
+              settled ||
+              questions.some((question) => !answers[question.id]?.trim())
+            }
+          >
             {busy && <Icon name="spinner" className="spin" size={16} />}
             {busy ? "Sending answers…" : settled ? "Answers sent" : "Send answers"}
           </button>
@@ -130,8 +264,8 @@ export function AttentionCard({ request, botId, report, disconnected = false }: 
       )}
       {request.kind === "official" && (
         <p className="muted">
-          Open the official Hermes interface to handle this request. Return here
-          when it is complete.
+          Open the official Hermes interface to handle this request. Return here when it is
+          complete.
         </p>
       )}
     </article>

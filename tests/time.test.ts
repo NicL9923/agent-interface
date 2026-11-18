@@ -7,14 +7,16 @@ import { When } from "../src/components/When";
 import { advance, mountRoot } from "./ui-harness";
 
 // Local-time constructors keep calendar-day boundaries independent of the machine's zone.
-const at = (month: number, day: number, hour: number, minute = 0, year = 2026) => new Date(year, month - 1, day, hour, minute);
+const at = (month: number, day: number, hour: number, minute = 0, year = 2026) =>
+  new Date(year, month - 1, day, hour, minute);
 const saturdayEvening = at(10, 3, 18, 50).getTime();
 const label = (value: Date | string | number, options: WhenOptions = {}) =>
   formatWhen(value, { now: saturdayEvening, locale: "en-US", ...options }).replace(/ /g, " ");
 
 describe("timestamp labels", () => {
   it("keeps list dates short: clock today, then Yesterday, weekday and date", () => {
-    const list = (value: Date) => formatListDate(value, { now: saturdayEvening, locale: "en-US" }).replace(/ /g, " ");
+    const list = (value: Date) =>
+      formatListDate(value, { now: saturdayEvening, locale: "en-US" }).replace(/ /g, " ");
     expect(list(at(10, 3, 9, 41))).toBe("9:41 AM");
     expect(list(at(10, 2, 23, 59))).toBe("Yesterday");
     expect(list(at(9, 28, 12))).toBe("Mon");
@@ -78,7 +80,9 @@ describe("timestamp labels", () => {
     expect(label(at(10, 3, 18, 38).toISOString())).toBe("12 min ago");
     expect(label(at(10, 3, 18, 38).getTime())).toBe("12 min ago");
     expect(label("not a date")).toBe("");
-    expect(formatFull(at(10, 3, 18, 38), "en-US").replace(/ /g, " ")).toBe("Saturday, October 3, 2026 at 6:38:00 PM");
+    expect(formatFull(at(10, 3, 18, 38), "en-US").replace(/ /g, " ")).toBe(
+      "Saturday, October 3, 2026 at 6:38:00 PM",
+    );
   });
 });
 
@@ -87,7 +91,12 @@ describe("When", () => {
     vi.useFakeTimers({ now: at(10, 3, 18, 50).getTime() + 30_000 });
     const { container, root } = mountRoot();
     const value = at(10, 3, 18, 50).toISOString();
-    await act(async () => root.render([createElement(When, { key: "a", value }), createElement(When, { key: "b", value: at(10, 3, 18, 40).getTime(), inline: true })]));
+    await act(async () =>
+      root.render([
+        createElement(When, { key: "a", value }),
+        createElement(When, { key: "b", value: at(10, 3, 18, 40).getTime(), inline: true }),
+      ]),
+    );
     const [first, second] = container.querySelectorAll("time");
     expect(first.getAttribute("datetime")).toBe(value);
     expect(first.title).toContain("2026");

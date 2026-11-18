@@ -45,11 +45,11 @@ that.
 the page's own `layout-shift` entries summed from release to 500 ms after:
 
 | Bootstrap's roster against the saved one | Desktop 1280×720 | Phone 390×844 |
-| --- | --- | --- |
-| An assistant removed, at the top | 0.0034 | 0.0239 |
-| An assistant new, at the top | 0.0023 | 0.0159 |
-| Assistants reordered | 0.0023 | 0.0159 |
-| An assistant renamed | 0 | 0 |
+| ---------------------------------------- | ---------------- | ------------- |
+| An assistant removed, at the top         | 0.0034           | 0.0239        |
+| An assistant new, at the top             | 0.0023           | 0.0159        |
+| Assistants reordered                     | 0.0023           | 0.0159        |
+| An assistant renamed                     | 0                | 0             |
 
 All are far below the 0.1 that Web Vitals call good, and each shift is a row really moving because
 the roster changed. Nothing was changed for them; the test holds each below 0.1.
@@ -65,21 +65,21 @@ the roster changed. Nothing was changed for them; the test holds each below 0.1.
   failed, every validation case drawing the copy, the room case still showing Supper plans, and both
   sign-out cases without the button or the mark.
 
-| Mutation, `tests/saved-roster-ui.test.ts` | Result |
-| --- | --- |
-| Face fields not checked on a geometric avatar | failed: 6 cases |
-| Eye scale range not checked | failed: 2 cases |
-| Portrait origin not checked | failed: 1 case |
-| Picture not required to be https | failed: 1 case |
-| Stored size bound removed | failed: 1 case |
-| List bound removed | failed: 4 cases |
-| String bound `<=` made `<` | failed: the limit case |
-| Rooms not pruned on screen | failed: the room case |
-| Rooms not pruned on disk | failed: the room case |
-| Refresh reads during a pending sign-out | failed: the offline sign-out case (focus while pending) |
-| A fresh page reads during a pending sign-out | failed: the later-page case, once it ran in its own module copy; it survived while the file's earlier tests left the generation above zero |
-| Offline sign-out without the mark | failed: 1 case |
-| The saved copy shows activity | failed: 2 cases |
+| Mutation, `tests/saved-roster-ui.test.ts`     | Result                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| Face fields not checked on a geometric avatar | failed: 6 cases                                                                                                                            |
+| Eye scale range not checked                   | failed: 2 cases                                                                                                                            |
+| Portrait origin not checked                   | failed: 1 case                                                                                                                             |
+| Picture not required to be https              | failed: 1 case                                                                                                                             |
+| Stored size bound removed                     | failed: 1 case                                                                                                                             |
+| List bound removed                            | failed: 4 cases                                                                                                                            |
+| String bound `<=` made `<`                    | failed: the limit case                                                                                                                     |
+| Rooms not pruned on screen                    | failed: the room case                                                                                                                      |
+| Rooms not pruned on disk                      | failed: the room case                                                                                                                      |
+| Refresh reads during a pending sign-out       | failed: the offline sign-out case (focus while pending)                                                                                    |
+| A fresh page reads during a pending sign-out  | failed: the later-page case, once it ran in its own module copy; it survived while the file's earlier tests left the generation above zero |
+| Offline sign-out without the mark             | failed: 1 case                                                                                                                             |
+| The saved copy shows activity                 | failed: 2 cases                                                                                                                            |
 
 ## Measurement
 

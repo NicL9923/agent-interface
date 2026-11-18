@@ -59,6 +59,7 @@ WildBots. It does not stop someone deliberately probing the server.
   limit above, taken up on `t3/routine-delivery-privacy`.
 
 <!-- Main assistant: begin -->
+
 ## Main assistant
 
 Each member can make one of their own personal assistants their main assistant, on

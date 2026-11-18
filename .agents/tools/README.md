@@ -123,3 +123,4 @@ The notification capture also exercises account-scoped Following and equal-time 
 - `npx tsx .agents/tools/notification-replay-bench.ts` times `store.enqueueKnownEvents()`, the replay the background worker runs every 5 seconds, on an in-memory store with 500 recent events, 4 members and 1 KB Markdown replies whose notifications are all already queued, and prints the median, p90 and minimum of 30 runs in milliseconds.
 
 - `staged-python.py`: format and lint staged Python using the same pinned Ruff resolver as `check-all`.
+- `format-python.py --write|--check`: run the pinned Ruff formatter over every tracked Python file with the hook's config. `format` and `format:check` call it. Files under `[format] exclude` in `ruff.toml` are pinned by hosts or receipts.

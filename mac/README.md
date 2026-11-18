@@ -9,14 +9,14 @@ macOS 14 or later, Swift 6 toolchain (Xcode 16 or later). No third-party package
 
 ## Layout
 
-| Path | What |
-| --- | --- |
-| `Sources/WildBotsMacCore` | Everything testable headlessly: protocol codec, argument validation, policy and folder rules, descriptor-based file actions, the Seatbelt policy builder, the command runner, the invocation journal, the activity log, the dispatcher and the link client. |
-| `Sources/WildBotsMac` | The SwiftUI menu bar app: screens, Keychain, sign-in browser, ScreenCaptureKit, screen lock, sleep assertion, notifications, login item. |
-| `Tests/WildBotsMacCoreTests` | XCTest suite, including `SandboxProbeTests`, the adversarial probes that run the real `sandbox-exec`. |
-| `Sandbox/` | Codex's Seatbelt policies, vendored unchanged. |
-| `tools/build-app.sh` | Builds and signs `build/WildBots.app`. |
-| `tools/embed-policies.sh` | Regenerates the embedded policy constants from `Sandbox/*.sbpl`. |
+| Path                         | What                                                                                                                                                                                                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Sources/WildBotsMacCore`    | Everything testable headlessly: protocol codec, argument validation, policy and folder rules, descriptor-based file actions, the Seatbelt policy builder, the command runner, the invocation journal, the activity log, the dispatcher and the link client. |
+| `Sources/WildBotsMac`        | The SwiftUI menu bar app: screens, Keychain, sign-in browser, ScreenCaptureKit, screen lock, sleep assertion, notifications, login item.                                                                                                                    |
+| `Tests/WildBotsMacCoreTests` | XCTest suite, including `SandboxProbeTests`, the adversarial probes that run the real `sandbox-exec`.                                                                                                                                                       |
+| `Sandbox/`                   | Codex's Seatbelt policies, vendored unchanged.                                                                                                                                                                                                              |
+| `tools/build-app.sh`         | Builds and signs `build/WildBots.app`.                                                                                                                                                                                                                      |
+| `tools/embed-policies.sh`    | Regenerates the embedded policy constants from `Sandbox/*.sbpl`.                                                                                                                                                                                            |
 
 ## Test
 

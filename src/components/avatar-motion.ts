@@ -29,14 +29,32 @@ export const FACE_RADIUS = 42;
  * nudges its exclamation mark; and any state change can boop.
  */
 export type GestureKind =
-  | "tilt" | "peek" | "hop" | "doubleTake"
-  | "spin" | "idea" | "tumble" | "twirl" | "cheer"
-  | "shake" | "nudge" | "boop";
+  | "tilt"
+  | "peek"
+  | "hop"
+  | "doubleTake"
+  | "spin"
+  | "idea"
+  | "tumble"
+  | "twirl"
+  | "cheer"
+  | "shake"
+  | "nudge"
+  | "boop";
 export const IDLE_GESTURE_LENGTH = 1.4;
 export const gestureLength: Record<GestureKind, number> = {
-  tilt: IDLE_GESTURE_LENGTH, peek: IDLE_GESTURE_LENGTH, hop: IDLE_GESTURE_LENGTH, doubleTake: IDLE_GESTURE_LENGTH,
-  spin: WORK_SPIN, idea: THINK_BEAT, tumble: THINK_BEAT, twirl: CELEBRATION, cheer: CELEBRATION,
-  shake: 0.45, nudge: 0.5, boop: 0.45,
+  tilt: IDLE_GESTURE_LENGTH,
+  peek: IDLE_GESTURE_LENGTH,
+  hop: IDLE_GESTURE_LENGTH,
+  doubleTake: IDLE_GESTURE_LENGTH,
+  spin: WORK_SPIN,
+  idea: THINK_BEAT,
+  tumble: THINK_BEAT,
+  twirl: CELEBRATION,
+  cheer: CELEBRATION,
+  shake: 0.45,
+  nudge: 0.5,
+  boop: 0.45,
 };
 /**
  * Gestures that read alike share a look: a working spin and a completion twirl both spin with
@@ -44,8 +62,18 @@ export const gestureLength: Record<GestureKind, number> = {
  * Only one bot at a time may show a look.
  */
 export const gestureLook: Record<GestureKind, string> = {
-  tilt: "tilt", peek: "peek", hop: "hop", cheer: "hop", doubleTake: "marks", idea: "marks",
-  spin: "spin", twirl: "spin", tumble: "tumble", shake: "shake", nudge: "nudge", boop: "boop",
+  tilt: "tilt",
+  peek: "peek",
+  hop: "hop",
+  cheer: "hop",
+  doubleTake: "marks",
+  idea: "marks",
+  spin: "spin",
+  twirl: "spin",
+  tumble: "tumble",
+  shake: "shake",
+  nudge: "nudge",
+  boop: "boop",
 };
 /** A granted gesture: what, toward which side (-1 left, 1 right), and when, in seconds since state entry. */
 export interface Gesture {
@@ -114,9 +142,22 @@ export interface Pose {
   tickSide: number;
 }
 export const restingPose: Pose = {
-  yaw: 0, lift: 0, shiftX: 0, roll: 0, scaleX: 1, scaleY: 1,
-  gazeX: 0, gazeY: 0, blink: 1, trails: 0, sweep: 0, symbolTilt: 0,
-  pitch: 0, eyeScale: 1, ticks: 0, tickSide: 1,
+  yaw: 0,
+  lift: 0,
+  shiftX: 0,
+  roll: 0,
+  scaleX: 1,
+  scaleY: 1,
+  gazeX: 0,
+  gazeY: 0,
+  blink: 1,
+  trails: 0,
+  sweep: 0,
+  symbolTilt: 0,
+  pitch: 0,
+  eyeScale: 1,
+  ticks: 0,
+  tickSide: 1,
 };
 
 /** States whose meaning is "nothing is happening right now" never move. */
@@ -131,7 +172,9 @@ export function animatesAt(state: ActivityState, t: number, plan: MotionPlan = s
 
 /** How long an idle avatar waits between frames while only its slow loops move. */
 export const IDLE_FRAME_MS = 83;
-const BLINK_PERIOD = 4.6, BLINK_LENGTH = 0.16, WANDER_SPAN = 2.8;
+const BLINK_PERIOD = 4.6,
+  BLINK_LENGTH = 0.16,
+  WANDER_SPAN = 2.8;
 /**
  * Whether an idle avatar only breathes and sways from t until t + ahead seconds. Those loops move
  * well under a pixel a frame, so they can be drawn about twelve times a second. A blink, a shift
@@ -139,11 +182,17 @@ const BLINK_PERIOD = 4.6, BLINK_LENGTH = 0.16, WANDER_SPAN = 2.8;
  * only how often it is drawn.
  */
 export function idleQuietAt(t: number, plan: MotionPlan, ahead: number) {
-  const overlaps = (start: number, length: number, from: number, to: number) => start < to && start + length > from;
+  const overlaps = (start: number, length: number, from: number, to: number) =>
+    start < to && start + length > from;
   const [from, to] = [motionClock(t, plan), motionClock(t + ahead, plan)];
   for (let k = Math.floor(from / BLINK_PERIOD) - 1; k <= Math.floor(to / BLINK_PERIOD); k++) {
     const at = k * BLINK_PERIOD + 1.4 + hash(k) * 2.4;
-    if ((hash(k + 7) > 0.72 ? [at, at + 0.28] : [at]).some(start => overlaps(start, BLINK_LENGTH, from, to))) return false;
+    if (
+      (hash(k + 7) > 0.72 ? [at, at + 0.28] : [at]).some((start) =>
+        overlaps(start, BLINK_LENGTH, from, to),
+      )
+    )
+      return false;
   }
   // The eyes blend to a new target over 0.24 s and the head follows 0.18 s later.
   for (let n = Math.floor(from / WANDER_SPAN); n <= Math.floor(to / WANDER_SPAN); n++)
@@ -159,16 +208,18 @@ export function blinkAt(t: number) {
     const at = k * BLINK_PERIOD + 1.4 + hash(k) * 2.4;
     for (const start of hash(k + 7) > 0.72 ? [at, at + 0.28] : [at]) {
       const d = t - start;
-      if (d >= 0 && d < BLINK_LENGTH) openness = Math.min(openness, 1 - Math.sin((Math.PI * d) / BLINK_LENGTH) * 0.92);
+      if (d >= 0 && d < BLINK_LENGTH)
+        openness = Math.min(openness, 1 - Math.sin((Math.PI * d) / BLINK_LENGTH) * 0.92);
     }
   }
   return openness;
 }
 
 function wander(t: number, span = WANDER_SPAN) {
-  const target = (segment: number) => hash(segment + 13) < 0.35
-    ? [0, 0]
-    : [hash(segment) * 2 - 1, (hash(segment + 31) * 2 - 1) * 0.5];
+  const target = (segment: number) =>
+    hash(segment + 13) < 0.35
+      ? [0, 0]
+      : [hash(segment) * 2 - 1, (hash(segment + 31) * 2 - 1) * 0.5];
   const segment = Math.floor(t / span);
   const blend = smoothstep((t - segment * span) / 0.24);
   const from = target(segment - 1);
@@ -184,7 +235,8 @@ export function popIn(t: number) {
 /** 0 to 1 over [start, end], eased. */
 const span = (t: number, start: number, end: number) => smoothstep((t - start) / (end - start));
 /** Up then back down over [start, end]: 0 at both ends, 1 in the middle. */
-const hump = (t: number, start: number, end: number) => t <= start || t >= end ? 0 : Math.sin((Math.PI * (t - start)) / (end - start));
+const hump = (t: number, start: number, end: number) =>
+  t <= start || t >= end ? 0 : Math.sin((Math.PI * (t - start)) / (end - start));
 
 /**
  * Thinking: eyes shrink to dots and look up to one side, then dart to the other with the body
@@ -196,7 +248,8 @@ function thinkPose(pose: Pose, t: number, c: number, beat?: Gesture) {
   const side = beat?.side ?? 1;
   // The eyes switch sides in 0.14 s; the head follows over 0.4 s.
   const glance = beat ? beat.start - GLANCE_LEAD : 0;
-  const toward = (from: number, to: number) => beat ? 2 * span(t, glance + from, glance + to) - 1 : -1;
+  const toward = (from: number, to: number) =>
+    beat ? 2 * span(t, glance + from, glance + to) - 1 : -1;
   const eyes = side * toward(0, 0.14);
   const head = side * toward(0.06, 0.46);
   const drift = Math.sin(c * 1.1);
@@ -271,7 +324,8 @@ function idleGesture(pose: Pose, t: number, gesture?: Gesture) {
       pose.gazeX += (side * 0.9 - pose.gazeX) * e;
       pose.shiftX += side * 1.5 * e;
       break;
-    case "hop": { // A hop: gather, spring up, land.
+    case "hop": {
+      // A hop: gather, spring up, land.
       const gather = hump(g, 0, 0.22) + hump(g, 0.62, 0.86);
       const air = hump(g, 0.18, 0.66);
       pose.scaleY *= 1 - 0.09 * gather + 0.06 * air;
@@ -281,7 +335,8 @@ function idleGesture(pose: Pose, t: number, gesture?: Gesture) {
       pose.blink = 1;
       break;
     }
-    case "doubleTake": { // A double take: a glance, back, then wide eyes and marks.
+    case "doubleTake": {
+      // A double take: a glance, back, then wide eyes and marks.
       const glance = hump(g, 0, 0.3);
       pose.gazeX += (side * 0.9 - pose.gazeX) * glance;
       pose.yaw += side * 0.25 * glance;
@@ -346,10 +401,22 @@ export function avatarProp(tool?: string): AvatarProp | undefined {
 /** Where the held prop sits in avatar units, and its tilt in degrees. */
 export function propMotion(prop: AvatarProp, t: number) {
   switch (prop) {
-    case "search": return { x: 72 + Math.sin(t * 1.6) * 9, y: 70 + Math.sin(t * 3.2) * 2.5, rotate: -8 + Math.sin(t * 1.6) * 6 };
-    case "computer": return { x: 50, y: 88 - Math.abs(Math.sin(t * 9)) * 0.5, rotate: 0 };
-    case "read": return { x: 50, y: 86 + Math.sin(t * 1.4) * 1, rotate: Math.sin(t * 0.7) * 2 };
-    case "write": return { x: 74 + Math.sin(t * 7) * 2.5, y: 78 + Math.cos(t * 7) * 1.2 + Math.sin(t * 0.9) * 2, rotate: 0 };
+    case "search":
+      return {
+        x: 72 + Math.sin(t * 1.6) * 9,
+        y: 70 + Math.sin(t * 3.2) * 2.5,
+        rotate: -8 + Math.sin(t * 1.6) * 6,
+      };
+    case "computer":
+      return { x: 50, y: 88 - Math.abs(Math.sin(t * 9)) * 0.5, rotate: 0 };
+    case "read":
+      return { x: 50, y: 86 + Math.sin(t * 1.4) * 1, rotate: Math.sin(t * 0.7) * 2 };
+    case "write":
+      return {
+        x: 74 + Math.sin(t * 7) * 2.5,
+        y: 78 + Math.cos(t * 7) * 1.2 + Math.sin(t * 0.9) * 2,
+        rotate: 0,
+      };
   }
 }
 
@@ -386,7 +453,13 @@ function propPose(pose: Pose, prop: AvatarProp, t: number) {
  * The pose at t seconds into `state`. `plan` says which named gestures this bot plays and when,
  * and the pace of its continuous loops; without one the avatar only runs its loops.
  */
-export function avatarPose(state: ActivityState, t: number, reduce: boolean, prop?: AvatarProp, plan: MotionPlan = soloPlan): Pose {
+export function avatarPose(
+  state: ActivityState,
+  t: number,
+  reduce: boolean,
+  prop?: AvatarProp,
+  plan: MotionPlan = soloPlan,
+): Pose {
   if (reduce || frozenStates.includes(state)) return restingPose;
   const c = motionClock(t, plan);
   const g = plan.gesture;
@@ -491,24 +564,42 @@ export interface Expression {
 /** Whether `beat` is an idea in its wide-eyed moment at t. */
 const ideaAt = (beat: Gesture | undefined, t: number) =>
   beat?.kind === "idea" && t - beat.start > 0.2 && t - beat.start < 1.1;
-export function expressionFor(state: ActivityState, t: number, plan: MotionPlan = soloPlan): Expression {
+export function expressionFor(
+  state: ActivityState,
+  t: number,
+  plan: MotionPlan = soloPlan,
+): Expression {
   switch (state) {
     case "thinking": {
       // Dots while pondering; the idea beat opens them wide again.
       const idea = ideaAt(plan.gesture, t) || ideaAt(plan.previous, t);
-      return { open: idea ? 1.1 : 1, tilt: 0, happy: 0, mouth: idea ? 0.9 : 0.1, dot: idea ? 0 : 1 };
+      return {
+        open: idea ? 1.1 : 1,
+        tilt: 0,
+        happy: 0,
+        mouth: idea ? 0.9 : 0.1,
+        dot: idea ? 0 : 1,
+      };
     }
-    case "working": return { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
-    case "waiting": return { open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0 };
-    case "blocked": return { open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0 };
+    case "working":
+      return { open: 0.82, tilt: 0, happy: 0, mouth: 0.3, dot: 0 };
+    case "waiting":
+      return { open: 0.36, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    case "blocked":
+      return { open: 1.1, tilt: 0, happy: 0, mouth: -0.2, dot: 0 };
     // Excited until most of the way through a celebration, which may have waited its turn.
-    case "done": return t < (plan.gesture?.start ?? 0) + CELEBRATION * 0.75
-      ? { open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0 }
-      : { open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0 };
-    case "failed": return { open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0 };
-    case "disconnected": return { open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0 };
-    case "interrupted": return { open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0 };
-    default: return { open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0 };
+    case "done":
+      return t < (plan.gesture?.start ?? 0) + CELEBRATION * 0.75
+        ? { open: 1.1, tilt: 0, happy: 0, mouth: 1, dot: 0 }
+        : { open: 1, tilt: 0, happy: 1, mouth: 1, dot: 0 };
+    case "failed":
+      return { open: 0.62, tilt: 14, happy: 0, mouth: -1, dot: 0 };
+    case "disconnected":
+      return { open: 0.7, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    case "interrupted":
+      return { open: 0.5, tilt: 0, happy: 0, mouth: 0, dot: 0 };
+    default:
+      return { open: 1, tilt: 0, happy: 0, mouth: 0.6, dot: 0 };
   }
 }
 /**
@@ -569,7 +660,15 @@ export function tickMarks(level: number, side: number, top: number) {
  * Splits a trail segment on a tilted orbit into the arcs behind and in front of
  * the body, so trails wrap around the avatar instead of floating on top of it.
  */
-export function orbitArcs(head: number, length: number, rx: number, ry: number, tilt: number, cx = 50, cy = 52) {
+export function orbitArcs(
+  head: number,
+  length: number,
+  rx: number,
+  ry: number,
+  tilt: number,
+  cx = 50,
+  cy = 52,
+) {
   const cos = Math.cos(tilt);
   const sin = Math.sin(tilt);
   const back: string[] = [];
@@ -578,7 +677,9 @@ export function orbitArcs(head: number, length: number, rx: number, ry: number, 
   let runFront: boolean | null = null;
   const flush = () => {
     if (run.length > 1)
-      (runFront ? front : back).push("M" + run.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(" L"));
+      (runFront ? front : back).push(
+        "M" + run.map(([x, y]) => `${x.toFixed(2)} ${y.toFixed(2)}`).join(" L"),
+      );
     run = [];
   };
   const steps = 16;
@@ -642,7 +743,9 @@ export function tint(color: string, amount: number) {
   const target = amount > 0 ? 255 : 0;
   const mix = (shift: number) => {
     const c = (value >> shift) & 255;
-    return Math.round(c + (target - c) * Math.abs(amount)).toString(16).padStart(2, "0");
+    return Math.round(c + (target - c) * Math.abs(amount))
+      .toString(16)
+      .padStart(2, "0");
   };
   return `#${mix(16)}${mix(8)}${mix(0)}`;
 }

@@ -23,7 +23,9 @@ export function useToast(owner: string | undefined) {
   }, []);
   const dismiss = useCallback(() => setToast(null), []);
   // A change of person drops the toast outright, so it cannot come back if they return.
-  useEffect(() => { setToast(current => current && current.owner !== owner ? null : current); }, [owner]);
+  useEffect(() => {
+    setToast((current) => (current && current.owner !== owner ? null : current));
+  }, [owner]);
   const shown = toast && toast.owner === owner ? toast : null;
   /** Runs the shown toast's undo once. False when nothing can be undone. */
   const undo = useCallback(() => {
@@ -35,26 +37,74 @@ export function useToast(owner: string | undefined) {
   return { toast: shown as ToastValue | null, show, dismiss, undo };
 }
 
-export function Toast({ toast, onDismiss, onUndo }: { toast: ToastValue | null; onDismiss: () => void; onUndo: () => void }) {
+export function Toast({
+  toast,
+  onDismiss,
+  onUndo,
+}: {
+  toast: ToastValue | null;
+  onDismiss: () => void;
+  onUndo: () => void;
+}) {
   const [paused, setPaused] = useState(false);
-  const hovered = useRef(false), focused = useRef(false);
+  const hovered = useRef(false),
+    focused = useRef(false);
   const settle = () => setPaused(hovered.current || focused.current);
   useEffect(() => {
     if (!toast || paused) return;
     const timer = setTimeout(onDismiss, TOAST_MS);
     return () => clearTimeout(timer);
   }, [toast, paused, onDismiss]);
-  useEffect(() => { hovered.current = focused.current = false; setPaused(false); }, [toast?.id]);
+  useEffect(() => {
+    hovered.current = focused.current = false;
+    setPaused(false);
+  }, [toast?.id]);
   // The region stays mounted, so screen readers already watch it when a message arrives.
-  return <div className="toast-region" role="status" aria-live="polite">
-    {toast && <div key={toast.id} className="toast"
-      onPointerEnter={() => { hovered.current = true; settle(); }} onPointerLeave={() => { hovered.current = false; settle(); }}
-      onFocus={() => { focused.current = true; settle(); }} onBlur={() => { focused.current = false; settle(); }}>
-      <span>{toast.message}</span>
-      {toast.undo && <button type="button" className="toast-undo" title={`Undo (${formatCombo(shortcuts.undo)})`} onClick={onUndo}>
-        <Icon name="undo" size={15} />Undo
-      </button>}
-      <button type="button" className="icon-button toast-close" aria-label="Dismiss" onClick={onDismiss}><Icon name="close" size={14} /></button>
-    </div>}
-  </div>;
+  return (
+    <div className="toast-region" role="status" aria-live="polite">
+      {toast && (
+        <div
+          key={toast.id}
+          className="toast"
+          onPointerEnter={() => {
+            hovered.current = true;
+            settle();
+          }}
+          onPointerLeave={() => {
+            hovered.current = false;
+            settle();
+          }}
+          onFocus={() => {
+            focused.current = true;
+            settle();
+          }}
+          onBlur={() => {
+            focused.current = false;
+            settle();
+          }}
+        >
+          <span>{toast.message}</span>
+          {toast.undo && (
+            <button
+              type="button"
+              className="toast-undo"
+              title={`Undo (${formatCombo(shortcuts.undo)})`}
+              onClick={onUndo}
+            >
+              <Icon name="undo" size={15} />
+              Undo
+            </button>
+          )}
+          <button
+            type="button"
+            className="icon-button toast-close"
+            aria-label="Dismiss"
+            onClick={onDismiss}
+          >
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

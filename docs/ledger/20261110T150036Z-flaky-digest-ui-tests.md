@@ -61,14 +61,14 @@ loops (`while :; do :; done`), and counts failing tests from the JSON reports. V
 config, as CI does: default `forks` pool, isolation on, 15 s test timeout. For "before", the `origin/main` copies of
 the two files ran as `tests/before-*.test.ts`, under the same conditions and in the same session, then were deleted.
 
-| Condition | Test | Before | After |
-| --- | --- | --- | --- |
-| File alone, 1 at a time, no load, 50 runs | form | 0 / 50 | 0 / 50 |
-| File alone, 1 at a time, no load, 50 runs | retry | 0 / 50 | 0 / 50 |
+| Condition                                           | Test      | Before                                  | After   |
+| --------------------------------------------------- | --------- | --------------------------------------- | ------- |
+| File alone, 1 at a time, no load, 50 runs           | form      | 0 / 50                                  | 0 / 50  |
+| File alone, 1 at a time, no load, 50 runs           | retry     | 0 / 50                                  | 0 / 50  |
 | File, 16 copies at once and 16 busy loops, 200 runs | form file | 12 / 200 (8 the CI test, 4 "field IDs") | 0 / 200 |
-| File, 16 copies at once and 16 busy loops, 200 runs | retry | 80 / 200 | 0 / 200 |
-| Full `vitest run`, 4 copies at once, 16 runs | form | 2 / 16 | 0 / 16 |
-| Full `vitest run`, 4 copies at once, 16 runs | retry | 8 / 16 | 0 / 16 |
+| File, 16 copies at once and 16 busy loops, 200 runs | retry     | 80 / 200                                | 0 / 200 |
+| Full `vitest run`, 4 copies at once, 16 runs        | form      | 2 / 16                                  | 0 / 16  |
+| Full `vitest run`, 4 copies at once, 16 runs        | retry     | 8 / 16                                  | 0 / 16  |
 
 Every failure before the change carried the CI message. A first exploratory round of the loaded condition gave 2 / 64
 for the form file and 33 / 96 for the retry, at `6e6d398`.
@@ -86,10 +86,10 @@ it. It ran 200 times under the loaded condition with no failure, and is unchange
 
 Each line was broken by hand on the fixed tests, the test run, and the source restored:
 
-| Broken | Red |
-| --- | --- |
-| `useTurnRetry.run` returns before posting | retry test: Retry button still present, `expected <button …> to be null` |
-| The retry posts without `retryOf` | retry test: `expected [] to deeply equal [ 'u1' ]` |
+| Broken                                                           | Red                                                                                     |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `useTurnRetry.run` returns before posting                        | retry test: Retry button still present, `expected <button …> to be null`                |
+| The retry posts without `retryOf`                                | retry test: `expected [] to deeply equal [ 'u1' ]`                                      |
 | Required fields never reported (`src/shared/reply-cards.ts:288`) | form test: `expected [[ '/bots/shared/messages', … ]] to have a length of +0 but got 1` |
 
 The third row shows the form test now covers the validation it is named for.

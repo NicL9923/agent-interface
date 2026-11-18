@@ -23,7 +23,30 @@ import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 
-for (const [name, language] of Object.entries({ bash, c, cpp, css, diff, go, ini, java, javascript, json, kotlin, markdown, php, python, ruby, rust, shell, sql, swift, typescript, xml, yaml })) {
+for (const [name, language] of Object.entries({
+  bash,
+  c,
+  cpp,
+  css,
+  diff,
+  go,
+  ini,
+  java,
+  javascript,
+  json,
+  kotlin,
+  markdown,
+  php,
+  python,
+  ruby,
+  rust,
+  shell,
+  sql,
+  swift,
+  typescript,
+  xml,
+  yaml,
+})) {
   hljs.registerLanguage(name, language);
 }
 // Fences name the shell many ways; commands read better with the Bash grammar than as a console session.

@@ -21,18 +21,18 @@ the running turn) or `voice_stopped` (a bare stop phrase typed while the session
 `tui_gateway/methods_prompt.py`, read from a local upstream clone). The add-on folds all three into `accepted`
 with `steering: false` (`src/hermes/extension.py:1909`), so the client cannot tell them apart. What a person sees:
 
-| Answer | Row |
-| --- | --- |
-| Sending, chat idle, done, failed or interrupted | Thinking, at once |
-| Sending while the chat shows work (a steer) | Only the work's row; nothing added |
-| Accepted, new turn | Thinking until Hermes's report or copy takes over, same node |
-| Accepted, steered | Nothing added |
-| Accepted, queued behind another turn | That turn's working row takes over the node; nothing after it |
-| Accepted, typed stop phrase | Thinking until the echo's own 30 s patience ends, then nothing (see below) |
-| Rejected, interrupted, refused by the app (4xx) | Gone with the echo |
-| Failed without an answer (5xx, network) or uncertain | Gone while unconfirmed; back while a Retry is on its way |
-| Discarded | Gone |
-| Read failed (#317) | Send is refused, so no echo and no row |
+| Answer                                               | Row                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| Sending, chat idle, done, failed or interrupted      | Thinking, at once                                                          |
+| Sending while the chat shows work (a steer)          | Only the work's row; nothing added                                         |
+| Accepted, new turn                                   | Thinking until Hermes's report or copy takes over, same node               |
+| Accepted, steered                                    | Nothing added                                                              |
+| Accepted, queued behind another turn                 | That turn's working row takes over the node; nothing after it              |
+| Accepted, typed stop phrase                          | Thinking until the echo's own 30 s patience ends, then nothing (see below) |
+| Rejected, interrupted, refused by the app (4xx)      | Gone with the echo                                                         |
+| Failed without an answer (5xx, network) or uncertain | Gone while unconfirmed; back while a Retry is on its way                   |
+| Discarded                                            | Gone                                                                       |
+| Read failed (#317)                                   | Send is refused, so no echo and no row                                     |
 
 The typed stop phrase is the one case the client cannot see. WildBots never turns on Hermes's voice mode, so it can
 happen only when someone ran `/voice on` in a Hermes terminal on the same session. Showing it correctly would take
@@ -49,12 +49,12 @@ change, so not fixed here.
 `e2e/server.ts` on port 4183, Trail Cook "Echo: …" turns. Time from the echo row's insertion to the activity
 row's, per a MutationObserver:
 
-| Build | Admission | Echo to row, median (min, max) | Row nodes inserted, removed | Status words | Sent message moved |
-| --- | --- | --- | --- | --- | --- |
-| `main` at `8281930` | immediate | 34 ms (30, 49) | 1, 0 | thinking | 18 px |
-| `main` at `8281930` | held 1,500 ms | 1,520 ms (1,514, 1,534) | 1, 0 | thinking | 18 px |
-| This branch | immediate | 0 ms (0, 0) | 1, 0 | thinking | 18 px |
-| This branch | held 1,500 ms | 0 ms (0, 0) | 1, 0 | thinking | 18 px |
+| Build               | Admission     | Echo to row, median (min, max) | Row nodes inserted, removed | Status words | Sent message moved |
+| ------------------- | ------------- | ------------------------------ | --------------------------- | ------------ | ------------------ |
+| `main` at `8281930` | immediate     | 34 ms (30, 49)                 | 1, 0                        | thinking     | 18 px              |
+| `main` at `8281930` | held 1,500 ms | 1,520 ms (1,514, 1,534)        | 1, 0                        | thinking     | 18 px              |
+| This branch         | immediate     | 0 ms (0, 0)                    | 1, 0                        | thinking     | 18 px              |
+| This branch         | held 1,500 ms | 0 ms (0, 0)                    | 1, 0                        | thinking     | 18 px              |
 
 On loopback the gap on `main` is one round trip; on a real network it adds the network's round trip and Hermes's
 admission. The 18 px move of the sent message is the same before and after, so the send anchor is undisturbed.
@@ -136,28 +136,28 @@ test passed with the gate in place and went red with it removed.
 
 Red proof, each line broken by hand and restored (`tests/thinking-at-send-ui.test.ts`, `tests/sent-echo.test.ts`):
 
-| Break | Red |
-| --- | --- |
-| `awaitingTurn` ignores `slow` | "does not show when its request has been out longer than the bound", "leaves a send whose request has not answered…" |
-| The bound timer in `useSentEchoes` never set | "leaves a send whose request has not answered…", "drops the row a bounded time after Hermes's copy arrives…" |
-| `slow` never set | "marks a request out for the bound as slow…", "leaves a send whose request has not answered…" |
-| A retry keeps the old `sendingSince` | "marks a request out for the bound as slow, and starts the bound again when a retry goes out" |
-| `awaitingTurn` ignores `handingOff` | the unit handoff test, "keeps one row and one announcement…", "drops the row a bounded time…" |
-| `nextEcho` drops a shown echo at once | the same three |
-| A reply after the copy ignored | "does not show when Hermes's copy is in the chat with a reply after it", "drops the row at once when Hermes's copy arrives with the turn's reply already after it" |
-| The handoff never ends | the unit handoff test, "drops the row a bounded time…" |
-| `!connectionShown &&` removed | "shows the chat disconnected, not thinking…" only |
+| Break                                        | Red                                                                                                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `awaitingTurn` ignores `slow`                | "does not show when its request has been out longer than the bound", "leaves a send whose request has not answered…"                                               |
+| The bound timer in `useSentEchoes` never set | "leaves a send whose request has not answered…", "drops the row a bounded time after Hermes's copy arrives…"                                                       |
+| `slow` never set                             | "marks a request out for the bound as slow…", "leaves a send whose request has not answered…"                                                                      |
+| A retry keeps the old `sendingSince`         | "marks a request out for the bound as slow, and starts the bound again when a retry goes out"                                                                      |
+| `awaitingTurn` ignores `handingOff`          | the unit handoff test, "keeps one row and one announcement…", "drops the row a bounded time…"                                                                      |
+| `nextEcho` drops a shown echo at once        | the same three                                                                                                                                                     |
+| A reply after the copy ignored               | "does not show when Hermes's copy is in the chat with a reply after it", "drops the row at once when Hermes's copy arrives with the turn's reply already after it" |
+| The handoff never ends                       | the unit handoff test, "drops the row a bounded time…"                                                                                                             |
+| `!connectionShown &&` removed                | "shows the chat disconnected, not thinking…" only                                                                                                                  |
 
 The first run of the gate break also failed four later tests: the offline stub leaked when the assertion threw.
 Its cleanup moved to `afterEach`, and the rerun failed only the gate's test.
 
 `node .agents/tools/measure-thinking-gap.mjs --runs 5 --delays 0,1500,7000`, Chromium 1280 x 800, `E2E_PORT=4271`:
 
-| Admission | Echo to row | Row nodes inserted, removed | Sent message moved |
-| --- | --- | --- | --- |
-| immediate | 0 ms in 5 of 5 | 1, 0 | 18 px |
-| held 1,500 ms | 0 ms in 5 of 5 | 1, 0 | 18 px |
-| held 7,000 ms | 0 ms in 5 of 5 | 2, 1: gone at the bound, back on acceptance | 65 px |
+| Admission     | Echo to row    | Row nodes inserted, removed                 | Sent message moved |
+| ------------- | -------------- | ------------------------------------------- | ------------------ |
+| immediate     | 0 ms in 5 of 5 | 1, 0                                        | 18 px              |
+| held 1,500 ms | 0 ms in 5 of 5 | 1, 0                                        | 18 px              |
+| held 7,000 ms | 0 ms in 5 of 5 | 2, 1: gone at the bound, back on acceptance | 65 px              |
 
 The 7 s case is the trade the bound makes: the row leaves while the message reads "Sending…", and returns when
 Hermes accepts it, announced again. The tool reads positions in a MutationObserver, before the transcript's
@@ -202,10 +202,10 @@ second after the reply's first words. The earlier version stopped at the reply's
 `caeeb7f` (no web client change since this branch's base `c2ee202`) ran from its own checkout with this branch's
 `e2e/server.ts` and `e2e/ports.ts` copied in for the admission delay, uncommitted there.
 
-| Build | Largest step, per frame | Largest step, after paint | When | Row nodes inserted, removed |
-| --- | --- | --- | --- | --- |
-| `origin/main` | 47 px, 165 to 118, 5 of 5 | 47 px, 5 of 5 | 7,322 to 7,327 ms after the send, 290 to 309 ms after the row first appeared | 1, 0 |
-| This branch | 47 px, 165 to 118, 5 of 5 | 51 px, 165 to 114, 5 of 5 | 7,286 to 7,291 ms after the send, 306 to 309 ms after the row returned | 2, 1 |
+| Build         | Largest step, per frame   | Largest step, after paint | When                                                                         | Row nodes inserted, removed |
+| ------------- | ------------------------- | ------------------------- | ---------------------------------------------------------------------------- | --------------------------- |
+| `origin/main` | 47 px, 165 to 118, 5 of 5 | 47 px, 5 of 5             | 7,322 to 7,327 ms after the send, 290 to 309 ms after the row first appeared | 1, 0                        |
+| This branch   | 47 px, 165 to 118, 5 of 5 | 51 px, 165 to 114, 5 of 5 | 7,286 to 7,291 ms after the send, 306 to 309 ms after the row returned       | 2, 1                        |
 
 The move is the arrival that saves the copy and starts the reply, on both builds, at the same place. The after-paint
 sample on this branch read 4 px more in the same step: the run's other 4 px move, which both builds make near the send,
@@ -223,16 +223,16 @@ the chat after the handoff bound passed in another chat" (one thinking status dr
 (`tests/thinking-at-send-ui.test.ts`). The return test records every status line inserted, so a frame that is
 replaced at once still counts. The settled reports in these tests carry no run ID, as Hermes sends them.
 
-| Break | Red |
-| --- | --- |
-| `settledHere` never true | the unit settled test and stale test, the three UI outcome tests, the UI stale test |
-| No rule for an outcome other than `before` | the unit settled and stale tests, the three UI outcome tests |
-| No rule for a later read | the unit stale test, the UI stale test |
-| Every settled report counts as this turn's | the unit stale test, the UI stale test |
+| Break                                      | Red                                                                                                                        |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `settledHere` never true                   | the unit settled test and stale test, the three UI outcome tests, the UI stale test                                        |
+| No rule for an outcome other than `before` | the unit settled and stale tests, the three UI outcome tests                                                               |
+| No rule for a later read                   | the unit stale test, the UI stale test                                                                                     |
+| Every settled report counts as this turn's | the unit stale test, the UI stale test                                                                                     |
 | Handoff bound checked only in its own chat | "stays while Hermes's copy is in the chat…", "treats a bound as over by the clock alone…", "drops the row a bounded time…" |
-| `awaitingTurn` ignores the handoff clock | "treats a bound as over by the clock alone…" |
-| `awaitingTurn` ignores the sending clock | "treats a bound as over by the clock alone…" |
-| Both handoff clock fixes removed together | "never paints thinking on returning to the chat…" |
+| `awaitingTurn` ignores the handoff clock   | "treats a bound as over by the clock alone…"                                                                               |
+| `awaitingTurn` ignores the sending clock   | "treats a bound as over by the clock alone…"                                                                               |
+| Both handoff clock fixes removed together  | "never paints thinking on returning to the chat…"                                                                          |
 
 The return UI test is held by either clock fix alone, so it went red only with both removed; each fix has its own unit
 case.
@@ -279,13 +279,13 @@ read and show the outcome from the next read.
 
 Written first against `848bc91`'s rule: 9 failed. Then each line broken by hand and restored, 60 tests in the 2 files:
 
-| Break | Red |
-| --- | --- |
-| Every settled report ends the row | 10: the five copy-read cases, the later-read case, the three UI outcomes, the UI stale test |
-| `>= 0`, so the copy's own read counts as later | the same 10 |
-| An unordered version counts as later | the same 10 |
-| A later read never ends the row | 5: the later-read case, the three UI outcomes, the UI stale test |
-| The copy's version is not stored | the same 10 as the first |
+| Break                                          | Red                                                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Every settled report ends the row              | 10: the five copy-read cases, the later-read case, the three UI outcomes, the UI stale test |
+| `>= 0`, so the copy's own read counts as later | the same 10                                                                                 |
+| An unordered version counts as later           | the same 10                                                                                 |
+| A later read never ends the row                | 5: the later-read case, the three UI outcomes, the UI stale test                            |
+| The copy's version is not stored               | the same 10 as the first                                                                    |
 
 ## Fourth review: Grok 4.7 on `45b99a8`
 

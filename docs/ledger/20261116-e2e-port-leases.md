@@ -41,7 +41,6 @@ incomplete because Anthropic is usage-limited and xAI has exhausted its balance.
 follow-up draft until an eligible outside-OpenAI reviewer completes it. No release is needed
 for this development-tool change.
 
-
 ## Final full check and target integration
 
 At `e0b2b47fd7deb67d2e47f208da9bec4e71cf2323`, the full non-browser check passed

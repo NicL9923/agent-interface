@@ -7,7 +7,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { accountMarker, ApnsError, apnsCollapseId, createApnsSender, apnsClearPayload, apnsPayload } from "../src/server/apns.js";
+import {
+  accountMarker,
+  ApnsError,
+  apnsCollapseId,
+  createApnsSender,
+  apnsClearPayload,
+  apnsPayload,
+} from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { Store } from "../src/server/store.js";
 import { defaultPreferences, type RuntimeEvent } from "../src/shared/types.js";
@@ -17,49 +24,122 @@ import { errorHandler, httpError } from "../src/server/http-error.js";
 import { nothingToStopMessage, runChangedMessage } from "../src/shared/errors.js";
 
 const origin = "http://127.0.0.1:3000";
-const runtime = fakeRuntime({ status: async () => ({ connected: false }), listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }], capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, generatedFiles: { supported: true }, idempotency: { supported: false }, durableEvents: { supported: false } }), download: async () => ({ body: new Blob(["file body"]).stream(), name: "answer.txt", mime: "text/plain" }), close: async () => {} });
+const runtime = fakeRuntime({
+  status: async () => ({ connected: false }),
+  listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "idle" }],
+  capabilities: async () =>
+    capabilitiesFixture({
+      avatarMetadata: { supported: false },
+      generatedFiles: { supported: true },
+      idempotency: { supported: false },
+      durableEvents: { supported: false },
+    }),
+  download: async () => ({
+    body: new Blob(["file body"]).stream(),
+    name: "answer.txt",
+    mime: "text/plain",
+  }),
+  close: async () => {},
+});
 const apps: Awaited<ReturnType<typeof createApp>>[] = [];
-afterEach(async () => { vi.useRealTimers(); for (const { app } of apps.splice(0)) await app.close(); });
-async function setup(config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"]) {
-  const result = await createApp(config, runtime, { background: false, verifyGoogle, sendApns: config.apns ? async () => {} : undefined });
-  apps.push(result); return result;
+afterEach(async () => {
+  vi.useRealTimers();
+  for (const { app } of apps.splice(0)) await app.close();
+});
+async function setup(
+  config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+  verifyGoogle?: NonNullable<Parameters<typeof createApp>[2]>["verifyGoogle"],
+) {
+  const result = await createApp(config, runtime, {
+    background: false,
+    verifyGoogle,
+    sendApns: config.apns ? async () => {} : undefined,
+  });
+  apps.push(result);
+  return result;
 }
 async function flow(app: Awaited<ReturnType<typeof createApp>>["app"], purpose?: "confirm") {
-  const state = randomBytes(32).toString("base64url"), codeVerifier = randomBytes(32).toString("base64url");
-  const query = new URLSearchParams({ state, code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"), code_challenge_method: "S256", ...(purpose ? { purpose } : {}) });
+  const state = randomBytes(32).toString("base64url"),
+    codeVerifier = randomBytes(32).toString("base64url");
+  const query = new URLSearchParams({
+    state,
+    code_challenge: createHash("sha256").update(codeVerifier).digest("base64url"),
+    code_challenge_method: "S256",
+    ...(purpose ? { purpose } : {}),
+  });
   const response = await app.inject(`/native/sign-in?${query}`);
   expect(response.statusCode).toBe(200);
-  return { state, codeVerifier, cookie: `native_flow=${response.cookies[0].value}`, cookieValue: response.cookies[0].value, response };
+  return {
+    state,
+    codeVerifier,
+    cookie: `native_flow=${response.cookies[0].value}`,
+    cookieValue: response.cookies[0].value,
+    response,
+  };
 }
-async function connectNative(app: Awaited<ReturnType<typeof createApp>>["app"], member: "one" | "two" = "one") {
+async function connectNative(
+  app: Awaited<ReturnType<typeof createApp>>["app"],
+  member: "one" | "two" = "one",
+) {
   const started = await flow(app);
-  const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { member } });
+  const completed = await app.inject({
+    method: "POST",
+    url: "/api/auth/native/complete",
+    headers: { origin, cookie: started.cookie },
+    payload: { member },
+  });
   expect(completed.statusCode).toBe(200);
   const callback = new URL(completed.json().callback);
   expect(callback.origin + callback.pathname).toBe("null/callback");
   expect(callback.protocol).toBe("agentinterface:");
-  const payload = { code: callback.searchParams.get("code")!, state: started.state, codeVerifier: started.codeVerifier };
+  const payload = {
+    code: callback.searchParams.get("code")!,
+    state: started.state,
+    codeVerifier: started.codeVerifier,
+  };
   const exchanged = await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload });
   expect(exchanged.statusCode).toBe(200);
   return { token: exchanged.json().token as string, payload, started };
 }
-const apnsConfig = (): NonNullable<Config["apns"]> => ({ teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "not-read-with-test-double", environment: "sandbox" });
+const apnsConfig = (): NonNullable<Config["apns"]> => ({
+  teamId: "TEAM123456",
+  keyId: "KEY1234567",
+  topic: "test.agentinterface",
+  privateKeyFile: "not-read-with-test-double",
+  environment: "sandbox",
+});
 
 it("uses single-use state and PKCE-bound native codes, hashed sessions, and retains browser write guards", async () => {
   const { app, store } = await setup();
   const started = await flow(app);
   expect(started.response.headers["cache-control"]).toBe("no-store");
   expect(started.response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
-  const complete = () => app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { member: "one" } });
+  const complete = () =>
+    app.inject({
+      method: "POST",
+      url: "/api/auth/native/complete",
+      headers: { origin, cookie: started.cookie },
+      payload: { member: "one" },
+    });
   const completed = await complete();
   const replayed = await complete();
   expect([replayed.statusCode, replayed.json().code]).toEqual([401, "session_expired"]);
   const callback = new URL(completed.json().callback);
-  const payload = { code: callback.searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
-  const exchange = (body: Record<string, unknown>, headers = {}) => app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: body, headers });
-  const wrongVerifier = await exchange({ ...payload, codeVerifier: randomBytes(32).toString("base64url") });
+  const payload = {
+    code: callback.searchParams.get("code"),
+    state: started.state,
+    codeVerifier: started.codeVerifier,
+  };
+  const exchange = (body: Record<string, unknown>, headers = {}) =>
+    app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: body, headers });
+  const wrongVerifier = await exchange({
+    ...payload,
+    codeVerifier: randomBytes(32).toString("base64url"),
+  });
   expect([wrongVerifier.statusCode, wrongVerifier.json().code]).toEqual([401, "session_expired"]);
-  expect((await exchange({ ...payload, state: randomBytes(32).toString("base64url") })).statusCode).toBe(401);
+  expect(
+    (await exchange({ ...payload, state: randomBytes(32).toString("base64url") })).statusCode,
+  ).toBe(401);
   expect((await exchange(payload, { origin })).statusCode).toBe(403);
   const result = await exchange(payload);
   expect(result.statusCode).toBe(200);
@@ -69,38 +149,116 @@ it("uses single-use state and PKCE-bound native codes, hashed sessions, and reta
   expect(store.getNativeSession(token)).toBeUndefined();
   const headers = { authorization: `Bearer ${token}` };
   const preferences = (await app.inject({ url: "/api/bootstrap", headers })).json().preferences;
-  expect((await app.inject({ method: "PATCH", url: "/api/preferences", headers, payload: preferences })).statusCode).toBe(200);
-  expect((await app.inject({ method: "PATCH", url: "/api/preferences", headers: { ...headers, origin }, payload: preferences })).statusCode).toBe(403);
-  expect((await app.inject({ method: "PATCH", url: "/api/preferences", headers: { origin }, payload: preferences })).statusCode).toBe(401);
-  expect((await app.inject({ method: "POST", url: "/api/auth/logout", headers })).statusCode).toBe(200);
+  expect(
+    (await app.inject({ method: "PATCH", url: "/api/preferences", headers, payload: preferences }))
+      .statusCode,
+  ).toBe(200);
+  expect(
+    (
+      await app.inject({
+        method: "PATCH",
+        url: "/api/preferences",
+        headers: { ...headers, origin },
+        payload: preferences,
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await app.inject({
+        method: "PATCH",
+        url: "/api/preferences",
+        headers: { origin },
+        payload: preferences,
+      })
+    ).statusCode,
+  ).toBe(401);
+  expect((await app.inject({ method: "POST", url: "/api/auth/logout", headers })).statusCode).toBe(
+    200,
+  );
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(401);
 });
 
 it("requires bridge cookie and same-origin action, rejects arbitrary callbacks, and expires handoffs", async () => {
   const { app, store } = await setup();
   const started = await flow(app);
-  const options = { method: "POST" as const, url: "/api/auth/native/complete", payload: { member: "one" } };
+  const options = {
+    method: "POST" as const,
+    url: "/api/auth/native/complete",
+    payload: { member: "one" },
+  };
   expect((await app.inject({ ...options, headers: { origin } })).statusCode).toBe(401);
-  expect((await app.inject({ ...options, headers: { origin: "https://evil.test", cookie: started.cookie } })).statusCode).toBe(403);
-  expect((await app.inject(`/native/sign-in?state=${started.state}&code_challenge=${randomBytes(32).toString("base64url")}&code_challenge_method=S256&redirect_uri=https://evil.test`)).statusCode).toBe(400);
+  expect(
+    (
+      await app.inject({
+        ...options,
+        headers: { origin: "https://evil.test", cookie: started.cookie },
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await app.inject(
+        `/native/sign-in?state=${started.state}&code_challenge=${randomBytes(32).toString("base64url")}&code_challenge_method=S256&redirect_uri=https://evil.test`,
+      )
+    ).statusCode,
+  ).toBe(400);
   store.db.prepare("UPDATE native_flows SET expires=0").run();
-  expect((await app.inject({ ...options, headers: { origin, cookie: started.cookie } })).statusCode).toBe(401);
+  expect(
+    (await app.inject({ ...options, headers: { origin, cookie: started.cookie } })).statusCode,
+  ).toBe(401);
   const second = await flow(app);
   const completed = await app.inject({ ...options, headers: { origin, cookie: second.cookie } });
   store.db.prepare("UPDATE native_codes SET expires=0").run();
-  expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: { code: new URL(completed.json().callback).searchParams.get("code"), state: second.state, codeVerifier: second.codeVerifier } })).statusCode).toBe(401);
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/auth/native/exchange",
+        payload: {
+          code: new URL(completed.json().callback).searchParams.get("code"),
+          state: second.state,
+          codeVerifier: second.codeVerifier,
+        },
+      })
+    ).statusCode,
+  ).toBe(401);
 });
 
 it("verifies the Google flow nonce and rechecks the household on each native request", async () => {
-  const config = loadConfig({ GOOGLE_CLIENT_ID: "google", HOUSEHOLD_EMAILS: "one@example.test", APP_DATABASE: ":memory:" });
+  const config = loadConfig({
+    GOOGLE_CLIENT_ID: "google",
+    HOUSEHOLD_EMAILS: "one@example.test",
+    APP_DATABASE: ":memory:",
+  });
   let nonce = "bad";
-  const { app, store } = await setup(config, async () => ({ sub: "google-one", email: "one@example.test", email_verified: true, nonce }));
+  const { app, store } = await setup(config, async () => ({
+    sub: "google-one",
+    email: "one@example.test",
+    email_verified: true,
+    nonce,
+  }));
   const started = await flow(app);
-  const complete = () => app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { credential: "verified-test-token" } });
+  const complete = () =>
+    app.inject({
+      method: "POST",
+      url: "/api/auth/native/complete",
+      headers: { origin, cookie: started.cookie },
+      payload: { credential: "verified-test-token" },
+    });
   expect((await complete()).statusCode).toBe(401);
   nonce = store.getNativeFlow(hash(started.cookieValue))!.nonce;
-  const completed = await complete(); expect(completed.statusCode).toBe(200);
-  const result = await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: { code: new URL(completed.json().callback).searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier } });
+  const completed = await complete();
+  expect(completed.statusCode).toBe(200);
+  const result = await app.inject({
+    method: "POST",
+    url: "/api/auth/native/exchange",
+    payload: {
+      code: new URL(completed.json().callback).searchParams.get("code"),
+      state: started.state,
+      codeVerifier: started.codeVerifier,
+    },
+  });
   const headers = { authorization: `Bearer ${result.json().token}` };
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
   config.householdEmails = [];
@@ -109,24 +267,59 @@ it("verifies the Google flow nonce and rechecks the household on each native req
 });
 
 /** A completed native sign-in page: the code the app receives, with its state and verifier. */
-async function nativeCode(app: Awaited<ReturnType<typeof createApp>>["app"], body: Record<string, string>, purpose?: "confirm") {
+async function nativeCode(
+  app: Awaited<ReturnType<typeof createApp>>["app"],
+  body: Record<string, string>,
+  purpose?: "confirm",
+) {
   const started = await flow(app, purpose);
-  const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: body });
+  const completed = await app.inject({
+    method: "POST",
+    url: "/api/auth/native/complete",
+    headers: { origin, cookie: started.cookie },
+    payload: body,
+  });
   expect(completed.statusCode).toBe(200);
-  return { code: new URL(completed.json().callback).searchParams.get("code")!, state: started.state, codeVerifier: started.codeVerifier };
+  return {
+    code: new URL(completed.json().callback).searchParams.get("code")!,
+    state: started.state,
+    codeVerifier: started.codeVerifier,
+  };
 }
 
 it("records signing in to the app as confirming it's you, from Google's issue time", async () => {
-  const config = loadConfig({ GOOGLE_CLIENT_ID: "google", HOUSEHOLD_EMAILS: "one@example.test", APP_DATABASE: ":memory:" });
+  const config = loadConfig({
+    GOOGLE_CLIENT_ID: "google",
+    HOUSEHOLD_EMAILS: "one@example.test",
+    APP_DATABASE: ":memory:",
+  });
   let identity: { iat?: number } = {};
-  const { app, store } = await setup(config, async () => ({ sub: "google-one", email: "one@example.test", email_verified: true, nonce: store.getNativeFlow(hash(flowCookie))!.nonce, ...identity }));
+  const { app, store } = await setup(config, async () => ({
+    sub: "google-one",
+    email: "one@example.test",
+    email_verified: true,
+    nonce: store.getNativeFlow(hash(flowCookie))!.nonce,
+    ...identity,
+  }));
   let flowCookie = "";
   const signIn = async () => {
     const started = await flow(app);
     flowCookie = started.cookieValue;
-    const completed = await app.inject({ method: "POST", url: "/api/auth/native/complete", headers: { origin, cookie: started.cookie }, payload: { credential: "verified-test-token" } });
-    const payload = { code: new URL(completed.json().callback).searchParams.get("code"), state: started.state, codeVerifier: started.codeVerifier };
-    return hash((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload })).json().token);
+    const completed = await app.inject({
+      method: "POST",
+      url: "/api/auth/native/complete",
+      headers: { origin, cookie: started.cookie },
+      payload: { credential: "verified-test-token" },
+    });
+    const payload = {
+      code: new URL(completed.json().callback).searchParams.get("code"),
+      state: started.state,
+      codeVerifier: started.codeVerifier,
+    };
+    return hash(
+      (await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload })).json()
+        .token,
+    );
   };
   identity = { iat: Math.floor(Date.now() / 1000) - 120 };
   expect(store.nativeSessionConfirmedAt(await signIn())).toBe(identity.iat! * 1000);
@@ -149,25 +342,45 @@ it("confirms a signed-in app's person with a fresh PKCE-bound code for the same 
   expect(store.nativeSessionConfirmedAt(hash(token))).toBe(Date.now());
   store.db.prepare("DELETE FROM native_session_confirmations").run();
   const confirm = (payload: unknown, extra: Record<string, string> = headers) =>
-    app.inject({ method: "POST", url: "/api/auth/native/confirm", headers: extra, payload: payload as object });
+    app.inject({
+      method: "POST",
+      url: "/api/auth/native/confirm",
+      headers: extra,
+      payload: payload as object,
+    });
   // The confirmation page says what it is for; any other purpose is refused.
   const page = (await flow(app, "confirm")).response.body;
-  expect(page).toContain("<h1>Confirm it's you</h1><p>Choose the same household account to open the terminal.</p>");
-  const query = (purpose: string) => `/native/sign-in?state=${"s".repeat(32)}&code_challenge=${"c".repeat(43)}&code_challenge_method=S256&purpose=${purpose}`;
+  expect(page).toContain(
+    "<h1>Confirm it's you</h1><p>Choose the same household account to open the terminal.</p>",
+  );
+  const query = (purpose: string) =>
+    `/native/sign-in?state=${"s".repeat(32)}&code_challenge=${"c".repeat(43)}&code_challenge_method=S256&purpose=${purpose}`;
   expect((await app.inject(query("sign-in"))).statusCode).toBe(400);
 
   const good = await nativeCode(app, { member: "one" }, "confirm");
   // Only the app's own bearer, without a browser Origin, reaches it; a browser session is refused.
-  expect((await confirm(good, {})).json()).toEqual({ error: "Sign in required", code: "session_expired" });
+  expect((await confirm(good, {})).json()).toEqual({
+    error: "Sign in required",
+    code: "session_expired",
+  });
   expect((await confirm(good, { ...headers, origin })).statusCode).toBe(403);
   const browser = await localLogin(app, origin);
-  expect((await confirm(good, browser)).json()).toEqual({ error: "Confirm your identity in the iOS app." });
+  expect((await confirm(good, browser)).json()).toEqual({
+    error: "Confirm your identity in the iOS app.",
+  });
   // Malformed bodies fail validation before anything is spent.
-  for (const bad of [{ ...good, code: "short" }, { ...good, extra: true }, { code: good.code, state: good.state }])
+  for (const bad of [
+    { ...good, code: "short" },
+    { ...good, extra: true },
+    { code: good.code, state: good.state },
+  ])
     expect((await confirm(bad)).statusCode).toBe(400);
   // A wrong verifier leaves the code unspent, and the refusal never says session_expired, so the app stays signed in.
   const wrong = await confirm({ ...good, codeVerifier: randomBytes(32).toString("base64url") });
-  expect([wrong.statusCode, wrong.json()]).toEqual([401, { error: "That confirmation expired. Try again.", code: "confirmation_expired" }]);
+  expect([wrong.statusCode, wrong.json()]).toEqual([
+    401,
+    { error: "That confirmation expired. Try again.", code: "confirmation_expired" },
+  ]);
   expect(store.nativeSessionConfirmedAt(hash(token))).toBeUndefined();
   const confirmed = await confirm(good);
   expect(confirmed.statusCode).toBe(200);
@@ -176,146 +389,331 @@ it("confirms a signed-in app's person with a fresh PKCE-bound code for the same 
   expect(at).toBe(Date.now());
   // Each code works once, for confirming or for signing in.
   expect((await confirm(good)).json().code).toBe("confirmation_expired");
-  expect((await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good })).statusCode).toBe(401);
+  expect(
+    (await app.inject({ method: "POST", url: "/api/auth/native/exchange", payload: good }))
+      .statusCode,
+  ).toBe(401);
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
 
   // Another household member's code never confirms this person.
   const theirs = await nativeCode(app, { member: "two" }, "confirm");
-  expect((await confirm(theirs)).json()).toEqual({ error: "Use the same Google account you signed in with." });
+  expect((await confirm(theirs)).json()).toEqual({
+    error: "Use the same Google account you signed in with.",
+  });
   // An expired code, and a code whose proof is missing or more than ten minutes old, are refused.
   const expired = await nativeCode(app, { member: "one" }, "confirm");
   store.db.prepare("UPDATE native_codes SET expires=0").run();
   expect((await confirm(expired)).json().code).toBe("confirmation_expired");
   const old = await nativeCode(app, { member: "one" }, "confirm");
-  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 - 1000);
-  expect((await confirm(old)).json()).toEqual({ error: "That confirmation is too old. Try again.", code: "confirmation_expired" });
+  store.db
+    .prepare("UPDATE native_code_confirmations SET confirmed_at=?")
+    .run(Date.now() - 10 * 60000 - 1000);
+  expect((await confirm(old)).json()).toEqual({
+    error: "That confirmation is too old. Try again.",
+    code: "confirmation_expired",
+  });
   const unproven = await nativeCode(app, { member: "one" }, "confirm");
   store.db.prepare("DELETE FROM native_code_confirmations").run();
   expect((await confirm(unproven)).json().error).toBe("That confirmation is too old. Try again.");
   // Just inside ten minutes counts, and never moves a later confirmation back.
   const recent = await nativeCode(app, { member: "one" }, "confirm");
-  store.db.prepare("UPDATE native_code_confirmations SET confirmed_at=?").run(Date.now() - 10 * 60000 + 30000);
+  store.db
+    .prepare("UPDATE native_code_confirmations SET confirmed_at=?")
+    .run(Date.now() - 10 * 60000 + 30000);
   expect((await confirm(recent)).statusCode).toBe(200);
   expect(store.nativeSessionConfirmedAt(hash(token))).toBe(at);
   expect((await app.inject({ url: "/api/bootstrap", headers })).statusCode).toBe(200);
 });
 
 it("keeps device ownership explicit, controls APNs environment on the host, and unregisters on native logout", async () => {
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+  config.apns = apnsConfig();
   const { app, store } = await setup(config);
-  const one = await connectNative(app), two = await connectNative(app, "two");
-  const deviceId = randomUUID(), token = "ab".repeat(32);
-  const register = (bearer: string, extra = {}) => app.inject({ method: "PUT", url: "/api/native/push/device", headers: { authorization: `Bearer ${bearer}` }, payload: { deviceId, token, ...extra } });
+  const one = await connectNative(app),
+    two = await connectNative(app, "two");
+  const deviceId = randomUUID(),
+    token = "ab".repeat(32);
+  const register = (bearer: string, extra = {}) =>
+    app.inject({
+      method: "PUT",
+      url: "/api/native/push/device",
+      headers: { authorization: `Bearer ${bearer}` },
+      payload: { deviceId, token, ...extra },
+    });
   expect((await register(one.token, { environment: "production" })).statusCode).toBe(400);
   expect((await register(one.token)).statusCode).toBe(200);
   expect((await register(two.token)).statusCode).toBe(409);
   expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
   expect(store.nativeDevices("local-one", "production")).toHaveLength(0);
-  await app.inject({ method: "DELETE", url: "/api/native/push/device", headers: { authorization: `Bearer ${two.token}` }, payload: { deviceId } });
+  await app.inject({
+    method: "DELETE",
+    url: "/api/native/push/device",
+    headers: { authorization: `Bearer ${two.token}` },
+    payload: { deviceId },
+  });
   expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
-  expect((await app.inject({ method: "POST", url: "/api/native/push/test", headers: { authorization: `Bearer ${one.token}` }, payload: { botId: "bot" } })).statusCode).toBe(200);
-  expect(store.outbox().map(item => item.user_id)).toEqual(["local-one"]);
-  await app.inject({ method: "POST", url: "/api/auth/logout", headers: { authorization: `Bearer ${one.token}` } });
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/native/push/test",
+        headers: { authorization: `Bearer ${one.token}` },
+        payload: { botId: "bot" },
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(store.outbox().map((item) => item.user_id)).toEqual(["local-one"]);
+  await app.inject({
+    method: "POST",
+    url: "/api/auth/logout",
+    headers: { authorization: `Bearer ${one.token}` },
+  });
   expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(0);
   expect((await register(two.token)).statusCode).toBe(200);
 });
 
 it("registers one Live Activity token per device and owner, seeds just-sent assistants, and forgets it on logout", async () => {
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", IOS_APP_LATEST_BUILD: "7", IOS_APP_UPDATE_URL: "https://testflight.apple.com/join/TEST" });
+  const config = loadConfig({
+    LOCAL_DEV_AUTH: "true",
+    APP_DATABASE: ":memory:",
+    IOS_APP_LATEST_BUILD: "7",
+    IOS_APP_UPDATE_URL: "https://testflight.apple.com/join/TEST",
+  });
   config.apns = apnsConfig();
   const { app, store, worker } = await setup(config);
-  const one = await connectNative(app), two = await connectNative(app, "two");
-  const deviceId = randomUUID(), token = "ab".repeat(32);
+  const one = await connectNative(app),
+    two = await connectNative(app, "two");
+  const deviceId = randomUUID(),
+    token = "ab".repeat(32);
   const headers = (bearer: string) => ({ authorization: `Bearer ${bearer}` });
-  const register = (bearer: string, extra = {}) => app.inject({ method: "PUT", url: "/api/native/live-activity", headers: headers(bearer), payload: { deviceId, token, ...extra } });
-  expect((await app.inject({ url: "/api/bootstrap", headers: headers(one.token) })).json().nativeApp).toEqual({ latestBuild: 7, updateUrl: "https://testflight.apple.com/join/TEST" });
+  const register = (bearer: string, extra = {}) =>
+    app.inject({
+      method: "PUT",
+      url: "/api/native/live-activity",
+      headers: headers(bearer),
+      payload: { deviceId, token, ...extra },
+    });
+  expect(
+    (await app.inject({ url: "/api/bootstrap", headers: headers(one.token) })).json().nativeApp,
+  ).toEqual({ latestBuild: 7, updateUrl: "https://testflight.apple.com/join/TEST" });
   expect((await register(one.token, { environment: "production" })).statusCode).toBe(400);
-  expect((await register(one.token, { botIds: Array.from({ length: 11 }, (_, index) => `bot${index}`) })).statusCode).toBe(400);
+  expect(
+    (await register(one.token, { botIds: Array.from({ length: 11 }, (_, index) => `bot${index}`) }))
+      .statusCode,
+  ).toBe(400);
   const registered = await register(one.token, { botIds: ["bot", "bot", "missing"] });
   expect(registered.statusCode).toBe(200);
   expect(registered.json()).toEqual({ ok: true });
-  expect(await worker.live.state("local-one", store.liveActivities("sandbox")[0]))
-    .toMatchObject({ title: "Bot is starting", activeCount: 1, rows: [{ botId: "bot", phase: "starting", status: "Starting" }] });
-  expect(store.liveActivities("sandbox")).toMatchObject([{ userId: "local-one", armed: ["bot", "missing"] }]);
+  expect(await worker.live.state("local-one", store.liveActivities("sandbox")[0])).toMatchObject({
+    title: "Bot is starting",
+    activeCount: 1,
+    rows: [{ botId: "bot", phase: "starting", status: "Starting" }],
+  });
+  expect(store.liveActivities("sandbox")).toMatchObject([
+    { userId: "local-one", armed: ["bot", "missing"] },
+  ]);
   expect((await register(two.token)).statusCode).toBe(409);
   // A background registration names the activity's account, which must be the signed-in one.
-  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  const scope = (userId: string) =>
+    Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
   expect((await register(one.token, { scope: scope("local-two") })).statusCode).toBe(400);
-  expect((await register(one.token, { botIds: ["bot"], scope: scope("local-one") })).statusCode).toBe(200);
+  expect(
+    (await register(one.token, { botIds: ["bot"], scope: scope("local-one") })).statusCode,
+  ).toBe(200);
   const read = await app.inject({ url: "/api/native/live-activity", headers: headers(one.token) });
   expect(read.json()).toMatchObject({ available: true, state: { activeCount: 0, rows: [] } });
   const deviceRead = `/api/native/live-activity?deviceId=${deviceId}`;
-  expect((await app.inject({ url: deviceRead, headers: headers(one.token) })).json())
-    .toMatchObject({ state: { activeCount: 1, rows: [{ botId: "bot", phase: "starting" }] } });
+  expect((await app.inject({ url: deviceRead, headers: headers(one.token) })).json()).toMatchObject(
+    { state: { activeCount: 1, rows: [{ botId: "bot", phase: "starting" }] } },
+  );
   // A device ID does not let another account or another native session inherit its grace.
-  expect((await app.inject({ url: deviceRead, headers: headers(two.token) })).json().state.rows).toEqual([]);
+  expect(
+    (await app.inject({ url: deviceRead, headers: headers(two.token) })).json().state.rows,
+  ).toEqual([]);
   const otherSession = await connectNative(app);
-  expect((await app.inject({ url: deviceRead, headers: headers(otherSession.token) })).json().state.rows).toEqual([]);
+  expect(
+    (await app.inject({ url: deviceRead, headers: headers(otherSession.token) })).json().state.rows,
+  ).toEqual([]);
   // A browser session has no device to show a Live Activity on.
-  expect((await app.inject({ url: "/api/native/live-activity", headers: { cookie: "session=none" } })).statusCode).toBe(401);
-  await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token } });
+  expect(
+    (await app.inject({ url: "/api/native/live-activity", headers: { cookie: "session=none" } }))
+      .statusCode,
+  ).toBe(401);
+  await app.inject({
+    method: "DELETE",
+    url: "/api/native/live-activity",
+    headers: headers(two.token),
+    payload: { deviceId, token },
+  });
   expect(store.liveActivities("sandbox")).toHaveLength(1);
   await app.inject({ method: "POST", url: "/api/auth/logout", headers: headers(one.token) });
   expect(store.liveActivities("sandbox")).toHaveLength(0);
   expect((await register(two.token)).statusCode).toBe(200);
   const replacement = "cd".repeat(32);
   expect((await register(two.token, { token: replacement })).statusCode).toBe(200);
-  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId } })).statusCode).toBe(400);
-  await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token } });
+  expect(
+    (
+      await app.inject({
+        method: "DELETE",
+        url: "/api/native/live-activity",
+        headers: headers(two.token),
+        payload: { deviceId },
+      })
+    ).statusCode,
+  ).toBe(400);
+  await app.inject({
+    method: "DELETE",
+    url: "/api/native/live-activity",
+    headers: headers(two.token),
+    payload: { deviceId, token },
+  });
   expect(store.liveActivities("sandbox")).toMatchObject([{ token: replacement }]);
-  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity", headers: headers(two.token), payload: { deviceId, token: replacement.toUpperCase() } })).statusCode).toBe(200);
+  expect(
+    (
+      await app.inject({
+        method: "DELETE",
+        url: "/api/native/live-activity",
+        headers: headers(two.token),
+        payload: { deviceId, token: replacement.toUpperCase() },
+      })
+    ).statusCode,
+  ).toBe(200);
   expect(store.liveActivities("sandbox")).toHaveLength(0);
 });
 
 it("registers a push-to-start token only for the signed-in account and lets the app claim its own start", async () => {
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+  config.apns = apnsConfig();
   const { app, store } = await setup(config);
-  const one = await connectNative(app), two = await connectNative(app, "two");
-  const deviceId = randomUUID(), token = "ab".repeat(32);
+  const one = await connectNative(app),
+    two = await connectNative(app, "two");
+  const deviceId = randomUUID(),
+    token = "ab".repeat(32);
   const headers = (bearer: string) => ({ authorization: `Bearer ${bearer}` });
-  const scope = (userId: string) => Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
-  const register = (bearer: string, payload: object) => app.inject({ method: "PUT", url: "/api/native/live-activity/start", headers: headers(bearer), payload });
+  const scope = (userId: string) =>
+    Buffer.from(`https://wildbots.example|${userId}`).toString("base64url");
+  const register = (bearer: string, payload: object) =>
+    app.inject({
+      method: "PUT",
+      url: "/api/native/live-activity/start",
+      headers: headers(bearer),
+      payload,
+    });
   // A scope naming another account would label this person's activity as someone else's.
-  expect((await register(one.token, { deviceId, token, scope: scope("local-two") })).statusCode).toBe(400);
-  expect((await register(one.token, { deviceId, token, scope: "not base64url!" })).statusCode).toBe(400);
-  expect((await register(one.token, { deviceId, token, scope: scope("local-one") })).statusCode).toBe(200);
-  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-one", deviceId, token, scope: scope("local-one"), started: [], localAt: 0 }]);
+  expect(
+    (await register(one.token, { deviceId, token, scope: scope("local-two") })).statusCode,
+  ).toBe(400);
+  expect((await register(one.token, { deviceId, token, scope: "not base64url!" })).statusCode).toBe(
+    400,
+  );
+  expect(
+    (await register(one.token, { deviceId, token, scope: scope("local-one") })).statusCode,
+  ).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([
+    { userId: "local-one", deviceId, token, scope: scope("local-one"), started: [], localAt: 0 },
+  ]);
   // The app's own start after a send holds pushed starts off this device.
-  await app.inject({ url: `/api/native/live-activity?deviceId=${deviceId}&local=1`, headers: headers(one.token) });
+  await app.inject({
+    url: `/api/native/live-activity?deviceId=${deviceId}&local=1`,
+    headers: headers(one.token),
+  });
   expect(store.liveActivityStarts("sandbox")[0].localAt).toBeGreaterThan(0);
   // The same device signed in as someone else, after an offline sign-out, takes the token over.
   const other = randomUUID();
-  expect((await register(two.token, { deviceId: other, token: token.toUpperCase(), scope: scope("local-two") })).statusCode).toBe(200);
-  expect(store.liveActivityStarts("sandbox")).toMatchObject([{ userId: "local-two", deviceId: other, token }]);
-  expect((await app.inject({ method: "DELETE", url: "/api/native/live-activity/start", headers: headers(one.token), payload: { deviceId: other } })).statusCode).toBe(200);
+  expect(
+    (
+      await register(two.token, {
+        deviceId: other,
+        token: token.toUpperCase(),
+        scope: scope("local-two"),
+      })
+    ).statusCode,
+  ).toBe(200);
+  expect(store.liveActivityStarts("sandbox")).toMatchObject([
+    { userId: "local-two", deviceId: other, token },
+  ]);
+  expect(
+    (
+      await app.inject({
+        method: "DELETE",
+        url: "/api/native/live-activity/start",
+        headers: headers(one.token),
+        payload: { deviceId: other },
+      })
+    ).statusCode,
+  ).toBe(200);
   expect(store.liveActivityStarts("sandbox")).toHaveLength(1);
   await app.inject({ method: "POST", url: "/api/auth/logout", headers: headers(two.token) });
   expect(store.liveActivityStarts("sandbox")).toHaveLength(0);
 });
 
 it("reports absent APNs settings explicitly and rejects incomplete signing configuration", async () => {
-  const { app } = await setup(); const { token } = await connectNative(app);
+  const { app } = await setup();
+  const { token } = await connectNative(app);
   const headers = { authorization: `Bearer ${token}` };
-  expect((await app.inject({ url: "/api/native/push/config", headers })).json()).toEqual({ available: false });
-  expect((await app.inject({ method: "PUT", url: "/api/native/push/device", headers, payload: { deviceId: randomUUID(), token: "ab".repeat(32) } })).statusCode).toBe(409);
-  expect((await app.inject({ url: "/api/native/live-activity", headers })).json()).toMatchObject({ available: false, state: { rows: [] } });
-  expect((await app.inject({ method: "PUT", url: "/api/native/live-activity", headers, payload: { deviceId: randomUUID(), token: "ab".repeat(32) } })).statusCode).toBe(409);
+  expect((await app.inject({ url: "/api/native/push/config", headers })).json()).toEqual({
+    available: false,
+  });
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: "/api/native/push/device",
+        headers,
+        payload: { deviceId: randomUUID(), token: "ab".repeat(32) },
+      })
+    ).statusCode,
+  ).toBe(409);
+  expect((await app.inject({ url: "/api/native/live-activity", headers })).json()).toMatchObject({
+    available: false,
+    state: { rows: [] },
+  });
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: "/api/native/live-activity",
+        headers,
+        payload: { deviceId: randomUUID(), token: "ab".repeat(32) },
+      })
+    ).statusCode,
+  ).toBe(409);
   expect(() => loadConfig({ APNS_KEY_ID: "KEY1234567" })).toThrow("All APNs");
   expect(() => loadConfig({ APNS_ENVIRONMENT: "sandbox" })).toThrow("signing settings");
 });
 
 it("authorizes native reads and downloads, rejects malformed bearer fallback, and expires sessions and registrations together", async () => {
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+  config.apns = apnsConfig();
   const { app, store } = await setup(config);
   const { token } = await connectNative(app);
   const headers = { authorization: `Bearer ${token}` };
   expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(200);
-  expect((await app.inject({ url: "/api/files/answer.signature", headers })).body).toBe("file body");
+  expect((await app.inject({ url: "/api/files/answer.signature", headers })).body).toBe(
+    "file body",
+  );
   expect((await app.inject("/api/files/answer.signature")).statusCode).toBe(401);
-  const web = await app.inject({ method: "POST", url: "/api/auth/local", headers: { origin }, payload: { member: "one" } });
+  const web = await app.inject({
+    method: "POST",
+    url: "/api/auth/local",
+    headers: { origin },
+    payload: { member: "one" },
+  });
   const cookie = `session=${web.cookies[0].value}`;
-  expect((await app.inject({ url: "/api/bots", headers: { cookie, authorization: "Bearer malformed" } })).statusCode).toBe(401);
-  expect((await app.inject({ method: "PUT", url: "/api/native/push/device", headers: { cookie, origin, "x-csrf-token": web.json().csrfToken }, payload: { deviceId: randomUUID(), token: "ab".repeat(32) } })).statusCode).toBe(403);
+  expect(
+    (await app.inject({ url: "/api/bots", headers: { cookie, authorization: "Bearer malformed" } }))
+      .statusCode,
+  ).toBe(401);
+  expect(
+    (
+      await app.inject({
+        method: "PUT",
+        url: "/api/native/push/device",
+        headers: { cookie, origin, "x-csrf-token": web.json().csrfToken },
+        payload: { deviceId: randomUUID(), token: "ab".repeat(32) },
+      })
+    ).statusCode,
+  ).toBe(403);
   store.registerNativeDevice("local-one", hash(token), randomUUID(), "ab".repeat(32), "sandbox");
   store.db.prepare("UPDATE native_sessions SET expires=0 WHERE hash=?").run(hash(token));
   expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(401);
@@ -325,16 +723,27 @@ it("authorizes native reads and downloads, rejects malformed bearer fallback, an
 
 it("renews a native session in place, keeping its push registrations, until 90 days after sign-in", async () => {
   freezeNow();
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+  config.apns = apnsConfig();
   const { app, store } = await setup(config);
   const { token } = await connectNative(app);
   const headers = { authorization: `Bearer ${token}` };
-  const renew = (extra: Record<string, string> = {}) => app.inject({ method: "POST", url: "/api/auth/native/renew", headers: { ...headers, ...extra }, payload: {} });
+  const renew = (extra: Record<string, string> = {}) =>
+    app.inject({
+      method: "POST",
+      url: "/api/auth/native/renew",
+      headers: { ...headers, ...extra },
+      payload: {},
+    });
   store.registerNativeDevice("local-one", hash(token), randomUUID(), "ab".repeat(32), "sandbox");
   const day = 86400000;
   // Six days in, one day remains; renewal restores a full week from now.
-  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
-  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(Date.now() - 6 * day, hash(token));
+  store.db
+    .prepare("UPDATE native_sessions SET expires=? WHERE hash=?")
+    .run(Date.now() + day, hash(token));
+  store.db
+    .prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?")
+    .run(Date.now() - 6 * day, hash(token));
   const renewed = await renew();
   expect(renewed.statusCode).toBe(200);
   expect(Date.parse(renewed.json().expiresAt)).toBe(Date.now() + 7 * day);
@@ -342,13 +751,20 @@ it("renews a native session in place, keeping its push registrations, until 90 d
   expect(store.nativeDevices("local-one", "sandbox")).toHaveLength(1);
   // Near the 90-day limit, renewal stops at the limit instead of granting another week.
   const start = Date.now() - 88 * day;
-  store.db.prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?").run(start, hash(token));
-  store.db.prepare("UPDATE native_sessions SET expires=? WHERE hash=?").run(Date.now() + day, hash(token));
+  store.db
+    .prepare("UPDATE native_session_starts SET signed_in_at=? WHERE hash=?")
+    .run(start, hash(token));
+  store.db
+    .prepare("UPDATE native_sessions SET expires=? WHERE hash=?")
+    .run(Date.now() + day, hash(token));
   expect(Date.parse((await renew()).json().expiresAt)).toBe(start + 90 * day);
   // A session from the previous release has no recorded start. Its start is inferred once and
   // kept, so renewing it every six days still ends 90 days after it began.
-  const legacy = "legacy-session", began = Date.now();
-  store.db.prepare("INSERT INTO native_sessions VALUES(?,?,?)").run(legacy, "local-one", began + 7 * day);
+  const legacy = "legacy-session",
+    began = Date.now();
+  store.db
+    .prepare("INSERT INTO native_sessions VALUES(?,?,?)")
+    .run(legacy, "local-one", began + 7 * day);
   let last: number | undefined;
   for (let at = began + 6 * day; at < began + 120 * day; at += 6 * day)
     last = store.renewNativeSession(legacy, 7 * day, 90 * day, at) ?? last;
@@ -363,77 +779,169 @@ it("signs cached ES256 APNs provider requests and bounds multibyte payloads", as
   const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
   const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
-  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), {
+    mode: 0o600,
+  });
   const seen: { origin: string; headers: Record<string, string>; body: string }[] = [];
-  const sender = createApnsSender(config, async (origin, headers, body) => { seen.push({ origin, headers, body }); return { statusCode: 200 }; })!;
+  const sender = createApnsSender(config, async (origin, headers, body) => {
+    seen.push({ origin, headers, body });
+    return { statusCode: 200 };
+  })!;
   try {
-    const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
-    const payload = JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" });
-    await sender(device, payload); await sender(device, payload);
+    const device = {
+      deviceId: randomUUID(),
+      token: "ab".repeat(32),
+      environment: "sandbox" as const,
+    };
+    const payload = JSON.stringify({
+      title: "Done",
+      body: "Hello",
+      url: "/?bot=bot",
+      tag: "event",
+    });
+    await sender(device, payload);
+    await sender(device, payload);
     expect(seen[0].origin).toBe("https://api.sandbox.push.apple.com");
     expect(seen[0].headers["apns-topic"]).toBe("test.agentinterface");
     expect(seen[0].headers["apns-push-type"]).toBe("alert");
     expect(seen[0].headers.authorization).toBe(seen[1].headers.authorization);
     const jwt = seen[0].headers.authorization.slice(7).split(".");
     expect(JSON.parse(Buffer.from(jwt[0], "base64url").toString()).alg).toBe("ES256");
-    expect(verify("sha256", Buffer.from(jwt.slice(0, 2).join(".")), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(jwt[2], "base64url"))).toBe(true);
-    expect(JSON.parse(seen[0].body)).toMatchObject({ aps: { alert: { title: "Done" } }, url: "/?bot=bot" });
+    expect(
+      verify(
+        "sha256",
+        Buffer.from(jwt.slice(0, 2).join(".")),
+        { key: publicKey, dsaEncoding: "ieee-p1363" },
+        Buffer.from(jwt[2], "base64url"),
+      ),
+    ).toBe(true);
+    expect(JSON.parse(seen[0].body)).toMatchObject({
+      aps: { alert: { title: "Done" } },
+      url: "/?bot=bot",
+    });
     await sender.refresh(device);
-    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
+    expect(seen[2].headers).toMatchObject({
+      "apns-topic": "test.agentinterface",
+      "apns-push-type": "background",
+      "apns-priority": "5",
+    });
     // Only a nudge: the app reads names and states itself, with its own sign-in.
-    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, refresh: ["widgets"] });
+    expect(JSON.parse(seen[2].body)).toEqual({
+      aps: { "content-available": 1 },
+      refresh: ["widgets"],
+    });
     seen.splice(2);
     await sender.clear(device, ["event"]);
-    expect(seen[2].headers).toMatchObject({ "apns-topic": "test.agentinterface", "apns-push-type": "background", "apns-priority": "5" });
-    expect(JSON.parse(seen[2].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] } });
+    expect(seen[2].headers).toMatchObject({
+      "apns-topic": "test.agentinterface",
+      "apns-push-type": "background",
+      "apns-priority": "5",
+    });
+    expect(JSON.parse(seen[2].body)).toEqual({
+      aps: { "content-available": 1 },
+      clear: { tags: ["event"] },
+    });
     // A known badge rides beside the background clear, and as a silent alert push for a closed app.
     await sender.clear(device, ["event"], 3);
-    expect(JSON.parse(seen[3].body)).toEqual({ aps: { "content-available": 1 }, clear: { tags: ["event"] }, badge: 3 });
+    expect(JSON.parse(seen[3].body)).toEqual({
+      aps: { "content-available": 1 },
+      clear: { tags: ["event"] },
+      badge: 3,
+    });
     expect(seen[4].headers).toMatchObject({ "apns-push-type": "alert", "apns-priority": "5" });
     expect(JSON.parse(seen[4].body)).toEqual({ aps: { badge: 3 } });
-    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: 0 }));
+    await sender(
+      device,
+      JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: 0 }),
+    );
     expect(JSON.parse(seen[5].body).aps).toMatchObject({ alert: { title: "Done" }, badge: 0 });
-    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: -1 }));
+    await sender(
+      device,
+      JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event", badge: -1 }),
+    );
     expect(JSON.parse(seen[6].body).aps).not.toHaveProperty("badge");
     seen.splice(2);
-    const many = apnsClearPayload(Array.from({ length: 100 }, (_, index) => `${index}`.padEnd(150, "x")));
+    const many = apnsClearPayload(
+      Array.from({ length: 100 }, (_, index) => `${index}`.padEnd(150, "x")),
+    );
     expect(Buffer.byteLength(many)).toBeLessThanOrEqual(4000);
     expect(JSON.parse(many).clear.tags[0]).toBe("0".padEnd(150, "x"));
-    const long = apnsPayload(JSON.stringify({ title: "😀".repeat(1000), body: "😀".repeat(1000), url: "😀".repeat(1000), tag: "😀".repeat(1000) }));
+    const long = apnsPayload(
+      JSON.stringify({
+        title: "😀".repeat(1000),
+        body: "😀".repeat(1000),
+        url: "😀".repeat(1000),
+        tag: "😀".repeat(1000),
+      }),
+    );
     expect(Buffer.byteLength(long)).toBeLessThan(4096);
-    const escaped = apnsPayload(JSON.stringify({ title: "\u0000".repeat(1000), body: "\n\\\"".repeat(1000), url: "/?bot=" + "a".repeat(2300), tag: "\t".repeat(1000) }));
+    const escaped = apnsPayload(
+      JSON.stringify({
+        title: "\u0000".repeat(1000),
+        body: '\n\\"'.repeat(1000),
+        url: "/?bot=" + "a".repeat(2300),
+        tag: "\t".repeat(1000),
+      }),
+    );
     expect(Buffer.byteLength(escaped)).toBeLessThan(4096);
     expect(JSON.parse(escaped).url).toBe("/?bot=" + "a".repeat(2300));
     expect(JSON.parse(long).url).toBeUndefined();
-    await expect(sender({ ...device, environment: "production" }, payload)).rejects.toThrow("environment");
-  } finally { sender.close(); rmSync(dir, { recursive: true }); }
+    await expect(sender({ ...device, environment: "production" }, payload)).rejects.toThrow(
+      "environment",
+    );
+  } finally {
+    sender.close();
+    rmSync(dir, { recursive: true });
+  }
 });
 
 it("reports Apple's refusal with its status and reason, which a route never forwards", async () => {
   const dir = mkdtempSync(join(tmpdir(), "apns-test-"));
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
-  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-  const sender = createApnsSender(config, async () => ({ statusCode: 400, reason: "BadDeviceToken" }))!;
-  const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), {
+    mode: 0o600,
+  });
+  const sender = createApnsSender(config, async () => ({
+    statusCode: 400,
+    reason: "BadDeviceToken",
+  }))!;
+  const device = {
+    deviceId: randomUUID(),
+    token: "ab".repeat(32),
+    environment: "sandbox" as const,
+  };
   const app = Fastify();
   try {
-    const refusal = await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" })).catch((error: unknown) => error);
+    const refusal = await sender(
+      device,
+      JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" }),
+    ).catch((error: unknown) => error);
     expect(refusal).toBeInstanceOf(ApnsError);
     expect(refusal).toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
-    await expect(sender.clear(device, ["event"])).rejects.toMatchObject({ apnsStatus: 400, reason: "BadDeviceToken" });
+    await expect(sender.clear(device, ["event"])).rejects.toMatchObject({
+      apnsStatus: 400,
+      reason: "BadDeviceToken",
+    });
     // Apple's 400 is not this app's: a route that let it escape answers as an unexplained failure.
     app.setErrorHandler(errorHandler({ production: true }));
-    app.get("/escaped", async () => { throw refusal; });
+    app.get("/escaped", async () => {
+      throw refusal;
+    });
     const response = await app.inject({ url: "/escaped" });
     expect(response.statusCode).toBe(502);
     expect(response.json()).toEqual({ error: "The Hermes operation could not be completed" });
-  } finally { await app.close(); sender.close(); rmSync(dir, { recursive: true }); }
+  } finally {
+    await app.close();
+    sender.close();
+    rmSync(dir, { recursive: true });
+  }
 });
 
 it("shares durable participant/routine notifications across web/APNs without retry duplicates and removes invalid devices", async () => {
   const store = new Store(":memory:");
-  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+  config.apns = apnsConfig();
   for (const userId of ["one", "two"]) {
     store.user({ id: userId, name: userId, email: `${userId}@example.test` });
     store.nativeSession(userId, userId, Date.now() + 100000);
@@ -441,66 +949,182 @@ it("shares durable participant/routine notifications across web/APNs without ret
   }
   store.participate("run", "one");
   store.routineRecipients("bot", "routine", ["two"]);
-  const event: RuntimeEvent = { id: "complete", botId: "bot", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
+  const event: RuntimeEvent = {
+    id: "complete",
+    botId: "bot",
+    runId: "run",
+    kind: "completed",
+    title: "Done",
+    occurredAt: "now",
+  };
   store.recordEvents([event, { ...event, id: "routine", routineId: "routine" }], "cursor");
-  store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
-  const web: string[] = [], native: string[] = [];
-  const worker = new BackgroundWorker(store, runtime, config, async device => { web.push(device.endpoint); }, async device => {
-    native.push(device.deviceId);
-    if (device.deviceId === "one" && native.filter(value => value === "one").length === 1) throw new Error("Temporary outage");
-    if (device.deviceId === "two") throw new ApnsError("Invalid device", 410);
+  store.subscribe("one", {
+    endpoint: "https://push.test/one",
+    keys: { p256dh: "key", auth: "auth" },
   });
+  const web: string[] = [],
+    native: string[] = [];
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    config,
+    async (device) => {
+      web.push(device.endpoint);
+    },
+    async (device) => {
+      native.push(device.deviceId);
+      if (device.deviceId === "one" && native.filter((value) => value === "one").length === 1)
+        throw new Error("Temporary outage");
+      if (device.deviceId === "two") throw new ApnsError("Invalid device", 410);
+    },
+  );
   try {
-    await worker.tick(); expect(web).toHaveLength(1); expect(native).toEqual(["one", "two"]);
+    await worker.tick();
+    expect(web).toHaveLength(1);
+    expect(native).toEqual(["one", "two"]);
     expect(store.nativeDevices("two", "sandbox")).toHaveLength(0);
-    store.db.prepare("UPDATE outbox SET next_attempt=0").run(); await worker.tick();
-    expect(web).toHaveLength(1); expect(native).toEqual(["one", "two", "one"]); expect(store.outbox()).toHaveLength(0);
-    store.recordEvents([{ ...event, id: "revoked" }], "cursor2"); config.householdEmails = [];
-    await worker.tick(); expect(native).toHaveLength(3);
-  } finally { await worker.stop(); store.close(); }
+    store.db.prepare("UPDATE outbox SET next_attempt=0").run();
+    await worker.tick();
+    expect(web).toHaveLength(1);
+    expect(native).toEqual(["one", "two", "one"]);
+    expect(store.outbox()).toHaveLength(0);
+    store.recordEvents([{ ...event, id: "revoked" }], "cursor2");
+    config.householdEmails = [];
+    await worker.tick();
+    expect(native).toHaveLength(3);
+  } finally {
+    await worker.stop();
+    store.close();
+  }
 });
 
 it("groups iOS notifications per assistant and adds actions only where they make sense", () => {
-  const base = { title: "Kitchen", body: "Done", url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" };
+  const base = {
+    title: "Kitchen",
+    body: "Done",
+    url: "/?bot=kitchen",
+    tag: "event-1",
+    botId: "kitchen",
+    account: "0123456789abcdef",
+  };
   const reply = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed" })));
-  expect(reply).toEqual({ aps: { alert: { title: "Kitchen", body: "Done" }, sound: "default", "filter-criteria": "kitchen", "thread-id": "kitchen", "mutable-content": 1, category: "REPLY" },
-    url: "/?bot=kitchen", tag: "event-1", botId: "kitchen", account: "0123456789abcdef" });
-  const approval = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })));
+  expect(reply).toEqual({
+    aps: {
+      alert: { title: "Kitchen", body: "Done" },
+      sound: "default",
+      "filter-criteria": "kitchen",
+      "thread-id": "kitchen",
+      "mutable-content": 1,
+      category: "REPLY",
+    },
+    url: "/?bot=kitchen",
+    tag: "event-1",
+    botId: "kitchen",
+    account: "0123456789abcdef",
+  });
+  const approval = JSON.parse(
+    apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "request-7" })),
+  );
   // A Focus filter can let every assistant's approvals through while it quiets the rest of their news.
-  expect(approval.aps).toMatchObject({ "thread-id": "kitchen", category: "APPROVAL", "interruption-level": "time-sensitive", "filter-criteria": "approval:kitchen" });
-  expect(approval).toMatchObject({ botId: "kitchen", approvalId: "request-7", account: "0123456789abcdef" });
+  expect(approval.aps).toMatchObject({
+    "thread-id": "kitchen",
+    category: "APPROVAL",
+    "interruption-level": "time-sensitive",
+    "filter-criteria": "approval:kitchen",
+  });
+  expect(approval).toMatchObject({
+    botId: "kitchen",
+    approvalId: "request-7",
+    account: "0123456789abcdef",
+  });
   // An add-on without approval IDs still sends a time-sensitive approval, which only opens the chat.
   const unnamed = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval" })));
-  expect([unnamed.aps.category, unnamed.aps["interruption-level"], unnamed.approvalId]).toEqual([undefined, "time-sensitive", undefined]);
+  expect([unnamed.aps.category, unnamed.aps["interruption-level"], unnamed.approvalId]).toEqual([
+    undefined,
+    "time-sensitive",
+    undefined,
+  ]);
   for (const kind of ["failed", "interrupted", "security", undefined]) {
     const value = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind })));
-    expect([value.aps.category, value.aps["interruption-level"], value.aps["thread-id"]]).toEqual([undefined, undefined, "kitchen"]);
+    expect([value.aps.category, value.aps["interruption-level"], value.aps["thread-id"]]).toEqual([
+      undefined,
+      undefined,
+      "kitchen",
+    ]);
     // Every assistant's notification names it and the account, so the extension can show it as the sender.
-    expect([value.aps["mutable-content"], value.botId, value.account]).toEqual([1, "kitchen", "0123456789abcdef"]);
+    expect([value.aps["mutable-content"], value.botId, value.account]).toEqual([
+      1,
+      "kitchen",
+      "0123456789abcdef",
+    ]);
   }
   // Routine results open their results sheet, not a chat to reply in; digests and host alerts have no assistant.
-  expect(JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }))).aps.category).toBeUndefined();
-  const digest = JSON.parse(apnsPayload(JSON.stringify({ title: "2 assistant updates", body: "A · B", url: "/?view=today", tag: "batch", account: "0123456789abcdef" })));
-  expect(digest.aps).toEqual({ alert: { title: "2 assistant updates", body: "A · B" }, sound: "default", "filter-criteria": "household" });
+  expect(
+    JSON.parse(
+      apnsPayload(
+        JSON.stringify({ ...base, kind: "completed", url: "/?bot=kitchen&routine=daily" }),
+      ),
+    ).aps.category,
+  ).toBeUndefined();
+  const digest = JSON.parse(
+    apnsPayload(
+      JSON.stringify({
+        title: "2 assistant updates",
+        body: "A · B",
+        url: "/?view=today",
+        tag: "batch",
+        account: "0123456789abcdef",
+      }),
+    ),
+  );
+  expect(digest.aps).toEqual({
+    alert: { title: "2 assistant updates", body: "A · B" },
+    sound: "default",
+    "filter-criteria": "household",
+  });
   // Without the account marker an action could be taken by whoever is signed in, so there is none,
   // and the extension cannot tell whose avatar to show.
-  const anonymous = JSON.parse(apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })));
-  expect([anonymous.aps.category, anonymous.aps["mutable-content"], anonymous.botId]).toEqual([undefined, undefined, undefined]);
+  const anonymous = JSON.parse(
+    apnsPayload(JSON.stringify({ ...base, account: undefined, kind: "completed" })),
+  );
+  expect([anonymous.aps.category, anonymous.aps["mutable-content"], anonymous.botId]).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
   // An oversized ID is never truncated into a different assistant or approval; that notification just has no actions.
-  const longId = JSON.parse(apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "a".repeat(300) })));
+  const longId = JSON.parse(
+    apnsPayload(JSON.stringify({ ...base, kind: "approval", approvalId: "a".repeat(300) })),
+  );
   expect([longId.aps.category, longId.approvalId]).toEqual([undefined, undefined]);
   // Full-size alerts keep their text and link; the extras go first, never the alert itself.
-  const huge = { title: "\u0000".repeat(1000), body: "\n\\\"".repeat(1000), url: "/?bot=" + "a".repeat(2300), tag: "\t".repeat(1000), kind: "approval", botId: "b".repeat(200), approvalId: "c".repeat(200), account: "0123456789abcdef" };
+  const huge = {
+    title: "\u0000".repeat(1000),
+    body: '\n\\"'.repeat(1000),
+    url: "/?bot=" + "a".repeat(2300),
+    tag: "\t".repeat(1000),
+    kind: "approval",
+    botId: "b".repeat(200),
+    approvalId: "c".repeat(200),
+    account: "0123456789abcdef",
+  };
   const fitted = apnsPayload(JSON.stringify(huge));
   expect(Buffer.byteLength(fitted)).toBeLessThanOrEqual(4000);
-  expect(JSON.parse(fitted)).toMatchObject({ url: huge.url, aps: { "interruption-level": "time-sensitive" } });
+  expect(JSON.parse(fitted)).toMatchObject({
+    url: huge.url,
+    aps: { "interruption-level": "time-sensitive" },
+  });
   expect(JSON.parse(fitted).aps.category).toBeUndefined();
-  const roomy = JSON.parse(apnsPayload(JSON.stringify({ ...huge, url: "/?bot=" + "b".repeat(200) })));
+  const roomy = JSON.parse(
+    apnsPayload(JSON.stringify({ ...huge, url: "/?bot=" + "b".repeat(200) })),
+  );
   expect([roomy.aps.category, roomy.approvalId]).toEqual(["APPROVAL", "c".repeat(200)]);
 });
 
 it("derives an APNs collapse ID from the tag within Apple's 64 bytes", async () => {
-  expect(apnsCollapseId("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70")).toBe("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70");
+  expect(apnsCollapseId("6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70")).toBe(
+    "6f1c2b1e-9d4a-4c3e-8f1a-2b3c4d5e6f70",
+  );
   expect(apnsCollapseId("x".repeat(64))).toBe("x".repeat(64));
   for (const tag of ["x".repeat(65), "😀".repeat(20), "with space", "line\nbreak"]) {
     const id = apnsCollapseId(tag);
@@ -512,36 +1136,104 @@ it("derives an APNs collapse ID from the tag within Apple's 64 bytes", async () 
   const dir = mkdtempSync(join(tmpdir(), "apns-collapse-"));
   const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const config = { ...apnsConfig(), privateKeyFile: join(dir, "key.p8") };
-  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
+  writeFileSync(config.privateKeyFile, privateKey.export({ type: "pkcs8", format: "pem" }), {
+    mode: 0o600,
+  });
   const seen: Record<string, string>[] = [];
-  const sender = createApnsSender(config, async (_origin, headers) => { seen.push(headers); return { statusCode: 200 }; })!;
+  const sender = createApnsSender(config, async (_origin, headers) => {
+    seen.push(headers);
+    return { statusCode: 200 };
+  })!;
   try {
-    const device = { deviceId: randomUUID(), token: "ab".repeat(32), environment: "sandbox" as const };
-    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" }));
-    await sender(device, JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "t".repeat(200) }));
+    const device = {
+      deviceId: randomUUID(),
+      token: "ab".repeat(32),
+      environment: "sandbox" as const,
+    };
+    await sender(
+      device,
+      JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "event" }),
+    );
+    await sender(
+      device,
+      JSON.stringify({ title: "Done", body: "Hello", url: "/?bot=bot", tag: "t".repeat(200) }),
+    );
     await sender.clear(device, ["event"]);
-    expect(seen.map(headers => headers["apns-collapse-id"])).toEqual(["event", apnsCollapseId("t".repeat(200)), undefined]);
-  } finally { sender.close(); rmSync(dir, { recursive: true }); }
+    expect(seen.map((headers) => headers["apns-collapse-id"])).toEqual([
+      "event",
+      apnsCollapseId("t".repeat(200)),
+      undefined,
+    ]);
+  } finally {
+    sender.close();
+    rmSync(dir, { recursive: true });
+  }
 });
 
 it("names the recipient account on iOS and Web Push alike, and the approval on iOS only", async () => {
   const store = new Store(":memory:");
-  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" }); config.apns = apnsConfig();
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" });
+  config.apns = apnsConfig();
   store.user({ id: "one", name: "one", email: "one@example.test" });
   store.nativeSession("one", "one", Date.now() + 100000);
   store.registerNativeDevice("one", "one", "one", "ab".repeat(32), "sandbox");
-  store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.subscribe("one", {
+    endpoint: "https://push.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
   store.savePreferences("one", { ...defaultPreferences, followBots: ["kitchen"] });
-  store.recordEvents([{ id: "ask", botId: "kitchen", runId: "run", kind: "approval", approvalId: "request-7", title: "Approval requested", occurredAt: "now" },
-    { id: "done", botId: "kitchen", runId: "run", kind: "completed", title: "Done", occurredAt: "now" }], "cursor");
-  const web: Record<string, unknown>[] = [], native: Record<string, unknown>[] = [];
-  const worker = new BackgroundWorker(store, runtime, config, async (_subscription, payload) => { web.push(JSON.parse(payload)); },
-    async (_device, payload) => { native.push(JSON.parse(apnsPayload(payload))); });
+  store.recordEvents(
+    [
+      {
+        id: "ask",
+        botId: "kitchen",
+        runId: "run",
+        kind: "approval",
+        approvalId: "request-7",
+        title: "Approval requested",
+        occurredAt: "now",
+      },
+      {
+        id: "done",
+        botId: "kitchen",
+        runId: "run",
+        kind: "completed",
+        title: "Done",
+        occurredAt: "now",
+      },
+    ],
+    "cursor",
+  );
+  const web: Record<string, unknown>[] = [],
+    native: Record<string, unknown>[] = [];
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    config,
+    async (_subscription, payload) => {
+      web.push(JSON.parse(payload));
+    },
+    async (_device, payload) => {
+      native.push(JSON.parse(apnsPayload(payload)));
+    },
+  );
   await worker.tick();
   // A browser's service worker drops a push for an account other than the one signed in there.
-  expect(web.map(row => [row.tag, row.approvalId, row.account])).toEqual([["ask", "request-7", accountMarker("one")], ["done", undefined, accountMarker("one")]]);
-  expect(native.map(row => [row.tag, (row.aps as { category?: string }).category, row.approvalId, row.account])).toEqual([
-    ["ask", "APPROVAL", "request-7", accountMarker("one")], ["done", "REPLY", undefined, accountMarker("one")]]);
+  expect(web.map((row) => [row.tag, row.approvalId, row.account])).toEqual([
+    ["ask", "request-7", accountMarker("one")],
+    ["done", undefined, accountMarker("one")],
+  ]);
+  expect(
+    native.map((row) => [
+      row.tag,
+      (row.aps as { category?: string }).category,
+      row.approvalId,
+      row.account,
+    ]),
+  ).toEqual([
+    ["ask", "APPROVAL", "request-7", accountMarker("one")],
+    ["done", "REPLY", undefined, accountMarker("one")],
+  ]);
   expect(accountMarker("one")).toMatch(/^[0-9a-f]{16}$/);
   expect(accountMarker("one")).not.toBe(accountMarker("two"));
   store.close();
@@ -549,55 +1241,110 @@ it("names the recipient account on iOS and Web Push alike, and the approval on i
 
 it("sends a private assistant's news only to its owner on web and APNs, even after quiet hours", async () => {
   const store = new Store(":memory:");
-  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+  config.apns = apnsConfig();
   for (const userId of ["one", "two"]) {
     store.user({ id: userId, name: userId, email: `${userId}@example.test` });
     store.nativeSession(userId, userId, Date.now() + 100000);
     store.registerNativeDevice(userId, userId, userId, userId.repeat(32), "sandbox");
-    store.subscribe(userId, { endpoint: `https://push.test/${userId}`, keys: { p256dh: "key", auth: "auth" } });
+    store.subscribe(userId, {
+      endpoint: `https://push.test/${userId}`,
+      keys: { p256dh: "key", auth: "auth" },
+    });
     store.savePreferences(userId, { ...defaultPreferences, followBots: ["mine"] });
   }
   // Two joined the run, receives the routine and follows the assistant; none of that reaches past its privacy.
   store.participate("run", "two");
   store.routineRecipients("mine", "routine", ["two"]);
   store.savePresentation("mine", { shared: false, ownerId: "one" });
-  const event: RuntimeEvent = { id: "run-done", botId: "mine", runId: "run", kind: "completed", title: "Done", occurredAt: "now" };
+  const event: RuntimeEvent = {
+    id: "run-done",
+    botId: "mine",
+    runId: "run",
+    kind: "completed",
+    title: "Done",
+    occurredAt: "now",
+  };
   store.recordEvents([event, { ...event, id: "routine-done", routineId: "routine" }], "cursor");
-  expect(store.outbox().map(row => row.user_id)).toEqual(["one", "one"]);
+  expect(store.outbox().map((row) => row.user_id)).toEqual(["one", "one"]);
   // Queued for two while shared and held by quiet hours, then made private before it could go out.
-  const hour = new Date().getUTCHours(), at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
-  store.savePreferences("two", { ...defaultPreferences, notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 0 } });
+  const hour = new Date().getUTCHours(),
+    at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
+  store.savePreferences("two", {
+    ...defaultPreferences,
+    notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 0 },
+  });
   store.savePresentation("family", { shared: true });
   store.recordEvents([{ ...event, id: "family-done", botId: "family" }], "cursor-2");
   const sent: string[] = [];
-  const worker = new BackgroundWorker(store, runtime, config, async (subscription, payload) => { sent.push(`${subscription.endpoint} ${JSON.parse(payload).tag}`); },
-    async (device, payload) => { sent.push(`apns:${device.deviceId} ${JSON.parse(payload).tag}`); });
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    config,
+    async (subscription, payload) => {
+      sent.push(`${subscription.endpoint} ${JSON.parse(payload).tag}`);
+    },
+    async (device, payload) => {
+      sent.push(`apns:${device.deviceId} ${JSON.parse(payload).tag}`);
+    },
+  );
   await worker.tick();
-  expect(sent.filter(row => row.includes("two"))).toEqual([]);
+  expect(sent.filter((row) => row.includes("two"))).toEqual([]);
   store.savePresentation("family", { shared: false, ownerId: "one" });
   store.savePreferences("two", defaultPreferences);
   await worker.tick();
-  expect(sent.sort()).toEqual(["apns:one routine-done", "apns:one run-done", "https://push.test/one routine-done", "https://push.test/one run-done"]);
+  expect(sent.sort()).toEqual([
+    "apns:one routine-done",
+    "apns:one run-done",
+    "https://push.test/one routine-done",
+    "https://push.test/one run-done",
+  ]);
   expect(store.outbox()).toHaveLength(0);
   store.close();
 });
 
 it("stops a delivery mid-way when its assistant turns private, before any other endpoint gets it", async () => {
   const store = new Store(":memory:");
-  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }); config.apns = apnsConfig();
-  for (const userId of ["one", "two"]) store.user({ id: userId, name: userId, email: `${userId}@example.test` });
+  const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
+  config.apns = apnsConfig();
+  for (const userId of ["one", "two"])
+    store.user({ id: userId, name: userId, email: `${userId}@example.test` });
   store.nativeSession("two", "two", Date.now() + 100000);
   store.registerNativeDevice("two", "two", "two", "two".repeat(32), "sandbox");
-  for (const device of ["phone", "laptop"]) store.subscribe("two", { endpoint: `https://push.test/${device}`, keys: { p256dh: "key", auth: "auth" } });
+  for (const device of ["phone", "laptop"])
+    store.subscribe("two", {
+      endpoint: `https://push.test/${device}`,
+      keys: { p256dh: "key", auth: "auth" },
+    });
   store.savePresentation("family", { shared: true });
   store.participate("run", "two");
-  store.recordEvents([{ id: "done", botId: "family", runId: "run", kind: "completed", title: "Private details", occurredAt: "now" }], "cursor");
+  store.recordEvents(
+    [
+      {
+        id: "done",
+        botId: "family",
+        runId: "run",
+        kind: "completed",
+        title: "Private details",
+        occurredAt: "now",
+      },
+    ],
+    "cursor",
+  );
   const sent: string[] = [];
-  const worker = new BackgroundWorker(store, runtime, config, async subscription => {
-    sent.push(subscription.endpoint);
-    // The owner makes it private while this first send is in flight.
-    store.savePresentation("family", { shared: false, ownerId: "one" });
-  }, async device => { sent.push(device.deviceId); });
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    config,
+    async (subscription) => {
+      sent.push(subscription.endpoint);
+      // The owner makes it private while this first send is in flight.
+      store.savePresentation("family", { shared: false, ownerId: "one" });
+    },
+    async (device) => {
+      sent.push(device.deviceId);
+    },
+  );
   await worker.tick();
   await worker.tick();
   expect(sent).toEqual(["https://push.test/phone"]);
@@ -607,30 +1354,56 @@ it("stops a delivery mid-way when its assistant turns private, before any other 
 
 it("publishes the iOS app's universal links only when the host signs for that app", async () => {
   const unsigned = await setup();
-  expect((await unsigned.app.inject("/.well-known/apple-app-site-association")).statusCode).toBe(404);
-  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }); config.apns = apnsConfig();
+  expect((await unsigned.app.inject("/.well-known/apple-app-site-association")).statusCode).toBe(
+    404,
+  );
+  const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" });
+  config.apns = apnsConfig();
   const signed = await setup(config);
   // Apple's CDN fetches it without a session.
   const response = await signed.app.inject("/.well-known/apple-app-site-association");
   expect(response.statusCode).toBe(200);
   expect(response.headers["content-type"]).toMatch(/^application\/json/);
   const value = response.json();
-  expect(value.applinks.details).toEqual([{ appIDs: ["TEAM123456.test.agentinterface"], components: [
-    expect.objectContaining({ "/": "/", "?": { bot: "?*" } }), expect.objectContaining({ "/": "/", "?": { view: "today" } }),
-  ] }]);
+  expect(value.applinks.details).toEqual([
+    {
+      appIDs: ["TEAM123456.test.agentinterface"],
+      components: [
+        expect.objectContaining({ "/": "/", "?": { bot: "?*" } }),
+        expect.objectContaining({ "/": "/", "?": { view: "today" } }),
+      ],
+    },
+  ]);
   expect(value.activitycontinuation).toEqual({ apps: ["TEAM123456.test.agentinterface"] });
 });
 
 it("lets a Live Activity's Stop act only for the account it names", async () => {
   const stopped: string[] = [];
-  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
-    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
-    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }), stop: async (botId: string) => { stopped.push(botId); },
-    close: async () => {},
-  }), { background: false });
+  const result = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    fakeRuntime({
+      listBots: async () => [
+        { id: "bot", name: "Bot", shared: true, model: "test", activity: "working" },
+      ],
+      capabilities: async () =>
+        capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }),
+      stop: async (botId: string) => {
+        stopped.push(botId);
+      },
+      close: async () => {},
+    }),
+    { background: false },
+  );
   apps.push(result);
-  const { app } = result, { token } = await connectNative(app);
-  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  const { app } = result,
+    { token } = await connectNative(app);
+  const stop = (payload?: object) =>
+    app.inject({
+      method: "POST",
+      url: "/api/bots/bot/stop",
+      headers: { authorization: `Bearer ${token}` },
+      ...(payload ? { payload } : {}),
+    });
   // Another person signed in on the phone since the activity started: nothing stops.
   const refused = await stop({ account: accountMarker("local-two") });
   expect(refused.statusCode).toBe(409);
@@ -648,37 +1421,78 @@ it("lets a Live Activity's Stop act only for the account it names", async () => 
 
 it("hands a Stop's run to the runtime, refuses a malformed one, and passes the runtime's refusal on", async () => {
   const stops: [string, string | undefined][] = [];
-  const result = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({
-    listBots: async () => [{ id: "bot", name: "Bot", shared: true, model: "test", activity: "working" }],
-    capabilities: async () => capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }),
-    stop: async (botId: string, runId?: string) => {
-      stops.push([botId, runId]);
-      if (runId === "finished") throw httpError(409, nothingToStopMessage, { code: "nothing_to_stop" });
-      if (runId === "replaced") throw httpError(409, runChangedMessage, { code: "run_changed" });
-    },
-    close: async () => {},
-  }), { background: false });
+  const result = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    fakeRuntime({
+      listBots: async () => [
+        { id: "bot", name: "Bot", shared: true, model: "test", activity: "working" },
+      ],
+      capabilities: async () =>
+        capabilitiesFixture({ avatarMetadata: { supported: false }, stop: { supported: true } }),
+      stop: async (botId: string, runId?: string) => {
+        stops.push([botId, runId]);
+        if (runId === "finished")
+          throw httpError(409, nothingToStopMessage, { code: "nothing_to_stop" });
+        if (runId === "replaced") throw httpError(409, runChangedMessage, { code: "run_changed" });
+      },
+      close: async () => {},
+    }),
+    { background: false },
+  );
   apps.push(result);
-  const { app } = result, { token } = await connectNative(app);
-  const stop = (payload?: object) => app.inject({ method: "POST", url: "/api/bots/bot/stop", headers: { authorization: `Bearer ${token}` }, ...(payload ? { payload } : {}) });
+  const { app } = result,
+    { token } = await connectNative(app);
+  const stop = (payload?: object) =>
+    app.inject({
+      method: "POST",
+      url: "/api/bots/bot/stop",
+      headers: { authorization: `Bearer ${token}` },
+      ...(payload ? { payload } : {}),
+    });
   expect((await stop({ runId: "run-one" })).statusCode).toBe(200);
-  expect((await stop({ runId: "run-one", account: accountMarker("local-one") })).statusCode).toBe(200);
+  expect((await stop({ runId: "run-one", account: accountMarker("local-one") })).statusCode).toBe(
+    200,
+  );
   // No body and an empty one name no run: the runtime decides from what runs now.
   expect((await stop()).statusCode).toBe(200);
   expect((await stop({})).statusCode).toBe(200);
-  expect(stops).toEqual([["bot", "run-one"], ["bot", "run-one"], ["bot", undefined], ["bot", undefined]]);
+  expect(stops).toEqual([
+    ["bot", "run-one"],
+    ["bot", "run-one"],
+    ["bot", undefined],
+    ["bot", undefined],
+  ]);
   // The runtime's refusals reach the person as they are, with the code a client can tell apart.
   const finished = await stop({ runId: "finished" });
-  expect([finished.statusCode, finished.json().code, finished.json().error]).toEqual([409, "nothing_to_stop", nothingToStopMessage]);
+  expect([finished.statusCode, finished.json().code, finished.json().error]).toEqual([
+    409,
+    "nothing_to_stop",
+    nothingToStopMessage,
+  ]);
   const replaced = await stop({ runId: "replaced" });
-  expect([replaced.statusCode, replaced.json().code, replaced.json().error]).toEqual([409, "run_changed", runChangedMessage]);
+  expect([replaced.statusCode, replaced.json().code, replaced.json().error]).toEqual([
+    409,
+    "run_changed",
+    runChangedMessage,
+  ]);
   stops.length = 0;
   // Another account's Live Activity is refused before the runtime is asked at all.
   const other = await stop({ runId: "run-one", account: accountMarker("local-two") });
-  expect([other.statusCode, other.json().error]).toEqual([409, "This activity belongs to a different account"]);
-  for (const bad of [{ runId: "" }, { runId: "x".repeat(201) }, { runId: 7 }, { runId: "run-one", extra: true }]) {
+  expect([other.statusCode, other.json().error]).toEqual([
+    409,
+    "This activity belongs to a different account",
+  ]);
+  for (const bad of [
+    { runId: "" },
+    { runId: "x".repeat(201) },
+    { runId: 7 },
+    { runId: "run-one", extra: true },
+  ]) {
     const refused = await stop(bad);
-    expect([refused.statusCode, refused.json().error], JSON.stringify(bad).slice(0, 40)).toEqual([400, "Invalid request"]);
+    expect([refused.statusCode, refused.json().error], JSON.stringify(bad).slice(0, 40)).toEqual([
+      400,
+      "Invalid request",
+    ]);
   }
   expect(stops).toEqual([]);
 });

@@ -12,8 +12,7 @@ import { SESSION_MAX_AGE_MS } from "../shared/session.js";
 // The only 401 that means this person's session is gone. Clients clear a stored
 // credential on this code alone, never on a bare 401.
 const signInRequired = { error: "Sign in required", code: "session_expired" };
-export const hash = (value: string) =>
-  createHash("sha256").update(value).digest("hex");
+export const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 declare module "fastify" {
   interface FastifyRequest {
     user: User | null;
@@ -55,8 +54,12 @@ export async function installAuth(
   }>,
 ) {
   const google = new OAuth2Client(config.googleClientId);
-  const googleIdentity = async (credential: string) => verify ? verify(credential)
-    : (await google.verifyIdToken({ idToken: credential, audience: config.googleClientId })).getPayload();
+  const googleIdentity = async (credential: string) =>
+    verify
+      ? verify(credential)
+      : (
+          await google.verifyIdToken({ idToken: credential, audience: config.googleClientId })
+        ).getPayload();
   app.decorateRequest("user", null);
   app.decorateRequest("csrfToken", null);
   app.decorateRequest("nativeSessionHash", null);
@@ -69,7 +72,9 @@ export async function installAuth(
     if (authorization !== undefined) {
       // Browser-origin requests always use the cookie/CSRF path; never let a bearer bypass it.
       if (req.headers.origin !== undefined)
-        return reply.code(403).send({ error: "Native authentication does not accept browser-origin requests" });
+        return reply
+          .code(403)
+          .send({ error: "Native authentication does not accept browser-origin requests" });
       const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization)?.[1];
       const sessionHash = token ? hash(token) : "";
       const session = token ? store.getNativeSession(sessionHash) : undefined;
@@ -94,8 +99,7 @@ export async function installAuth(
       }
     }
     const publicRoute = publicApiRoutes.includes(route);
-    if (!publicRoute && !req.user)
-      return reply.code(401).send(signInRequired);
+    if (!publicRoute && !req.user) return reply.code(401).send(signInRequired);
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       if (route === "/api/auth/native/exchange") {
         if (req.headers.origin !== undefined || req.headers.cookie !== undefined)
@@ -104,11 +108,16 @@ export async function installAuth(
       }
       // Browsers send violation reports without an Origin or CSRF token.
       if (route === "/api/csp-report") return;
-      if (req.nativeSessionHash && (!route.startsWith("/api/auth/") || ["/api/auth/logout", "/api/auth/native/renew", "/api/auth/native/confirm"].includes(route))) return;
+      if (
+        req.nativeSessionHash &&
+        (!route.startsWith("/api/auth/") ||
+          ["/api/auth/logout", "/api/auth/native/renew", "/api/auth/native/confirm"].includes(
+            route,
+          ))
+      )
+        return;
       if (req.headers.origin !== config.origin)
-        return reply
-          .code(403)
-          .send({ error: "Request origin must match this application" });
+        return reply.code(403).send({ error: "Request origin must match this application" });
       if (!publicRoute && req.headers["x-csrf-token"] !== req.csrfToken)
         return reply.code(403).send({ error: "Invalid CSRF token" });
     }
@@ -137,9 +146,7 @@ export async function installAuth(
   }));
   app.post("/api/auth/google", async (req, reply) => {
     if (!config.googleClientId)
-      return reply
-        .code(503)
-        .send({ error: "Google sign-in is not configured" });
+      return reply.code(503).send({ error: "Google sign-in is not configured" });
     const credential = (req.body as { credential?: unknown })?.credential;
     if (typeof credential !== "string")
       return reply.code(400).send({ error: "Missing Google credential" });
@@ -151,9 +158,7 @@ export async function installAuth(
         payload.email_verified !== true ||
         !config.householdEmails.includes(payload.email.toLowerCase())
       )
-        return reply
-          .code(403)
-          .send({ error: "This account is not in the household allowlist" });
+        return reply.code(403).send({ error: "This account is not in the household allowlist" });
       return signIn(
         {
           id: payload.sub,
@@ -165,18 +170,13 @@ export async function installAuth(
         payload.iat ? Math.min(payload.iat * 1000, Date.now()) : undefined,
       );
     } catch {
-      return reply
-        .code(401)
-        .send({ error: "Google sign-in could not be verified" });
+      return reply.code(401).send({ error: "Google sign-in could not be verified" });
     }
   });
   app.post("/api/auth/local", async (req, reply) => {
     if (!config.localDevAuth || !loopback(req.ip))
-      return reply
-        .code(403)
-        .send({ error: "Local development sign-in is disabled" });
-    const member =
-      (req.body as { member?: unknown })?.member === "two" ? "two" : "one";
+      return reply.code(403).send({ error: "Local development sign-in is disabled" });
+    const member = (req.body as { member?: unknown })?.member === "two" ? "two" : "one";
     return signIn(
       {
         id: `local-${member}`,
@@ -188,13 +188,16 @@ export async function installAuth(
     );
   });
   app.post("/api/auth/confirm", async (req, reply) => {
-    const user = signedIn(req), cookie = req.cookies.session;
+    const user = signedIn(req),
+      cookie = req.cookies.session;
     if (!cookie || req.nativeSessionHash)
       return reply.code(403).send({ error: "Confirm your identity in the web app" });
-    const body = z.union([
-      z.object({ credential: z.string().min(1).max(20000) }).strict(),
-      z.object({ member: z.enum(["one", "two"]) }).strict(),
-    ]).parse(req.body);
+    const body = z
+      .union([
+        z.object({ credential: z.string().min(1).max(20000) }).strict(),
+        z.object({ member: z.enum(["one", "two"]) }).strict(),
+      ])
+      .parse(req.body);
     let confirmedAt = Date.now();
     if ("member" in body) {
       if (!config.localDevAuth || !loopback(req.ip) || user.id !== `local-${body.member}`)
@@ -203,8 +206,11 @@ export async function installAuth(
       if (!config.googleClientId)
         return reply.code(503).send({ error: "Google sign-in is not configured" });
       let payload;
-      try { payload = await googleIdentity(body.credential); }
-      catch { return reply.code(401).send({ error: "Google could not confirm it's you. Try again." }); }
+      try {
+        payload = await googleIdentity(body.credential);
+      } catch {
+        return reply.code(401).send({ error: "Google could not confirm it's you. Try again." });
+      }
       if (!payload?.sub || payload.sub !== user.id)
         return reply.code(403).send({ error: "Use the same Google account you signed in with." });
       const issued = (payload.iat ?? 0) * 1000;
@@ -231,9 +237,13 @@ export async function installAuth(
 }
 /** Whether the session that signed this request in is still valid, for a response that outlives the sign-in check. */
 export function stillSignedIn(store: Store, config: Config, req: FastifyRequest): boolean {
-  const session = req.nativeSessionHash ? store.getNativeSession(req.nativeSessionHash)
-    : req.cookies.session ? store.getSession(hash(req.cookies.session)) : undefined;
-  const user = session && session.userId === req.user?.id ? store.getUser(session.userId) : undefined;
+  const session = req.nativeSessionHash
+    ? store.getNativeSession(req.nativeSessionHash)
+    : req.cookies.session
+      ? store.getSession(hash(req.cookies.session))
+      : undefined;
+  const user =
+    session && session.userId === req.user?.id ? store.getUser(session.userId) : undefined;
   return !!user && allowedIdentity(config, user);
 }
 /** The hash of the session that signed this request in: a native bearer token or the web cookie. */

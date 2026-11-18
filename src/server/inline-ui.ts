@@ -44,13 +44,18 @@ export const inlineUiShell = `<!doctype html><html><head><meta charset="utf-8"><
 })();
 </script></body></html>`;
 
-export const inlineUiShellPolicy = inlineUiPolicy.replace("frame-src 'none'", "frame-src about:") + "; sandbox allow-scripts; frame-ancestors 'self'";
+export const inlineUiShellPolicy =
+  inlineUiPolicy.replace("frame-src 'none'", "frame-src about:") +
+  "; sandbox allow-scripts; frame-ancestors 'self'";
 export function installInlineUi(app: FastifyInstance) {
-  app.get("/inline-ui", async (_request, reply) => reply
-    .header("Content-Security-Policy", inlineUiShellPolicy)
-    .header("X-Frame-Options", "SAMEORIGIN")
-    .header("Cache-Control", "no-store")
-    .header("Referrer-Policy", "no-referrer")
-    .header("X-DNS-Prefetch-Control", "off")
-    .type("text/html").send(inlineUiShell));
+  app.get("/inline-ui", async (_request, reply) =>
+    reply
+      .header("Content-Security-Policy", inlineUiShellPolicy)
+      .header("X-Frame-Options", "SAMEORIGIN")
+      .header("Cache-Control", "no-store")
+      .header("Referrer-Policy", "no-referrer")
+      .header("X-DNS-Prefetch-Control", "off")
+      .type("text/html")
+      .send(inlineUiShell),
+  );
 }

@@ -2,7 +2,12 @@
 import { act, createElement, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearEnd, ReplyMarkdown, logicalEndSide } from "../src/components/MessageMarkdown";
-import { CATCH_UP_MS, MIN_FRAME_MS, graphemeCut, useRevealed } from "../src/components/streaming-reveal";
+import {
+  CATCH_UP_MS,
+  MIN_FRAME_MS,
+  graphemeCut,
+  useRevealed,
+} from "../src/components/streaming-reveal";
 import { advance, mountRoot, stubMatchMedia } from "./ui-harness";
 import type { Mount } from "./ui-harness";
 
@@ -12,20 +17,34 @@ const FRAME = 16;
 const PACED = MIN_FRAME_MS + FRAME;
 let mount: Mount;
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance", "Date", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({
+    toFake: [
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+      "performance",
+      "Date",
+      "setTimeout",
+      "clearTimeout",
+    ],
+  });
   stubMatchMedia(false);
   mount = mountRoot();
 });
-afterEach(() => { Reflect.deleteProperty(document, "visibilityState"); });
+afterEach(() => {
+  Reflect.deleteProperty(document, "visibilityState");
+});
 
 const show = (text: string) => mount.render(createElement(ReplyMarkdown, { text, live: true }));
 const shown = () => mount.container.querySelector(".message-markdown")?.textContent ?? "";
-const words = (count: number) => Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
+const words = (count: number) =>
+  Array.from({ length: count }, (_, index) => `word${index}`).join(" ");
 type Shown = { at: number; text: string };
 /** Records each text the real hook returned that React committed, and when. */
 function Probe({ text, log }: { text: string; log: Shown[] }) {
   const shown = useRevealed(text);
-  useLayoutEffect(() => { if (log.at(-1)?.text !== shown) log.push({ at: performance.now(), text: shown }); });
+  useLayoutEffect(() => {
+    if (log.at(-1)?.text !== shown) log.push({ at: performance.now(), text: shown });
+  });
   return null;
 }
 /**
@@ -34,7 +53,7 @@ function Probe({ text, log }: { text: string; log: Shown[] }) {
  */
 async function frameByFrame(ms: number) {
   for (let left = ms; left > 0;) {
-    const step = Math.min(FRAME - Math.floor(performance.now()) % FRAME, left);
+    const step = Math.min(FRAME - (Math.floor(performance.now()) % FRAME), left);
     await advance(step);
     left -= step;
   }
@@ -58,7 +77,7 @@ describe("revealing a live reply", () => {
     await show(full);
     expect(shown()).toBe("Checking the gate.");
     const seen = await frames(CATCH_UP_MS + PACED);
-    const steps = new Set(seen.filter(text => text !== full));
+    const steps = new Set(seen.filter((text) => text !== full));
     expect(steps.size).toBeGreaterThan(4);
     expect(seen.at(-1)).toBe(full);
     // Halfway through, it is neither stalled nor done.
@@ -83,7 +102,7 @@ describe("revealing a live reply", () => {
   });
 
   it("shows an update at once when the system asks for reduced motion", async () => {
-    stubMatchMedia(query => query.includes("prefers-reduced-motion: reduce"));
+    stubMatchMedia((query) => query.includes("prefers-reduced-motion: reduce"));
     await show("Gate.");
     await show(`Gate. ${words(50)}`);
     expect(shown()).toBe(`Gate. ${words(50)}`);
@@ -95,7 +114,9 @@ describe("revealing a live reply", () => {
     await advance(FRAME * 2);
     expect(shown()).not.toBe(`Gate. ${words(50)}`);
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
-    await act(async () => { document.dispatchEvent(new Event("visibilitychange")); });
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
     expect(shown()).toBe(`Gate. ${words(50)}`);
     await show(`Gate. ${words(90)}`);
     expect(shown()).toBe(`Gate. ${words(90)}`);
@@ -120,7 +141,7 @@ describe("revealing a live reply", () => {
       expect(rendered.startsWith(text)).toBe(true);
     }
     // The bold term shows whole, never as the reveal's half of it.
-    expect(seen.some(text => text.endsWith("hay bale"))).toBe(false);
+    expect(seen.some((text) => text.endsWith("hay bale"))).toBe(false);
   });
 
   it("shows a caret after the text while the reply streams, hidden from assistive technology and holding no text", async () => {
@@ -142,15 +163,18 @@ describe("the reveal's pacing rule", () => {
     const text = clusters.join("").repeat(3);
     const boundaries = new Set([0]);
     let at = 0;
-    for (const cluster of [...clusters, ...clusters, ...clusters]) boundaries.add(at += cluster.length);
-    for (let cut = 0; cut <= text.length; cut++) expect(boundaries.has(graphemeCut(text, cut)), `cut at ${cut}`).toBe(true);
+    for (const cluster of [...clusters, ...clusters, ...clusters])
+      boundaries.add((at += cluster.length));
+    for (let cut = 0; cut <= text.length; cut++)
+      expect(boundaries.has(graphemeCut(text, cut)), `cut at ${cut}`).toBe(true);
   });
 
   // Seeded runs of arrivals at random times, mostly growth with an occasional new reply, checked
   // against the contract at every frame, on what the real hook returned and React committed.
   it("always shows a prefix of the latest text and every character within the catch-up time of arriving", async () => {
     let seed = 11;
-    const pick = (count: number) => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
+    const pick = (count: number) =>
+      ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) >>> 8) % count;
     for (let run = 0; run < 30; run++) {
       let text = "";
       const log: Shown[] = [];
@@ -162,19 +186,28 @@ describe("the reveal's pacing rule", () => {
         // Steps a frame at a time to the next arrival, checking what shows after each.
         for (let wait = pick(400); wait > 0; wait -= FRAME) {
           await advance(Math.min(FRAME, wait));
-          const shown = log.at(-1)!.text, now = performance.now();
-          expect(text.startsWith(shown), `run ${run}: "${shown}" is a prefix of "${text}"`).toBe(true);
-          expect(graphemeCut(text, shown.length), `run ${run}: cut between graphemes`).toBe(shown.length);
+          const shown = log.at(-1)!.text,
+            now = performance.now();
+          expect(text.startsWith(shown), `run ${run}: "${shown}" is a prefix of "${text}"`).toBe(
+            true,
+          );
+          expect(graphemeCut(text, shown.length), `run ${run}: cut between graphemes`).toBe(
+            shown.length,
+          );
           // Everything that arrived at least the catch-up time ago shows, up to the grapheme it belongs to.
-          const due = arrivedAt.findLastIndex(time => time + CATCH_UP_MS + PACED <= now) + 1;
-          expect(shown.length, `run ${run} at ${now}`).toBeGreaterThanOrEqual(graphemeCut(text, due));
+          const due = arrivedAt.findLastIndex((time) => time + CATCH_UP_MS + PACED <= now) + 1;
+          expect(shown.length, `run ${run} at ${now}`).toBeGreaterThanOrEqual(
+            graphemeCut(text, due),
+          );
         }
         const now = performance.now();
         if (pick(10) === 0) {
           text = clusters[pick(clusters.length)].repeat(1 + pick(50));
           arrivedAt = Array(text.length).fill(now);
         } else {
-          const add = Array.from({ length: pick(30) }, () => clusters[pick(clusters.length)]).join("");
+          const add = Array.from({ length: pick(30) }, () => clusters[pick(clusters.length)]).join(
+            "",
+          );
           arrivedAt.push(...Array(add.length).fill(now));
           text += add;
         }
@@ -199,13 +232,15 @@ describe("the reveal's pacing rule", () => {
     }
     await frameByFrame(CATCH_UP_MS + PACED);
     expect(log.at(-1)!.text).toBe(text);
-    const paints = log.slice(1).map(entry => entry.at);
+    const paints = log.slice(1).map((entry) => entry.at);
     // The gap between any two paints, arrival or frame, respects the cap. The 1 ms is the frame-time
     // jitter the hook allows, so a 60 Hz screen paints every second frame.
     const gaps = paints.slice(1).map((at, index) => at - paints[index]);
     expect(Math.min(...gaps), gaps.join(" ")).toBeGreaterThanOrEqual(MIN_FRAME_MS - 1);
     for (let second = 0; second < 3; second++) {
-      const count = paints.filter(at => at >= started + second * 1000 && at < started + (second + 1) * 1000).length;
+      const count = paints.filter(
+        (at) => at >= started + second * 1000 && at < started + (second + 1) * 1000,
+      ).length;
       expect(count, `paints in second ${second + 1}`).toBeLessThanOrEqual(30);
     }
   });
@@ -221,23 +256,75 @@ describe("where the caret goes", () => {
     ["a digit, which runs left to right inside Arabic text", "٦", at(40), at(50), "rtl", "right"],
     ["punctuation after text laid out right to left", ".", at(0), at(10), "ltr", "left"],
     ["punctuation after text laid out left to right", ".", at(10), at(0), "rtl", "right"],
-    ["punctuation first on its line, in a right-to-left paragraph", ".", at(0, 20), at(10, 0), "rtl", "left"],
+    [
+      "punctuation first on its line, in a right-to-left paragraph",
+      ".",
+      at(0, 20),
+      at(10, 0),
+      "rtl",
+      "left",
+    ],
     ["punctuation alone, in a left-to-right paragraph", "!", at(0), undefined, "ltr", "right"],
-  ] as const)("ends %s on its trailing side", (_name, grapheme, last, previous, direction, side) => {
-    expect(logicalEndSide(grapheme, last, previous, direction)).toBe(side);
-  });
+  ] as const)(
+    "ends %s on its trailing side",
+    (_name, grapheme, last, previous, direction, side) => {
+      expect(logicalEndSide(grapheme, last, previous, direction)).toBe(side);
+    },
+  );
 
   // The caret's gap and width come to 4 px. "o" ends at 50 where an Arabic letter's trailing edge
   // touches it, as in "helloمرحبا"; the line runs from 0 to 90. `last` is the reply's final grapheme.
   it.each([
-    ["stays past the logical end when nothing lies there", at(50), "left", [at(10), at(70)], "ltr", { x: 50, side: "left" }],
-    ["stays past the logical end when a space's width lies between it and the next glyph", at(40), "right", [at(55)], "ltr", { x: 50, side: "right" }],
-    ["moves past the line's right end when a glyph touches the logical end", at(50), "left", [at(40), at(80)], "ltr", { x: 90, side: "right" }],
-    ["moves past the line's left end in a right-to-left paragraph", at(40), "right", [at(0), at(50)], "rtl", { x: 0, side: "left" }],
+    [
+      "stays past the logical end when nothing lies there",
+      at(50),
+      "left",
+      [at(10), at(70)],
+      "ltr",
+      { x: 50, side: "left" },
+    ],
+    [
+      "stays past the logical end when a space's width lies between it and the next glyph",
+      at(40),
+      "right",
+      [at(55)],
+      "ltr",
+      { x: 50, side: "right" },
+    ],
+    [
+      "moves past the line's right end when a glyph touches the logical end",
+      at(50),
+      "left",
+      [at(40), at(80)],
+      "ltr",
+      { x: 90, side: "right" },
+    ],
+    [
+      "moves past the line's left end in a right-to-left paragraph",
+      at(40),
+      "right",
+      [at(0), at(50)],
+      "rtl",
+      { x: 0, side: "left" },
+    ],
     // "helloم": the final letter is itself the line's right end, so the caret clears it too.
-    ["moves past the final grapheme when it ends the line, left to right", at(50), "left", [at(40)], "ltr", { x: 60, side: "right" }],
+    [
+      "moves past the final grapheme when it ends the line, left to right",
+      at(50),
+      "left",
+      [at(40)],
+      "ltr",
+      { x: 60, side: "right" },
+    ],
     // "مرحباA" in a right-to-left paragraph: "A" is the line's left end.
-    ["moves past the final grapheme when it ends the line, right to left", at(40), "right", [at(50)], "rtl", { x: 40, side: "left" }],
+    [
+      "moves past the final grapheme when it ends the line, right to left",
+      at(40),
+      "right",
+      [at(50)],
+      "rtl",
+      { x: 40, side: "left" },
+    ],
   ] as const)("%s", (_name, last, side, line, direction, spot) => {
     expect(clearEnd(last, side, [...line], direction, 4)).toEqual(spot);
   });
@@ -245,32 +332,62 @@ describe("where the caret goes", () => {
   it("places the caret again once a frame while a code block in the reply scrolls sideways", async () => {
     // Layout is faked at the browser's edge: each character of a text node is 10 px wide, shifted
     // left by however far the code is scrolled, and the caret's containing block is its parent.
-    let scrolled = 0, measured = 0;
+    let scrolled = 0,
+      measured = 0;
     const offsetParent = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetParent")!;
     const rects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
-    Object.defineProperty(HTMLElement.prototype, "offsetParent", { configurable: true, get(this: HTMLElement) { return this.parentElement; } });
-    const box = (left: number, width: number) => ({ left, right: left + width, top: 0, bottom: 16, width, height: 16, x: left, y: 0 }) as DOMRect;
-    Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value(this: Range) {
-      measured++;
-      return [box(this.startOffset * 10 - scrolled, (this.endOffset - this.startOffset) * 10)];
-    } });
-    const bounds = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-      return this.classList.contains("message-markdown") ? box(0, 2000) : box(0, 0);
+    Object.defineProperty(HTMLElement.prototype, "offsetParent", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.parentElement;
+      },
     });
+    const box = (left: number, width: number) =>
+      ({
+        left,
+        right: left + width,
+        top: 0,
+        bottom: 16,
+        width,
+        height: 16,
+        x: left,
+        y: 0,
+      }) as DOMRect;
+    Object.defineProperty(Range.prototype, "getClientRects", {
+      configurable: true,
+      value(this: Range) {
+        measured++;
+        return [box(this.startOffset * 10 - scrolled, (this.endOffset - this.startOffset) * 10)];
+      },
+    });
+    const bounds = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        return this.classList.contains("message-markdown") ? box(0, 2000) : box(0, 0);
+      });
     try {
       await show("```\nlet gate = latched;\nend");
-      const caret = mount.container.querySelector<HTMLElement>(".streaming-caret")!, pre = mount.container.querySelector("pre")!;
+      const caret = mount.container.querySelector<HTMLElement>(".streaming-caret")!,
+        pre = mount.container.querySelector("pre")!;
       const end = pre.textContent!.trimEnd().length;
-      expect(caret.style.transform).toMatch(new RegExp(`^translate\\(${end * 10 + 2}px(?:, 0px)?\\)$`));
+      expect(caret.style.transform).toMatch(
+        new RegExp(`^translate\\(${end * 10 + 2}px(?:, 0px)?\\)$`),
+      );
 
       const scroll = async (to: number, events: number) => {
         scrolled = to;
-        const before = measured, transform = caret.style.transform;
-        for (let event = 0; event < events; event++) await act(async () => { pre.dispatchEvent(new Event("scroll")); });
+        const before = measured,
+          transform = caret.style.transform;
+        for (let event = 0; event < events; event++)
+          await act(async () => {
+            pre.dispatchEvent(new Event("scroll"));
+          });
         // Not before the next frame.
         expect(caret.style.transform).toBe(transform);
         await advance(FRAME);
-        expect(caret.style.transform).toMatch(new RegExp(`^translate\\(${end * 10 - to + 2}px(?:, 0px)?\\)$`));
+        expect(caret.style.transform).toMatch(
+          new RegExp(`^translate\\(${end * 10 - to + 2}px(?:, 0px)?\\)$`),
+        );
         return measured - before;
       };
       // Three scroll events in one frame measure the text as often as one does.

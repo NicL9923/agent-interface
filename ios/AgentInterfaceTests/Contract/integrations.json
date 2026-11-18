@@ -14,12 +14,8 @@
         "status": "connected",
         "detail": "Reads the family calendar.",
         "checkedAt": "2026-10-01T11:00:00.000Z",
-        "capabilities": [
-          "calendar.read"
-        ],
-        "botIds": [
-          "household"
-        ],
+        "capabilities": ["calendar.read"],
+        "botIds": ["household"],
         "actions": {
           "connect": true,
           "check": true,

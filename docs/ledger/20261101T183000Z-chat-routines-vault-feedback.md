@@ -59,6 +59,7 @@ fixes do not touch native sources.
     them fixed the test; see the rerun below.
 
 After the switch moved, a focused rerun passed:
+
 - the whole `ExperienceFlowTests` class except its pre-existing `testRoutineResultsAndGroupCreationMessaging`, including the routine trial test
 - `TranscriptFlowTests.testRoutineRunsSitAmongTurnsAndOpenToTheirOutput`
 - `RoutineRunsTests` and `SettingsParityTests`, 27 tests
@@ -86,6 +87,7 @@ fix.
 
 The implementation agents captured each feature at web desktop and phone widths and on
 iPhone, and the orchestrator inspected the results. The captures cover:
+
 - the header chip and meta lines
 - routine cards, collapsed and open, in light and dark
 - secure card states and the handoff flow

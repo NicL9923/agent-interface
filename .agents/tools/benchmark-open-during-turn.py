@@ -25,6 +25,7 @@ the rest of the open, where only the interpreter lock is shared.
 
     python3 .agents/tools/benchmark-open-during-turn.py [--repo PATH] [--rows 5000] [--opens 30] [--plan] [--contend]
 """
+
 import argparse
 import json
 import platform
@@ -113,11 +114,16 @@ class Store:
         self.statements = {}
 
     def add(self, role, uid, timestamp):
-        return self.db.execute("INSERT INTO messages(session_id,role,timestamp,message_uid) VALUES('stored',?,?,?)", (role, timestamp, uid)).lastrowid
+        return self.db.execute(
+            "INSERT INTO messages(session_id,role,timestamp,message_uid) VALUES('stored',?,?,?)",
+            (role, timestamp, uid),
+        ).lastrowid
 
     def archive(self):
         """Hermes's compaction archive (hermes_state_messages.py:73): every active row, still searchable."""
-        self.db.execute("UPDATE messages SET active = 0, compacted = 1 WHERE session_id = 'stored' AND active = 1")
+        self.db.execute(
+            "UPDATE messages SET active = 0, compacted = 1 WHERE session_id = 'stored' AND active = 1"
+        )
 
     def _read_all(self, sql, params=()):
         self.statements[sql] = params
@@ -138,14 +144,26 @@ class TimedLock:
             depth = getattr(self.local, "depth", 0)
             if depth == 0:
                 self.local.since = time.perf_counter()
-                self.waits.append((threading.get_ident(), started, (self.local.since - started) * 1000))
+                self.waits.append(
+                    (
+                        threading.get_ident(),
+                        started,
+                        (self.local.since - started) * 1000,
+                    )
+                )
             self.local.depth = depth + 1
         return got
 
     def release(self):
         self.local.depth -= 1
         if self.local.depth == 0:
-            self.holds.append((threading.get_ident(), self.local.since, (time.perf_counter() - self.local.since) * 1000))
+            self.holds.append(
+                (
+                    threading.get_ident(),
+                    self.local.since,
+                    (time.perf_counter() - self.local.since) * 1000,
+                )
+            )
         self.lock.release()
 
     def __enter__(self):
@@ -174,9 +192,23 @@ def project(history, **kwargs):
         if row.get("display_kind") == "handoff":
             continue
         if row["role"] == "tool":
-            messages.append({"role": "tool", "name": "terminal", "tool_call_id": row["tool_call_id"], "timestamp": row["timestamp"]})
+            messages.append(
+                {
+                    "role": "tool",
+                    "name": "terminal",
+                    "tool_call_id": row["tool_call_id"],
+                    "timestamp": row["timestamp"],
+                }
+            )
         else:
-            messages.append({"role": row["role"], "text": row["content"], "timestamp": row["timestamp"], "row_id": row["_row_id"]})
+            messages.append(
+                {
+                    "role": row["role"],
+                    "text": row["content"],
+                    "timestamp": row["timestamp"],
+                    "row_id": row["_row_id"],
+                }
+            )
     return messages
 
 
@@ -187,26 +219,61 @@ class Transcript:
 
     def row(self, role, content, **fields):
         self.count += 1
-        row = {"role": role, "content": content, "timestamp": float(self.count), "_row_id": self.store.add(role, f"uid{self.count}", float(self.count)), **fields}
+        row = {
+            "role": role,
+            "content": content,
+            "timestamp": float(self.count),
+            "_row_id": self.store.add(role, f"uid{self.count}", float(self.count)),
+            **fields,
+        }
         self.history.append(row)
         return row
 
     def user(self):
         self.turn = f"run{self.count}"
         row = self.row("user", f"Question {self.count}")
-        fakes.receipt(self.hermes.journal.db, self.turn, row["_row_id"], float(self.count))
+        fakes.receipt(
+            self.hermes.journal.db, self.turn, row["_row_id"], float(self.count)
+        )
 
     def call(self):
-        call, output = f"call{self.count}", {"exit_code": 0, "output": "line of output\n" * 100, "lines": list(range(20))}
+        call, output = (
+            f"call{self.count}",
+            {
+                "exit_code": 0,
+                "output": "line of output\n" * 100,
+                "lines": list(range(20)),
+            },
+        )
         self.row("tool", json.dumps(output), tool_call_id=call)
         fakes.tool(self.hermes.journal.db, self.turn, call, output)
 
     def compact(self):
         """Hermes's in-place compaction: archive every row, then a handoff and each kept row stored again under a new ID."""
-        uids = dict(self.store.db.execute("SELECT id,message_uid FROM messages WHERE session_id='stored'").fetchall())
+        uids = dict(
+            self.store.db.execute(
+                "SELECT id,message_uid FROM messages WHERE session_id='stored'"
+            ).fetchall()
+        )
         self.store.archive()
-        kept = [{**row, "_row_id": self.store.add(row["role"], uids[row["_row_id"]], row["timestamp"])} for row in self.history]
-        self.history[:] = [{"role": "user", "content": "Summary", "display_kind": "handoff", "timestamp": 0.0}, *kept]
+        kept = [
+            {
+                **row,
+                "_row_id": self.store.add(
+                    row["role"], uids[row["_row_id"]], row["timestamp"]
+                ),
+            }
+            for row in self.history
+        ]
+        self.history[:] = [
+            {
+                "role": "user",
+                "content": "Summary",
+                "display_kind": "handoff",
+                "timestamp": 0.0,
+            },
+            *kept,
+        ]
 
 
 def build(hermes, store, rows):
@@ -226,19 +293,35 @@ def build(hermes, store, rows):
 def main():
     global fakes
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument(
+        "--repo", type=Path, default=Path(__file__).resolve().parents[2]
+    )
     parser.add_argument("--rows", type=int, default=5000)
     parser.add_argument("--opens", type=int, default=30)
-    parser.add_argument("--plan", action="store_true", help="print the query plan of each statement the add-on ran against the store")
-    parser.add_argument("--contend", action="store_true", help="time journal lock holds, and a frame thread recording live tool calls beside the opens")
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="print the query plan of each statement the add-on ran against the store",
+    )
+    parser.add_argument(
+        "--contend",
+        action="store_true",
+        help="time journal lock holds, and a frame thread recording live tool calls beside the opens",
+    )
     args = parser.parse_args()
     sys.path.insert(0, str(args.repo.resolve() / "tests"))
     import hermes_extension_journal_test
+
     fakes = hermes_extension_journal_test
     with tempfile.TemporaryDirectory() as directory:
         store = Store(Path(directory) / "state.db")
         hermes = fakes.FakeHermes([])
-        hermes.session = {"session_key": "stored", "history": [], "history_lock": threading.Lock(), "running": True}
+        hermes.session = {
+            "session_key": "stored",
+            "history": [],
+            "history_lock": threading.Lock(),
+            "running": True,
+        }
         server = hermes.server
         server._sessions["sid"] = hermes.session
         server._history_to_messages = project
@@ -248,9 +331,26 @@ def main():
         def handle(request):
             params = request.get("params") or {}
             if request["method"] == "profiles.list":
-                return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": "stored"}}]})
-            messages = [] if params.get("omit_messages") else server._history_to_messages(list(hermes.session["history"]))
-            return server._ok(request["id"], {"session_id": "sid", "messages": messages})
+                return server._ok(
+                    request["id"],
+                    {
+                        "profiles": [
+                            {
+                                "name": "default",
+                                "canonical_session": {"resolved_id": "stored"},
+                            }
+                        ]
+                    },
+                )
+            messages = (
+                []
+                if params.get("omit_messages")
+                else server._history_to_messages(list(hermes.session["history"]))
+            )
+            return server._ok(
+                request["id"], {"session_id": "sid", "messages": messages}
+            )
+
         server.handle_request = handle
         with hermes:
             transcript = build(hermes, store, args.rows)
@@ -266,6 +366,7 @@ def main():
                     return original_rows(*args)
                 finally:
                     lookups.append((time.perf_counter() - started) * 1000)
+
             bridge.original_rows = timed_original_rows
             passes, frames = [], []
             if args.contend:
@@ -278,6 +379,7 @@ def main():
                         return attribute(*args, **kwargs)
                     finally:
                         passes.append((started, time.perf_counter()))
+
                 bridge.attribute = timed_attribute
             for _ in range(2):
                 open_("warm", {"profile": "default", "window": {"turns": 20}})
@@ -290,17 +392,30 @@ def main():
 
             def frame_thread():
                 # Each tool.start and tool.complete frame records the call; tool.complete also inserts a row.
-                payload = {"tool_id": "live", "name": "terminal", "args": {"command": "ls"}}
+                payload = {
+                    "tool_id": "live",
+                    "name": "terminal",
+                    "args": {"command": "ls"},
+                }
                 while not stop.is_set():
                     started = time.perf_counter()
                     before = len(lock.waits)
-                    bridge.record_live_tool("sid", hermes.session, "tool.start", payload)
+                    bridge.record_live_tool(
+                        "sid", hermes.session, "tool.start", payload
+                    )
                     ended = time.perf_counter()
-                    waits = [wait for ident, _, wait in lock.waits[before:] if ident == threading.get_ident()]
+                    waits = [
+                        wait
+                        for ident, _, wait in lock.waits[before:]
+                        if ident == threading.get_ident()
+                    ]
                     frames.append((started, sum(waits), (ended - started) * 1000))
                     time.sleep(0.001)
+
             if args.contend:
-                contender = threading.Thread(target=frame_thread, name="frames", daemon=True)
+                contender = threading.Thread(
+                    target=frame_thread, name="frames", daemon=True
+                )
                 contender.start()
                 del lock.holds[:]
             for _ in range(args.opens):
@@ -309,9 +424,13 @@ def main():
                     transcript.call()
                 after = Path(store.db_path + "-wal").stat()
                 if (wal.st_size, wal.st_mtime_ns) == (after.st_size, after.st_mtime_ns):
-                    sys.exit("The write before an open left the state.db WAL unchanged; this would not model a running turn.")
+                    sys.exit(
+                        "The write before an open left the state.db WAL unchanged; this would not model a running turn."
+                    )
                 started = time.perf_counter()
-                result = open_("poll", {"profile": "default", "window": {"turns": 20}})["result"]
+                result = open_("poll", {"profile": "default", "window": {"turns": 20}})[
+                    "result"
+                ]
                 durations.append((time.perf_counter() - started) * 1000)
                 spans.append((started, time.perf_counter()))
                 phases.append(result["app_timing"])
@@ -319,31 +438,59 @@ def main():
                 stop.set()
                 contender.join(5)
             if len(lookups) != args.opens:
-                sys.exit(f"{args.opens - len(lookups)} opens skipped the compaction-copy lookup; they did not model a running turn.")
+                sys.exit(
+                    f"{args.opens - len(lookups)} opens skipped the compaction-copy lookup; they did not model a running turn."
+                )
 
             def summary(values):
                 values = sorted(values)
                 return f"median {statistics.median(values):.1f} ms, p90 {values[int(len(values) * 0.9) - 1]:.1f} ms"
+
             print(f"Repository: {args.repo}")
-            print(f"Python {platform.python_version()}, SQLite {sqlite3.sqlite_version} on {platform.system()} {platform.machine()}")
-            print(f"Transcript: {visible} visible rows ({tools} tool rows) at the first measured open, a running turn, {args.opens} opens")
+            print(
+                f"Python {platform.python_version()}, SQLite {sqlite3.sqlite_version} on {platform.system()} {platform.machine()}"
+            )
+            print(
+                f"Transcript: {visible} visible rows ({tools} tool rows) at the first measured open, a running turn, {args.opens} opens"
+            )
             print(f"Open, wall: {summary(durations)}, max {max(durations):.1f} ms")
             for name in phases[0]:
                 print(f"  {name}: {summary(phase[name] for phase in phases)}")
             print(f"  original_rows (in decorate): {summary(lookups)}")
             if args.contend:
                 opener = threading.get_ident()
-                within = lambda moment, ranges: any(start <= moment < end for start, end in ranges)
-                holds = [hold for ident, since, hold in lock.holds if ident == opener and within(since, spans)]
-                print(f"Journal lock, opener's holds during measured opens ({len(holds)}): {summary(holds)}, max {max(holds):.1f} ms")
-                print(f"  attribution pass: {summary([(end - start) * 1000 for start, end in passes])}; cold row cache, first open: {cold[0]:.1f} ms")
+                within = lambda moment, ranges: any(
+                    start <= moment < end for start, end in ranges
+                )
+                holds = [
+                    hold
+                    for ident, since, hold in lock.holds
+                    if ident == opener and within(since, spans)
+                ]
+                print(
+                    f"Journal lock, opener's holds during measured opens ({len(holds)}): {summary(holds)}, max {max(holds):.1f} ms"
+                )
+                print(
+                    f"  attribution pass: {summary([(end - start) * 1000 for start, end in passes])}; cold row cache, first open: {cold[0]:.1f} ms"
+                )
                 during = [frame for frame in frames if within(frame[0], passes)]
-                rest = [frame for frame in frames if within(frame[0], spans) and not within(frame[0], passes)]
-                for name, group in (("began during an attribution pass", during), ("began in the rest of an open", rest)):
+                rest = [
+                    frame
+                    for frame in frames
+                    if within(frame[0], spans) and not within(frame[0], passes)
+                ]
+                for name, group in (
+                    ("began during an attribution pass", during),
+                    ("began in the rest of an open", rest),
+                ):
                     if group:
                         print(f"Frame thread, {len(group)} calls that {name}:")
-                        print(f"  journal lock wait: {summary([frame[1] for frame in group])}, max {max(frame[1] for frame in group):.1f} ms")
-                        print(f"  whole call: {summary([frame[2] for frame in group])}, max {max(frame[2] for frame in group):.1f} ms")
+                        print(
+                            f"  journal lock wait: {summary([frame[1] for frame in group])}, max {max(frame[1] for frame in group):.1f} ms"
+                        )
+                        print(
+                            f"  whole call: {summary([frame[2] for frame in group])}, max {max(frame[2] for frame in group):.1f} ms"
+                        )
             if args.plan:
                 for sql, params in store.statements.items():
                     print(f"\n{sql}")

@@ -20,11 +20,16 @@ export function mountRoot(): Mount {
   document.body.append(container);
   let live: Root | undefined;
   const root: Root = {
-    render: node => { (live ??= createRoot(container)).render(node); },
-    unmount: () => { live?.unmount(); live = undefined; },
+    render: (node) => {
+      (live ??= createRoot(container)).render(node);
+    },
+    unmount: () => {
+      live?.unmount();
+      live = undefined;
+    },
   };
   mounts.push({ container, root });
-  return { container, root, render: node => act(async () => root.render(node)) };
+  return { container, root, render: (node) => act(async () => root.render(node)) };
 }
 
 /** The mount that click, button and typeInto act on by default. */
@@ -42,7 +47,9 @@ export async function unmountAll() {
 
 /** The button whose text, ignoring surrounding space, is exactly `text`. */
 export function button(text: string, scope: ParentNode = current()) {
-  const found = Array.from(scope.querySelectorAll("button")).find(item => item.textContent?.trim() === text);
+  const found = Array.from(scope.querySelectorAll("button")).find(
+    (item) => item.textContent?.trim() === text,
+  );
   expect(found, `a "${text}" button`).toBeDefined();
   return found!;
 }
@@ -55,7 +62,10 @@ export function click(text: string, scope?: ParentNode) {
 type TextField = HTMLInputElement | HTMLTextAreaElement;
 /** Sets a field through the native value setter, which React's change tracking would otherwise swallow. */
 export async function typeInto(field: TextField, value: string) {
-  const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  const prototype =
+    field instanceof HTMLTextAreaElement
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
   await act(async () => {
     Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(field, value);
     field.dispatchEvent(new Event("input", { bubbles: true }));
@@ -64,7 +74,9 @@ export async function typeInto(field: TextField, value: string) {
 
 /** Moves fake timers forward and lets the effects they trigger settle. */
 export function advance(milliseconds: number) {
-  return act(async () => { await vi.advanceTimersByTimeAsync(milliseconds); });
+  return act(async () => {
+    await vi.advanceTimersByTimeAsync(milliseconds);
+  });
 }
 
 // Captured before any test installs fake timers, so waiting can always take real time.
@@ -86,7 +98,7 @@ export async function waitForUi(check: () => unknown, timeout = 1000, interval =
     }
     await act(async () => {
       if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(interval);
-      await new Promise(resolve => realSetTimeout(resolve, interval));
+      await new Promise((resolve) => realSetTimeout(resolve, interval));
     });
   }
 }
@@ -95,12 +107,15 @@ export async function waitForUi(check: () => unknown, timeout = 1000, interval =
 export const reducedMotionOnly = (query: string) => query === "(prefers-reduced-motion: reduce)";
 /** Replaces matchMedia; `matches` may be fixed or decided per query. */
 export function stubMatchMedia(matches: boolean | ((query: string) => boolean) = false) {
-  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
-    matches: typeof matches === "function" ? matches(query) : matches,
-    media: query,
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-  })));
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches: typeof matches === "function" ? matches(query) : matches,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
 }
 /**
  * Runs every animation frame request at once. A request made from inside a frame is dropped, so the
@@ -111,7 +126,11 @@ export function stubImmediateFrames() {
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     if (inside) return 0;
     inside = true;
-    try { callback(0); } finally { inside = false; }
+    try {
+      callback(0);
+    } finally {
+      inside = false;
+    }
     return 0;
   });
 }
@@ -120,7 +139,10 @@ export function stubImmediateFrames() {
  * component renders again, and keeps it when a memoized component above it skips rendering.
  */
 export const renderedProps = (element: Element) => {
-  const key = Object.keys(element).find(name => name.startsWith("__reactProps$"));
-  if (!key) throw new Error(`React keeps no props on ${element.localName}; this check needs another way to see renders`);
+  const key = Object.keys(element).find((name) => name.startsWith("__reactProps$"));
+  if (!key)
+    throw new Error(
+      `React keeps no props on ${element.localName}; this check needs another way to see renders`,
+    );
   return (element as unknown as Record<string, unknown>)[key];
 };

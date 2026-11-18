@@ -16,8 +16,10 @@ export async function requireSecondLoopback() {
       server.listen(0, SECOND_LOOPBACK, resolve);
     });
   } catch (error) {
-    throw new Error(`This machine cannot listen on ${SECOND_LOOPBACK} (${(error as NodeJS.ErrnoException).code}). ` +
-      `On macOS give it to the loopback adapter: sudo ifconfig lo0 alias ${SECOND_LOOPBACK} up. README.md, "Validate", says how to keep it across restarts.`);
+    throw new Error(
+      `This machine cannot listen on ${SECOND_LOOPBACK} (${(error as NodeJS.ErrnoException).code}). ` +
+        `On macOS give it to the loopback adapter: sudo ifconfig lo0 alias ${SECOND_LOOPBACK} up. README.md, "Validate", says how to keep it across restarts.`,
+    );
   } finally {
     if (server.listening) server.close();
   }

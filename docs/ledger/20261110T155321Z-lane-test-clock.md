@@ -46,12 +46,12 @@ preempt-bound test red with no warning logged; restored, and `__pycache__` delet
 Each line was broken with a scripted text replacement in `src/hermes/extension.py`, the lane file run with `-B` and
 `PYTHONDONTWRITEBYTECODE=1`, and the source restored, checked by hash, and every `__pycache__` deleted:
 
-| Broken | Red |
-| --- | --- |
-| Compaction time charged to `wait`: the mark before `submission_lock` removed | the compaction test: `200.0 not less than 100` |
-| Staging time not charged | the staging test: `0.0 not greater than or equal to 150` |
-| Hermes's admission time not charged | the arrival-order test: `0.0 not greater than or equal to 150` |
-| Queue time not charged | the arrival-order test: `0.0 not greater than or equal to 150` |
+| Broken                                                                       | Red                                                            |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Compaction time charged to `wait`: the mark before `submission_lock` removed | the compaction test: `200.0 not less than 100`                 |
+| Staging time not charged                                                     | the staging test: `0.0 not greater than or equal to 150`       |
+| Hermes's admission time not charged                                          | the arrival-order test: `0.0 not greater than or equal to 150` |
+| Queue time not charged                                                       | the arrival-order test: `0.0 not greater than or equal to 150` |
 
 ## Counts
 
@@ -59,19 +59,19 @@ Each line was broken with a scripted text replacement in `src/hermes/extension.p
 fresh processes, PARALLEL at once, beside BUSY `while True: pass` processes; `CPUS` pins both to those cores with
 `taskset`, and `NICE` runs the tests at that niceness.
 
-| Source | Load | Passed | Failed |
-| --- | --- | --- | --- |
-| `main` | 8 at once, 32 busy loops, all cores | 100 | 0 |
-| `main` | 16 at once, 64 busy loops, all cores | 100 | 0 |
-| `main` | 4 at once, 4 busy loops, cores 0 and 1 | 100 | 0 |
-| `main` | 4 at once, 4 busy loops, cores 0 and 1, tests at niceness 10 | 100 | 0 |
-| the clock alone, on `4b8fdc2` | the same, run later under heavier outside load | 88 | 12 |
-| `main` at `c2ee202` | paired with the next row | 89 | 11 |
-| the clock and the held compaction, on `4b8fdc2` | paired with the row above | 96 | 4 |
-| `main` at `c2ee202` | paired with the next row, fault handler on | 93 | 7 |
-| the clock and the held compaction, on `c2ee202` | paired with the row above, fault handler on | 99 | 1 |
-| `main` at `c2ee202` | paired with the next row, fault handler on | 95 | 5 |
-| this branch: clock, held compaction, locked close | paired with the row above, fault handler on | 100 | 0 |
+| Source                                            | Load                                                         | Passed | Failed |
+| ------------------------------------------------- | ------------------------------------------------------------ | ------ | ------ |
+| `main`                                            | 8 at once, 32 busy loops, all cores                          | 100    | 0      |
+| `main`                                            | 16 at once, 64 busy loops, all cores                         | 100    | 0      |
+| `main`                                            | 4 at once, 4 busy loops, cores 0 and 1                       | 100    | 0      |
+| `main`                                            | 4 at once, 4 busy loops, cores 0 and 1, tests at niceness 10 | 100    | 0      |
+| the clock alone, on `4b8fdc2`                     | the same, run later under heavier outside load               | 88     | 12     |
+| `main` at `c2ee202`                               | paired with the next row                                     | 89     | 11     |
+| the clock and the held compaction, on `4b8fdc2`   | paired with the row above                                    | 96     | 4      |
+| `main` at `c2ee202`                               | paired with the next row, fault handler on                   | 93     | 7      |
+| the clock and the held compaction, on `c2ee202`   | paired with the row above, fault handler on                  | 99     | 1      |
+| `main` at `c2ee202`                               | paired with the next row, fault handler on                   | 95     | 5      |
+| this branch: clock, held compaction, locked close | paired with the row above, fault handler on                  | 100    | 0      |
 
 Paired rows ran at the same time, each with its own 4 copies and 4 busy loops at niceness 10 on cores 0 and 1, so both
 saw the same load; runs then took 40 to 100 s against 8 s idle. The machine carried a load average near 29 from other

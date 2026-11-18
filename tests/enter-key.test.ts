@@ -10,7 +10,7 @@ describe("whether Enter sends", () => {
     ["a computer with a mouse", ["(any-pointer: fine)"], true],
     ["a computer driven by its keyboard alone", [], true],
   ])("%s", (_, matching, expected) => {
-    stubMatchMedia(query => matching.includes(query));
+    stubMatchMedia((query) => matching.includes(query));
     expect(enterSends()).toBe(expected);
   });
 
@@ -21,13 +21,23 @@ describe("whether Enter sends", () => {
 });
 
 describe("whether a key sends", () => {
-  const enter = { key: "Enter", shiftKey: false, ctrlKey: false, metaKey: false, isComposing: false, keyCode: 13 };
+  const enter = {
+    key: "Enter",
+    shiftKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    isComposing: false,
+    keyCode: 13,
+  };
   // The composers return early for an input method's keys too; this keeps the rule safe for a caller that does not.
   it.each([
     ["Safari's word-confirming Enter", { keyCode: 229 }],
     ["an Enter while composing", { isComposing: true }],
   ])("never sends on %s, not even with Ctrl or Cmd", (_, ime) => {
-    expect([sendsOnKey({ ...enter, ...ime }, true), sendsOnKey({ ...enter, ...ime, ctrlKey: true }, false),
-      sendsOnKey({ ...enter, ...ime, metaKey: true }, false)]).toEqual([false, false, false]);
+    expect([
+      sendsOnKey({ ...enter, ...ime }, true),
+      sendsOnKey({ ...enter, ...ime, ctrlKey: true }, false),
+      sendsOnKey({ ...enter, ...ime, metaKey: true }, false),
+    ]).toEqual([false, false, false]);
   });
 });

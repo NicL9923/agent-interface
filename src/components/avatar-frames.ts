@@ -27,17 +27,19 @@ function request() {
 function frame(now: number) {
   requested = 0;
   const running = [...awake];
-  const pauses = running.map(animation => {
+  const pauses = running.map((animation) => {
     try {
       return animation.advance(now);
     } catch (error) {
       // One broken avatar stops itself, as it did with a loop of its own, and does not take the others with it.
-      queueMicrotask(() => { throw error; });
+      queueMicrotask(() => {
+        throw error;
+      });
       return null;
     }
   });
   // Committed inside this frame's callback; scheduled React work would land in a second frame, and each costs a restyle.
-  flushSync(() => running.forEach(animation => animation.commit()));
+  flushSync(() => running.forEach((animation) => animation.commit()));
   running.forEach((animation, index) => {
     // It may have stopped itself while this frame was committing.
     if (!awake.has(animation)) return;
@@ -45,11 +47,14 @@ function frame(now: number) {
     if (pause === 0) return;
     awake.delete(animation);
     if (pause === null) return;
-    asleep.set(animation, setTimeout(() => {
-      asleep.delete(animation);
-      awake.add(animation);
-      request();
-    }, pause));
+    asleep.set(
+      animation,
+      setTimeout(() => {
+        asleep.delete(animation);
+        awake.add(animation);
+        request();
+      }, pause),
+    );
   });
   request();
 }

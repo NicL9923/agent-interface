@@ -15,10 +15,10 @@ platforms and Control elsewhere. No other hardcoded modifier shortcut remains in
 
 ## Runs
 
-| Run | Result |
-| --- | --- |
-| `npm run build && node .agents/tools/diff-computed-styles.mjs` | exit 0, all six screens read, no differences (light, dark, 900px, motion reduce) |
-| Red: the palette step forced to `Meta+k`, `SCHEMES=light` | exit 1, `locator.waitFor` timed out on `.command-palette[open]`; file restored |
+| Run                                                                               | Result                                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm run build && node .agents/tools/diff-computed-styles.mjs`                    | exit 0, all six screens read, no differences (light, dark, 900px, motion reduce)                                                                                                                                   |
+| Red: the palette step forced to `Meta+k`, `SCHEMES=light`                         | exit 1, `locator.waitFor` timed out on `.command-palette[open]`; file restored                                                                                                                                     |
 | `capture-app-settings.js` on `preview-app.mjs` (port 3299) through playwright-cli | exit 1 at line 35, before the changed key presses: no `Settings` button, since Settings moved into the Account menu. The platform read at the top ran. This drift predates the change and is left for its own fix. |
 
 The tools have no unit tests, and none were added for a dev tool. The macOS branch is the same browser-platform test the

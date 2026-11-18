@@ -9,18 +9,28 @@ import { fakeRuntime } from "./helpers/server.js";
 // the iOS app's and older bundles' included, must start and ping exactly as before. These requests go
 // through the real app and its query parser over a socket; only the ping interval's clock is virtual.
 const origin = "http://127.0.0.1:3000";
-const FALLBACK_OPEN = "retry: 3000\n\n", FALLBACK_PING = "event: ping\ndata: ping\n\n";
+const FALLBACK_OPEN = "retry: 3000\n\n",
+  FALLBACK_PING = "event: ping\ndata: ping\n\n";
 const FAST_PING = "event: ping\ndata: 10\n\n";
 let app: Awaited<ReturnType<typeof createApp>>["app"], base: string, cookie: string;
 beforeEach(async () => {
   const runtime: Runtime = fakeRuntime({
-    status: async () => ({ connected: true }), close: async () => {},
+    status: async () => ({ connected: true }),
+    close: async () => {},
     capabilities: async () => new Proxy({}, { get: () => ({ supported: true }) }) as never,
     listBots: async () => [botFixture({ id: "ranch" })],
   });
-  ({ app } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false }));
+  ({ app } = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    runtime,
+    { background: false },
+  ));
   base = await app.listen({ port: 0, host: "127.0.0.1" });
-  const signIn = await fetch(`${base}/api/auth/local`, { method: "POST", headers: { origin, "content-type": "application/json" }, body: JSON.stringify({ member: "one" }) });
+  const signIn = await fetch(`${base}/api/auth/local`, {
+    method: "POST",
+    headers: { origin, "content-type": "application/json" },
+    body: JSON.stringify({ member: "one" }),
+  });
   cookie = signIn.headers.getSetCookie()[0].split(";")[0];
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 });
@@ -35,11 +45,17 @@ async function stream(query: string) {
   expect(response.status).toBe(200);
   const reader = response.body!.pipeThrough(new TextDecoderStream()).getReader();
   const got = { text: "" };
-  void (async () => { for (;;) { const chunk = await reader.read().catch(() => ({ done: true, value: "" })); if (chunk.done) return; got.text += chunk.value; } })();
+  void (async () => {
+    for (;;) {
+      const chunk = await reader.read().catch(() => ({ done: true, value: "" }));
+      if (chunk.done) return;
+      got.text += chunk.value;
+    }
+  })();
   return { got, stop: () => reader.cancel() };
 }
 /** Lets the socket deliver what the server wrote. */
-const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 /** Waits for what the stream is expected to have written, by the stream's own bytes; the step count only ends a stream that never writes it. */
 async function until(test: () => boolean, expected = "its opening") {
   for (let step = 0; !test(); step++) {

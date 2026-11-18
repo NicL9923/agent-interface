@@ -9,7 +9,13 @@ export const GROUP_WATCHES_PER_PERSON = 8;
 /** Rooms polled at once for everyone, so the server's reads of Hermes stay bounded. */
 export const GROUP_WATCHED_ROOMS = 24;
 type Listener = (state: GroupState) => void;
-type Room = { listeners: Set<Listener>; timer?: NodeJS.Timeout; delay: number; generation: number; seen?: string };
+type Room = {
+  listeners: Set<Listener>;
+  timer?: NodeJS.Timeout;
+  delay: number;
+  generation: number;
+  seen?: string;
+};
 
 /**
  * What a watcher must hear about: the room's newest event and its driver status, including who works
@@ -18,8 +24,13 @@ type Room = { listeners: Set<Listener>; timer?: NodeJS.Timeout; delay: number; g
  */
 export function fingerprint(state: GroupState): string {
   const status = state.driver_status;
-  return JSON.stringify([state.room.latest_seq, status && {
-    ...status, member_activity: status.member_activity?.map(({ progress_at: _, ...activity }) => activity) }]);
+  return JSON.stringify([
+    state.room.latest_seq,
+    status && {
+      ...status,
+      member_activity: status.member_activity?.map(({ progress_at: _, ...activity }) => activity),
+    },
+  ]);
 }
 
 /**
@@ -32,15 +43,26 @@ export function fingerprint(state: GroupState): string {
 export class GroupWatch {
   private readonly rooms = new Map<string, Room>();
   private readonly owners = new Map<string, number>();
-  constructor(private readonly runtime: Pick<Runtime, "groupRequest">, private readonly interval = GROUP_POLL_MS) {}
-  get watched() { return [...this.rooms.keys()]; }
+  constructor(
+    private readonly runtime: Pick<Runtime, "groupRequest">,
+    private readonly interval = GROUP_POLL_MS,
+  ) {}
+  get watched() {
+    return [...this.rooms.keys()];
+  }
   watch(roomId: string, owner: string, listener: Listener): () => void {
     const held = this.owners.get(owner) ?? 0;
     if (held >= GROUP_WATCHES_PER_PERSON)
-      throw httpError(429, "Too many group chats are open for you at once. Close one in another tab or device, then try again.");
+      throw httpError(
+        429,
+        "Too many group chats are open for you at once. Close one in another tab or device, then try again.",
+      );
     let room = this.rooms.get(roomId);
     if (!room && this.rooms.size >= GROUP_WATCHED_ROOMS)
-      throw httpError(429, "Too many group chats are open in this household right now. Try again once one closes.");
+      throw httpError(
+        429,
+        "Too many group chats are open in this household right now. Try again once one closes.",
+      );
     this.owners.set(owner, held + 1);
     if (!room) {
       room = { listeners: new Set(), delay: this.interval, generation: 0 };
@@ -48,14 +70,15 @@ export class GroupWatch {
       this.schedule(roomId, room, 0);
     }
     // Each watch is its own entry, so two streams sharing a listener still count and leave separately.
-    const entry: Listener = state => listener(state);
+    const entry: Listener = (state) => listener(state);
     room.listeners.add(entry);
     let ended = false;
     return () => {
       if (ended) return;
       ended = true;
       const left = (this.owners.get(owner) ?? 1) - 1;
-      if (left > 0) this.owners.set(owner, left); else this.owners.delete(owner);
+      if (left > 0) this.owners.set(owner, left);
+      else this.owners.delete(owner);
       const current = this.rooms.get(roomId);
       if (current !== room || !room.listeners.delete(entry) || room.listeners.size) return;
       clearTimeout(room.timer);
@@ -64,7 +87,10 @@ export class GroupWatch {
     };
   }
   close() {
-    for (const room of this.rooms.values()) { clearTimeout(room.timer); room.generation++; }
+    for (const room of this.rooms.values()) {
+      clearTimeout(room.timer);
+      room.generation++;
+    }
     this.rooms.clear();
     this.owners.clear();
   }
@@ -76,7 +102,7 @@ export class GroupWatch {
   private async poll(roomId: string, room: Room, generation: number) {
     let state: GroupState | undefined;
     try {
-      state = await this.runtime.groupRequest!({ operation: "state", roomId }) as GroupState;
+      state = (await this.runtime.groupRequest!({ operation: "state", roomId })) as GroupState;
       room.delay = this.interval;
     } catch {
       room.delay = Math.min(room.delay * 2, GROUP_POLL_MAX_MS);

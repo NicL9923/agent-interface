@@ -21,9 +21,7 @@
         "eyes": "oval",
         "accessory": "none"
       },
-      "enabledMcpServers": [
-        "existing-calendar"
-      ]
+      "enabledMcpServers": ["existing-calendar"]
     }
   ],
   "preferences": {

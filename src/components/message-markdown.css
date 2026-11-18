@@ -198,7 +198,9 @@
   padding: 0;
 }
 @media (pointer: coarse) {
-  .markdown-table-actions button { min-height: 44px; }
+  .markdown-table-actions button {
+    min-height: 44px;
+  }
 }
 /* Highlighted code changes color only, never weight or size, so painting it moves nothing. */
 .message-markdown .hljs {
@@ -209,14 +211,63 @@
   --code-title: var(--ink);
   color: var(--ink);
 }
-.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-literal, .hljs-type, .hljs-meta .hljs-keyword, .hljs-doctag, .hljs-section { color: var(--code-keyword); }
-.hljs-string, .hljs-regexp, .hljs-char.escape_, .hljs-attr, .hljs-attribute, .hljs-symbol, .hljs-template-tag, .hljs-template-variable, .hljs-selector-attr, .hljs-link { color: var(--code-string); }
-.hljs-number, .hljs-variable.constant_, .hljs-selector-id, .hljs-selector-class, .hljs-name, .hljs-tag .hljs-attr { color: var(--code-number); }
-.hljs-comment, .hljs-quote, .hljs-meta, .hljs-punctuation, .hljs-tag { color: var(--code-comment); }
-.hljs-comment, .hljs-quote { font-style: italic; }
-.hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-property, .hljs-params, .hljs-variable { color: var(--code-title); }
-.hljs-addition { color: var(--accent); background: var(--accent-soft); }
-.hljs-deletion { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-literal,
+.hljs-type,
+.hljs-meta .hljs-keyword,
+.hljs-doctag,
+.hljs-section {
+  color: var(--code-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-char.escape_,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-link {
+  color: var(--code-string);
+}
+.hljs-number,
+.hljs-variable.constant_,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-name,
+.hljs-tag .hljs-attr {
+  color: var(--code-number);
+}
+.hljs-comment,
+.hljs-quote,
+.hljs-meta,
+.hljs-punctuation,
+.hljs-tag {
+  color: var(--code-comment);
+}
+.hljs-comment,
+.hljs-quote {
+  font-style: italic;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-property,
+.hljs-params,
+.hljs-variable {
+  color: var(--code-title);
+}
+.hljs-addition {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.hljs-deletion {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
 
 /* A file the assistant named by its path on the Hermes computer: readable, but not a link that leads nowhere. */
 .markdown-local-file {

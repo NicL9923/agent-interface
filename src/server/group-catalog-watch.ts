@@ -35,17 +35,26 @@ export class GroupCatalogWatch {
   private generation = 0;
   /** The Hermes read in flight, kept across generations so a reconnect never starts a second one. */
   private inflight?: Promise<unknown>;
-  constructor(private readonly read: CatalogRead, private readonly interval = GROUP_CATALOG_POLL_MS,
-    private readonly floor = GROUP_CATALOG_WRITE_FLOOR_MS) {}
+  constructor(
+    private readonly read: CatalogRead,
+    private readonly interval = GROUP_CATALOG_POLL_MS,
+    private readonly floor = GROUP_CATALOG_WRITE_FLOOR_MS,
+  ) {}
 
-  get watching() { return this.viewers.size; }
+  get watching() {
+    return this.viewers.size;
+  }
 
   /** Calls `changed` whenever this person's catalog changes, until the returned function runs. */
   watch(userId: string, changed: () => void): () => void {
     const viewer: Viewer = { userId, changed, fresh: false };
     this.viewers.add(viewer);
     if (!this.seen.has(userId) && this.project) {
-      try { this.seen.set(userId, this.project(userId)); } catch { /* The next read sets it. */ }
+      try {
+        this.seen.set(userId, this.project(userId));
+      } catch {
+        /* The next read sets it. */
+      }
     }
     // Every stream hears once that its catalog is known, and clients read it on that notice rather than
     // on connect. With a starting point from an earlier check, that is now: any later change still
@@ -53,7 +62,10 @@ export class GroupCatalogWatch {
     // change the client's read missed and must not silently start from it.
     viewer.fresh = !this.seen.has(userId);
     // After the caller's stream has opened, which finishes synchronously after this returns.
-    if (!viewer.fresh) queueMicrotask(() => { if (this.viewers.has(viewer)) viewer.changed(); });
+    if (!viewer.fresh)
+      queueMicrotask(() => {
+        if (this.viewers.has(viewer)) viewer.changed();
+      });
     // The first viewer starts the checks.
     if (this.viewers.size === 1) this.schedule(0);
     let ended = false;
@@ -61,7 +73,7 @@ export class GroupCatalogWatch {
       if (ended) return;
       ended = true;
       this.viewers.delete(viewer);
-      if (![...this.viewers].some(other => other.userId === userId)) this.seen.delete(userId);
+      if (![...this.viewers].some((other) => other.userId === userId)) this.seen.delete(userId);
       if (this.viewers.size) return;
       this.stop();
     };
@@ -70,7 +82,10 @@ export class GroupCatalogWatch {
   /** After a write through the app that may change rooms, checks soon instead of waiting for the timer. */
   changed() {
     if (!this.viewers.size) return;
-    if (this.reading) { this.again = true; return; }
+    if (this.reading) {
+      this.again = true;
+      return;
+    }
     this.schedule(Math.max(0, this.last + this.floor - Date.now()));
   }
 
@@ -109,11 +124,15 @@ export class GroupCatalogWatch {
     if (generation !== this.generation || !this.viewers.size) return;
     this.last = Date.now();
     let project: ((userId: string) => string) | undefined;
-    const reading = this.read([...new Set([...this.viewers].map(viewer => viewer.userId))]);
+    const reading = this.read([...new Set([...this.viewers].map((viewer) => viewer.userId))]);
     this.inflight = reading;
-    try { project = await reading; }
-    catch { /* Hermes or its catalog is unavailable: keep what was seen and try at the next check. */ }
-    finally { if (this.inflight === reading) this.inflight = undefined; }
+    try {
+      project = await reading;
+    } catch {
+      /* Hermes or its catalog is unavailable: keep what was seen and try at the next check. */
+    } finally {
+      if (this.inflight === reading) this.inflight = undefined;
+    }
     // A read from before the last viewer left changes nothing, not even whether a read is running.
     if (generation !== this.generation) return;
     this.reading = false;
@@ -124,14 +143,20 @@ export class GroupCatalogWatch {
       for (const viewer of [...this.viewers]) {
         if (!next.has(viewer.userId)) {
           let value: string | undefined;
-          try { value = project(viewer.userId); } catch { value = undefined; }
+          try {
+            value = project(viewer.userId);
+          } catch {
+            value = undefined;
+          }
           next.set(viewer.userId, value);
         }
         const value = next.get(viewer.userId);
         if (value === undefined) continue;
         const before = this.seen.get(viewer.userId);
-        if (viewer.fresh) { viewer.fresh = false; tell.push(viewer); }
-        else if (before !== undefined && before !== value) tell.push(viewer);
+        if (viewer.fresh) {
+          viewer.fresh = false;
+          tell.push(viewer);
+        } else if (before !== undefined && before !== value) tell.push(viewer);
       }
       // Recorded before anyone hears: a listener that ends the last stream clears it all, and nothing
       // from this check may be written back after that for a later stream to start from.
@@ -140,7 +165,9 @@ export class GroupCatalogWatch {
     }
     // A listener may have ended the last stream just now.
     if (generation !== this.generation || !this.viewers.size) return;
-    if (this.again) { this.again = false; this.schedule(Math.max(0, this.last + this.floor - Date.now())); }
-    else this.schedule(this.interval);
+    if (this.again) {
+      this.again = false;
+      this.schedule(Math.max(0, this.last + this.floor - Date.now()));
+    } else this.schedule(this.interval);
   }
 }

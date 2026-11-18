@@ -29,38 +29,50 @@ export function useAction() {
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; };
+    return () => {
+      mounted.current = false;
+    };
   }, []);
 
-  const run = useCallback(async <T,>(work: (context: ActionContext) => Promise<T>, options: ActionOptions<T> = {}): Promise<T | undefined> => {
-    if (running.current) return undefined;
-    running.current = true;
-    const started = epoch.current;
-    const current = () => mounted.current && epoch.current === started;
-    setBusy(true); setError(""); setNotice("");
-    try {
-      const result = await work({ current });
-      if (current()) {
-        if (options.success) setNotice(options.success);
-        options.onSuccess?.(result);
+  const run = useCallback(
+    async <T>(
+      work: (context: ActionContext) => Promise<T>,
+      options: ActionOptions<T> = {},
+    ): Promise<T | undefined> => {
+      if (running.current) return undefined;
+      running.current = true;
+      const started = epoch.current;
+      const current = () => mounted.current && epoch.current === started;
+      setBusy(true);
+      setError("");
+      setNotice("");
+      try {
+        const result = await work({ current });
+        if (current()) {
+          if (options.success) setNotice(options.success);
+          options.onSuccess?.(result);
+        }
+        return result;
+      } catch (cause) {
+        if (current()) {
+          const message = options.onError?.(cause);
+          if (message !== null) setError(message ?? (cause as Error).message);
+        }
+        return undefined;
+      } finally {
+        if (epoch.current === started) running.current = false;
+        if (current()) setBusy(false);
       }
-      return result;
-    } catch (cause) {
-      if (current()) {
-        const message = options.onError?.(cause);
-        if (message !== null) setError(message ?? (cause as Error).message);
-      }
-      return undefined;
-    } finally {
-      if (epoch.current === started) running.current = false;
-      if (current()) setBusy(false);
-    }
-  }, []);
+    },
+    [],
+  );
   /** Drops the work in flight, so a new `run` may start and the old one cannot touch state. */
   const reset = useCallback(() => {
     epoch.current++;
     running.current = false;
-    setBusy(false); setError(""); setNotice("");
+    setBusy(false);
+    setError("");
+    setNotice("");
   }, []);
   return { busy, error, notice, run, setError, setNotice, reset };
 }

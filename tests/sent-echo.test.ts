@@ -1,23 +1,70 @@
 import { describe, expect, it } from "vitest";
-import { advance, awaitingTurn, COPY_HANDOFF_MS, ECHO_PATIENCE, nextEcho, nextEchoes, nextSends, OWN_SENDS_KEPT, ownSentRows, restoreSent, SENDING_ROW_MS, sendingDraft, withEchoes } from "../src/app/sent-echo";
+import {
+  advance,
+  awaitingTurn,
+  COPY_HANDOFF_MS,
+  ECHO_PATIENCE,
+  nextEcho,
+  nextEchoes,
+  nextSends,
+  OWN_SENDS_KEPT,
+  ownSentRows,
+  restoreSent,
+  SENDING_ROW_MS,
+  sendingDraft,
+  withEchoes,
+} from "../src/app/sent-echo";
 import type { EchoState, OwnSend, SentEcho } from "../src/app/sent-echo";
 import type { Pending, SavedConversation } from "../src/app/storage";
 import type { Message, SubmissionReceipt } from "../src/shared/types";
 
 const sender = { id: "one", name: "One" };
-const request: Pending = { requestId: "req", botId: "bot", text: "Hello there", attachments: [], reviewedInterruption: false };
-const conversation = (messages: Message[] = [{ id: "a", role: "assistant", text: "Hi" }], state: SavedConversation["activity"]["state"] = "idle"): SavedConversation =>
-  ({ botId: "bot", messages, approvals: [], files: [], activity: { state }, draft: null, readPosition: null });
+const request: Pending = {
+  requestId: "req",
+  botId: "bot",
+  text: "Hello there",
+  attachments: [],
+  reviewedInterruption: false,
+};
+const conversation = (
+  messages: Message[] = [{ id: "a", role: "assistant", text: "Hi" }],
+  state: SavedConversation["activity"]["state"] = "idle",
+): SavedConversation => ({
+  botId: "bot",
+  messages,
+  approvals: [],
+  files: [],
+  activity: { state },
+  draft: null,
+  readPosition: null,
+});
 const step = (echo: SentEcho | null, input: Partial<Parameters<typeof nextEcho>[1]>) =>
-  nextEcho(echo, { pending: null, receipt: null, sending: false, conversation: conversation(), sender, now: 1000, ...input });
+  nextEcho(echo, {
+    pending: null,
+    receipt: null,
+    sending: false,
+    conversation: conversation(),
+    sender,
+    now: 1000,
+    ...input,
+  });
 const accepted: SubmissionReceipt = { requestId: "req", status: "accepted", messageId: "row-9" };
 const sending = step(null, { pending: request, sending: true })!;
 
 describe("sent message echo", () => {
   it("appears for a new send after the last message shown", () => {
-    expect(sending).toMatchObject({ status: "sending", after: "a", sentAt: new Date(1000).toISOString() });
+    expect(sending).toMatchObject({
+      status: "sending",
+      after: "a",
+      sentAt: new Date(1000).toISOString(),
+    });
     const shown = withEchoes(conversation(), [sending])!;
-    expect(shown.messages.at(-1)).toMatchObject({ id: "req", role: "user", text: "Hello there", sender });
+    expect(shown.messages.at(-1)).toMatchObject({
+      id: "req",
+      role: "user",
+      text: "Hello there",
+      sender,
+    });
   });
 
   it("says a steered message joined the running task before Hermes's copy arrives, and an unknown one says nothing", () => {
@@ -46,7 +93,13 @@ describe("sent message echo", () => {
     const kept = step(sending, { receipt: accepted })!;
     expect(kept).toMatchObject({ status: "accepted", messageId: "row-9", acceptedAt: 1000 });
     for (const id of ["req", "row-9"]) {
-      const arrived = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id, role: "user", text: "Hello there" }], "thinking");
+      const arrived = conversation(
+        [
+          { id: "a", role: "assistant", text: "Hi" },
+          { id, role: "user", text: "Hello there" },
+        ],
+        "thinking",
+      );
       expect(step(kept, { receipt: accepted, conversation: arrived })).toBeNull();
       expect(withEchoes(arrived, [kept])).toBe(arrived);
     }
@@ -54,20 +107,43 @@ describe("sent message echo", () => {
 
   it("matches an accepted copy by its words only after the message last shown", () => {
     const earlier = { id: "u0", role: "user" as const, text: "Hello there", sender };
-    const kept = step(null, { pending: request, sending: true, conversation: conversation([earlier]) })!;
+    const kept = step(null, {
+      pending: request,
+      sending: true,
+      conversation: conversation([earlier]),
+    })!;
     const acceptedEcho = step(kept, { receipt: accepted, conversation: conversation([earlier]) })!;
     expect(acceptedEcho).not.toBeNull();
-    const saved = conversation([earlier, { id: "u1", role: "user", text: " Hello there ", sender }], "thinking");
+    const saved = conversation(
+      [earlier, { id: "u1", role: "user", text: " Hello there ", sender }],
+      "thinking",
+    );
     expect(step(acceptedEcho, { receipt: accepted, conversation: saved })).toBeNull();
-    const someoneElse = conversation([earlier, { id: "u1", role: "user", text: "Hello there", sender: { id: "two", name: "Two" } }], "thinking");
+    const someoneElse = conversation(
+      [
+        earlier,
+        { id: "u1", role: "user", text: "Hello there", sender: { id: "two", name: "Two" } },
+      ],
+      "thinking",
+    );
     expect(step(acceptedEcho, { receipt: accepted, conversation: someoneElse })).not.toBeNull();
   });
 
   it("stands in for a prompt saved only when its run ends", () => {
     let echo = step(sending, { receipt: accepted })!;
-    echo = step(echo, { receipt: accepted, conversation: conversation(undefined, "working"), now: 90_000 })!;
+    echo = step(echo, {
+      receipt: accepted,
+      conversation: conversation(undefined, "working"),
+      now: 90_000,
+    })!;
     expect(echo.ran).toBe(true);
-    expect(step(echo, { receipt: accepted, conversation: conversation(undefined, "done"), now: 120_000 })).toBeNull();
+    expect(
+      step(echo, {
+        receipt: accepted,
+        conversation: conversation(undefined, "done"),
+        now: 120_000,
+      }),
+    ).toBeNull();
   });
 
   it("gives up on an accepted message whose run never shows", () => {
@@ -99,7 +175,12 @@ describe("sent message echo", () => {
     const sent = { text: "Hello there", attachments: [file] };
     const typed = { text: "Next", attachments: [], botId: "bot", seq: 3 };
     const restored = restoreSent(typed, sent);
-    expect(restored).toMatchObject({ text: "Hello there\n\nNext", attachments: [file], dirty: true, seq: 3 });
+    expect(restored).toMatchObject({
+      text: "Hello there\n\nNext",
+      attachments: [file],
+      dirty: true,
+      seq: 3,
+    });
     expect(restoreSent(restored, sent)).toBe(restored);
     const untouched = { text: "Hello there", attachments: [file] };
     expect(restoreSent(untouched, sent)).toBe(untouched);
@@ -112,35 +193,75 @@ describe("sent message echo", () => {
   });
 
   it("anchors on a saved message, and never matches words once its anchor is gone", () => {
-    const live = conversation([{ id: "u0", role: "user", text: "continue", sender }, { id: "s-inflight", role: "assistant", text: "Working" }], "working");
-    const echo = step(null, { pending: { ...request, text: "continue" }, sending: true, conversation: live })!;
+    const live = conversation(
+      [
+        { id: "u0", role: "user", text: "continue", sender },
+        { id: "s-inflight", role: "assistant", text: "Working" },
+      ],
+      "working",
+    );
+    const echo = step(null, {
+      pending: { ...request, text: "continue" },
+      sending: true,
+      conversation: live,
+    })!;
     expect(echo.after).toBe("u0");
     const unanchored = { ...echo, after: "gone", status: "accepted" as const };
-    expect(step(unanchored, { receipt: { requestId: "req", status: "accepted" }, conversation: conversation([{ id: "u0", role: "user", text: "continue", sender }], "working") })).not.toBeNull();
+    expect(
+      step(unanchored, {
+        receipt: { requestId: "req", status: "accepted" },
+        conversation: conversation(
+          [{ id: "u0", role: "user", text: "continue", sender }],
+          "working",
+        ),
+      }),
+    ).not.toBeNull();
   });
 
   it("keeps an accepted message that is not saved yet while another is sent", () => {
-    const photo: Pending = { ...request, requestId: "photo", text: "", attachments: [{ id: "f1", name: "a.png", mime: "image/png" }] };
+    const photo: Pending = {
+      ...request,
+      requestId: "photo",
+      text: "",
+      attachments: [{ id: "f1", name: "a.png", mime: "image/png" }],
+    };
     const guidance: Pending = { ...request, requestId: "guide", text: "Also check the gate" };
     const accept = (requestId: string): SubmissionReceipt => ({ requestId, status: "accepted" });
     const steps = (echoes: SentEcho[], input: Partial<Parameters<typeof nextEchoes>[1]>) =>
-      nextEchoes(echoes, { pending: null, receipt: null, sending: false, conversation: conversation(undefined, "working"), sender, now: 1000, ...input });
+      nextEchoes(echoes, {
+        pending: null,
+        receipt: null,
+        sending: false,
+        conversation: conversation(undefined, "working"),
+        sender,
+        now: 1000,
+        ...input,
+      });
     let echoes = steps([], { pending: photo, sending: true });
     echoes = steps(echoes, { receipt: accept("photo") });
     expect(steps(echoes, { receipt: accept("photo") })).toBe(echoes);
     echoes = steps(echoes, { pending: guidance, sending: true, receipt: accept("photo") });
-    expect(echoes.map(echo => [echo.request.requestId, echo.status])).toEqual([["photo", "accepted"], ["guide", "sending"]]);
-    expect(withEchoes(conversation(undefined, "working"), echoes)!.messages.map(message => message.id)).toEqual(["a", "photo", "guide"]);
+    expect(echoes.map((echo) => [echo.request.requestId, echo.status])).toEqual([
+      ["photo", "accepted"],
+      ["guide", "sending"],
+    ]);
+    expect(
+      withEchoes(conversation(undefined, "working"), echoes)!.messages.map((message) => message.id),
+    ).toEqual(["a", "photo", "guide"]);
     // Guidance refused: the photo stays; its run ends and its row is saved.
     echoes = steps(echoes, { receipt: { requestId: "guide", status: "rejected" } });
-    expect(echoes.map(echo => echo.request.requestId)).toEqual(["photo"]);
+    expect(echoes.map((echo) => echo.request.requestId)).toEqual(["photo"]);
     expect(steps(echoes, { conversation: conversation(undefined, "done") })).toEqual([]);
   });
 
   it("shows the same words sent twice until Hermes has each", () => {
     const first = { ...sending, status: "accepted" as const };
     const second = { ...first, request: { ...first.request, requestId: "req-2" } };
-    expect(withEchoes(conversation(undefined, "working"), [first, second])!.messages.map(message => message.id)).toEqual(["a", "req", "req-2"]);
+    expect(
+      withEchoes(conversation(undefined, "working"), [first, second])!.messages.map(
+        (message) => message.id,
+      ),
+    ).toEqual(["a", "req", "req-2"]);
   });
 });
 
@@ -150,7 +271,8 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     expect(awaitingTurn([sending], conversation(), 1000)).toBe(true);
     expect(awaitingTurn([acceptedEcho], conversation(), 1000)).toBe(true);
     // A finished or failed turn before it does not count as work: the new message starts another.
-    for (const state of ["done", "failed", "interrupted"] as const) expect(awaitingTurn([sending], conversation(undefined, state), 1000)).toBe(true);
+    for (const state of ["done", "failed", "interrupted"] as const)
+      expect(awaitingTurn([sending], conversation(undefined, state), 1000)).toBe(true);
   });
 
   // Each case is one reason the row must not be there.
@@ -158,37 +280,95 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     ["no conversation is loaded", [sending], null],
     ["nothing was sent", [], conversation()],
     ["Hermes reports the turn's own work", [sending], conversation(undefined, "working")],
-    ["the message went to another assistant", [{ ...sending, request: { ...request, botId: "other" } }], conversation()],
+    [
+      "the message went to another assistant",
+      [{ ...sending, request: { ...request, botId: "other" } }],
+      conversation(),
+    ],
     ["it ended without a receipt", [step(sending, { pending: request })!], conversation()],
-    ["Hermes steered it into the running task", [step(sending, { receipt: { ...accepted, steered: true } })!], conversation()],
-    ["Hermes put it into the running turn", [step(sending, { receipt: { ...accepted, steered: false, turn: "joined" } })!], conversation()],
-    ["it was sent while the chat showed work", [step(null, { pending: request, sending: true, conversation: conversation(undefined, "working") })!], conversation()],
+    [
+      "Hermes steered it into the running task",
+      [step(sending, { receipt: { ...accepted, steered: true } })!],
+      conversation(),
+    ],
+    [
+      "Hermes put it into the running turn",
+      [step(sending, { receipt: { ...accepted, steered: false, turn: "joined" } })!],
+      conversation(),
+    ],
+    [
+      "it was sent while the chat showed work",
+      [
+        step(null, {
+          pending: request,
+          sending: true,
+          conversation: conversation(undefined, "working"),
+        })!,
+      ],
+      conversation(),
+    ],
     ["its turn already showed work", [{ ...acceptedEcho, ran: true }], conversation()],
-    ["Hermes's copy is in the chat with a reply after it",
-      [acceptedEcho], conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }, { id: "b", role: "assistant", text: "Done" }])],
-    ["its request has been out longer than the bound", [{ ...sending, slow: true }], conversation()],
+    [
+      "Hermes's copy is in the chat with a reply after it",
+      [acceptedEcho],
+      conversation([
+        { id: "a", role: "assistant", text: "Hi" },
+        { id: "row-9", role: "user", text: "Hello there" },
+        { id: "b", role: "assistant", text: "Done" },
+      ]),
+    ],
+    [
+      "its request has been out longer than the bound",
+      [{ ...sending, slow: true }],
+      conversation(),
+    ],
   ])("does not show when %s", (_, echoes, shown) => {
     expect(awaitingTurn(echoes, shown, 1000)).toBe(false);
   });
 
-  const copied = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }]);
+  const copied = conversation([
+    { id: "a", role: "assistant", text: "Hi" },
+    { id: "row-9", role: "user", text: "Hello there" },
+  ]);
   it("stays while Hermes's copy is in the chat before the turn's report, and only for the handoff bound", () => {
     const kept = step(acceptedEcho, { receipt: accepted, conversation: copied, now: 2000 })!;
     expect(kept).toMatchObject({ copiedAt: 2000 });
     expect(awaitingTurn([kept], copied, 2000)).toBe(true);
     // The copy is Hermes's, so the echo is not drawn a second time.
     expect(withEchoes(copied, [kept])).toBe(copied);
-    expect(step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
-    expect(step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    expect(
+      step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS - 1 }),
+    ).toBe(kept);
+    expect(
+      step(kept, { receipt: accepted, conversation: copied, now: 2000 + COPY_HANDOFF_MS }),
+    ).toBeNull();
     // The report takes over, and a steered or already-run message never stood for a new turn.
-    expect(step(kept, { receipt: accepted, conversation: { ...copied, activity: { state: "thinking" } }, now: 2100 })).toBeNull();
-    expect(step({ ...acceptedEcho, steered: true }, { receipt: accepted, conversation: copied, now: 2000 })).toBeNull();
+    expect(
+      step(kept, {
+        receipt: accepted,
+        conversation: { ...copied, activity: { state: "thinking" } },
+        now: 2100,
+      }),
+    ).toBeNull();
+    expect(
+      step(
+        { ...acceptedEcho, steered: true },
+        { receipt: accepted, conversation: copied, now: 2000 },
+      ),
+    ).toBeNull();
     // Only a message Hermes accepted hands off: one still on its way leaves with its copy, as before.
-    expect(step(sending, { pending: request, sending: true, conversation: conversation([{ id: "req", role: "user", text: "Hello there" }]) })).toBeNull();
+    expect(
+      step(sending, {
+        pending: request,
+        sending: true,
+        conversation: conversation([{ id: "req", role: "user", text: "Hello there" }]),
+      }),
+    ).toBeNull();
   });
 
   it("marks a request out for the bound as slow, and starts the bound again when a retry goes out", () => {
-    const out = (echo: SentEcho, now: number, isSending = true) => step(echo, { pending: request, sending: isSending, now })!;
+    const out = (echo: SentEcho, now: number, isSending = true) =>
+      step(echo, { pending: request, sending: isSending, now })!;
     expect(out(sending, 1000 + SENDING_ROW_MS - 1)).toBe(sending);
     const slow = out(sending, 1000 + SENDING_ROW_MS);
     expect(slow).toMatchObject({ status: "sending", slow: true });
@@ -198,8 +378,10 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     expect(awaitingTurn([retried], conversation(), 20_000)).toBe(true);
   });
   // What tells this turn's outcome from the last one's: a read that began after the one that brought the copy.
-  const settled = (state: "done" | "failed" | "interrupted", version?: string): SavedConversation =>
-    ({ ...copied, activity: { state }, ...version ? { version } : {} });
+  const settled = (
+    state: "done" | "failed" | "interrupted",
+    version?: string,
+  ): SavedConversation => ({ ...copied, activity: { state }, ...(version ? { version } : {}) });
   // While Hermes admits a message it has saved the copy and not opened the run, so that read reports the turn before.
   // What the chat showed at the send cannot tell the two apart: a cached chat or one not yet loaded shows something else.
   it.each<[string, SavedConversation | null]>([
@@ -208,31 +390,59 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     ["the same failure", { ...conversation(undefined, "failed"), version: "b:0:4" }],
     ["no conversation yet", null],
     ["another chat", { ...conversation(), botId: "other" }],
-  ])("keeps the row through a settled report in the read that brings the copy, when the message was sent from %s", (_, shownAtSend) => {
-    const sent = step(step(null, { pending: request, sending: true, conversation: shownAtSend }), { receipt: accepted, conversation: shownAtSend })!;
-    for (const state of ["failed", "interrupted", "done"] as const) {
-      const kept = step(sent, { receipt: accepted, conversation: settled(state, "b:0:5"), now: 2000 })!;
-      expect(kept).toMatchObject({ copiedAt: 2000, copiedVersion: "b:0:5" });
-      expect(awaitingTurn([kept], settled(state, "b:0:5"), 2000)).toBe(true);
-    }
-  });
+  ])(
+    "keeps the row through a settled report in the read that brings the copy, when the message was sent from %s",
+    (_, shownAtSend) => {
+      const sent = step(
+        step(null, { pending: request, sending: true, conversation: shownAtSend }),
+        { receipt: accepted, conversation: shownAtSend },
+      )!;
+      for (const state of ["failed", "interrupted", "done"] as const) {
+        const kept = step(sent, {
+          receipt: accepted,
+          conversation: settled(state, "b:0:5"),
+          now: 2000,
+        })!;
+        expect(kept).toMatchObject({ copiedAt: 2000, copiedVersion: "b:0:5" });
+        expect(awaitingTurn([kept], settled(state, "b:0:5"), 2000)).toBe(true);
+      }
+    },
+  );
 
   it("ends on a settled report from a later read, and only one the server's version can order after the copy's", () => {
-    const kept = step(acceptedEcho, { receipt: accepted, conversation: settled("failed", "b:0:5"), now: 2000 })!;
+    const kept = step(acceptedEcho, {
+      receipt: accepted,
+      conversation: settled("failed", "b:0:5"),
+      now: 2000,
+    })!;
     for (const state of ["failed", "interrupted", "done"] as const) {
       // A read that began after the one that brought the copy reports this turn, so its outcome is the turn's own.
       expect(awaitingTurn([kept], settled(state, "b:0:6"), 2100)).toBe(false);
-      expect(step(kept, { receipt: accepted, conversation: settled(state, "b:0:6"), now: 2100 })).toBeNull();
+      expect(
+        step(kept, { receipt: accepted, conversation: settled(state, "b:0:6"), now: 2100 }),
+      ).toBeNull();
       // The same read again, an older one, another server process's, or one without a version orders nothing.
       for (const version of ["b:0:5", "b:0:4", "c:0:9", undefined]) {
         expect(awaitingTurn([kept], settled(state, version), 2100)).toBe(true);
-        expect(step(kept, { receipt: accepted, conversation: settled(state, version), now: 2100 })).toBe(kept);
+        expect(
+          step(kept, { receipt: accepted, conversation: settled(state, version), now: 2100 }),
+        ).toBe(kept);
       }
     }
     // A copy that came in a read without a version is never ordered before a later one; the handoff bound ends it.
-    const unversioned = step(acceptedEcho, { receipt: accepted, conversation: settled("failed"), now: 2000 })!;
+    const unversioned = step(acceptedEcho, {
+      receipt: accepted,
+      conversation: settled("failed"),
+      now: 2000,
+    })!;
     expect(awaitingTurn([unversioned], settled("failed", "b:0:6"), 2100)).toBe(true);
-    expect(step(unversioned, { receipt: accepted, conversation: settled("failed", "b:0:6"), now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    expect(
+      step(unversioned, {
+        receipt: accepted,
+        conversation: settled("failed", "b:0:6"),
+        now: 2000 + COPY_HANDOFF_MS,
+      }),
+    ).toBeNull();
   });
 
   // The clock runs while another chat is open, so a return never paints a row whose bound has passed.
@@ -243,14 +453,27 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     expect(awaitingTurn([sending], conversation(), 1000 + SENDING_ROW_MS - 1)).toBe(true);
     expect(awaitingTurn([sending], conversation(), 1000 + SENDING_ROW_MS)).toBe(false);
     const elsewhere = { ...conversation(), botId: "other" };
-    expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
-    expect(step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    expect(
+      step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS - 1 }),
+    ).toBe(kept);
+    expect(
+      step(kept, { receipt: accepted, conversation: elsewhere, now: 2000 + COPY_HANDOFF_MS }),
+    ).toBeNull();
   });
 
   // Hermes's answer says what became of the turn. A typed stop phrase admitted nothing and Hermes saved nothing.
   it("leaves at once when a typed stop phrase admitted nothing, and a joined message reads as no steer of its own", () => {
     expect(step(sending, { receipt: { ...accepted, turn: "none" } })).toBeNull();
-    expect(nextEchoes([sending], { pending: null, receipt: { ...accepted, turn: "none" }, sending: false, conversation: conversation(), sender, now: 1000 })).toEqual([]);
+    expect(
+      nextEchoes([sending], {
+        pending: null,
+        receipt: { ...accepted, turn: "none" },
+        sending: false,
+        conversation: conversation(),
+        sender,
+        now: 1000,
+      }),
+    ).toEqual([]);
     // Joined text goes into the running turn, but Hermes's copy does not say so, so the echo does not either.
     const joined = step(sending, { receipt: { ...accepted, steered: false, turn: "joined" } })!;
     expect(withEchoes(conversation(), [joined])!.messages.at(-1)).not.toHaveProperty("steered");
@@ -265,30 +488,46 @@ describe("the assistant thinking before Hermes reports the turn", () => {
     const echo = step(sending, { receipt: started })!;
     expect(echo).toMatchObject({ turn: "started", admittedVersion: "b:0:7" });
     for (const state of ["failed", "interrupted", "done"] as const) {
-      const kept = step(echo, { receipt: started, conversation: settled(state, "b:0:5"), now: 2000 })!;
+      const kept = step(echo, {
+        receipt: started,
+        conversation: settled(state, "b:0:5"),
+        now: 2000,
+      })!;
       expect(awaitingTurn([kept], settled(state, "b:0:5"), 2000)).toBe(true);
       // Later than the copy's read, still inside the admission, and the read at the answer's own version may have
       // been asked just before it: each is the turn before's report.
       for (const version of ["b:0:6", "b:0:7"]) {
         expect(awaitingTurn([kept], settled(state, version), 2100)).toBe(true);
-        expect(step(kept, { receipt: started, conversation: settled(state, version), now: 2100 })).toBe(kept);
+        expect(
+          step(kept, { receipt: started, conversation: settled(state, version), now: 2100 }),
+        ).toBe(kept);
       }
       expect(awaitingTurn([kept], settled(state, "b:0:8"), 2100)).toBe(false);
-      expect(step(kept, { receipt: started, conversation: settled(state, "b:0:8"), now: 2100 })).toBeNull();
+      expect(
+        step(kept, { receipt: started, conversation: settled(state, "b:0:8"), now: 2100 }),
+      ).toBeNull();
       // Asked after the admission, the read that brings the copy reports this turn, so it ends the row itself.
-      expect(step(echo, { receipt: started, conversation: settled(state, "b:0:8"), now: 2000 })).toBeNull();
+      expect(
+        step(echo, { receipt: started, conversation: settled(state, "b:0:8"), now: 2000 }),
+      ).toBeNull();
     }
   });
 
   it("falls back to the copy's read without a started turn or a version that compares", () => {
     const after = (receipt: SubmissionReceipt, version: string) => {
-      const kept = step(step(sending, { receipt })!, { receipt, conversation: settled("failed", "b:0:5"), now: 2000 })!;
+      const kept = step(step(sending, { receipt })!, {
+        receipt,
+        conversation: settled("failed", "b:0:5"),
+        now: 2000,
+      })!;
       return awaitingTurn([kept], settled("failed", version), 2100);
     };
     // Only a started turn's answer orders reads by admission. Unknown and an older add-on's answer keep
     // the rule before: a read later than the copy's ends the row. A queued turn's answer does not, see below.
     for (const turn of ["unknown", undefined] as const)
-      expect(after({ ...accepted, admittedVersion: "b:0:7", ...turn ? { turn } : {} }, "b:0:6")).toBe(false);
+      expect(
+        after({ ...accepted, admittedVersion: "b:0:7", ...(turn ? { turn } : {}) }, "b:0:6"),
+      ).toBe(false);
     // Without the version, or from another server process, the same.
     expect(after({ ...accepted, turn: "started" }, "b:0:6")).toBe(false);
     expect(after({ ...started, admittedVersion: "c:0:1" }, "b:0:6")).toBe(false);
@@ -300,56 +539,116 @@ describe("the assistant thinking before Hermes reports the turn", () => {
 describe("a send Hermes queued behind a turn the chat did not show", () => {
   const queued: SubmissionReceipt = { ...accepted, turn: "queued", admittedVersion: "b:0:7" };
   const queuedEcho = step(sending, { receipt: queued })!;
-  const copied = conversation([{ id: "a", role: "assistant", text: "Hi" }, { id: "row-9", role: "user", text: "Hello there" }]);
-  const settled = (state: "done" | "failed" | "interrupted", version?: string): SavedConversation =>
-    ({ ...copied, activity: { state }, ...version ? { version } : {} });
+  const copied = conversation([
+    { id: "a", role: "assistant", text: "Hi" },
+    { id: "row-9", role: "user", text: "Hello there" },
+  ]);
+  const settled = (
+    state: "done" | "failed" | "interrupted",
+    version?: string,
+  ): SavedConversation => ({ ...copied, activity: { state }, ...(version ? { version } : {}) });
 
   // Hermes saves a queued row at accept, so the copy shows while the turn it queued behind still runs, and that
   // turn's settle is not this one's. Nothing in the report says which turn it belongs to.
   it("keeps the row through the settle of the turn it queued behind, in the copy's read and every read after it", () => {
     expect(queuedEcho).toMatchObject({ turn: "queued", admittedVersion: "b:0:7" });
     for (const state of ["failed", "interrupted", "done"] as const) {
-      const kept = step(queuedEcho, { receipt: queued, conversation: settled(state, "b:0:6"), now: 2000 })!;
+      const kept = step(queuedEcho, {
+        receipt: queued,
+        conversation: settled(state, "b:0:6"),
+        now: 2000,
+      })!;
       expect(kept).toMatchObject({ copiedAt: 2000 });
       // Past the copy's read and past the answer's version: a started turn's row would end here.
       for (const version of ["b:0:7", "b:0:8", "b:0:9"]) {
         expect(awaitingTurn([kept], settled(state, version), 2100)).toBe(true);
-        expect(step(kept, { receipt: queued, conversation: settled(state, version), now: 2100 })).toBe(kept);
+        expect(
+          step(kept, { receipt: queued, conversation: settled(state, version), now: 2100 }),
+        ).toBe(kept);
       }
       // Even when the first read already comes after the admission.
-      const late = step(queuedEcho, { receipt: queued, conversation: settled(state, "b:0:8"), now: 2000 })!;
+      const late = step(queuedEcho, {
+        receipt: queued,
+        conversation: settled(state, "b:0:8"),
+        now: 2000,
+      })!;
       expect(awaitingTurn([late], settled(state, "b:0:9"), 2100)).toBe(true);
     }
   });
 
   it("ends when a read shows the queued run start, or at the handoff bound", () => {
-    const kept = step(queuedEcho, { receipt: queued, conversation: settled("interrupted", "b:0:8"), now: 2000 })!;
+    const kept = step(queuedEcho, {
+      receipt: queued,
+      conversation: settled("interrupted", "b:0:8"),
+      now: 2000,
+    })!;
     const running = { ...copied, activity: { state: "thinking" as const }, version: "b:0:9" };
     expect(step(kept, { receipt: queued, conversation: running, now: 2100 })).toBeNull();
     expect(awaitingTurn([kept], running, 2100)).toBe(false);
-    expect(step(kept, { receipt: queued, conversation: settled("interrupted", "b:0:9"), now: 2000 + COPY_HANDOFF_MS - 1 })).toBe(kept);
-    expect(step(kept, { receipt: queued, conversation: settled("interrupted", "b:0:9"), now: 2000 + COPY_HANDOFF_MS })).toBeNull();
+    expect(
+      step(kept, {
+        receipt: queued,
+        conversation: settled("interrupted", "b:0:9"),
+        now: 2000 + COPY_HANDOFF_MS - 1,
+      }),
+    ).toBe(kept);
+    expect(
+      step(kept, {
+        receipt: queued,
+        conversation: settled("interrupted", "b:0:9"),
+        now: 2000 + COPY_HANDOFF_MS,
+      }),
+    ).toBeNull();
     // A reply after the copy is the queued turn's own and ends it too.
-    const replied = conversation([...copied.messages, { id: "b", role: "assistant", text: "Done" }]);
-    expect(step(kept, { receipt: queued, conversation: { ...replied, activity: { state: "done" }, version: "b:0:9" }, now: 2100 })).toBeNull();
+    const replied = conversation([
+      ...copied.messages,
+      { id: "b", role: "assistant", text: "Done" },
+    ]);
+    expect(
+      step(kept, {
+        receipt: queued,
+        conversation: { ...replied, activity: { state: "done" }, version: "b:0:9" },
+        now: 2100,
+      }),
+    ).toBeNull();
   });
 });
 
 describe("the person's own sends, kept after their echo leaves", () => {
-  const user = (id: string, text: string, from?: Message["sender"]): Message => ({ id, role: "user", text, ...from ? { sender: from } : {} });
+  const user = (id: string, text: string, from?: Message["sender"]): Message => ({
+    id,
+    role: "user",
+    text,
+    ...(from ? { sender: from } : {}),
+  });
   const kim = { id: "two", name: "Two" };
-  const accept = (receipt: Partial<SubmissionReceipt> = {}): SubmissionReceipt => ({ ...accepted, ...receipt });
+  const accept = (receipt: Partial<SubmissionReceipt> = {}): SubmissionReceipt => ({
+    ...accepted,
+    ...receipt,
+  });
   const send = (words: string, requestId = "req") =>
     step(null, { pending: { ...request, requestId, text: words }, sending: true });
   /** The send as the app records it when Hermes accepts it. */
-  const recorded = (words: string, requestId = "req", receipt: Partial<SubmissionReceipt> = {}, sends: OwnSend[] = []) =>
-    recordedFrom(send(words, requestId)!, accept({ requestId, ...receipt }), sends);
+  const recorded = (
+    words: string,
+    requestId = "req",
+    receipt: Partial<SubmissionReceipt> = {},
+    sends: OwnSend[] = [],
+  ) => recordedFrom(send(words, requestId)!, accept({ requestId, ...receipt }), sends);
   const recordedFrom = (echo: SentEcho, receipt: SubmissionReceipt, sends: OwnSend[] = []) =>
     nextSends(sends, [echo], [echo], { receipt, sender, conversation: null });
 
   it("records a send when Hermes accepts it, from the echo it had until then", () => {
     expect(recorded("Avoid flights", "req", { steered: true })).toEqual([
-      { requestId: "req", botId: "bot", senderId: "one", text: "Avoid flights", after: "a", messageId: "row-9" }]);
+      {
+        requestId: "req",
+        botId: "bot",
+        senderId: "one",
+        text: "Avoid flights",
+        after: "a",
+        messageId: "row-9",
+      },
+    ]);
   });
 
   it.each<[string, SubmissionReceipt | null]>([
@@ -358,42 +657,72 @@ describe("the person's own sends, kept after their echo leaves", () => {
     ["a typed stop phrase, which admitted nothing", accept({ turn: "none" })],
     ["another request's receipt", accept({ requestId: "older" })],
   ])("records nothing for %s", (_name, receipt) => {
-    expect(nextSends([], [send("Avoid flights")!], [send("Avoid flights")!], { receipt, sender, conversation: null })).toEqual([]);
+    expect(
+      nextSends([], [send("Avoid flights")!], [send("Avoid flights")!], {
+        receipt,
+        sender,
+        conversation: null,
+      }),
+    ).toEqual([]);
   });
 
   it("records a send once, keeps the same list when nothing changed, and forgets the last person's", () => {
     const sends = recorded("Avoid flights");
     const echo = send("Avoid flights")!;
-    expect(nextSends(sends, [echo], [echo], { receipt: accept(), sender, conversation: null })).toBe(sends);
+    expect(
+      nextSends(sends, [echo], [echo], { receipt: accept(), sender, conversation: null }),
+    ).toBe(sends);
     expect(nextSends(sends, [], [], { receipt: null, sender, conversation: null })).toBe(sends);
-    expect(nextSends(sends, [], [], { receipt: null, sender: { id: "two", name: "Two" }, conversation: null })).toEqual([]);
-    expect(nextSends(sends, [], [], { receipt: null, sender: undefined, conversation: null })).toEqual([]);
+    expect(
+      nextSends(sends, [], [], {
+        receipt: null,
+        sender: { id: "two", name: "Two" },
+        conversation: null,
+      }),
+    ).toEqual([]);
+    expect(
+      nextSends(sends, [], [], { receipt: null, sender: undefined, conversation: null }),
+    ).toEqual([]);
   });
 
   it("keeps a chat's newest sends and leaves another chat's alone", () => {
     let sends = recorded("elsewhere", "other-chat");
     sends = [{ ...sends[0], botId: "other" }];
-    for (let index = 0; index < OWN_SENDS_KEPT + 1; index++) sends = recorded(`send ${index}`, `req-${index}`, {}, sends);
+    for (let index = 0; index < OWN_SENDS_KEPT + 1; index++)
+      sends = recorded(`send ${index}`, `req-${index}`, {}, sends);
     expect(sends).toHaveLength(OWN_SENDS_KEPT + 1);
-    expect(sends.map(each => each.requestId)).toEqual(["other-chat", ...Array.from({ length: OWN_SENDS_KEPT }, (_, index) => `req-${index + 1}`)]);
+    expect(sends.map((each) => each.requestId)).toEqual([
+      "other-chat",
+      ...Array.from({ length: OWN_SENDS_KEPT }, (_, index) => `req-${index + 1}`),
+    ]);
   });
 
   describe("claiming saved rows", () => {
     it("claims the no-sender row that copies a steer after its anchor", () => {
       const sends = recorded("Avoid flights", "req", { steered: true });
-      const saved = conversation([{ id: "a", role: "assistant", text: "Hi" }, user("steer", "Avoid flights")], "working");
+      const saved = conversation(
+        [{ id: "a", role: "assistant", text: "Hi" }, user("steer", "Avoid flights")],
+        "working",
+      );
       expect([...ownSentRows(sends, saved)]).toEqual(["steer"]);
     });
 
     it("claims a queued send's row, matched on trimmed words like the echo", () => {
       const sends = recorded("Avoid flights", "req", { turn: "queued" });
-      const saved = conversation([{ id: "a", role: "assistant", text: "Hi" }, user("queued", "  Avoid flights \n")], "thinking");
+      const saved = conversation(
+        [{ id: "a", role: "assistant", text: "Hi" }, user("queued", "  Avoid flights \n")],
+        "thinking",
+      );
       expect([...ownSentRows(sends, saved)]).toEqual(["queued"]);
     });
 
     it("claims one row for each send, so another member's same words stay unclaimed", () => {
       const sends = recorded("Avoid flights");
-      const saved = conversation([{ id: "a", role: "assistant", text: "Hi" }, user("mine", "Avoid flights"), user("theirs", "Avoid flights")]);
+      const saved = conversation([
+        { id: "a", role: "assistant", text: "Hi" },
+        user("mine", "Avoid flights"),
+        user("theirs", "Avoid flights"),
+      ]);
       expect([...ownSentRows(sends, saved)]).toEqual(["mine"]);
       // Sent twice, each claims its own.
       const twice = recorded("Avoid flights", "req-2", {}, sends);
@@ -402,25 +731,61 @@ describe("the person's own sends, kept after their echo leaves", () => {
 
     it("does not claim a row saved before the send, nor any row once the anchor is gone", () => {
       const sends = recorded("Avoid flights");
-      expect(ownSentRows(sends, conversation([user("older", "Avoid flights"), { id: "a", role: "assistant", text: "Hi" }]))).toEqual(new Set());
-      expect(ownSentRows(sends, conversation([user("elsewhere", "Avoid flights")]))).toEqual(new Set());
+      expect(
+        ownSentRows(
+          sends,
+          conversation([
+            user("older", "Avoid flights"),
+            { id: "a", role: "assistant", text: "Hi" },
+          ]),
+        ),
+      ).toEqual(new Set());
+      expect(ownSentRows(sends, conversation([user("elsewhere", "Avoid flights")]))).toEqual(
+        new Set(),
+      );
     });
 
     it("lets a row Hermes named for the send, or one it bound to the viewer, take the claim before a no-sender row", () => {
       const sends = recorded("Avoid flights");
-      const bound = conversation([{ id: "a", role: "assistant", text: "Hi" }, user("bound", "Avoid flights", sender), user("native", "Avoid flights")]);
+      const bound = conversation([
+        { id: "a", role: "assistant", text: "Hi" },
+        user("bound", "Avoid flights", sender),
+        user("native", "Avoid flights"),
+      ]);
       expect([...ownSentRows(sends, bound)]).toEqual(["bound"]);
-      const named = conversation([{ id: "a", role: "assistant", text: "Hi" }, user("native", "Avoid flights"), user("row-9", "Avoid flights, please", sender)]);
+      const named = conversation([
+        { id: "a", role: "assistant", text: "Hi" },
+        user("native", "Avoid flights"),
+        user("row-9", "Avoid flights, please", sender),
+      ]);
       expect([...ownSentRows(sends, named)]).toEqual(["row-9"]);
     });
 
     it("skips a row another member sent, and a send of another chat or without words", () => {
       const sends = recorded("Avoid flights");
-      expect(ownSentRows(sends, conversation([{ id: "a", role: "assistant", text: "Hi" }, user("theirs", "Avoid flights", kim)]))).toEqual(new Set());
-      expect(ownSentRows(sends, { ...conversation([{ id: "a", role: "assistant", text: "Hi" }, user("x", "Avoid flights")]), botId: "other" })).toEqual(new Set());
+      expect(
+        ownSentRows(
+          sends,
+          conversation([
+            { id: "a", role: "assistant", text: "Hi" },
+            user("theirs", "Avoid flights", kim),
+          ]),
+        ),
+      ).toEqual(new Set());
+      expect(
+        ownSentRows(sends, {
+          ...conversation([{ id: "a", role: "assistant", text: "Hi" }, user("x", "Avoid flights")]),
+          botId: "other",
+        }),
+      ).toEqual(new Set());
       expect(ownSentRows(sends, null)).toEqual(new Set());
       const photo = recorded("   ", "photo");
-      expect(ownSentRows(photo, conversation([{ id: "a", role: "assistant", text: "Hi" }, user("blank", "")]))).toEqual(new Set());
+      expect(
+        ownSentRows(
+          photo,
+          conversation([{ id: "a", role: "assistant", text: "Hi" }, user("blank", "")]),
+        ),
+      ).toEqual(new Set());
     });
   });
 
@@ -428,35 +793,59 @@ describe("the person's own sends, kept after their echo leaves", () => {
     // The page reloads while the outcome is unknown: the pending send comes back while the conversation is
     // still null, so its echo has no anchor, and Hermes then queues it with no row ID.
     const restored = (receipt: Partial<SubmissionReceipt> = {}) => {
-      const echo = step(null, { pending: { ...request, text: "Thanks" }, sending: true, conversation: null })!;
+      const echo = step(null, {
+        pending: { ...request, text: "Thanks" },
+        sending: true,
+        conversation: null,
+      })!;
       expect(echo.after).toBeUndefined();
       return recordedFrom(echo, accept({ messageId: undefined, turn: "queued", ...receipt }));
     };
-    const saved = (rows: Message[]) => conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "working");
+    const saved = (rows: Message[]) =>
+      conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "working");
 
     it("claims no row by its words, so an older member's same words keep their label", () => {
       const sends = restored();
       expect(sends[0].after).toBeUndefined();
-      expect(ownSentRows(sends, saved([user("older", "Thanks"), user("queued", "Thanks")]))).toEqual(new Set());
+      expect(
+        ownSentRows(sends, saved([user("older", "Thanks"), user("queued", "Thanks")])),
+      ).toEqual(new Set());
     });
 
     it("still claims the row Hermes named for it", () => {
       const sends = restored({ messageId: "row-9" });
-      expect([...ownSentRows(sends, saved([user("older", "Thanks"), user("row-9", "Thanks, then")]))]).toEqual(["row-9"]);
+      expect([
+        ...ownSentRows(sends, saved([user("older", "Thanks"), user("row-9", "Thanks, then")])),
+      ]).toEqual(["row-9"]);
     });
   });
 
   describe("a send Hermes never saves under its own words", () => {
     const working = conversation([{ id: "a", role: "assistant", text: "Hi" }], "working");
-    const settled = (rows: Message[]) => conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "done");
-    const input = (extra: Partial<Parameters<typeof nextEcho>[1]>) => ({ pending: null, receipt: null, sending: false, conversation: working, sender, now: 1000, ...extra });
+    const settled = (rows: Message[]) =>
+      conversation([{ id: "a", role: "assistant", text: "Hi" }, ...rows], "done");
+    const input = (extra: Partial<Parameters<typeof nextEcho>[1]>) => ({
+      pending: null,
+      receipt: null,
+      sending: false,
+      conversation: working,
+      sender,
+      now: 1000,
+      ...extra,
+    });
     /** Both steers accepted while the chat is working, then the chat settles on `rows`. */
     const afterJoined = (rows: Message[], steers = ["Avoid flights", "Use trains"]) => {
       let state: EchoState = { echoes: [], sends: [] };
       steers.forEach((words, index) => {
         const requestId = `steer-${index}`;
-        state = advance(state, input({ pending: { ...request, requestId, text: words }, sending: true }));
-        state = advance(state, input({ receipt: { requestId, status: "accepted", steered: true, turn: "joined" } }));
+        state = advance(
+          state,
+          input({ pending: { ...request, requestId, text: words }, sending: true }),
+        );
+        state = advance(
+          state,
+          input({ receipt: { requestId, status: "accepted", steered: true, turn: "joined" } }),
+        );
       });
       expect(state.sends).toHaveLength(steers.length);
       state = advance(state, input({ conversation: working, now: 2000 }));
@@ -468,28 +857,47 @@ describe("the person's own sends, kept after their echo leaves", () => {
       const state = afterJoined([user("joined", "Avoid flights\nUse trains")]);
       expect(state.echoes).toEqual([]);
       expect(state.sends).toEqual([]);
-      expect(ownSentRows(state.sends, settled([user("joined", "Avoid flights\nUse trains"), user("theirs", "Avoid flights")]))).toEqual(new Set());
+      expect(
+        ownSentRows(
+          state.sends,
+          settled([user("joined", "Avoid flights\nUse trains"), user("theirs", "Avoid flights")]),
+        ),
+      ).toEqual(new Set());
     });
 
     it("keeps a record whose copy is shown, and one whose echo still waits on a long queue", () => {
       const copied = afterJoined([user("mine", "Avoid flights"), user("joined", "Use trains")]);
-      expect(copied.sends.map(each => each.requestId)).toEqual(["steer-0", "steer-1"]);
+      expect(copied.sends.map((each) => each.requestId)).toEqual(["steer-0", "steer-1"]);
       let state = afterJoined([], ["Avoid flights"]);
       expect(state.sends).toEqual([]);
       // Still working ten minutes on: the echo, and so the record, wait for the queue however long it is.
-      state = advance({ echoes: [], sends: [] }, input({ pending: { ...request, text: "Avoid flights" }, sending: true }));
-      state = advance(state, input({ receipt: { requestId: "req", status: "accepted", turn: "queued" } }));
+      state = advance(
+        { echoes: [], sends: [] },
+        input({ pending: { ...request, text: "Avoid flights" }, sending: true }),
+      );
+      state = advance(
+        state,
+        input({ receipt: { requestId: "req", status: "accepted", turn: "queued" } }),
+      );
       state = advance(state, input({ now: 1000 + 600_000 }));
       expect(state.sends).toHaveLength(1);
     });
 
     it("leaves a record alone while another chat is open", () => {
-      const sends: OwnSend[] = [{ requestId: "req", botId: "bot", senderId: "one", text: "Avoid flights", after: "a" }];
+      const sends: OwnSend[] = [
+        { requestId: "req", botId: "bot", senderId: "one", text: "Avoid flights", after: "a" },
+      ];
       const echo = send("Avoid flights")!;
       const other = { ...conversation(), botId: "other" };
-      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: other })).toBe(sends);
-      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: null })).toBe(sends);
-      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: conversation() })).toEqual([]);
+      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: other })).toBe(
+        sends,
+      );
+      expect(nextSends(sends, [echo], [], { receipt: null, sender, conversation: null })).toBe(
+        sends,
+      );
+      expect(
+        nextSends(sends, [echo], [], { receipt: null, sender, conversation: conversation() }),
+      ).toEqual([]);
     });
   });
 });

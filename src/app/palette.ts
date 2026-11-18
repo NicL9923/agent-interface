@@ -9,7 +9,8 @@ export type PaletteItem = {
   trailing?: boolean;
 };
 
-const normalize = (value: string) => value.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").trim();
+const normalize = (value: string) =>
+  value.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").trim();
 
 /**
  * How well `query` finds `text`, or null when it does not. Higher is better: a whole match, then a
@@ -17,18 +18,21 @@ const normalize = (value: string) => value.toLowerCase().normalize("NFKD").repla
  * where tighter and earlier runs score higher.
  */
 export function scoreText(query: string, text: string): number | null {
-  const q = normalize(query), t = normalize(text);
+  const q = normalize(query),
+    t = normalize(text);
   if (!q) return 0;
   if (t === q) return 1000;
   if (t.startsWith(q)) return 900 - Math.min(t.length - q.length, 99);
   const words = t.split(/[\s\-_/·&]+/);
-  if (words.some(word => word.startsWith(q))) return 800 - t.indexOf(q);
+  if (words.some((word) => word.startsWith(q))) return 800 - t.indexOf(q);
   const at = t.indexOf(q);
   if (at >= 0) return 600 - Math.min(at, 99);
   // Initials of each word, like "kc" for Kitchen companion.
-  const initials = words.map(word => word[0] ?? "").join("");
+  const initials = words.map((word) => word[0] ?? "").join("");
   if (initials.startsWith(q.replace(/\s+/g, ""))) return 700;
-  let position = -1, gaps = 0, first = -1;
+  let position = -1,
+    gaps = 0,
+    first = -1;
   for (const char of q.replace(/\s+/g, "")) {
     const next = t.indexOf(char, position + 1);
     if (next < 0) return null;
@@ -54,13 +58,13 @@ export function scoreItem(query: string, item: PaletteItem) {
  * given order too, so pinned assistants stay ahead of the rest.
  */
 export function rankItems<T extends PaletteItem>(query: string, items: T[]): T[] {
-  if (!normalize(query)) return items.filter(item => !item.trailing);
+  if (!normalize(query)) return items.filter((item) => !item.trailing);
   const scored = items.flatMap((item, index) => {
     if (item.trailing) return [{ item, score: -Infinity, index }];
     const score = scoreItem(query, item);
     return score === null ? [] : [{ item, score, index }];
   });
-  return scored.sort((a, b) => b.score - a.score || a.index - b.index).map(entry => entry.item);
+  return scored.sort((a, b) => b.score - a.score || a.index - b.index).map((entry) => entry.item);
 }
 
 /** Moves the highlight with wraparound, as the arrow keys do. */

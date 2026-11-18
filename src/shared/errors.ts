@@ -63,29 +63,40 @@ export type ErrorCode =
   | "INVALID_RESPONSE";
 
 /** Sent when a request ID already names a different message. */
-export const submissionConflictMessage = "This submission ID was already used for different content";
+export const submissionConflictMessage =
+  "This submission ID was already used for different content";
 /** Sent when a Stop finds nothing running, so the interrupt, which also clears queued messages and denies approvals, is not sent. */
 export const nothingToStopMessage = "Nothing is running right now, so nothing was stopped.";
 /** Sent when a Stop names a run that is no longer the one running. */
-export const runChangedMessage = "A different reply is running now, so nothing was stopped. Look at it, then stop it if you still want to.";
+export const runChangedMessage =
+  "A different reply is running now, so nothing was stopped. Look at it, then stop it if you still want to.";
 /** Sent when a send reaches the app, or Hermes, while Hermes is being upgraded. The message was not sent and its draft is kept. */
-export const hermesMaintenanceSendMessage = "Hermes is being upgraded. Your draft is saved; send it after the update finishes.";
+export const hermesMaintenanceSendMessage =
+  "Hermes is being upgraded. Your draft is saved; send it after the update finishes.";
 /**
  * A refusal as Talk speaks it. A spoken request has no typed draft, so the sentences that tell the person their draft is
  * saved are dropped: they would send someone to a draft that does not exist.
  */
 export function withoutDraftClause(message: string): string {
-  return message.split(/(?<=[.!?])\s+/).filter(sentence => !/\bdraft\b/i.test(sentence)).join(" ");
+  return message
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !/\bdraft\b/i.test(sentence))
+    .join(" ");
 }
 /** Sent when a conversation's interrupted task needs review before another message starts. */
-export const interruptionPendingMessage = "Review the interrupted task before starting another message.";
+export const interruptionPendingMessage =
+  "Review the interrupted task before starting another message.";
 
 /**
  * A runtime created an assistant, then could neither finish setting it up nor remove it.
  * It still exists as `createdBotId`, so the app keeps a record of who may see it.
  */
 export class IncompleteCreationError extends Error {
-  constructor(message: string, readonly createdBotId: string, options?: ErrorOptions) {
+  constructor(
+    message: string,
+    readonly createdBotId: string,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = "IncompleteCreationError";
   }
@@ -109,20 +120,31 @@ export type RefusalStatus = 400 | 404 | 409;
  * the app's error handler and its other error checks read.
  */
 export class RuntimeRefusal extends Error {
-  constructor(readonly statusCode: RefusalStatus, message: string, readonly code?: ErrorCode, options?: ErrorOptions) {
+  constructor(
+    readonly statusCode: RefusalStatus,
+    message: string,
+    readonly code?: ErrorCode,
+    options?: ErrorOptions,
+  ) {
     super(message, options);
     this.name = "RuntimeRefusal";
   }
 }
 /** A request the runtime cannot take as sent: fix it and send it again. */
 export class InvalidInput extends RuntimeRefusal {
-  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(400, message, code, options); }
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) {
+    super(400, message, code, options);
+  }
 }
 /** The request names something that does not exist, or no longer does. */
 export class NotFound extends RuntimeRefusal {
-  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(404, message, code, options); }
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) {
+    super(404, message, code, options);
+  }
 }
 /** The request was valid when it was made, but the state it acted on has changed: reload before trying again. */
 export class Conflict extends RuntimeRefusal {
-  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) { super(409, message, code, options); }
+  constructor(message: string, code?: ErrorCode, options?: ErrorOptions) {
+    super(409, message, code, options);
+  }
 }

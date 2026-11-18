@@ -14,15 +14,15 @@ At equal specificity the later sheet wins, so the two disagree.
 `node .agents/tools/sample-entrance-animations.mjs`, Chromium 900 x 700, each class on a bare element after sign-in.
 `main` is the four stylesheets from `origin/main` built in this worktree; the branch is this commit.
 
-| Selector | `main`, production | `main`, dev | Branch, production and dev |
-| --- | --- | --- | --- |
-| `.bot-menu` | `bot-menu-in` 0.14s `ease-out` | `bot-menu-in` 0.26s soft spring | `bot-menu-in` 0.26s soft spring |
-| `.dock-item` | `dock-in` 0.2s `cubic-bezier(0.2, 0.8, 0.2, 1)` | `dock-in` 0.38s spring | `dock-in` 0.38s spring |
-| `.toast` | `toast-in` 0.2s same curve | `toast-in` 0.42s spring | `toast-in` 0.42s spring |
-| `.jump-latest` | `jump-latest-in` 0.42s spring | same | same |
-| `.command-palette[open]` | `palette-in` 0.16s same curve | `palette-in` 0.32s soft spring | `palette-in` 0.32s soft spring |
-| `.settings-sheet[open]` | `settings-in` 0.22s same curve | `settings-in` 0.38s soft spring | `settings-in` 0.38s soft spring |
-| All six, reduced motion | `none` | `none` | `none` |
+| Selector                 | `main`, production                              | `main`, dev                     | Branch, production and dev      |
+| ------------------------ | ----------------------------------------------- | ------------------------------- | ------------------------------- |
+| `.bot-menu`              | `bot-menu-in` 0.14s `ease-out`                  | `bot-menu-in` 0.26s soft spring | `bot-menu-in` 0.26s soft spring |
+| `.dock-item`             | `dock-in` 0.2s `cubic-bezier(0.2, 0.8, 0.2, 1)` | `dock-in` 0.38s spring          | `dock-in` 0.38s spring          |
+| `.toast`                 | `toast-in` 0.2s same curve                      | `toast-in` 0.42s spring         | `toast-in` 0.42s spring         |
+| `.jump-latest`           | `jump-latest-in` 0.42s spring                   | same                            | same                            |
+| `.command-palette[open]` | `palette-in` 0.16s same curve                   | `palette-in` 0.32s soft spring  | `palette-in` 0.32s soft spring  |
+| `.settings-sheet[open]`  | `settings-in` 0.22s same curve                  | `settings-in` 0.38s soft spring | `settings-in` 0.38s soft spring |
+| All six, reduced motion  | `none`                                          | `none`                          | `none`                          |
 
 The branch's production JSON equals `main`'s dev JSON value for value, including opacity and transform at 0 to
 420 ms. At 390 px wide, the phone layout, the palette and settings sheet run `palette-up` 0.22s and `settings-up`
@@ -79,26 +79,26 @@ shorthand family, overlapping motion setting and screen condition:
 
 Each break made by hand with a script that restores the files after; the two test files run each time.
 
-| # | Break | Result |
-| --- | --- | --- |
-| 1 | `.bot-menu`'s 140 ms base animation back in `home.css` | red in both: `no-preference \| .bot-menu`, and `.bot-menu animation: src/app/home.css` |
-| 2 | `.dock-item`'s base back in `shell.css` | red in both |
-| 3 | `.toast`'s base back in `shell.css` | red in both |
-| 4 | `.jump-latest`'s base back in `styles.css` | red in the keyframe test; the order test trusts `styles.css`, as designed |
-| 5 | `.command-palette[open]`'s unconditional base back in `shell.css` | red in both, against `src/motion.css` under `min-width: 621px` |
-| 6 | `.settings-sheet[open]`'s unconditional base back in `home.css` | red in both |
-| 7 | Break 5 with `conditionsMeet` reduced to equality | green, so the unconditioned-meets-all rule is what catches 5 |
-| 8 | `.jump-latest { box-shadow: none }` added to `shell.css` | red: `.jump-latest box-shadow: src/app/shell.css` |
-| 9 | `.app-shell { background: … }` added to `home.css`, against the layer's `background-color` and `background-image` | red |
-| 10 | Break 9 with `family` returning the property unchanged | red only for the known `.bot-rail background` entry going missing; 9 is no longer caught, so the family map is what catches both |
-| 11 | The layer's `.bot-rail` grain removed | red: the known entry is stale |
-| 12 | `main.tsx` imports `motion.css` before `styles.css` | red: the trusted list, and four `styles.css` overlaps |
-| 13 | A reduced-motion `.toast` animation added to `shell.css` | green: the layer's `.toast` is motion-allowed only |
-| 14 | `.toast` base plus a later phone-width variant in `shell.css` | red, both against the layer's rule; the two `shell.css` rules are not paired |
-| 15 | The phone variant placed before the base | red, including the `shell.css` pair: the base hides the variant |
-| 16 | Two unconditional `.toast` rules in `shell.css`, the layer's removed | red: the pair |
-| 17 | The layer's `.toast` removed, base plus a later phone variant | green |
-| 18 | Break 17 with the same-file override exemption removed | red: the pair, so the exemption is what keeps 17 green |
+| #   | Break                                                                                                             | Result                                                                                                                           |
+| --- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `.bot-menu`'s 140 ms base animation back in `home.css`                                                            | red in both: `no-preference \| .bot-menu`, and `.bot-menu animation: src/app/home.css`                                           |
+| 2   | `.dock-item`'s base back in `shell.css`                                                                           | red in both                                                                                                                      |
+| 3   | `.toast`'s base back in `shell.css`                                                                               | red in both                                                                                                                      |
+| 4   | `.jump-latest`'s base back in `styles.css`                                                                        | red in the keyframe test; the order test trusts `styles.css`, as designed                                                        |
+| 5   | `.command-palette[open]`'s unconditional base back in `shell.css`                                                 | red in both, against `src/motion.css` under `min-width: 621px`                                                                   |
+| 6   | `.settings-sheet[open]`'s unconditional base back in `home.css`                                                   | red in both                                                                                                                      |
+| 7   | Break 5 with `conditionsMeet` reduced to equality                                                                 | green, so the unconditioned-meets-all rule is what catches 5                                                                     |
+| 8   | `.jump-latest { box-shadow: none }` added to `shell.css`                                                          | red: `.jump-latest box-shadow: src/app/shell.css`                                                                                |
+| 9   | `.app-shell { background: … }` added to `home.css`, against the layer's `background-color` and `background-image` | red                                                                                                                              |
+| 10  | Break 9 with `family` returning the property unchanged                                                            | red only for the known `.bot-rail background` entry going missing; 9 is no longer caught, so the family map is what catches both |
+| 11  | The layer's `.bot-rail` grain removed                                                                             | red: the known entry is stale                                                                                                    |
+| 12  | `main.tsx` imports `motion.css` before `styles.css`                                                               | red: the trusted list, and four `styles.css` overlaps                                                                            |
+| 13  | A reduced-motion `.toast` animation added to `shell.css`                                                          | green: the layer's `.toast` is motion-allowed only                                                                               |
+| 14  | `.toast` base plus a later phone-width variant in `shell.css`                                                     | red, both against the layer's rule; the two `shell.css` rules are not paired                                                     |
+| 15  | The phone variant placed before the base                                                                          | red, including the `shell.css` pair: the base hides the variant                                                                  |
+| 16  | Two unconditional `.toast` rules in `shell.css`, the layer's removed                                              | red: the pair                                                                                                                    |
+| 17  | The layer's `.toast` removed, base plus a later phone variant                                                     | green                                                                                                                            |
+| 18  | Break 17 with the same-file override exemption removed                                                            | red: the pair, so the exemption is what keeps 17 green                                                                           |
 
 ## Checks
 
@@ -139,13 +139,14 @@ A cross-provider review of `4f420e1` found seven things. Each is below with its 
    `overflow-y: auto`, and the livelier spring passed rest by 0.74 px at 114 ms. `.dock-item` takes the soft spring.
    A `.dock-item` holding a `.notice` with a 1 px `#c00` border, in a real `.status-dock` in the open chat, paused:
 
-   | Frame | Item top vs the dock's top edge | Top border row, in pixels |
-   | --- | --- | --- |
-   | Livelier spring, 114 ms (before) | -0.744 px | `#f2bfbf`, about a quarter of the red |
-   | Soft spring, 114 ms | +0.845 px | whole, below the edge |
-   | Soft spring, its peak near 200 ms | -0.103 px | `#d11b1b`, within a few percent of `#cc0000` |
+   | Frame                             | Item top vs the dock's top edge | Top border row, in pixels                    |
+   | --------------------------------- | ------------------------------- | -------------------------------------------- |
+   | Livelier spring, 114 ms (before)  | -0.744 px                       | `#f2bfbf`, about a quarter of the red        |
+   | Soft spring, 114 ms               | +0.845 px                       | whole, below the edge                        |
+   | Soft spring, its peak near 200 ms | -0.103 px                       | `#d11b1b`, within a few percent of `#cc0000` |
 
    The clip is not zero, but a tenth of a pixel is not visible.
+
 6. `tests/helpers/css-declarations.ts` names `tests/motion-css-order.test.ts`.
 7. **Fallback wording.** Without `linear()` support the soft spring is the app's `cubic-bezier(0.2, 0.8, 0.2, 1)`
    ease-out, and the livelier one is `cubic-bezier(0.34, 1.4, 0.64, 1)`, about 5% overshoot. The comment in
@@ -156,15 +157,15 @@ A cross-provider review of `4f420e1` found seven things. Each is below with its 
 
 Same method as above, by script, the two test files run each time and the file restored after.
 
-| # | Break | Result |
-| --- | --- | --- |
-| 19 | `.toast`'s spring moved outside the no-preference block | red: `src/motion.css:342 animation: toast-in 420ms var(--ease-spring)` |
-| 20 | A `prefers-reduced-motion: reduce` `.toast` animation added to the layer | red, same test |
-| 21 | The `header-lift` animation removed | red: the `.chat-header-identity` exception is unused |
-| 22 | `@media (min-width: 1000px) { .settings-sheet[open] { animation: settings-in 220ms ease-out; } }` in `home.css` | red in both: the pair against `src/motion.css:247 [@media (width > 620px)]`, and `.settings-sheet[open] animation: src/app/home.css x1` |
-| 23 | The complementary list emptied | red in both: the palette and sheet pairs against `(max-width: 620px)`, and `.bot-rail position: src/app/home.css` |
-| 24 | The palette and sheet back to `(min-width: 621px)` | red in both, so the gap form cannot return unnoticed |
-| 25 | A second `box-shadow` on `.bot-menu` in `home.css` | red: `.bot-menu box-shadow: src/app/home.css x1` became `x2` |
+| #   | Break                                                                                                           | Result                                                                                                                                  |
+| --- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 19  | `.toast`'s spring moved outside the no-preference block                                                         | red: `src/motion.css:342 animation: toast-in 420ms var(--ease-spring)`                                                                  |
+| 20  | A `prefers-reduced-motion: reduce` `.toast` animation added to the layer                                        | red, same test                                                                                                                          |
+| 21  | The `header-lift` animation removed                                                                             | red: the `.chat-header-identity` exception is unused                                                                                    |
+| 22  | `@media (min-width: 1000px) { .settings-sheet[open] { animation: settings-in 220ms ease-out; } }` in `home.css` | red in both: the pair against `src/motion.css:247 [@media (width > 620px)]`, and `.settings-sheet[open] animation: src/app/home.css x1` |
+| 23  | The complementary list emptied                                                                                  | red in both: the palette and sheet pairs against `(max-width: 620px)`, and `.bot-rail position: src/app/home.css`                       |
+| 24  | The palette and sheet back to `(min-width: 621px)`                                                              | red in both, so the gap form cannot return unnoticed                                                                                    |
+| 25  | A second `box-shadow` on `.bot-menu` in `home.css`                                                              | red: `.bot-menu box-shadow: src/app/home.css x1` became `x2`                                                                            |
 
 Break 22 on the reviewer's exact rule was green before the change. Finding 5 has no test: a test pinning
 `--ease-spring-soft` on `.dock-item` would assert a constant, and the paused-frame table above is the evidence.
@@ -174,15 +175,15 @@ Break 22 on the reviewer's exact rule was green before the change. Finding 5 has
 `node .agents/tools/sample-entrance-animations.mjs` on the production build, Chromium 900 x 700, motion allowed.
 Production and `MODE=dev` JSON are equal value for value. Samples are the paused animation's transform.
 
-| Selector | Animation | Curve | 0 ms | 80 ms | 140 ms | 200 ms |
-| --- | --- | --- | --- | --- | --- | --- |
-| `.bot-menu` | `bot-menu-in` 0.26s | soft spring | scale 0.96 | 0.9948 | 1.0007 | 1.0003 |
-| `.dock-item` | `dock-in` 0.38s | soft spring (was livelier) | y 6 | 2.11 | 0.31 | -0.10 |
-| `.toast` | `toast-in` 0.42s | livelier spring | y 10 | 0.62 | -1.13 | -0.18 |
-| `.jump-latest` | `jump-latest-in` 0.42s | livelier spring | y 8 | 0.50 | -0.90 | -0.15 |
-| `.command-palette[open]` | `palette-in` 0.32s | soft spring | y -8, scale 0.98 | -1.96, 0.9951 | -0.03, 0.9999 | 0.13, 1.0003 |
-| `.settings-sheet[open]` | `settings-in` 0.38s | soft spring | y 16, scale 0.98 | 5.62, 0.9930 | 0.83, 0.9990 | -0.27, 1.0003 |
-| All six, reduced motion | `none` | | | | | |
+| Selector                 | Animation              | Curve                      | 0 ms             | 80 ms         | 140 ms        | 200 ms        |
+| ------------------------ | ---------------------- | -------------------------- | ---------------- | ------------- | ------------- | ------------- |
+| `.bot-menu`              | `bot-menu-in` 0.26s    | soft spring                | scale 0.96       | 0.9948        | 1.0007        | 1.0003        |
+| `.dock-item`             | `dock-in` 0.38s        | soft spring (was livelier) | y 6              | 2.11          | 0.31          | -0.10         |
+| `.toast`                 | `toast-in` 0.42s       | livelier spring            | y 10             | 0.62          | -1.13         | -0.18         |
+| `.jump-latest`           | `jump-latest-in` 0.42s | livelier spring            | y 8              | 0.50          | -0.90         | -0.15         |
+| `.command-palette[open]` | `palette-in` 0.32s     | soft spring                | y -8, scale 0.98 | -1.96, 0.9951 | -0.03, 0.9999 | 0.13, 1.0003  |
+| `.settings-sheet[open]`  | `settings-in` 0.38s    | soft spring                | y 16, scale 0.98 | 5.62, 0.9930  | 0.83, 0.9990  | -0.27, 1.0003 |
+| All six, reduced motion  | `none`                 |                            |                  |               |               |               |
 
 At 390 px the palette and settings sheet still run `palette-up` 0.22s and `settings-up` 0.26s ease-out, and `none`
 under reduced motion; the other four match the table.

@@ -18,13 +18,29 @@ beforeAll(async () => {
 
 it("compiles shadcn surface/foreground pairs against the live app palette", () => {
   const colors = {
-    background: "surface", foreground: "ink", card: "raised", "card-foreground": "ink",
-    popover: "raised", "popover-foreground": "ink", primary: "accent", "primary-foreground": "surface",
-    secondary: "rail", "secondary-foreground": "ink", muted: "rail", "muted-foreground": "muted",
-    accent: "accent-soft", "accent-foreground": "ink", destructive: "danger", "destructive-foreground": "surface",
-    border: "line", input: "line", ring: "accent", brand: "accent", "muted-text": "muted",
+    background: "surface",
+    foreground: "ink",
+    card: "raised",
+    "card-foreground": "ink",
+    popover: "raised",
+    "popover-foreground": "ink",
+    primary: "accent",
+    "primary-foreground": "surface",
+    secondary: "rail",
+    "secondary-foreground": "ink",
+    muted: "rail",
+    "muted-foreground": "muted",
+    accent: "accent-soft",
+    "accent-foreground": "ink",
+    destructive: "danger",
+    "destructive-foreground": "surface",
+    border: "line",
+    input: "line",
+    ring: "accent",
+    brand: "accent",
+    "muted-text": "muted",
   };
-  const css = compiler.build(Object.keys(colors).map(name => `tw:bg-${name}`));
+  const css = compiler.build(Object.keys(colors).map((name) => `tw:bg-${name}`));
   for (const [name, variable] of Object.entries(colors)) {
     expect(css).toContain(`.tw\\:bg-${name} {\n    background-color: var(--${variable});`);
   }
@@ -32,8 +48,12 @@ it("compiles shadcn surface/foreground pairs against the live app palette", () =
 
 it("compiles dark variants for the explicit dark setting and media-gated system setting", () => {
   const css = compiler.build(["tw:dark:bg-primary"]);
-  expect(css).toContain('.tw\\:dark\\:bg-primary:where(:root[data-theme="dark"], :root[data-theme="dark"] *)');
-  expect(css).toContain('@media (prefers-color-scheme: dark) {\n    .tw\\:dark\\:bg-primary:where(:root[data-theme="system"], :root[data-theme="system"] *)');
+  expect(css).toContain(
+    '.tw\\:dark\\:bg-primary:where(:root[data-theme="dark"], :root[data-theme="dark"] *)',
+  );
+  expect(css).toContain(
+    '@media (prefers-color-scheme: dark) {\n    .tw\\:dark\\:bg-primary:where(:root[data-theme="system"], :root[data-theme="system"] *)',
+  );
 });
 
 it("requires the utility prefix even when existing semantic classes are scanned", () => {

@@ -1,13 +1,6 @@
 /** Real app API + isolated Hermes proof. No Runtime mock or production mutation. */
 import assert from "node:assert/strict";
-import {
-  readFileSync,
-  existsSync,
-  mkdtempSync,
-  rmSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
+import { readFileSync, existsSync, mkdtempSync, rmSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -18,10 +11,7 @@ import { fileSigner } from "../../src/server/hermes-files.ts";
 import { Store } from "../../src/server/store.ts";
 import { probeScope } from "./app-probe-scope.mjs";
 const accessPath = process.env.HERMES_SPIKE_ACCESS;
-assert(
-  accessPath,
-  "Set HERMES_SPIKE_ACCESS to the private isolated fixture access file.",
-);
+assert(accessPath, "Set HERMES_SPIKE_ACCESS to the private isolated fixture access file.");
 const access = JSON.parse(readFileSync(accessPath, "utf8"));
 assert(
   ["127.0.0.1", "localhost", "[::1]"].includes(new URL(access.url).hostname),
@@ -50,9 +40,18 @@ const boot = () => {
   const store = new Store(config.database);
   return createApp(
     config,
-    createHermesRuntime({ url: access.url, token: access.token, authMode: "static", files: fileSigner(store.fileKeys(), access.token),
+    createHermesRuntime({
+      url: access.url,
+      token: access.token,
+      authMode: "static",
+      files: fileSigner(store.fileKeys(), access.token),
       qualification: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION
-        ? {revision:process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,home:access.isolatedHome} : undefined }),
+        ? {
+            revision: process.env.HERMES_AGENT_INTERFACE_QUALIFICATION_REVISION,
+            home: access.isolatedHome,
+          }
+        : undefined,
+    }),
     { store },
   );
 };
@@ -88,9 +87,7 @@ async function call(method, path, payload, member = "one") {
   const session = sessions[member];
   const headers = {
     origin,
-    ...(session
-      ? { cookie: session.cookie, "x-csrf-token": session.csrf }
-      : {}),
+    ...(session ? { cookie: session.cookie, "x-csrf-token": session.csrf } : {}),
   };
   const init = { method, headers };
   if (payload instanceof FormData) init.body = payload;
@@ -119,21 +116,13 @@ async function check(name, fn) {
   } catch (error) {
     report.checks[name] = {
       passed: false,
-      error: String(error.message).replace(
-        /\/[^\s]+agent-interface[^\s]+/g,
-        "<isolated-path>",
-      ),
+      error: String(error.message).replace(/\/[^\s]+agent-interface[^\s]+/g, "<isolated-path>"),
     };
     throw error;
   }
 }
 async function login(member) {
-  const { data, response } = await call(
-    "POST",
-    "/api/auth/local",
-    { member },
-    member,
-  );
+  const { data, response } = await call("POST", "/api/auth/local", { member }, member);
   sessions[member] = {
     cookie: response.headers.get("set-cookie").split(";")[0],
     csrf: data.csrfToken,
@@ -191,17 +180,12 @@ async function nativeSetup(method, params) {
       socket.addEventListener("error", reject, { once: true });
     });
     return await new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Native fixture setup timed out")),
-        10000,
-      );
+      const timer = setTimeout(() => reject(new Error("Native fixture setup timed out")), 10000);
       socket.addEventListener("message", ({ data }) => {
         const frame = JSON.parse(String(data));
         if (frame.id !== 1) return;
         clearTimeout(timer);
-        frame.error
-          ? reject(new Error(frame.error.message))
-          : resolve(frame.result);
+        frame.error ? reject(new Error(frame.error.message)) : resolve(frame.result);
       });
       socket.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }));
     });
@@ -217,14 +201,24 @@ try {
     await login("one");
     await login("two");
     const { data } = await call("GET", "/api/bootstrap");
-    assert(data.connection.connected, data.connection.detail ?? "Native fixture connection must be ready");
-    assert(data.capabilities.chat.supported, data.capabilities.chat.reason ?? "Native fixture must support chat");
+    assert(
+      data.connection.connected,
+      data.connection.detail ?? "Native fixture connection must be ready",
+    );
+    assert(
+      data.capabilities.chat.supported,
+      data.capabilities.chat.reason ?? "Native fixture must support chat",
+    );
     assert.equal(data.household.length, 2);
     // The add-on's voice status must be reachable through real Hermes routing. A disposable home
     // has no voice plugin, so Talk is unavailable for that reason, never a missing route.
     assert(data.capabilities.liveVoice, "Bootstrap must report live voice");
-    assert(!/predates live voice|could not report live voice/i.test(data.capabilities.liveVoice.reason ?? ""),
-      `Live voice status must reach the add-on: ${data.capabilities.liveVoice.reason}`);
+    assert(
+      !/predates live voice|could not report live voice/i.test(
+        data.capabilities.liveVoice.reason ?? "",
+      ),
+      `Live voice status must reach the add-on: ${data.capabilities.liveVoice.reason}`,
+    );
     return {
       householdMembers: 2,
       imageBackendAvailable: data.capabilities.imageGeneration.supported,
@@ -313,19 +307,34 @@ try {
     assert.deepEqual(loaded.recipientIds, ["local-two"]);
     assert.equal(loaded.prompt, routine.prompt);
     assert.equal(loaded.enabled, false);
-    const before = (
-      await call("GET", `/api/bots/${botId}/conversation`)
-    ).data.messages.filter((x) => x.role === "assistant").length;
+    const before = (await call("GET", `/api/bots/${botId}/conversation`)).data.messages.filter(
+      (x) => x.role === "assistant",
+    ).length;
     await call("PUT", `/api/routines/${routineId}`, {
       ...routine,
       enabled: true,
       recipientIds: ["local-two"],
     });
     const resumed = (await call("GET", "/api/routines")).data.find((r) => r.id === routineId);
-    assert.equal(resumed.enabled, true, "Resume must update native scheduler state, not just the response");
-    await call("PUT", `/api/routines/${routineId}`, { ...routine, enabled: false, recipientIds: ["local-two"] });
-    assert.equal((await call("GET", "/api/routines")).data.find((r) => r.id === routineId).enabled, false);
-    await call("PUT", `/api/routines/${routineId}`, { ...routine, enabled: true, recipientIds: ["local-two"] });
+    assert.equal(
+      resumed.enabled,
+      true,
+      "Resume must update native scheduler state, not just the response",
+    );
+    await call("PUT", `/api/routines/${routineId}`, {
+      ...routine,
+      enabled: false,
+      recipientIds: ["local-two"],
+    });
+    assert.equal(
+      (await call("GET", "/api/routines")).data.find((r) => r.id === routineId).enabled,
+      false,
+    );
+    await call("PUT", `/api/routines/${routineId}`, {
+      ...routine,
+      enabled: true,
+      recipientIds: ["local-two"],
+    });
     const trigger = await fetch(
       new URL(
         `/api/cron/jobs/${encodeURIComponent(routineId)}/trigger?profile=${encodeURIComponent(botId)}`,
@@ -348,10 +357,7 @@ try {
       if (discovered) break;
       await pause(250);
     }
-    assert(
-      discovered,
-      "Actual routine completion must reach durable app discovery",
-    );
+    assert(discovered, "Actual routine completion must reach durable app discovery");
     const recipients = server.store.db
       .prepare("SELECT user_id FROM outbox WHERE event_id=?")
       .all(discovered.id)
@@ -363,14 +369,11 @@ try {
     let after = 0;
     for (let i = 0; i < 600 && after <= before; i++) {
       if (i) await pause(250);
-      after = (
-        await call("GET", `/api/bots/${botId}/conversation`)
-      ).data.messages.filter((x) => x.role === "assistant").length;
+      after = (await call("GET", `/api/bots/${botId}/conversation`)).data.messages.filter(
+        (x) => x.role === "assistant",
+      ).length;
     }
-    assert(
-      after > before,
-      "Native routine result must appear in the canonical conversation",
-    );
+    assert(after > before, "Native routine result must appear in the canonical conversation");
     await call("DELETE", `/api/routines/${routineId}`);
     routineId = undefined;
     return {
@@ -398,11 +401,7 @@ try {
     for (const [name, mime, bytes] of specimens) {
       const form = new FormData();
       form.set("file", new Blob([bytes], { type: mime }), name);
-      const { data: file } = await call(
-        "POST",
-        `/api/bots/${botId}/uploads`,
-        form,
-      );
+      const { data: file } = await call("POST", `/api/bots/${botId}/uploads`, form);
       uploaded.push(file);
       const response = await fetch(origin + file.url, {
         headers: { cookie: sessions.one.cookie },
@@ -427,34 +426,20 @@ try {
     const image = uploaded.find((file) => file.mime === "image/png");
     assert(image);
     const requestId = randomUUID();
-    const { data: receipt } = await call(
-      "POST",
-      `/api/bots/${botId}/messages`,
-      { requestId, text: "", attachments: [image] },
-    );
+    const { data: receipt } = await call("POST", `/api/bots/${botId}/messages`, {
+      requestId,
+      text: "",
+      attachments: [image],
+    });
     assert.equal(receipt.status, "accepted");
     const conversation = await waitCompleted(botId);
-    const row = conversation.messages.find(
-      (message) => message.id === requestId,
-    );
-    assert(
-      row,
-      "Image-only native canonical row must bind to its durable request ID",
-    );
+    const row = conversation.messages.find((message) => message.id === requestId);
+    assert(row, "Image-only native canonical row must bind to its durable request ID");
     assert.equal(row.role, "user");
     assert.equal(row.sender?.id, "local-one");
-    assert.equal(
-      row.text,
-      "",
-      "Image-only message must not display raw @image filesystem paths",
-    );
-    const registered = row.files?.find(
-      (file) => file.id === image.id && file.mime === "image/png",
-    );
-    assert(
-      registered,
-      "Canonical image-only message must include the registered image FileRef",
-    );
+    assert.equal(row.text, "", "Image-only message must not display raw @image filesystem paths");
+    const registered = row.files?.find((file) => file.id === image.id && file.mime === "image/png");
+    assert(registered, "Canonical image-only message must include the registered image FileRef");
     const response = await fetch(origin + registered.url, {
       headers: { cookie: sessions.one.cookie },
     });
@@ -481,11 +466,10 @@ try {
       value: "manual",
       profile: botId,
     });
-    const { data: receipt } = await call(
-      "POST",
-      `/api/bots/${botId}/messages`,
-      { requestId: randomUUID(), text: "PROBE_APPROVAL" },
-    );
+    const { data: receipt } = await call("POST", `/api/bots/${botId}/messages`, {
+      requestId: randomUUID(),
+      text: "PROBE_APPROVAL",
+    });
     assert.equal(receipt.status, "accepted");
     let approval;
     for (let i = 0; i < 80; i++) {
@@ -501,19 +485,16 @@ try {
       { decision: "approved" },
       "two",
     );
-    const second = await fetch(
-      origin + `/api/bots/${botId}/approvals/${approval.id}`,
-      {
-        method: "POST",
-        headers: {
-          origin,
-          cookie: sessions.one.cookie,
-          "x-csrf-token": sessions.one.csrf,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ decision: "denied" }),
+    const second = await fetch(origin + `/api/bots/${botId}/approvals/${approval.id}`, {
+      method: "POST",
+      headers: {
+        origin,
+        cookie: sessions.one.cookie,
+        "x-csrf-token": sessions.one.csrf,
+        "content-type": "application/json",
       },
-    );
+      body: JSON.stringify({ decision: "denied" }),
+    });
     assert.equal(second.status, 409);
     assert.equal(server.store.approval(approval.id).userId, "local-two");
     await waitCompleted(botId);
@@ -530,9 +511,7 @@ try {
       text: "PROBE_FILE",
     });
     const conversation = await waitCompleted(botId);
-    const generated = conversation.files.find(
-      (x) => x.name === "generated-proof.txt",
-    );
+    const generated = conversation.files.find((x) => x.name === "generated-proof.txt");
     assert(generated, "Actual terminal-created file must be projected");
     const response = await fetch(origin + generated.url, {
       headers: { cookie: sessions.one.cookie },
@@ -550,8 +529,7 @@ try {
     const conversation = await waitCompleted(botId);
     assert(
       conversation.messages.some(
-        (x) =>
-          x.role === "tool" && x.text.includes("Public synthetic attachment"),
+        (x) => x.role === "tool" && x.text.includes("Public synthetic attachment"),
       ),
       "Native tool must read the staged attachment contents",
     );
@@ -566,41 +544,23 @@ try {
       text: "PROBE_SLOW_TOOL synthetic app proof",
       attachments: uploaded,
     };
-    const { data: first } = await call(
-      "POST",
-      `/api/bots/${botId}/messages`,
-      payload,
-    );
+    const { data: first } = await call("POST", `/api/bots/${botId}/messages`, payload);
     assert.equal(first.status, "accepted");
-    const { data: again } = await call(
-      "POST",
-      `/api/bots/${botId}/messages`,
-      payload,
-    );
+    const { data: again } = await call("POST", `/api/bots/${botId}/messages`, payload);
     assert.deepEqual(again, first);
     const second = {
       requestId: randomUUID(),
       text: "Public second participant steering",
     };
-    const { data: steer } = await call(
-      "POST",
-      `/api/bots/${botId}/messages`,
-      second,
-      "two",
-    );
+    const { data: steer } = await call("POST", `/api/bots/${botId}/messages`, second, "two");
     assert.equal(steer.status, "accepted");
     const conversation = await waitCompleted(botId);
-    const firstUser = conversation.messages.find((m) =>
-      m.text.includes("PROBE_SLOW"),
-    );
+    const firstUser = conversation.messages.find((m) => m.text.includes("PROBE_SLOW"));
     assert.equal(firstUser?.sender?.id, "local-one");
     const steeringMessage = conversation.messages.find((m) =>
       m.text.includes("Public second participant steering"),
     );
-    assert(
-      steeringMessage,
-      "Native canonical history did not preserve the admitted steering text",
-    );
+    assert(steeringMessage, "Native canonical history did not preserve the admitted steering text");
     assert.equal(steeringMessage.sender?.id, "local-two");
     const members = server.store.recipients({
       id: "proof",
@@ -631,10 +591,7 @@ try {
       restartRequest,
     );
     assert.equal(restartReceipt.status, "accepted");
-    const { data: active } = await call(
-      "GET",
-      `/api/bots/${botId}/conversation`,
-    );
+    const { data: active } = await call("GET", `/api/bots/${botId}/conversation`);
     assert(
       ["thinking", "working"].includes(active.activity.state),
       "Restart must begin during active execution",
@@ -668,66 +625,49 @@ try {
         "Executor controller must be in the isolated fixture root",
       );
       assert.equal(
-        readFileSync(
-          join(directory, ".agent-interface-isolated"),
-          "utf8",
-        ).trim(),
+        readFileSync(join(directory, ".agent-interface-isolated"), "utf8").trim(),
         access.marker,
       );
       const requestId = randomUUID();
-      const { data: receipt } = await call(
-        "POST",
-        `/api/bots/${botId}/messages`,
-        { requestId, text: "PROBE_SLOW executor interruption app proof" },
-      );
+      const { data: receipt } = await call("POST", `/api/bots/${botId}/messages`, {
+        requestId,
+        text: "PROBE_SLOW executor interruption app proof",
+      });
       assert.equal(receipt.status, "accepted");
-      const { data: active } = await call(
-        "GET",
-        `/api/bots/${botId}/conversation`,
-      );
+      const { data: active } = await call("GET", `/api/bots/${botId}/conversation`);
       assert(["thinking", "working"].includes(active.activity.state));
       const nonce = randomUUID();
       writeControl(join(directory, "restart.request.json"), { nonce });
       let restarted = false;
       for (let i = 0; i < 120; i++) {
         const path = join(directory, "restart.complete.json");
-        if (
-          existsSync(path) &&
-          JSON.parse(readFileSync(path, "utf8")).nonce === nonce
-        ) {
+        if (existsSync(path) && JSON.parse(readFileSync(path, "utf8")).nonce === nonce) {
           restarted = true;
           break;
         }
         await pause(250);
       }
-      assert(
-        restarted,
-        "Isolated controller did not acknowledge executor restart",
-      );
+      assert(restarted, "Isolated controller did not acknowledge executor restart");
       // The app intentionally backs off failed connections. Exercise automatic
       // read-only recovery instead of assuming the first post-restart read wins.
       const recoveryStarted = Date.now();
       let recovered = false;
       while (Date.now() - recoveryStarted < 45_000) {
         const { data: bootstrap } = await call("GET", "/api/bootstrap");
-        if (bootstrap.connection.connected) { recovered = true; break; }
+        if (bootstrap.connection.connected) {
+          recovered = true;
+          break;
+        }
         await pause(500);
       }
       assert(recovered, "App did not automatically reconnect to the restarted executor");
       const automaticReconnectMs = Date.now() - recoveryStarted;
-      const { data: interrupted } = await call(
-        "GET",
-        `/api/bots/${botId}/conversation`,
-      );
+      const { data: interrupted } = await call("GET", `/api/bots/${botId}/conversation`);
       assert.equal(interrupted.activity.state, "interrupted");
-      assert.equal(
-        (await call("GET", `/api/submissions/${requestId}`)).data.status,
-        "interrupted",
-      );
+      assert.equal((await call("GET", `/api/submissions/${requestId}`)).data.status, "interrupted");
       await pause(500);
       assert.equal(
-        (await call("GET", `/api/bots/${botId}/conversation`)).data.activity
-          .state,
+        (await call("GET", `/api/bots/${botId}/conversation`)).data.activity.state,
         "interrupted",
       );
       const fresh = {
@@ -745,11 +685,10 @@ try {
         body: JSON.stringify(fresh),
       });
       assert.equal(blocked.status, 409);
-      const { data: reviewed } = await call(
-        "POST",
-        `/api/bots/${botId}/messages`,
-        { ...fresh, reviewedInterruption: true },
-      );
+      const { data: reviewed } = await call("POST", `/api/bots/${botId}/messages`, {
+        ...fresh,
+        reviewedInterruption: true,
+      });
       assert.equal(reviewed.status, "accepted");
       await waitCompleted(botId);
       return {
@@ -765,8 +704,7 @@ try {
     report.checks.executorRestartNeedsExplicitReview = {
       passed: false,
       notRun: true,
-      reason:
-        "Requires isolated launcher's explicit executor control directory",
+      reason: "Requires isolated launcher's explicit executor control directory",
     };
   }
 } catch (error) {

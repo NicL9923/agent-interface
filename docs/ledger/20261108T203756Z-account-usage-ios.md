@@ -72,4 +72,3 @@ attention" never appeared). A `git archive` of `origin/main` without this change
 so it is not caused by the profile menu. Removing the reset-completion generation bump made
 `testAReadThatStartsDuringAResetAndLandsAfterItNeverReplacesTheAccountItChanged` fail (2 banked resets
 instead of 1); it was restored.
-

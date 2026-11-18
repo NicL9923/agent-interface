@@ -12,9 +12,22 @@ export function loggerOptions(level: LogLevel, stream?: { write(line: string): v
     logger: {
       level,
       ...(stream ? { stream } : {}),
-      redact: ["ticket", "*.ticket", "headers.authorization", "headers.cookie", 'headers["x-csrf-token"]',
-        "req.headers.authorization", "req.headers.cookie", 'req.headers["x-csrf-token"]'],
-      serializers: { req: (req: { method: string; url: string }) => ({ method: req.method, url: req.url.split("?")[0] }) },
+      redact: [
+        "ticket",
+        "*.ticket",
+        "headers.authorization",
+        "headers.cookie",
+        'headers["x-csrf-token"]',
+        "req.headers.authorization",
+        "req.headers.cookie",
+        'req.headers["x-csrf-token"]',
+      ],
+      serializers: {
+        req: (req: { method: string; url: string }) => ({
+          method: req.method,
+          url: req.url.split("?")[0],
+        }),
+      },
     },
     logController: new LogController({ disableRequestLogging: true }),
   };
@@ -29,7 +42,11 @@ export function safeError(error: unknown) {
     message: error.message.slice(0, 300),
     ...(typeof statusCode === "number" ? { statusCode } : {}),
     ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
-    stack: error.stack?.split("\n").slice(1, 9).map(line => line.trim()).join("\n"),
+    stack: error.stack
+      ?.split("\n")
+      .slice(1, 9)
+      .map((line) => line.trim())
+      .join("\n"),
   };
 }
 
@@ -60,24 +77,41 @@ export class FailureTracker {
   failingSince?: number;
   consecutiveFailures = 0;
   private remindedAt = 0;
-  constructor(private log: Log, private name: string) {}
+  constructor(
+    private log: Log,
+    private name: string,
+  ) {}
   failure(error: unknown, now = Date.now()) {
     this.lastError = (error instanceof Error ? error.message : String(error)).slice(0, 300);
     this.lastFailureAt = now;
     this.consecutiveFailures++;
-    const context = { operation: this.name, error: this.lastError, failures: this.consecutiveFailures };
+    const context = {
+      operation: this.name,
+      error: this.lastError,
+      failures: this.consecutiveFailures,
+    };
     if (this.failingSince === undefined) {
       this.failingSince = this.remindedAt = now;
       this.log.warn(context, `${this.name} failed`);
     } else if (now - this.remindedAt >= reminderInterval) {
       this.remindedAt = now;
-      this.log.warn({ ...context, failingForMs: now - this.failingSince }, `${this.name} is still failing`);
+      this.log.warn(
+        { ...context, failingForMs: now - this.failingSince },
+        `${this.name} is still failing`,
+      );
     }
   }
   success(now = Date.now()) {
     this.lastSuccessAt = now;
     if (this.failingSince === undefined) return;
-    this.log.info({ operation: this.name, failures: this.consecutiveFailures, failedForMs: now - this.failingSince }, `${this.name} recovered`);
+    this.log.info(
+      {
+        operation: this.name,
+        failures: this.consecutiveFailures,
+        failedForMs: now - this.failingSince,
+      },
+      `${this.name} recovered`,
+    );
     this.failingSince = undefined;
     this.consecutiveFailures = 0;
   }

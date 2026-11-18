@@ -14,46 +14,82 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { chromium } from "@playwright/test";
 
 const args = process.argv.slice(2);
-const flag = (name, fallback) => { const at = args.indexOf(name); return at < 0 ? fallback : args[at + 1]; };
+const flag = (name, fallback) => {
+  const at = args.indexOf(name);
+  return at < 0 ? fallback : args[at + 1];
+};
 const GIVE_UP_MS = Number(flag("--give-up-ms", 180_000));
-const BLACKOUT = args.includes("--blackout"), BLACKOUT_MS = Number(flag("--blackout-ms", 60_000));
+const BLACKOUT = args.includes("--blackout"),
+  BLACKOUT_MS = Number(flag("--blackout-ms", 60_000));
 const SCREENSHOT = flag("--screenshot", undefined);
-const PROXY = 4180, APP = 4173;
+const PROXY = 4180,
+  APP = 4173;
 
-const server = spawn("npx", ["tsx", "e2e/server.ts"], { stdio: ["ignore", "inherit", "inherit"], detached: true });
-const stop = () => { try { if (server.pid) process.kill(-server.pid, "SIGTERM"); } catch { /* Already gone. */ } };
+const server = spawn("npx", ["tsx", "e2e/server.ts"], {
+  stdio: ["ignore", "inherit", "inherit"],
+  detached: true,
+});
+const stop = () => {
+  try {
+    if (server.pid) process.kill(-server.pid, "SIGTERM");
+  } catch {
+    /* Already gone. */
+  }
+};
 process.on("exit", stop);
 for (let tries = 0; ; tries++) {
-  try { if ((await fetch(`http://127.0.0.1:${APP}/api/auth/config`)).ok) break; } catch { /* Not up yet. */ }
+  try {
+    if ((await fetch(`http://127.0.0.1:${APP}/api/auth/config`)).ok) break;
+  } catch {
+    /* Not up yet. */
+  }
   if (tries > 120) throw new Error("e2e server did not start");
   await sleep(250);
 }
 
 // Each connection forwards both ways until the cut, which stops the bytes and leaves the sockets open.
-const open = new Set(), held = new Set();
+const open = new Set(),
+  held = new Set();
 let dark = false;
-const proxy = createServer(client => {
+const proxy = createServer((client) => {
   // During a blackout a new connection is accepted and then hears nothing, as on a dead network.
-  if (dark) { held.add(client); client.on("error", () => {}); client.pause(); return; }
+  if (dark) {
+    held.add(client);
+    client.on("error", () => {});
+    client.pause();
+    return;
+  }
   const upstream = connect(APP, "127.0.0.1");
   const pair = { client, upstream };
   open.add(pair);
   client.pipe(upstream);
   upstream.pipe(client);
-  const forget = () => { open.delete(pair); client.destroy(); upstream.destroy(); };
-  client.on("error", forget); upstream.on("error", forget); client.on("close", forget); upstream.on("close", forget);
+  const forget = () => {
+    open.delete(pair);
+    client.destroy();
+    upstream.destroy();
+  };
+  client.on("error", forget);
+  upstream.on("error", forget);
+  client.on("close", forget);
+  upstream.on("close", forget);
 });
-await new Promise(resolve => proxy.listen(PROXY, "127.0.0.1", resolve));
+await new Promise((resolve) => proxy.listen(PROXY, "127.0.0.1", resolve));
 const cut = () => {
   for (const { client, upstream } of open) {
-    client.unpipe(upstream); upstream.unpipe(client);
-    client.pause(); upstream.pause();
+    client.unpipe(upstream);
+    upstream.unpipe(client);
+    client.pause();
+    upstream.pause();
   }
   open.clear();
 };
 
 const browser = await chromium.launch();
-const context = await browser.newContext({ serviceWorkers: "block", viewport: { width: 1280, height: 800 } });
+const context = await browser.newContext({
+  serviceWorkers: "block",
+  viewport: { width: 1280, height: 800 },
+});
 const page = await context.newPage();
 // Sign-in checks the request's origin against the app's own, so it goes direct. The session cookie
 // names the host, not the port, so the proxied page carries it.
@@ -67,22 +103,28 @@ await sleep(8_000);
 const streams = { household: /^\/api\/events(\?|$)/, chat: /^\/api\/bots\/ranch\/events/ };
 const reopened = {};
 let cutAt = 0;
-page.on("request", request => {
+page.on("request", (request) => {
   if (!cutAt) return;
   const url = new URL(request.url());
   for (const [name, pattern] of Object.entries(streams))
-    if (!(name in reopened) && pattern.test(url.pathname + url.search)) reopened[name] = (Date.now() - cutAt) / 1000;
+    if (!(name in reopened) && pattern.test(url.pathname + url.search))
+      reopened[name] = (Date.now() - cutAt) / 1000;
 });
 const panels = () => page.locator('section[aria-label="Hermes connection"] h2').allTextContents();
 if (BLACKOUT) {
   dark = true;
   cut();
   cutAt = Date.now();
-  let shownAt = null, most = 0, titles = [];
+  let shownAt = null,
+    most = 0,
+    titles = [];
   while (Date.now() - cutAt < BLACKOUT_MS) {
     const now = await panels();
     if (now.length && shownAt === null) shownAt = (Date.now() - cutAt) / 1000;
-    if (now.length >= most) { most = now.length; titles = now; }
+    if (now.length >= most) {
+      most = now.length;
+      titles = now;
+    }
     await sleep(250);
   }
   if (SCREENSHOT) await page.screenshot({ path: SCREENSHOT });
@@ -92,16 +134,36 @@ if (BLACKOUT) {
   const back = Date.now();
   let clearedAfter = null;
   while (Date.now() - back < GIVE_UP_MS) {
-    if (!(await panels()).length) { clearedAfter = (Date.now() - back) / 1000; break; }
+    if (!(await panels()).length) {
+      clearedAfter = (Date.now() - back) / 1000;
+      break;
+    }
     await sleep(250);
   }
-  console.log(JSON.stringify({ noticeShownAfterSeconds: shownAt, mostNoticesAtOnce: most, titles, clearedSecondsAfterNetworkReturned: clearedAfter }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        noticeShownAfterSeconds: shownAt,
+        mostNoticesAtOnce: most,
+        titles,
+        clearedSecondsAfterNetworkReturned: clearedAfter,
+      },
+      null,
+      2,
+    ),
+  );
 } else {
   cut();
   cutAt = Date.now();
-  while (Object.keys(reopened).length < Object.keys(streams).length && Date.now() - cutAt < GIVE_UP_MS) await sleep(250);
+  while (
+    Object.keys(reopened).length < Object.keys(streams).length &&
+    Date.now() - cutAt < GIVE_UP_MS
+  )
+    await sleep(250);
   for (const name of Object.keys(streams)) reopened[name] ??= null;
-  console.log(JSON.stringify({ secondsToReopen: reopened, gaveUpAfterSeconds: GIVE_UP_MS / 1000 }, null, 2));
+  console.log(
+    JSON.stringify({ secondsToReopen: reopened, gaveUpAfterSeconds: GIVE_UP_MS / 1000 }, null, 2),
+  );
 }
 await browser.close();
 proxy.close();

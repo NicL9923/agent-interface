@@ -17,12 +17,12 @@ The decorated history already skips the read whenever the chat is unchanged, but
 What else ends it is a change it can see: any write to the profile's `state.db` or its WAL, `config.yaml`, redaction
 state or the profile's journal. Over the 24 hours before this entry, counted on `.backup` copies (counts only):
 
-| Profile | Rows written to its Bot Chat | Rows written to other sessions |
-| --- | --- | --- |
-| patch | 9 | 15 |
-| lumen | 1 | 0 |
-| penny | 0 | 0 |
-| wft-marketing | 0 | 0 |
+| Profile       | Rows written to its Bot Chat | Rows written to other sessions |
+| ------------- | ---------------------------- | ------------------------------ |
+| patch         | 9                            | 15                             |
+| lumen         | 1                            | 0                              |
+| penny         | 0                            | 0                              |
+| wft-marketing | 0                            | 0                              |
 
 So nearly every open after a ten-minute pause paid the whole read for a chat that had not changed. The comment on
 `DECORATED_TTL` already said the lifetime "only bounds what an identity collision could serve". Decoration reads
@@ -40,6 +40,7 @@ Hermes runs in, not only the profile's: Hermes's `t()` labels tools in the langu
 (`agent/i18n.py:89-91`), and `projection_context` already stamped both.
 
 Not covered, and said so in the comment:
+
 - Hermes's projection also reads an attached image's file, the skin and installed language packs.
 - A commit the file stamps cannot see. The host runs Linux 6.8 on ext4, with coarse file times, so two commits within
   one clock tick, the second rewriting WAL frames in place at the same size, leave equal stamps. It also needs a
@@ -49,6 +50,7 @@ Not covered, and said so in the comment:
 A first fix kept one read-only connection per store to read `PRAGMA data_version`, which moves on every other
 connection's commit. On the host's SQLite 3.53.1 it did, against a `.backup` copy of `patch`'s WAL store with Hermes's
 own `SessionDB` writing. Re-review found it unsafe, and it was removed:
+
 - Hermes refuses to open a store for writing while any process holds a deleted `-wal` or `-shm` of it
   (`refuse_deleted_wal_generation`, `hermes_state_dbfile.py:355-393`). An untracked connection outlives profile
   deletion, so recreating a deleted assistant would fail until the gateway restarted.
@@ -63,17 +65,17 @@ the dashboard's, would then drop every assistant's decorated history.
 `python3 .agents/tools/mutate-py.py --batch ... --baseline` over `src/hermes/extension.py`, running
 `hermes_extension_journal_test`; the baseline passed.
 
-| Mutation | Result |
-| --- | --- |
-| ten-minute lifetime | failed: test_decorated_history_outlives_an_overnight_idle_until_its_bound (exit 1) |
-| untracked redaction keeps the day lifetime | failed: test_decorated_history_follows_native_redaction_registries (exit 1) |
+| Mutation                                   | Result                                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------------------------- |
+| ten-minute lifetime                        | failed: test_decorated_history_outlives_an_overnight_idle_until_its_bound (exit 1) |
+| untracked redaction keeps the day lifetime | failed: test_decorated_history_follows_native_redaction_registries (exit 1)        |
 
 After review, the same tool over the four add-on test modules; the baseline passed.
 
-| Mutation | Result |
-| --- | --- |
-| only the profile home's configuration | failed: test_the_configuration_of_the_home_hermes_runs_in_ends_a_profiles_decorated_history (exit 1) |
-| warm-up reuses a projection made under another context | failed: test_a_redaction_change_while_the_warm_up_stood_aside_projects_again (exit 1) |
+| Mutation                                               | Result                                                                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| only the profile home's configuration                  | failed: test_the_configuration_of_the_home_hermes_runs_in_ends_a_profiles_decorated_history (exit 1) |
+| warm-up reuses a projection made under another context | failed: test_a_redaction_change_while_the_warm_up_stood_aside_projects_again (exit 1)                |
 
 The second row is #375's fix, run again because its test changed (below).
 

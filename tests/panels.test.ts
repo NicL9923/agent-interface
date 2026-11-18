@@ -16,18 +16,36 @@ describe("lazy screens", () => {
   it("say they are opening, then show the screen", async () => {
     type Module = { default: () => ReturnType<typeof createElement> };
     let finish!: (module: Module) => void;
-    const Screen = lazy(() => new Promise<Module>(resolve => { finish = resolve; }));
+    const Screen = lazy(
+      () =>
+        new Promise<Module>((resolve) => {
+          finish = resolve;
+        }),
+    );
     await act(async () => root.render(createElement(Loading, null, createElement(Screen))));
     expect(container.querySelector("[role=status]")?.textContent).toBe("Opening…");
-    await act(async () => finish({ default: () => createElement("p", { id: "screen" }, "Settings") }));
+    await act(async () =>
+      finish({ default: () => createElement("p", { id: "screen" }, "Settings") }),
+    );
     expect(container.querySelector("#screen")?.textContent).toBe("Settings");
     expect(container.querySelector("[role=status]")).toBeNull();
   });
 
   it("offer a reload instead of blanking the app when a screen cannot load", async () => {
     quietConsoleErrors();
-    const Screen = lazy(() => Promise.reject(new Error("Failed to fetch dynamically imported module")));
-    await act(async () => root.render(createElement("div", null, createElement("p", { id: "app" }, "App"), createElement(Loading, null, createElement(Screen)))));
+    const Screen = lazy(() =>
+      Promise.reject(new Error("Failed to fetch dynamically imported module")),
+    );
+    await act(async () =>
+      root.render(
+        createElement(
+          "div",
+          null,
+          createElement("p", { id: "app" }, "App"),
+          createElement(Loading, null, createElement(Screen)),
+        ),
+      ),
+    );
     expect(container.querySelector("#app")?.textContent).toBe("App");
     expect(container.querySelector("[role=alert]")?.textContent).toContain("could not load");
     expect(container.querySelector("[role=alert] button")?.textContent).toBe("Reload");

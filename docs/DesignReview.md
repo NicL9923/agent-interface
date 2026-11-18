@@ -55,49 +55,49 @@ References collected October 25, 2026. External artwork is reference material on
 
 ## Screen ledger
 
-| Screen | Baseline | Implementation | Independent rating, High requested |
-| --- | --- | --- | --- |
-| Today, web and iOS | Web, iPhone and iPad captured | Complete | Web 9.2; iPhone 9.1; iPad 9.1 |
-| Assistants home | Web, iPhone and iPad captured | Complete | Web 9; native 9 |
-| Home context menus | Keyboard, touch and native submenus captured | Complete | Web 9.5; native 9.5 |
-| Conversation and composer | Web, iPhone and iPad captured | Complete | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9 |
-| Questions | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
-| Approvals | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone/iPad 9 |
-| Failed and interrupted turns | Web, iPhone and iPad captured | Complete | Web desktop/phone and iPhone 9.2; iPad 9.1 |
-| Assistant details and artifacts | Web, iPhone and iPad captured | Complete | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9 |
-| Assistant creation and settings | Web, iPhone and iPad captured | Complete | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
-| Avatar editor | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete | Web desktop/phone, iPhone and iPad 9 |
-| Models and capabilities | 35 web before, 43 web after; 26 native before and after states per device | Complete | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9 |
-| Memory | 20 web before, 35 after; 18 native before, 26 after per device | Complete | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9 |
-| Work frame and standing goal | 21 web and 20 native before frames per device verified | Complete | Web, iPhone and iPad 9 |
-| Work task board and actions | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames | Complete | Web refusal 9.5; remaining web states, iPhone and iPad 9 |
-| Work task editors | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed | Complete | Every frame 9 |
-| Work event triggers | Web, iPhone and iPad comparisons available | Complete | Whole-screen rounds: 7.6, 9.1. Six native large-text frames remain accepted |
-| Learning | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.0, 8.5, 9.0 |
-| Routines and results | Desktop/phone web and current iPhone views captured | Complete | Whole-screen rounds: 7.2, 8.6, 9.1 |
-| Logins and secure requests | Desktop/phone web and current iPhone logins captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Search, saved items and automations | Desktop/phone web and current iPhone captures | Complete | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly |
-| Group chats and threads | Desktop/phone web and iPhone conversation captured | Complete | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly |
-| Settings, following and home sections | Desktop/phone web and current iPhone front captured | Complete | Whole-area rounds: 8.0, 8.5, 9.0 |
-| Integrations | Desktop/phone web and current iPhone captured | Complete | Combined whole-area rounds: 7.8, 8.8, 9.1 |
-| Computer and terminal | Desktop/phone web and current iPhone viewer captured | Complete | Whole-area rounds: 7.6, 8.6, 9.0 |
-| Hermes updates and recovery | Desktop/phone web and iPhone recovery captured | Complete | Connection whole-area rounds: 7.0, 8.6, 9.0 |
-| Sign-in and connection recovery | Desktop/phone web and iPhone captured | Complete | Connection whole-area score 9.0 |
-| Command palette and keyboard help | Desktop/phone web captured | Complete | Included in Settings final whole-area score: 9.0 |
-| Attachments, upload failures and large paste | Not separately captured in this pass | Existing behavior retained | Auxiliary coverage gap tracked in #206 |
-| Find in conversation | Desktop/phone web captured and exercised | Complete | Included in Settings final whole-area score: 9.0 |
-| Voice recording and playback | Not separately captured in this pass | Existing behavior retained | Auxiliary coverage gap tracked in #206 |
-| Status dock, connection notices and app updates | Connection notices captured; app-update states not separately captured | Connection scope complete | Connection area 9.0; app-update coverage gap in #206 |
-| Toasts, undo and stop confirmation | Context-menu undo reviewed; other transient states not separately captured | Existing behavior retained | Home context menus 9.5; remaining coverage gap in #206 |
-| Notification setup and settings | Desktop/phone web and iPhone ready/blocked fixtures captured | Complete | Whole-area rounds: 7.5, 8.7, 9.1 |
-| Apple device connections | iPhone access/date form captured; snapshot preview source-reviewed | Complete within Notifications area | Whole-area score 9.1; real EventKit data unverified |
-| Offline library | Web outage/reconnect exercised; native cold start source-reviewed | Complete within final area | Whole-area score 9.0; cold-start coverage gap retained |
-| iOS quick switcher | Source reviewed; gestures not captured | Complete in Settings scope | Settings whole-area score 9.0; native interaction remains unverified |
-| Empty conversation | Desktop/phone web captured and draft action exercised | Complete | Final-area rounds: 8.3, 9.0 |
-| Empty household, app loading and load failure | Empty roster captured on web/iPhone; recovery captured separately | Complete in final/Connection areas | Both whole-area scores 9.0; not every loading transition captured |
-| iOS share extension | Shared-draft form captured; system extension source-reviewed | Complete within final area | Whole-area score 9.0; real import and system-hosted page unverified |
-| Widgets, Live Activity and notification content | Production small/medium widget views with sample fresh/stale/empty data | Complete within final area | Whole-area score 9.0; system hosts, Live Activity and notification rendering remain gaps |
-| Standalone computer page | Routing source-reviewed; embedded viewer captured | Computer scope complete | Computer area 9.0; standalone page not separately graded |
+| Screen                                          | Baseline                                                                             | Implementation                     | Independent rating, High requested                                                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Today, web and iOS                              | Web, iPhone and iPad captured                                                        | Complete                           | Web 9.2; iPhone 9.1; iPad 9.1                                                                                                      |
+| Assistants home                                 | Web, iPhone and iPad captured                                                        | Complete                           | Web 9; native 9                                                                                                                    |
+| Home context menus                              | Keyboard, touch and native submenus captured                                         | Complete                           | Web 9.5; native 9.5                                                                                                                |
+| Conversation and composer                       | Web, iPhone and iPad captured                                                        | Complete                           | Web conversation 9; web composer 9.5; iPhone/iPad conversation and composer 9                                                      |
+| Questions                                       | Web, iPhone and iPad captured                                                        | Complete                           | Web desktop/phone and iPhone/iPad 9                                                                                                |
+| Approvals                                       | Web, iPhone and iPad captured                                                        | Complete                           | Web desktop/phone and iPhone/iPad 9                                                                                                |
+| Failed and interrupted turns                    | Web, iPhone and iPad captured                                                        | Complete                           | Web desktop/phone and iPhone 9.2; iPad 9.1                                                                                         |
+| Assistant details and artifacts                 | Web, iPhone and iPad captured                                                        | Complete                           | Web details 9.1; artifacts desktop 9.2, phone 9; iPhone profile/artifacts 9.1, preview 9; iPad 9                                   |
+| Assistant creation and settings                 | Web, iPhone and iPad captured                                                        | Complete                           | Web creation/details 9.1, confirmations 9.2; iPhone creation/details/confirmations 9.2; iPad creation/details 9.1, confirmations 9 |
+| Avatar editor                                   | 17 web and 15 native baseline states; 24 web and 19 each on iPhone/iPad after states | Complete                           | Web desktop/phone, iPhone and iPad 9                                                                                               |
+| Models and capabilities                         | 35 web before, 43 web after; 26 native before and after states per device            | Complete                           | Models, Tools and Skills: web desktop/phone, iPhone and iPad 9                                                                     |
+| Memory                                          | 20 web before, 35 after; 18 native before, 26 after per device                       | Complete                           | Web desktop, tablet, phone, dark and 200% text 9; iPhone and iPad normal, dark, AX3 and recovery 9                                 |
+| Work frame and standing goal                    | 21 web and 20 native before frames per device verified                               | Complete                           | Web, iPhone and iPad 9                                                                                                             |
+| Work task board and actions                     | 67 shared before frames; 19 web, 23 iPhone and 23 iPad after frames                  | Complete                           | Web refusal 9.5; remaining web states, iPhone and iPad 9                                                                           |
+| Work task editors                               | Shared before baseline; 16 web, 13 iPhone and 9 iPad after frames reviewed           | Complete                           | Every frame 9                                                                                                                      |
+| Work event triggers                             | Web, iPhone and iPad comparisons available                                           | Complete                           | Whole-screen rounds: 7.6, 9.1. Six native large-text frames remain accepted                                                        |
+| Learning                                        | Desktop/phone web and current iPhone views captured                                  | Complete                           | Whole-screen rounds: 7.0, 8.5, 9.0                                                                                                 |
+| Routines and results                            | Desktop/phone web and current iPhone views captured                                  | Complete                           | Whole-screen rounds: 7.2, 8.6, 9.1                                                                                                 |
+| Logins and secure requests                      | Desktop/phone web and current iPhone logins captured                                 | Complete                           | Combined whole-area rounds: 7.8, 8.8, 9.1                                                                                          |
+| Search, saved items and automations             | Desktop/phone web and current iPhone captures                                        | Complete                           | Whole-area rounds: 8.2, 8.8, 9.0; final CSS and Back-state fixes applied directly                                                  |
+| Group chats and threads                         | Desktop/phone web and iPhone conversation captured                                   | Complete                           | Whole-area rounds: 7.0, 8.6, 9.0; final scroll follow-ups applied directly                                                         |
+| Settings, following and home sections           | Desktop/phone web and current iPhone front captured                                  | Complete                           | Whole-area rounds: 8.0, 8.5, 9.0                                                                                                   |
+| Integrations                                    | Desktop/phone web and current iPhone captured                                        | Complete                           | Combined whole-area rounds: 7.8, 8.8, 9.1                                                                                          |
+| Computer and terminal                           | Desktop/phone web and current iPhone viewer captured                                 | Complete                           | Whole-area rounds: 7.6, 8.6, 9.0                                                                                                   |
+| Hermes updates and recovery                     | Desktop/phone web and iPhone recovery captured                                       | Complete                           | Connection whole-area rounds: 7.0, 8.6, 9.0                                                                                        |
+| Sign-in and connection recovery                 | Desktop/phone web and iPhone captured                                                | Complete                           | Connection whole-area score 9.0                                                                                                    |
+| Command palette and keyboard help               | Desktop/phone web captured                                                           | Complete                           | Included in Settings final whole-area score: 9.0                                                                                   |
+| Attachments, upload failures and large paste    | Not separately captured in this pass                                                 | Existing behavior retained         | Auxiliary coverage gap tracked in #206                                                                                             |
+| Find in conversation                            | Desktop/phone web captured and exercised                                             | Complete                           | Included in Settings final whole-area score: 9.0                                                                                   |
+| Voice recording and playback                    | Not separately captured in this pass                                                 | Existing behavior retained         | Auxiliary coverage gap tracked in #206                                                                                             |
+| Status dock, connection notices and app updates | Connection notices captured; app-update states not separately captured               | Connection scope complete          | Connection area 9.0; app-update coverage gap in #206                                                                               |
+| Toasts, undo and stop confirmation              | Context-menu undo reviewed; other transient states not separately captured           | Existing behavior retained         | Home context menus 9.5; remaining coverage gap in #206                                                                             |
+| Notification setup and settings                 | Desktop/phone web and iPhone ready/blocked fixtures captured                         | Complete                           | Whole-area rounds: 7.5, 8.7, 9.1                                                                                                   |
+| Apple device connections                        | iPhone access/date form captured; snapshot preview source-reviewed                   | Complete within Notifications area | Whole-area score 9.1; real EventKit data unverified                                                                                |
+| Offline library                                 | Web outage/reconnect exercised; native cold start source-reviewed                    | Complete within final area         | Whole-area score 9.0; cold-start coverage gap retained                                                                             |
+| iOS quick switcher                              | Source reviewed; gestures not captured                                               | Complete in Settings scope         | Settings whole-area score 9.0; native interaction remains unverified                                                               |
+| Empty conversation                              | Desktop/phone web captured and draft action exercised                                | Complete                           | Final-area rounds: 8.3, 9.0                                                                                                        |
+| Empty household, app loading and load failure   | Empty roster captured on web/iPhone; recovery captured separately                    | Complete in final/Connection areas | Both whole-area scores 9.0; not every loading transition captured                                                                  |
+| iOS share extension                             | Shared-draft form captured; system extension source-reviewed                         | Complete within final area         | Whole-area score 9.0; real import and system-hosted page unverified                                                                |
+| Widgets, Live Activity and notification content | Production small/medium widget views with sample fresh/stale/empty data              | Complete within final area         | Whole-area score 9.0; system hosts, Live Activity and notification rendering remain gaps                                           |
+| Standalone computer page                        | Routing source-reviewed; embedded viewer captured                                    | Computer scope complete            | Computer area 9.0; standalone page not separately graded                                                                           |
 
 The avatar specimen is a developer tool and is outside this product design pass.
 Native layouts also need a representative iPad check.
@@ -165,7 +165,6 @@ conversation captures. Those remain assigned to their own screens, including
 the empty conversation, reduced-motion activity, approvals, assistant handoffs
 and stop confirmation. The final full-app review must include those states.
 
-
 ## Questions review history
 
 Questions passes at 9/10 on web desktop, web phone, iPhone and iPad. The
@@ -188,7 +187,6 @@ fixtures exercise light, dark, narrow widths, large text, written answers,
 failure and retry. Web refreshes its private fixture explicitly after checking
 the accepted local state; this does not establish live server event delivery.
 Native checks use simulators, with no manual VoiceOver or physical-device run.
-
 
 ## Approvals review history
 
@@ -245,7 +243,6 @@ The [acceptance note](evidence/design-review/settings-acceptance.md) records the
 32 annotated comparisons and limits. Native enlarged text is AX3, not AX5.
 The final [independent review](evidence/design-review/settings-final-review.md)
 recomputed the source and measured both Retry labels at 5.91:1.
-
 
 ## Avatar editor acceptance
 
@@ -459,7 +456,6 @@ and the native policy explanation is a section footer. These do not start a
 fourth review round. Native review-sheet interaction, clipboard and VoiceOver
 remain outside the screenshot coverage. Routines is next.
 
-
 ## Routines and results
 
 [Round 1](evidence/design-review/routines-screen-review.md) scored 7.2.
@@ -477,7 +473,6 @@ iPhone capture covers the routine list, labels, recipe and trial explanation.
 Native editor and result interactions, VoiceOver, large text and live execution
 are outside these captures.
 
-
 [Round 2](evidence/design-review/routines-screen-round2.md) scored 8.6.
 The final revision fixes the instruction font cascade, makes the preview footnote
 muted, distinguishes Paused with a badge on both clients, restores focus to
@@ -491,7 +486,6 @@ focus, and paused and resumed the synthetic routine at both widths. Fresh native
 captures show the paused-state badge. Pending-run help and saved-edit focus have
 focused behavioral coverage; no live routine execution is claimed.
 
-
 [Round 3](evidence/design-review/routines-screen-round3.md) passed Routines
 and results at 9.1. The two small follow-ups were applied directly: native routine
 instructions use body text, and Retry has its own explanation that resending may
@@ -500,7 +494,6 @@ run the routine. Recipient checkbox spacing remains a minor polish item in
 currently relies on retaining the cards during reload; preserve that behavior if
 the loading presentation changes. Native editor/results interaction, VoiceOver,
 dark mode, large text and live routine execution remain outside the captures.
-
 
 ## Secure requests, logins and integrations
 
@@ -525,7 +518,6 @@ secure-request and native Logins captures remain valid. Clipboard success/failur
 has a focused mock test; actual clipboard access, real provider sign-in, native
 forms/dialogs, VoiceOver, dark mode and large text were not exercised.
 
-
 [Round 2](evidence/design-review/security-integrations-screen-round2.md) scored
 8.8. The final revision puts the recommended connection action first on both
 clients, uses amber for recoverable web connection states, and matches account
@@ -542,7 +534,6 @@ web widths. No real vault or provider was contacted. A fresh iPhone capture
 confirms the native action order. Clipboard and the previously unobserved native
 forms, VoiceOver, dark mode and large text remain outside runtime coverage.
 
-
 [Round 3](evidence/design-review/security-integrations-screen-round3.md) passed
 the combined area at 9.1. The contrast miss was fixed directly after the final
 review. Amber chips use a darker adaptive mix, and gray chips use the existing
@@ -557,7 +548,6 @@ web captures show the wider desktop cards. The existing native capture remains
 valid. Real clipboard, provider sign-in, native forms/dialogs, VoiceOver, full
 dark mode and large text remain outside the observed coverage. Search, Saved
 items and Automations are next.
-
 
 ## Search, Saved items and Automations
 
@@ -610,7 +600,6 @@ that clipped the tab strip or save notice before scrolling, and clear native
 history errors and notices on Back. The agent checked the header at scroll zero
 with a save notice and again at the end of history at both web widths. No fourth
 review is planned. Group conversations are next.
-
 
 ## Group conversations
 
@@ -669,7 +658,6 @@ compiled; its scroll behavior remains source-only. Repeated quotes in long
 single-thread runs and initial-position consistency remain optional polish.
 App settings and navigation are next. No fourth group review is planned.
 
-
 ## Settings and navigation, round 1
 
 Nineteen of 25 grouped areas have passed. Learning and Routines are counted
@@ -699,7 +687,6 @@ VoiceOver, dark mode and large text remain unverified. Native and web fixture
 account names, update dates and start-page values differ by fixture setup.
 No product parity claim comes from those values. Both browser and preview
 server were closed after capture. The first whole-area review is pending.
-
 
 Settings round 1 scored 8.0. Find now shares its text-range lookup with the
 highlight renderer and reveals the actual match inside a long message. It uses
@@ -731,7 +718,6 @@ closed. The second review is pending. Palette links to deeper Settings pages
 remain optional navigation work; live saves, native subpage gestures, quiet-hour
 menus, Sign out, VoiceOver, dark mode and larger text are not newly verified.
 
-
 ## Computer and terminal, round 1
 
 The agent captured the shared desktop and system terminal at both web widths.
@@ -749,7 +735,6 @@ Take over and the Safari and Terminal links. Native takeover and Safari gestures
 identity confirmation, unavailable and reconnecting states, provider access,
 VoiceOver, dark mode and large text remain unverified. The browser and preview
 server are closed. This is a baseline for the first whole-area review.
-
 
 Settings round 2 scored 8.5. The final pass always finishes a native dialog close
 so the app can reopen Settings, even when a local name is invalid. Keep original
@@ -779,7 +764,6 @@ contains both widths; the error frames were refreshed after their final CSS
 polish. Browser and preview server are closed. The third review is final; any
 remaining issues will be recorded in the PR and the review will move on.
 
-
 Settings finished its third and final round at 9.0/10, so 20 of 25 grouped areas
 have passed. The review confirmed all seven round-2 findings were addressed,
 with native interactions and incoming-Find behavior explicitly labeled as
@@ -791,7 +775,6 @@ adds a new matching reply, checking that the replacement remains selected.
 All 109 focused checks and the web and native builds pass. Native gestures,
 VoiceOver, live saves, dark mode and large text remain unverified. No fourth
 Settings review is planned. Computer and terminal's first review is underway.
-
 
 Computer round 1 scored 7.6. The phone desktop stage now follows the remote
 canvas dimensions, including resolution changes. An accent border and badge
@@ -819,7 +802,6 @@ Native gestures, Safari interaction, VoiceOver, dark mode, large text, live
 hosts, identity confirmation and reconnecting-state pixels remain unverified.
 The browser, server and simulator are closed. Round 2 is pending.
 
-
 Computer round 2 scored 8.6. The final pass hides the persistent-shell warning
 when the shell has ended, with an assertion in the existing ended-shell test.
 The control badge no longer covers remote controls. The toolbar label and
@@ -833,7 +815,6 @@ Watching view was captured again; native after-takeover remains source-only.
 The browser, preview server and simulator are closed. The third review is final;
 remaining issues will go into the PR without a fourth review.
 
-
 Computer finished at 9.0 in its third and final round, bringing progress to
 21 of 25 grouped areas. The review confirmed the ended-shell warning is gone
 and no label obscures remote controls. Small follow-ups move the web outline
@@ -843,7 +824,6 @@ cleanup is included. The watch-mode headline deliberately emphasizes local
 Watching, rather than account ownership; Take over to use it here explains the
 next action. All 40 focused checks and both builds pass. Native large-text
 rendering and gestures remain unverified. No fourth review is planned.
-
 
 ## Event triggers, round 2
 
@@ -868,17 +848,14 @@ The six accepted native large-text frames remain accepted. Their uncovered form
 tails, VoiceOver, real clipboard behavior and current large-text layout remain
 unverified. The second whole-screen review is pending.
 
-
 Event triggers passed at 9.1 in round 2, bringing progress to 22 of 25 grouped
 areas. The review confirmed all five principal findings were fixed. The web
 secret labels were then made small and muted to match the list and native;
 only those two web states were recaptured and inspected after the CSS change.
 No third review is needed. Native create-field label hierarchy, example-copy
-parity and the shared-shell scroll strip remain optional follow-ups in issue
-206. Native gestures, revealed-normal state, real clipboard behavior, VoiceOver
+parity and the shared-shell scroll strip remain optional follow-ups in issue 206. Native gestures, revealed-normal state, real clipboard behavior, VoiceOver
 and current large-text layout remain unverified. The six accepted native
 large-text frames remain accepted. Connection and update recovery are next.
-
 
 ## Connection, sign-in and update recovery, round 1
 
@@ -954,7 +931,6 @@ note and recovery section. The browser, preview server and simulator are closed.
 The third review is final. Any remaining issues go into issue 206, with no fourth
 round. Native interaction, real sign-in/update operations, VoiceOver, dark mode
 and large text remain unverified. Progress stays 22 of 25 until that review.
-
 
 Connection and update recovery finished at 9.0 in round 3, bringing progress to
 23 of 25 grouped areas. The final review confirmed the eight round-2 fixes.
@@ -1035,7 +1011,6 @@ Dated-reminder inclusion remains a device coverage question. Native XCTest,
 VoiceOver, dark mode and large text are still unverified. Round 2 is pending;
 progress remains 23 of 25 grouped areas.
 
-
 ## Notifications and Apple devices, round 3 preparation
 
 Round 2 scored 8.7. Quiet-hours errors now have their own spacing and explain
@@ -1069,7 +1044,6 @@ EventKit permissions/data, push delivery, native gestures, XCTest, VoiceOver,
 dark mode and large text remain unverified. Round 3 is the final review round;
 progress remains 23 of 25 grouped areas until its result.
 
-
 ## Notifications and Apple devices complete
 
 Round 3 scored 9.1 with no blockers. Progress is 24 of 25 grouped areas.
@@ -1084,7 +1058,6 @@ is recorded as a minor layout follow-up, especially for large text, rather than
 starting a fourth review. Real EventKit integration, push delivery, native
 preview/confirmation gestures, VoiceOver, dark mode and large text remain gaps.
 The final area is empty/offline content, share extensions and widgets.
-
 
 ## Empty/offline content, shared drafts and widgets baseline
 
@@ -1110,7 +1083,6 @@ and preview server are closed. This commit adds capture entry points rather than
 changing product behavior. Progress remains 24 of 25 grouped areas, with the
 first whole-area review pending. The final Notifications footer wording was
 also recaptured after its small follow-up.
-
 
 ## Empty/offline content, shared drafts and widgets, round 2
 
@@ -1147,7 +1119,6 @@ The browser, preview server and simulator are closed. Real share-sheet import,
 file transfer, cold-start offline reading, system-hosted widgets, VoiceOver,
 dark mode and large text remain unverified. Progress remains 24 of 25 grouped
 areas, pending the second whole-area review.
-
 
 ## Design pass complete
 

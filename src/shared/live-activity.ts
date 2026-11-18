@@ -1,5 +1,13 @@
 /** One row of the aggregate Live Activity. docs/native-api.md is the contract the iOS app decodes. */
-export type LivePhase = "starting" | "thinking" | "working" | "waiting" | "blocked" | "done" | "failed" | "interrupted";
+export type LivePhase =
+  | "starting"
+  | "thinking"
+  | "working"
+  | "waiting"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "interrupted";
 export interface LiveRow {
   botId: string;
   name: string;

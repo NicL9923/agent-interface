@@ -10,11 +10,16 @@ export const TAPE_LENGTH = 12;
 export function toolGlyph(name: string): IconName {
   if (usesComputer(name)) return "computer";
   switch (avatarProp(name)) {
-    case "search": return "search";
-    case "computer": return "terminal";
-    case "read": return "file";
-    case "write": return "pencil";
-    default: return /agent|delegate|subagent/i.test(name) ? "robot" : "sparkle";
+    case "search":
+      return "search";
+    case "computer":
+      return "terminal";
+    case "read":
+      return "file";
+    case "write":
+      return "pencil";
+    default:
+      return /agent|delegate|subagent/i.test(name) ? "robot" : "sparkle";
   }
 }
 
@@ -24,4 +29,8 @@ export function tapeSteps(calls: ToolCall[], length = TAPE_LENGTH) {
   return { shown, folded: calls.length - shown.length };
 }
 
-export const stepStatus: Record<ToolCall["status"], string> = { running: "running", completed: "done", failed: "failed" };
+export const stepStatus: Record<ToolCall["status"], string> = {
+  running: "running",
+  completed: "done",
+  failed: "failed",
+};

@@ -43,36 +43,36 @@ falls through to the old review path with the blocked status kept. An acquire wi
 A scratch runner applied each replacement, deleted every `__pycache__`, ran the test file with `python3 -B` and
 `PYTHONDONTWRITEBYTECODE=1`, and restored the file. All went red; the restored tree then passed.
 
-| Broken | File run | Red |
-| --- | --- | --- |
-| App stopped before acquire (the old order) | `tests/deploy_common_test.py` | 6 failures, including the order test and the busy test |
-| Blocked status written after acquire | `tests/deploy_common_test.py` | 9 failures, including the order test |
-| No release on refusal | `tests/deploy_common_test.py` | 4 failures and 3 errors, including the lost-answer test |
-| Fence "refused: maintenance released" removed | `tests/deploy_common_test.py` | the uncertain-refusal test |
-| Fence "refused: no maintenance lease remains" removed | `tests/deploy_common_test.py` | the uncertain-refusal test |
-| Fence "refused: update status is still this operation's blocked status" removed | `tests/deploy_common_test.py` | the uncertain-refusal test |
-| Fence "refused: pending update requests are complete" removed | `tests/deploy_common_test.py` | the uncertain-refusal test |
-| Saved status not restored on refusal | `tests/deploy_common_test.py` | 4 failures: busy, lost answer, unexpected answers |
-| `maintenance-refused` not journaled | `tests/deploy_common_test.py` | the busy test |
-| Refusal raised as a plain error | `tests/deploy_common_test.py` | 4 errors: busy, lost answer, unexpected answers |
-| Fence "pending update requests complete after the app stopped" removed | `tests/deploy_common_test.py` | the request-during-stop test |
-| Blocked status not rewritten after the stop | `tests/deploy_common_test.py` | the status-during-stop test |
-| A journal write placed before the `--check` exit | `tests/deploy_common_test.py` | the `--check` structure test |
-| Wrapper treats exit 75 as a failure | `tests/release_app_test.py` | the refusal test |
-| Wrapper treats a preflight's exit 75 as a refusal | `tests/release_app_test.py` | the refusal test |
-| Wrapper leaves a refused stage `activating` | `tests/release_app_test.py` | the refusal test |
+| Broken                                                                          | File run                      | Red                                                     |
+| ------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------- |
+| App stopped before acquire (the old order)                                      | `tests/deploy_common_test.py` | 6 failures, including the order test and the busy test  |
+| Blocked status written after acquire                                            | `tests/deploy_common_test.py` | 9 failures, including the order test                    |
+| No release on refusal                                                           | `tests/deploy_common_test.py` | 4 failures and 3 errors, including the lost-answer test |
+| Fence "refused: maintenance released" removed                                   | `tests/deploy_common_test.py` | the uncertain-refusal test                              |
+| Fence "refused: no maintenance lease remains" removed                           | `tests/deploy_common_test.py` | the uncertain-refusal test                              |
+| Fence "refused: update status is still this operation's blocked status" removed | `tests/deploy_common_test.py` | the uncertain-refusal test                              |
+| Fence "refused: pending update requests are complete" removed                   | `tests/deploy_common_test.py` | the uncertain-refusal test                              |
+| Saved status not restored on refusal                                            | `tests/deploy_common_test.py` | 4 failures: busy, lost answer, unexpected answers       |
+| `maintenance-refused` not journaled                                             | `tests/deploy_common_test.py` | the busy test                                           |
+| Refusal raised as a plain error                                                 | `tests/deploy_common_test.py` | 4 errors: busy, lost answer, unexpected answers         |
+| Fence "pending update requests complete after the app stopped" removed          | `tests/deploy_common_test.py` | the request-during-stop test                            |
+| Blocked status not rewritten after the stop                                     | `tests/deploy_common_test.py` | the status-during-stop test                             |
+| A journal write placed before the `--check` exit                                | `tests/deploy_common_test.py` | the `--check` structure test                            |
+| Wrapper treats exit 75 as a failure                                             | `tests/release_app_test.py`   | the refusal test                                        |
+| Wrapper treats a preflight's exit 75 as a refusal                               | `tests/release_app_test.py`   | the refusal test                                        |
+| Wrapper leaves a refused stage `activating`                                     | `tests/release_app_test.py`   | the refusal test                                        |
 
 ## Checks
 
-| Check | Result |
-| --- | --- |
-| `npm run test:py` | 44 files passed, 0 skipped, 0 failed (206.7 s) |
-| `tests/deploy_common_test.py` | 26 tests, 9 new: 8 for the ordered steps, 1 for `--check` |
-| `tests/release_app_test.py` | 50 tests, 1 new: exit 75 keeps the stage prepared, a preflight's 75 is a failure |
-| `ruff check .` (0.17.3) | all checks passed |
-| `npm run typecheck` | passed |
-| `npm run lint` | passed |
-| `npm test` | 192 files, 3202 tests passed |
+| Check                         | Result                                                                           |
+| ----------------------------- | -------------------------------------------------------------------------------- |
+| `npm run test:py`             | 44 files passed, 0 skipped, 0 failed (206.7 s)                                   |
+| `tests/deploy_common_test.py` | 26 tests, 9 new: 8 for the ordered steps, 1 for `--check`                        |
+| `tests/release_app_test.py`   | 50 tests, 1 new: exit 75 keeps the stage prepared, a preflight's 75 is a failure |
+| `ruff check .` (0.17.3)       | all checks passed                                                                |
+| `npm run typecheck`           | passed                                                                           |
+| `npm run lint`                | passed                                                                           |
+| `npm test`                    | 192 files, 3202 tests passed                                                     |
 
 ## Not exercised
 
@@ -117,21 +117,21 @@ restore, so the file keeps the app's bytes; the runbook now says to leave them i
 A scratch runner applied each replacement, deleted every `__pycache__`, ran the test file with `python3 -B` and
 `PYTHONDONTWRITEBYTECODE=1` from `tests/`, and restored the file. All went red; the restored tree then passed.
 
-| Broken | File run | Red |
-| --- | --- | --- |
-| Unanswered acquire refused like a finished one (`f03b7ed`'s behavior) | `tests/deploy_common_test.py` | the unanswered-acquire test, 1 failure and 2 errors |
-| No release after an unanswered acquire | `tests/deploy_common_test.py` | the unanswered-acquire test, 3 subtests |
-| A failed release after an unanswered acquire propagates | `tests/deploy_common_test.py` | the unanswered-acquire test, release unreachable |
-| Any error answer treated as the busy refusal | `tests/deploy_common_test.py` | the other-error-answer test |
-| `maintenance_rpc` never raises `Answered` | `tests/deploy_common_test.py` | the error-answer test |
-| `Answered` without the one-key shape check | `tests/deploy_common_test.py` | the failed-child test |
-| `Answered` without the error-object check | `tests/deploy_common_test.py` | the failed-child test |
-| A non-JSON last line not caught | `tests/deploy_common_test.py` | the failed-child test |
-| Acquire keeps the 15 s wait | `tests/deploy_common_test.py` | the acquire-wait test |
-| `NATIVE` ignores `wait` | `tests/deploy_common_test.py` | the acquire-wait test |
-| `NATIVE` prints no answered error | `tests/deploy_common_test.py` | the error-answer test |
-| The guarded tool's `rpc` uses plain `run` | `tests/deploy_common_test.py` | the wiring test |
-| The add-on's busy message differs from `BUSY_REFUSAL` | `tests/hermes_send_lanes_test.py` | the maintenance active-work test |
+| Broken                                                                | File run                          | Red                                                 |
+| --------------------------------------------------------------------- | --------------------------------- | --------------------------------------------------- |
+| Unanswered acquire refused like a finished one (`f03b7ed`'s behavior) | `tests/deploy_common_test.py`     | the unanswered-acquire test, 1 failure and 2 errors |
+| No release after an unanswered acquire                                | `tests/deploy_common_test.py`     | the unanswered-acquire test, 3 subtests             |
+| A failed release after an unanswered acquire propagates               | `tests/deploy_common_test.py`     | the unanswered-acquire test, release unreachable    |
+| Any error answer treated as the busy refusal                          | `tests/deploy_common_test.py`     | the other-error-answer test                         |
+| `maintenance_rpc` never raises `Answered`                             | `tests/deploy_common_test.py`     | the error-answer test                               |
+| `Answered` without the one-key shape check                            | `tests/deploy_common_test.py`     | the failed-child test                               |
+| `Answered` without the error-object check                             | `tests/deploy_common_test.py`     | the failed-child test                               |
+| A non-JSON last line not caught                                       | `tests/deploy_common_test.py`     | the failed-child test                               |
+| Acquire keeps the 15 s wait                                           | `tests/deploy_common_test.py`     | the acquire-wait test                               |
+| `NATIVE` ignores `wait`                                               | `tests/deploy_common_test.py`     | the acquire-wait test                               |
+| `NATIVE` prints no answered error                                     | `tests/deploy_common_test.py`     | the error-answer test                               |
+| The guarded tool's `rpc` uses plain `run`                             | `tests/deploy_common_test.py`     | the wiring test                                     |
+| The add-on's busy message differs from `BUSY_REFUSAL`                 | `tests/hermes_send_lanes_test.py` | the maintenance active-work test                    |
 
 ### Tests
 
@@ -141,17 +141,16 @@ release. Each keeps the blocked status and raises the fence, not `Refused`. The 
 error, and a new test holds another error answer for review without a release. `MaintenanceRpcTests` runs the helper's
 real `NATIVE` against a local ticket server and a fake WebSocket client module that fails on any unscripted receive.
 
-
 ### Checks
 
-| Check | Result |
-| --- | --- |
-| `npm run test:py` | 44 files passed, 0 skipped, 0 failed (262.3 s) |
-| `tests/deploy_common_test.py` | 32 tests, 6 new: 4 for `NATIVE` through `maintenance_rpc`, 1 for another error answer, 1 for the tool's wiring; the lost-answer test replaced |
-| `ruff check .` (0.17.3) | all checks passed |
-| `npm run typecheck` | passed |
-| `npm run lint` | passed |
-| `npm test` | 192 files, 3202 tests passed on three runs. The first run, right after `npm ci`, failed 6 tests in 2 files; its output was not kept and the failure did not recur. This fix changed no TypeScript |
+| Check                         | Result                                                                                                                                                                                            |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run test:py`             | 44 files passed, 0 skipped, 0 failed (262.3 s)                                                                                                                                                    |
+| `tests/deploy_common_test.py` | 32 tests, 6 new: 4 for `NATIVE` through `maintenance_rpc`, 1 for another error answer, 1 for the tool's wiring; the lost-answer test replaced                                                     |
+| `ruff check .` (0.17.3)       | all checks passed                                                                                                                                                                                 |
+| `npm run typecheck`           | passed                                                                                                                                                                                            |
+| `npm run lint`                | passed                                                                                                                                                                                            |
+| `npm test`                    | 192 files, 3202 tests passed on three runs. The first run, right after `npm ci`, failed 6 tests in 2 files; its output was not kept and the failure did not recur. This fix changed no TypeScript |
 
 The guarded tool was not run, and `NATIVE` did not reach a real Hermes. The 120 s acquire wait is sized from the add-on's
 source, not from a measured acquire during a compaction.

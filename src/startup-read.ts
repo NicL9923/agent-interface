@@ -17,18 +17,30 @@ type Read = { path: string; response: PromiseLike<Response>; abort(): void };
  */
 type StartupReads = { version: number; epoch: string; reads: Read[] };
 declare global {
-  interface Window { __wildbotsStartup?: unknown }
+  interface Window {
+    __wildbotsStartup?: unknown;
+  }
 }
 
 const isRead = (value: unknown): value is Read => {
   const read = value as Partial<Read> | null;
-  return !!read && typeof read === "object" && typeof read.path === "string" && typeof read.abort === "function" && typeof read.response?.then === "function";
+  return (
+    !!read &&
+    typeof read === "object" &&
+    typeof read.path === "string" &&
+    typeof read.abort === "function" &&
+    typeof read.response?.then === "function"
+  );
 };
 function parse(value: unknown): StartupReads | null {
   if (!value || typeof value !== "object") return null;
   const startup = value as Partial<StartupReads>;
   // An `epoch` that is not text never equals the stored record, so the claim below drops it.
-  return startup.version === STARTUP_READ_VERSION && Array.isArray(startup.reads) && startup.reads.every(isRead) ? startup as StartupReads : null;
+  return startup.version === STARTUP_READ_VERSION &&
+    Array.isArray(startup.reads) &&
+    startup.reads.every(isRead)
+    ? (startup as StartupReads)
+    : null;
 }
 
 /** Lets every read go unused, as when the account changes before the app asks for them. */
@@ -39,7 +51,11 @@ export function dropStartupRead() {
   // Whatever can be aborted, in this shape or another release's, such as one read with its own `abort`.
   const reads: unknown[] = Array.isArray(startup?.reads) ? startup.reads : [startup?.reads];
   for (const read of [startup, ...reads] as (Partial<Read> | null | undefined)[]) {
-    try { if (typeof read?.abort === "function") read.abort(); } catch { /* Gone either way. */ }
+    try {
+      if (typeof read?.abort === "function") read.abort();
+    } catch {
+      /* Gone either way. */
+    }
   }
 }
 
@@ -50,14 +66,18 @@ export function dropStartupRead() {
  * is taken once; the others stay for their own paths. The caller releases abort forwarding only after
  * consuming the body, since fetch resolves when headers arrive.
  */
-export function takeStartupRead(path: string, signal: AbortSignal, fallback: () => Promise<Response>): { response: Promise<Response>; release(): void } | undefined {
+export function takeStartupRead(
+  path: string,
+  signal: AbortSignal,
+  fallback: () => Promise<Response>,
+): { response: Promise<Response>; release(): void } | undefined {
   if (typeof window === "undefined" || window.__wildbotsStartup === undefined) return undefined;
   const startup = parse(window.__wildbotsStartup);
   if (!startup) {
     dropStartupRead();
     return undefined;
   }
-  const index = startup.reads.findIndex(read => read.path === path);
+  const index = startup.reads.findIndex((read) => read.path === path);
   if (index < 0) return undefined;
   // Made under another account record: the cookie they carried may be another account's. The app asks for itself.
   if (!accountRecordIs(startup.epoch)) {
@@ -71,8 +91,10 @@ export function takeStartupRead(path: string, signal: AbortSignal, fallback: () 
   else signal.addEventListener("abort", abort, { once: true });
   // An answer that arrives after the record changed is discarded by api(), as any answer is.
   return {
-    response: Promise.resolve(read.response)
-      .then(response => response, error => signal.aborted ? Promise.reject(error) : fallback()),
+    response: Promise.resolve(read.response).then(
+      (response) => response,
+      (error) => (signal.aborted ? Promise.reject(error) : fallback()),
+    ),
     release: () => signal.removeEventListener("abort", abort),
   };
 }

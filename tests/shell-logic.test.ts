@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { rankItems, scoreText, step, type PaletteItem } from "../src/app/palette";
-import { applePlatform, formatCombo, isTypingTarget, matchCombo, shortcuts } from "../src/app/shortcuts";
+import {
+  applePlatform,
+  formatCombo,
+  isTypingTarget,
+  matchCombo,
+  shortcuts,
+} from "../src/app/shortcuts";
 import { ownPrompts, recallStep, type Recall } from "../src/app/prompt-recall";
 import { LARGE_PASTE_BYTES, largePasteFile } from "../src/app/large-paste";
 import { sortDock, type DockItem } from "../src/app/StatusDock";
@@ -15,13 +21,18 @@ describe("palette ranking", () => {
   const items: PaletteItem[] = [
     { id: "kitchen", group: "Assistants", label: "Kitchen companion" },
     { id: "trail", group: "Assistants", label: "Trail guide" },
-    { id: "ranch", group: "Assistants", label: "Ranch hand", keywords: ["Fences and the north gate"] },
+    {
+      id: "ranch",
+      group: "Assistants",
+      label: "Ranch hand",
+      keywords: ["Fences and the north gate"],
+    },
     { id: "today", group: "Go to", label: "Today" },
     { id: "groups", group: "Go to", label: "Group chats" },
     { id: "dark", group: "Appearance", label: "Appearance: Dark", keywords: ["theme"] },
     { id: "search", group: "Search", label: "", trailing: true },
   ];
-  const ids = (query: string) => rankItems(query, items).map(item => item.id);
+  const ids = (query: string) => rankItems(query, items).map((item) => item.id);
 
   it("keeps the given order and hides trailing items without a query", () => {
     expect(ids("")).toEqual(["kitchen", "trail", "ranch", "today", "groups", "dark"]);
@@ -63,7 +74,12 @@ describe("shortcut matching", () => {
     try {
       expect(applePlatform()).toBe(apple);
       expect(formatCombo(shortcuts.palette)).toBe(apple ? "⌘K" : "Ctrl+K");
-      expect(matchCombo(new KeyboardEvent("keydown", { key: "k", metaKey: apple, ctrlKey: !apple }), shortcuts.palette)).toEqual({});
+      expect(
+        matchCombo(
+          new KeyboardEvent("keydown", { key: "k", metaKey: apple, ctrlKey: !apple }),
+          shortcuts.palette,
+        ),
+      ).toEqual({});
     } finally {
       vi.unstubAllGlobals();
     }
@@ -77,15 +93,23 @@ describe("shortcut matching", () => {
     expect(matchCombo(key({ key: "k", metaKey: true }), shortcuts.palette, true)).toEqual({});
     expect(matchCombo(key({ key: "k", ctrlKey: true }), shortcuts.palette, true)).toBe(false);
     expect(matchCombo(key({ key: "K", ctrlKey: true }), shortcuts.palette, false)).toEqual({});
-    expect(matchCombo(key({ key: "k", ctrlKey: true, metaKey: true }), shortcuts.palette, false)).toBe(false);
-    expect(matchCombo(key({ key: "k", metaKey: true, altKey: true }), shortcuts.palette, true)).toBe(false);
+    expect(
+      matchCombo(key({ key: "k", ctrlKey: true, metaKey: true }), shortcuts.palette, false),
+    ).toBe(false);
+    expect(
+      matchCombo(key({ key: "k", metaKey: true, altKey: true }), shortcuts.palette, true),
+    ).toBe(false);
     expect(formatCombo(shortcuts.palette, true)).toBe("⌘K");
     expect(formatCombo(shortcuts.stop, false)).toBe("Ctrl+.");
   });
   it("reads the pinned digit by key or physical key", () => {
-    expect(matchCombo(key({ key: "3", metaKey: true }), shortcuts.pinned, true)).toEqual({ digit: 3 });
+    expect(matchCombo(key({ key: "3", metaKey: true }), shortcuts.pinned, true)).toEqual({
+      digit: 3,
+    });
     // A layout where the digit row types symbols without Shift.
-    expect(matchCombo(key({ key: "&", code: "Digit1", metaKey: true }), shortcuts.pinned, true)).toEqual({ digit: 1 });
+    expect(
+      matchCombo(key({ key: "&", code: "Digit1", metaKey: true }), shortcuts.pinned, true),
+    ).toEqual({ digit: 1 });
     expect(matchCombo(key({ key: "0", metaKey: true }), shortcuts.pinned, true)).toBe(false);
   });
   it("leaves plain keys to the person typing but lets field shortcuts through", () => {
@@ -95,20 +119,41 @@ describe("shortcut matching", () => {
     expect(isTypingTarget(document.createElement("input"))).toBe(true);
     expect(isTypingTarget(checkbox)).toBe(false);
     expect(isTypingTarget(document.createElement("button"))).toBe(false);
-    expect(matchCombo(key({ key: "?", shiftKey: true, target: field }), shortcuts.help, true)).toBe(false);
-    expect(matchCombo(key({ key: "?", shiftKey: true, target: document.body }), shortcuts.help, true)).toEqual({});
-    expect(matchCombo(key({ key: "z", metaKey: true, target: field }), shortcuts.undo, true)).toBe(false);
-    expect(matchCombo(key({ key: "k", metaKey: true, target: field }), shortcuts.palette, true)).toEqual({});
-    expect(matchCombo(key({ key: "k", metaKey: true, isComposing: true }), shortcuts.palette, true)).toBe(false);
-    expect(matchCombo(key({ key: "z", metaKey: true, shiftKey: true }), shortcuts.undo, true)).toBe(false);
+    expect(matchCombo(key({ key: "?", shiftKey: true, target: field }), shortcuts.help, true)).toBe(
+      false,
+    );
+    expect(
+      matchCombo(key({ key: "?", shiftKey: true, target: document.body }), shortcuts.help, true),
+    ).toEqual({});
+    expect(matchCombo(key({ key: "z", metaKey: true, target: field }), shortcuts.undo, true)).toBe(
+      false,
+    );
+    expect(
+      matchCombo(key({ key: "k", metaKey: true, target: field }), shortcuts.palette, true),
+    ).toEqual({});
+    expect(
+      matchCombo(key({ key: "k", metaKey: true, isComposing: true }), shortcuts.palette, true),
+    ).toBe(false);
+    expect(matchCombo(key({ key: "z", metaKey: true, shiftKey: true }), shortcuts.undo, true)).toBe(
+      false,
+    );
   });
 });
 
 describe("prompt recall", () => {
-  const message = (id: string, text: string, sender = "one", role: Message["role"] = "user"): Message => ({ id, role, text, sender: { id: sender, name: sender } });
+  const message = (
+    id: string,
+    text: string,
+    sender = "one",
+    role: Message["role"] = "user",
+  ): Message => ({ id, role, text, sender: { id: sender, name: sender } });
   const messages = [
-    message("1", "Plan dinner"), message("2", "Sure", "one", "assistant"), message("3", "Fix the gate", "two"),
-    message("4", "What about Tuesday?"), message("5", "Plan dinner"), message("6-inflight", "Sending now"),
+    message("1", "Plan dinner"),
+    message("2", "Sure", "one", "assistant"),
+    message("3", "Fix the gate", "two"),
+    message("4", "What about Tuesday?"),
+    message("5", "Plan dinner"),
+    message("6-inflight", "Sending now"),
   ];
   it("lists this person's own messages newest first, once each", () => {
     expect(ownPrompts(messages, "one")).toEqual(["Plan dinner", "What about Tuesday?"]);
@@ -135,8 +180,12 @@ describe("prompt recall", () => {
     expect(recallStep(null, "ArrowUp", ["Hi"], "draft", true, false)).toBeNull();
     expect(recallStep(null, "ArrowUp", [], "", true, true)).toBeNull();
     // Inside a long recalled message the caret moves first.
-    expect(recallStep({ index: 0, draft: "" }, "ArrowUp", ["a\nb", "c"], "a\nb", false, true)).toBeNull();
-    expect(recallStep({ index: 0, draft: "" }, "ArrowDown", ["a\nb", "c"], "a\nb", true, false)).toBeNull();
+    expect(
+      recallStep({ index: 0, draft: "" }, "ArrowUp", ["a\nb", "c"], "a\nb", false, true),
+    ).toBeNull();
+    expect(
+      recallStep({ index: 0, draft: "" }, "ArrowDown", ["a\nb", "c"], "a\nb", true, false),
+    ).toBeNull();
   });
 });
 
@@ -144,20 +193,39 @@ describe("large paste", () => {
   it("attaches text of 32 KiB or more in UTF-8 bytes as a text file", async () => {
     expect(largePasteFile("a".repeat(LARGE_PASTE_BYTES - 1))).toBeNull();
     const file = largePasteFile("a".repeat(LARGE_PASTE_BYTES))!;
-    expect([file.name, file.type, file.size]).toEqual(["Pasted text.txt", "text/plain", LARGE_PASTE_BYTES]);
+    expect([file.name, file.type, file.size]).toEqual([
+      "Pasted text.txt",
+      "text/plain",
+      LARGE_PASTE_BYTES,
+    ]);
     // Characters are counted as bytes: 8,192 four-byte emoji reach the limit with a quarter of the characters.
     const emoji = largePasteFile("🐴".repeat(LARGE_PASTE_BYTES / 8));
     expect(emoji).toBeNull();
-    expect(await largePasteFile("🐴".repeat(LARGE_PASTE_BYTES / 4))!.text()).toBe("🐴".repeat(LARGE_PASTE_BYTES / 4));
+    expect(await largePasteFile("🐴".repeat(LARGE_PASTE_BYTES / 4))!.text()).toBe(
+      "🐴".repeat(LARGE_PASTE_BYTES / 4),
+    );
   });
 });
 
 describe("status dock", () => {
   it("puts the most pressing notice first and keeps the given order within a kind", () => {
     const item = (id: string, kind: DockItem["kind"]): DockItem => ({ id, kind, node: null });
-    const order = sortDock([item("update", "update"), item("connection", "connection"), item("decisions", "decisions"),
-      item("rejected", "send"), item("interrupted", "interrupted"), item("uncertain", "send")]).map(entry => entry.id);
-    expect(order).toEqual(["rejected", "uncertain", "interrupted", "connection", "decisions", "update"]);
+    const order = sortDock([
+      item("update", "update"),
+      item("connection", "connection"),
+      item("decisions", "decisions"),
+      item("rejected", "send"),
+      item("interrupted", "interrupted"),
+      item("uncertain", "send"),
+    ]).map((entry) => entry.id);
+    expect(order).toEqual([
+      "rejected",
+      "uncertain",
+      "interrupted",
+      "connection",
+      "decisions",
+      "update",
+    ]);
   });
 });
 
@@ -175,18 +243,31 @@ describe("group mentions", () => {
     expect(mentionAt("Ask @ranch now", 14)).toBeNull();
   });
   it("matches handles first, then words of the name", () => {
-    expect(matchMembers(members, "ra").map(member => member.handle)).toEqual(["ranch", "rainy"]);
-    expect(matchMembers(members, "trip").map(member => member.handle)).toEqual(["planner"]);
+    expect(matchMembers(members, "ra").map((member) => member.handle)).toEqual(["ranch", "rainy"]);
+    expect(matchMembers(members, "trip").map((member) => member.handle)).toEqual(["planner"]);
     expect(matchMembers(members, "").length).toBe(3);
   });
   it("replaces the partial handle and places the caret after one space", () => {
-    expect(insertMention("Ask @ra", { start: 4, query: "ra" }, "ranch")).toEqual({ text: "Ask @ranch ", caret: 11 });
-    expect(insertMention("Ask @ra about rain", { start: 4, query: "ra" }, "ranch")).toEqual({ text: "Ask @ranch about rain", caret: 11 });
+    expect(insertMention("Ask @ra", { start: 4, query: "ra" }, "ranch")).toEqual({
+      text: "Ask @ranch ",
+      caret: 11,
+    });
+    expect(insertMention("Ask @ra about rain", { start: 4, query: "ra" }, "ranch")).toEqual({
+      text: "Ask @ranch about rain",
+      caret: 11,
+    });
   });
 });
 
 describe("app badge", () => {
-  const bot = (id: string, extra: Partial<Bot> = {}): Bot => ({ id, name: id, shared: true, model: "m", activity: "idle", ...extra });
+  const bot = (id: string, extra: Partial<Bot> = {}): Bot => ({
+    id,
+    name: id,
+    shared: true,
+    model: "m",
+    activity: "idle",
+    ...extra,
+  });
   const at = "2026-10-25T12:00:00Z";
   it("counts unread chats and assistants waiting on a decision once each", () => {
     const bots = [
@@ -207,9 +288,14 @@ describe("app badge", () => {
 });
 
 describe("home undo", () => {
-  const prefs: Preferences = { ...defaultPreferences, favorites: ["a", "b", "c"], sections: [
-    { id: "house", name: "Around the house", botIds: ["x", "y", "z"] }, { id: "kids", name: "Kids", botIds: [] },
-  ] };
+  const prefs: Preferences = {
+    ...defaultPreferences,
+    favorites: ["a", "b", "c"],
+    sections: [
+      { id: "house", name: "Around the house", botIds: ["x", "y", "z"] },
+      { id: "kids", name: "Kids", botIds: [] },
+    ],
+  };
   it("returns an unpinned assistant to its old place", () => {
     const change = togglePinEdit(prefs, "b", "Bee");
     expect(change.message).toBe("Unpinned Bee");
@@ -224,8 +310,13 @@ describe("home undo", () => {
     const change = moveSectionEdit(prefs, "y", "Why", "kids");
     expect(change.message).toBe("Moved Why to Kids");
     const after = change.apply(prefs);
-    expect(after.sections.map(section => section.botIds)).toEqual([["x", "z"], ["y"]]);
-    expect(change.undo(after).sections.map(section => section.botIds)).toEqual([["x", "y", "z"], []]);
-    expect(moveSectionEdit(prefs, "y", "Why", null).message).toBe("Removed Why from Around the house");
+    expect(after.sections.map((section) => section.botIds)).toEqual([["x", "z"], ["y"]]);
+    expect(change.undo(after).sections.map((section) => section.botIds)).toEqual([
+      ["x", "y", "z"],
+      [],
+    ]);
+    expect(moveSectionEdit(prefs, "y", "Why", null).message).toBe(
+      "Removed Why from Around the house",
+    );
   });
 });

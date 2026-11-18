@@ -8,9 +8,14 @@ import { onAccountEnd } from "./account-epoch";
  */
 const declined = new Map<string, string>();
 const listeners = new Set<() => void>();
-const publish = () => { for (const listener of listeners) listener(); };
+const publish = () => {
+  for (const listener of listeners) listener();
+};
 // Keyed by chat alone, so another account's decline in a shared assistant must not prompt the next one.
-onAccountEnd(() => { declined.clear(); publish(); });
+onAccountEnd(() => {
+  declined.clear();
+  publish();
+});
 
 export function rememberDecline(botId: string, approvalId: string) {
   declined.set(botId, approvalId);
@@ -21,5 +26,13 @@ export function clearDecline(botId: string) {
 }
 /** The approval declined in this chat, awaiting the person's next message. */
 export function useDeclined(botId: string) {
-  return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => declined.get(botId));
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    () => declined.get(botId),
+  );
 }

@@ -8,7 +8,7 @@ import { dirname } from "node:path";
 // columns. Older releases insert positionally into every other table.
 const migrations: ((db: DatabaseSync) => void)[] = [
   // 1: the unversioned schema that existing installations already have.
-  db => {
+  (db) => {
     db.exec(`
       CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,email TEXT UNIQUE NOT NULL,name TEXT NOT NULL,picture TEXT);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),csrf TEXT NOT NULL,expires INTEGER NOT NULL);
@@ -41,7 +41,7 @@ const migrations: ((db: DatabaseSync) => void)[] = [
     addColumn(db, "today_seen", "event_frontier", "INTEGER NOT NULL DEFAULT 0");
   },
   // 2: recent sign-in confirmation, delivery diagnostics and indexes for polling paths.
-  db => {
+  (db) => {
     db.exec(`
       CREATE TABLE session_confirmations(session_hash TEXT PRIMARY KEY REFERENCES sessions(hash) ON DELETE CASCADE,confirmed_at INTEGER NOT NULL);
       ALTER TABLE outbox ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
@@ -124,21 +124,35 @@ const additions = `
 export const schemaVersion = migrations.length;
 function addColumn(db: DatabaseSync, table: string, column: string, definition: string) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!columns.some(existing => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  if (!columns.some((existing) => existing.name === column))
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
 // A release briefly versioned bot_visibility_periods and bot_names as migration 3. Those tables
 // are now additions, so such a database returns to version 2, which the previous release opens.
 function unversionAdditions(db: DatabaseSync) {
-  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-  const tables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map(row => row.name));
-  if (version === 3 && migrations.length === 2 && tables.has("bot_visibility_periods") && tables.has("bot_names"))
+  const version = (db.prepare("PRAGMA user_version").get() as { user_version: number })
+    .user_version;
+  const tables = new Set(
+    (
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]
+    ).map((row) => row.name),
+  );
+  if (
+    version === 3 &&
+    migrations.length === 2 &&
+    tables.has("bot_visibility_periods") &&
+    tables.has("bot_names")
+  )
     db.exec("PRAGMA user_version=2");
 }
 function migrate(db: DatabaseSync) {
   unversionAdditions(db);
-  const current = (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
+  const current = (db.prepare("PRAGMA user_version").get() as { user_version: number })
+    .user_version;
   if (current > migrations.length)
-    throw new Error(`The app database uses schema version ${current}, but this release supports up to ${migrations.length}. Run a matching release or restore a backup.`);
+    throw new Error(
+      `The app database uses schema version ${current}, but this release supports up to ${migrations.length}. Run a matching release or restore a backup.`,
+    );
   for (let version = current; version < migrations.length; version++) {
     db.exec("BEGIN IMMEDIATE");
     try {
@@ -167,7 +181,8 @@ class CachedDatabase extends DatabaseSync {
     let statement = this.#statements.get(sql);
     if (statement) return statement;
     statement = super.prepare(sql);
-    if (this.#statements.size >= STATEMENT_CACHE) this.#statements.delete(this.#statements.keys().next().value!);
+    if (this.#statements.size >= STATEMENT_CACHE)
+      this.#statements.delete(this.#statements.keys().next().value!);
     this.#statements.set(sql, statement);
     return statement;
   }
@@ -185,8 +200,7 @@ class CachedDatabase extends DatabaseSync {
 export class StoreDatabase {
   readonly db: DatabaseSync;
   constructor(path: string) {
-    if (path !== ":memory:")
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     this.db = new CachedDatabase(path);
     if (path !== ":memory:") chmodSync(path, 0o600);
     // node:sqlite blocks the event loop, so a commit that waits on fsync stalls every request and
@@ -195,7 +209,9 @@ export class StoreDatabase {
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;");
     migrate(this.db);
     this.db.exec(additions);
-    this.db.exec("INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid");
+    this.db.exec(
+      "INSERT INTO notification_ingestion(event_id) SELECT id FROM notification_events e WHERE NOT EXISTS(SELECT 1 FROM notification_ingestion i WHERE i.event_id=e.id) ORDER BY e.rowid",
+    );
     this.backfillSettlements();
   }
   /**
@@ -205,14 +221,29 @@ export class StoreDatabase {
    */
   private backfillSettlements() {
     this.transaction(() => {
-      const watermark = Number((this.db.prepare("SELECT value FROM metadata WHERE key='settlement_backfill'").get() as { value: string } | undefined)?.value ?? 0);
-      this.db.prepare(`INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT json_extract(e.value,'$.botId'),json_extract(e.value,'$.runId'),i.id
+      const watermark = Number(
+        (
+          this.db.prepare("SELECT value FROM metadata WHERE key='settlement_backfill'").get() as
+            | { value: string }
+            | undefined
+        )?.value ?? 0,
+      );
+      this.db
+        .prepare(`INSERT OR IGNORE INTO run_settlements(bot_id,run_id,ingestion_id) SELECT json_extract(e.value,'$.botId'),json_extract(e.value,'$.runId'),i.id
         FROM notification_ingestion i JOIN notification_events e ON e.id=i.event_id
         WHERE i.id>? AND json_extract(e.value,'$.kind') IN ('completed','failed','interrupted') AND json_extract(e.value,'$.runId') IS NOT NULL AND json_extract(e.value,'$.botId') IS NOT NULL`)
         .run(watermark);
-      const latest = (this.db.prepare("SELECT max(id) AS id FROM notification_ingestion").get() as { id: number | null }).id;
+      const latest = (
+        this.db.prepare("SELECT max(id) AS id FROM notification_ingestion").get() as {
+          id: number | null;
+        }
+      ).id;
       if (latest !== null && latest > watermark)
-        this.db.prepare("INSERT INTO metadata VALUES('settlement_backfill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(String(latest));
+        this.db
+          .prepare(
+            "INSERT INTO metadata VALUES('settlement_backfill',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          )
+          .run(String(latest));
     });
   }
   close() {

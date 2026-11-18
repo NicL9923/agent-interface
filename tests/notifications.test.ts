@@ -10,7 +10,9 @@ import { fakeRuntime } from "./helpers/server.js";
 import { byText, byTuple } from "./helpers/sort";
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>(done => { resolve = done; });
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
   return { promise, resolve };
 }
 const event: RuntimeEvent = {
@@ -23,8 +25,7 @@ const event: RuntimeEvent = {
 };
 function storeWithUsers() {
   const store = new Store(":memory:");
-  for (const id of ["one", "two"])
-    store.user({ id, name: id, email: `${id}@example.test` });
+  for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
   return store;
 }
 it("persists durable event discovery with participant/routine recipient semantics and deduplicates replay", () => {
@@ -35,12 +36,11 @@ it("persists durable event discovery with participant/routine recipient semantic
   expect(store.cursor()).toBe("cursor-1");
   expect(store.outbox()).toHaveLength(1);
   store.routineRecipients("shared", "routine", ["two"]);
-  store.recordEvents(
-    [{ ...event, id: "routine-event", routineId: "routine" }],
-    "cursor-2",
-  );
+  store.recordEvents([{ ...event, id: "routine-event", routineId: "routine" }], "cursor-2");
   expect(store.outbox().map((x) => x.user_id)).toEqual(["one", "two"]);
-  expect(JSON.parse(store.outbox().find(x => x.user_id === 'two')!.payload).url).toBe('/?bot=shared&routine=routine');
+  expect(JSON.parse(store.outbox().find((x) => x.user_id === "two")!.payload).url).toBe(
+    "/?bot=shared&routine=routine",
+  );
   store.close();
 });
 it("names the assistant and quotes the reply in queued notifications", () => {
@@ -48,8 +48,20 @@ it("names the assistant and quotes the reply in queued notifications", () => {
   store.participate("run", "one");
   store.botNames = new Map([["shared", "Nic's Chief"]]);
   // A reply's Markdown reaches the notification as its words; inline code keeps its contents.
-  store.recordEvents([{ ...event, title: "Hermes completed", body: "**Tailscale is up** on the NAS.\n\nRun `tailscale __status__`." }], "cursor-1");
-  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({ title: "Nic's Chief", body: "Tailscale is up on the NAS. Run tailscale __status__." });
+  store.recordEvents(
+    [
+      {
+        ...event,
+        title: "Hermes completed",
+        body: "**Tailscale is up** on the NAS.\n\nRun `tailscale __status__`.",
+      },
+    ],
+    "cursor-1",
+  );
+  expect(JSON.parse(store.outbox()[0].payload)).toMatchObject({
+    title: "Nic's Chief",
+    body: "Tailscale is up on the NAS. Run tailscale __status__.",
+  });
   store.close();
 });
 it("keeps completion pending without a subscription and retries failed delivery without resending successful endpoints", async () => {
@@ -58,10 +70,11 @@ it("keeps completion pending without a subscription and retries failed delivery 
   store.recordEvents([event], "cursor-1");
   const seen: string[] = [];
   const runtime = fakeRuntime({
-    capabilities: async () => capabilitiesFixture({
-      idempotency: { supported: false },
-      durableEvents: { supported: false },
-    }),
+    capabilities: async () =>
+      capabilitiesFixture({
+        idempotency: { supported: false },
+        durableEvents: { supported: false },
+      }),
   });
   const worker = new BackgroundWorker(
     store,
@@ -78,10 +91,7 @@ it("keeps completion pending without a subscription and retries failed delivery 
   );
   await worker.tick();
   expect(store.outbox()).toHaveLength(1);
-  for (const endpoint of [
-    "https://push.example.test/ok",
-    "https://push.example.test/retry",
-  ])
+  for (const endpoint of ["https://push.example.test/ok", "https://push.example.test/retry"])
     store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
   await worker.tick();
   expect(seen).toHaveLength(2);
@@ -102,10 +112,11 @@ it("recovers admission receipts before event discovery so recovered completions 
     attachments: [],
   });
   const runtime = fakeRuntime({
-    capabilities: async () => capabilitiesFixture({
-      idempotency: { supported: true },
-      durableEvents: { supported: true },
-    }),
+    capabilities: async () =>
+      capabilitiesFixture({
+        idempotency: { supported: true },
+        durableEvents: { supported: true },
+      }),
     lookupSubmission: async () => ({
       requestId: "request",
       status: "accepted",
@@ -165,24 +176,37 @@ it("delivers durable alerts while receipt recovery waits, then delivers recovere
   const store = storeWithUsers();
   store.participate("previous-run", "two");
   store.recordEvents([{ ...event, id: "previous", runId: "previous-run" }], "previous-cursor");
-  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-  for (const user of ["one", "two"]) store.subscribe(user, {
-    endpoint: `https://push.example.test/${user}`, keys: { p256dh: "key", auth: "auth" },
+  store.intent({
+    requestId: "request",
+    botId: "shared",
+    senderId: "one",
+    text: "Hello",
+    attachments: [],
   });
-  const entered = deferred(), release = deferred();
+  for (const user of ["one", "two"])
+    store.subscribe(user, {
+      endpoint: `https://push.example.test/${user}`,
+      keys: { p256dh: "key", auth: "auth" },
+    });
+  const entered = deferred(),
+    release = deferred();
   const discoverEvents = vi.fn(async () => ({ cursor: "recovered", events: [event] }));
   const submit = vi.fn();
   const runtime = fakeRuntime({
-    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
+    capabilities: async () =>
+      capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
     lookupSubmission: async () => {
       entered.resolve();
       await release.promise;
       return { requestId: "request", status: "accepted" as const, runId: "run" };
     },
-    discoverEvents, submit,
+    discoverEvents,
+    submit,
   });
   const sent: string[] = [];
-  const worker = new BackgroundWorker(store, runtime, household(), async subscription => { sent.push(subscription.endpoint); });
+  const worker = new BackgroundWorker(store, runtime, household(), async (subscription) => {
+    sent.push(subscription.endpoint);
+  });
   const tick = worker.tick();
   try {
     await entered.promise;
@@ -204,20 +228,45 @@ it("delivers durable alerts while receipt recovery waits, then delivers recovere
 });
 it("keeps each job nonoverlapping across repeated ticks while other jobs are stalled", async () => {
   const store = storeWithUsers();
-  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.intent({
+    requestId: "request",
+    botId: "shared",
+    senderId: "one",
+    text: "Hello",
+    attachments: [],
+  });
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
   queue(store, "first", Date.now());
-  const receipt = deferred(), discovery = deferred();
-  const delivery = deferred(), live = deferred();
-  const capabilities = vi.fn(async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }));
+  const receipt = deferred(),
+    discovery = deferred();
+  const delivery = deferred(),
+    live = deferred();
+  const capabilities = vi.fn(async () =>
+    capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
+  );
   const lookupSubmission = vi.fn(async () => {
     await receipt.promise;
     return { requestId: "request", status: "accepted" as const, runId: "run" };
   });
-  const discoverEvents = vi.fn(async () => { await discovery.promise; return { events: [], cursor: "advanced" }; });
-  const send = vi.fn(async () => { await delivery.promise; });
-  const worker = new BackgroundWorker(store, fakeRuntime({ capabilities, lookupSubmission, discoverEvents }), household(), send);
-  const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => { await live.promise; });
+  const discoverEvents = vi.fn(async () => {
+    await discovery.promise;
+    return { events: [], cursor: "advanced" };
+  });
+  const send = vi.fn(async () => {
+    await delivery.promise;
+  });
+  const worker = new BackgroundWorker(
+    store,
+    fakeRuntime({ capabilities, lookupSubmission, discoverEvents }),
+    household(),
+    send,
+  );
+  const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => {
+    await live.promise;
+  });
   const ticks = [worker.tick(), worker.tick(), worker.tick()];
   try {
     await vi.waitFor(() => expect(lookupSubmission).toHaveBeenCalledTimes(1));
@@ -238,7 +287,10 @@ it("keeps each job nonoverlapping across repeated ticks while other jobs are sta
     expect(discoverEvents).toHaveBeenCalledTimes(1);
     expect(liveTick).toHaveBeenCalledTimes(1);
   } finally {
-    receipt.resolve(); discovery.resolve(); delivery.resolve(); live.resolve();
+    receipt.resolve();
+    discovery.resolve();
+    delivery.resolve();
+    live.resolve();
     await Promise.all(ticks);
     await worker.stop();
     liveTick.mockRestore();
@@ -251,16 +303,37 @@ it("keeps each job nonoverlapping across repeated ticks while other jobs are sta
 it("continues scheduled delivery during slow recovery without overlapping recovery passes", async () => {
   vi.useFakeTimers();
   const store = storeWithUsers();
-  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
+  store.intent({
+    requestId: "request",
+    botId: "shared",
+    senderId: "one",
+    text: "Hello",
+    attachments: [],
+  });
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
   queue(store, "first", Date.now());
   const release = deferred();
-  const lookupSubmission = vi.fn(async () => { await release.promise; return null; });
+  const lookupSubmission = vi.fn(async () => {
+    await release.promise;
+    return null;
+  });
   const send = vi.fn(async () => {});
-  const worker = new BackgroundWorker(store, fakeRuntime({
-    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: false } }),
-    lookupSubmission,
-  }), household(), send);
+  const worker = new BackgroundWorker(
+    store,
+    fakeRuntime({
+      capabilities: async () =>
+        capabilitiesFixture({
+          idempotency: { supported: true },
+          durableEvents: { supported: false },
+        }),
+      lookupSubmission,
+    }),
+    household(),
+    send,
+  );
   try {
     worker.start();
     worker.start();
@@ -283,69 +356,108 @@ it("continues scheduled delivery during slow recovery without overlapping recove
     vi.useRealTimers();
   }
 });
-it.each(["runtime", "outbox", "live"] as const)("drains every job before closing APNs when %s settles last", async last => {
-  const store = storeWithUsers();
-  store.intent({ requestId: "request", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-  queue(store, "existing", Date.now());
-  store.nativeSession("session", "one", Date.now() + 60_000);
-  store.registerNativeDevice("one", "session", "phone", "ab".repeat(32), "sandbox");
-  const gates = { runtime: deferred(), outbox: deferred(), live: deferred() };
-  const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
-  const close = vi.fn();
-  const sender = Object.assign(vi.fn(async () => { await gates.outbox.promise; finished.outbox.resolve(); }), {
-    close, liveActivity: vi.fn(async () => {}), clear: vi.fn(async () => {}), refresh: vi.fn(async () => {}), badge: vi.fn(async () => {}),
-  });
-  const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
-  const config = household();
-  config.apns = { teamId: "team", keyId: "key", topic: "test", privateKeyFile: "unused", environment: "sandbox" };
-  const discoverEvents = vi.fn(async () => {
-    await gates.runtime.promise;
-    finished.runtime.resolve();
-    return { events: [event], cursor: "recovered" };
-  });
-  const worker = new BackgroundWorker(store, fakeRuntime({
-    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: true } }),
-    lookupSubmission: async () => ({ requestId: "request", status: "accepted", runId: "run" }),
-    discoverEvents,
-  }), config);
-  const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => { await gates.live.promise; finished.live.resolve(); });
-  const tick = worker.tick();
-  let stopped = false;
-  try {
-    await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
-    expect(sender).toHaveBeenCalledTimes(1);
-    expect(liveTick).toHaveBeenCalledTimes(1);
-    const stop = worker.stop();
-    expect(worker.stop()).toBe(stop);
-    const stopping = stop.then(() => { stopped = true; });
-    for (const name of ["runtime", "outbox", "live"] as const) if (name !== last) {
-      gates[name].resolve();
-      await finished[name].promise;
+it.each(["runtime", "outbox", "live"] as const)(
+  "drains every job before closing APNs when %s settles last",
+  async (last) => {
+    const store = storeWithUsers();
+    store.intent({
+      requestId: "request",
+      botId: "shared",
+      senderId: "one",
+      text: "Hello",
+      attachments: [],
+    });
+    queue(store, "existing", Date.now());
+    store.nativeSession("session", "one", Date.now() + 60_000);
+    store.registerNativeDevice("one", "session", "phone", "ab".repeat(32), "sandbox");
+    const gates = { runtime: deferred(), outbox: deferred(), live: deferred() };
+    const finished = { runtime: deferred(), outbox: deferred(), live: deferred() };
+    const close = vi.fn();
+    const sender = Object.assign(
+      vi.fn(async () => {
+        await gates.outbox.promise;
+        finished.outbox.resolve();
+      }),
+      {
+        close,
+        liveActivity: vi.fn(async () => {}),
+        clear: vi.fn(async () => {}),
+        refresh: vi.fn(async () => {}),
+        badge: vi.fn(async () => {}),
+      },
+    );
+    const factory = vi.spyOn(apns, "createApnsSender").mockReturnValue(sender);
+    const config = household();
+    config.apns = {
+      teamId: "team",
+      keyId: "key",
+      topic: "test",
+      privateKeyFile: "unused",
+      environment: "sandbox",
+    };
+    const discoverEvents = vi.fn(async () => {
+      await gates.runtime.promise;
+      finished.runtime.resolve();
+      return { events: [event], cursor: "recovered" };
+    });
+    const worker = new BackgroundWorker(
+      store,
+      fakeRuntime({
+        capabilities: async () =>
+          capabilitiesFixture({
+            idempotency: { supported: true },
+            durableEvents: { supported: true },
+          }),
+        lookupSubmission: async () => ({ requestId: "request", status: "accepted", runId: "run" }),
+        discoverEvents,
+      }),
+      config,
+    );
+    const liveTick = vi.spyOn(worker.live, "tick").mockImplementation(async () => {
+      await gates.live.promise;
+      finished.live.resolve();
+    });
+    const tick = worker.tick();
+    let stopped = false;
+    try {
+      await vi.waitFor(() => expect(discoverEvents).toHaveBeenCalledTimes(1));
+      expect(sender).toHaveBeenCalledTimes(1);
+      expect(liveTick).toHaveBeenCalledTimes(1);
+      const stop = worker.stop();
+      expect(worker.stop()).toBe(stop);
+      const stopping = stop.then(() => {
+        stopped = true;
+      });
+      for (const name of ["runtime", "outbox", "live"] as const)
+        if (name !== last) {
+          gates[name].resolve();
+          await finished[name].promise;
+        }
+      await worker.tick();
+      expect(stopped).toBe(false);
+      expect(close).not.toHaveBeenCalled();
+      gates[last].resolve();
+      await stopping;
+      await tick;
+      expect(sender).toHaveBeenCalledTimes(2);
+      expect(store.outbox()).toHaveLength(0);
+      expect(store.cursor()).toBe("recovered");
+      expect(close).toHaveBeenCalledTimes(1);
+      await worker.stop();
+      await worker.tick();
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(discoverEvents).toHaveBeenCalledTimes(1);
+      expect(liveTick).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.values(gates).forEach((gate) => gate.resolve());
+      await tick;
+      await worker.stop();
+      liveTick.mockRestore();
+      factory.mockRestore();
+      store.close();
     }
-    await worker.tick();
-    expect(stopped).toBe(false);
-    expect(close).not.toHaveBeenCalled();
-    gates[last].resolve();
-    await stopping;
-    await tick;
-    expect(sender).toHaveBeenCalledTimes(2);
-    expect(store.outbox()).toHaveLength(0);
-    expect(store.cursor()).toBe("recovered");
-    expect(close).toHaveBeenCalledTimes(1);
-    await worker.stop();
-    await worker.tick();
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(discoverEvents).toHaveBeenCalledTimes(1);
-    expect(liveTick).toHaveBeenCalledTimes(1);
-  } finally {
-    Object.values(gates).forEach(gate => gate.resolve());
-    await tick;
-    await worker.stop();
-    liveTick.mockRestore();
-    factory.mockRestore();
-    store.close();
-  }
-});
+  },
+);
 it("lists explicit routine recipients without adding bot followers", () => {
   const store = storeWithUsers();
   store.routineRecipients("shared", "routine", ["one"]);
@@ -357,37 +469,67 @@ it("lists explicit routine recipients without adding bot followers", () => {
     followBots: ["shared"],
   });
   expect(store.getRoutineRecipients("shared", "routine")).toEqual(["one"]);
-  expect(store.recipients({ ...event, routineId: "routine" })).toEqual([
-    "one",
-    "two",
-  ]);
+  expect(store.recipients({ ...event, routineId: "routine" })).toEqual(["one", "two"]);
   store.close();
 });
 const day = 86400000;
-const offline = fakeRuntime({ capabilities: async () => { throw new Error("Hermes offline"); } });
+const offline = fakeRuntime({
+  capabilities: async () => {
+    throw new Error("Hermes offline");
+  },
+});
 const household = () => loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
 const outboxRow = (store: Store, id: string) =>
-  store.db.prepare("SELECT state,attempts,last_error FROM outbox WHERE id=?").get(id) as { state: string; attempts: number; last_error: string | null } | undefined;
+  store.db.prepare("SELECT state,attempts,last_error FROM outbox WHERE id=?").get(id) as
+    | { state: string; attempts: number; last_error: string | null }
+    | undefined;
 function queue(store: Store, id: string, createdAt: number, state = "pending", userId = "one") {
-  store.db.prepare("INSERT INTO outbox(id,event_id,user_id,payload,state,created_at) VALUES(?,?,?,?,?,?)")
-    .run(id, `event-${id}`, userId, JSON.stringify({ title: id, body: "", url: "/", tag: id }), state, createdAt);
+  store.db
+    .prepare("INSERT INTO outbox(id,event_id,user_id,payload,state,created_at) VALUES(?,?,?,?,?,?)")
+    .run(
+      id,
+      `event-${id}`,
+      userId,
+      JSON.stringify({ title: id, body: "", url: "/", tag: id }),
+      state,
+      createdAt,
+    );
 }
 it("gives up after 12 attempts and keeps the last delivery error", async () => {
   const store = storeWithUsers();
-  store.subscribe("one", { endpoint: "https://push.example.test/down", keys: { p256dh: "key", auth: "auth" } });
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/down",
+    keys: { p256dh: "key", auth: "auth" },
+  });
   queue(store, "stuck", Date.now());
   const warnings: string[] = [];
-  const log = { info() {}, warn: (...args: unknown[]) => { warnings.push(String(args[1])); }, error() {} };
-  const worker = new BackgroundWorker(store, offline, household(), async () => {
-    throw Object.assign(new Error("Push service unavailable"), { statusCode: 503 });
-  }, undefined, log);
+  const log = {
+    info() {},
+    warn: (...args: unknown[]) => {
+      warnings.push(String(args[1]));
+    },
+    error() {},
+  };
+  const worker = new BackgroundWorker(
+    store,
+    offline,
+    household(),
+    async () => {
+      throw Object.assign(new Error("Push service unavailable"), { statusCode: 503 });
+    },
+    undefined,
+    log,
+  );
   for (let attempt = 1; attempt <= 12; attempt++) {
     store.db.prepare("UPDATE outbox SET next_attempt=0").run();
     await worker.tick();
-    expect(outboxRow(store, "stuck")).toMatchObject({ attempts: attempt, state: attempt < 12 ? "pending" : "failed" });
+    expect(outboxRow(store, "stuck")).toMatchObject({
+      attempts: attempt,
+      state: attempt < 12 ? "pending" : "failed",
+    });
   }
   expect(outboxRow(store, "stuck")!.last_error).toBe("Web Push 503: Push service unavailable");
-  expect(warnings.filter(message => message.startsWith("Gave up"))).toHaveLength(1);
+  expect(warnings.filter((message) => message.startsWith("Gave up"))).toHaveLength(1);
   expect(worker.push.lastError).toBe("Web Push 503: Push service unavailable");
   expect(worker.loop.consecutiveFailures).toBe(0);
   store.close();
@@ -401,36 +543,80 @@ it("expires day-old pending notifications even when partly delivered or never de
   queue(store, "recent", Date.now() - day + 3600000);
   queue(store, "unknown-age", 0);
   queue(store, "already-delivered", old, "delivered");
-  await new BackgroundWorker(store, offline, household(), async () => { throw new Error("not reached"); }).tick();
-  expect(Object.fromEntries(["partly-delivered", "no-subscription", "recent", "unknown-age", "already-delivered"]
-    .map(id => [id, outboxRow(store, id)!.state]))).toEqual({
-    "partly-delivered": "expired", "no-subscription": "expired", recent: "pending", "unknown-age": "pending", "already-delivered": "delivered",
+  await new BackgroundWorker(store, offline, household(), async () => {
+    throw new Error("not reached");
+  }).tick();
+  expect(
+    Object.fromEntries(
+      ["partly-delivered", "no-subscription", "recent", "unknown-age", "already-delivered"].map(
+        (id) => [id, outboxRow(store, id)!.state],
+      ),
+    ),
+  ).toEqual({
+    "partly-delivered": "expired",
+    "no-subscription": "expired",
+    recent: "pending",
+    "unknown-age": "pending",
+    "already-delivered": "delivered",
   });
   store.close();
 });
 it("delivers notifications without an assistant, and one failing notification never blocks the rest", async () => {
   const store = storeWithUsers();
-  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
-  const push = (id: string, botId?: string) => store.queueNotification(id, "one", { title: id, body: "", url: "/", tag: id, ...(botId ? { botId, kind: "approval" } : {}) });
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
+  const push = (id: string, botId?: string) =>
+    store.queueNotification(id, "one", {
+      title: id,
+      body: "",
+      url: "/",
+      tag: id,
+      ...(botId ? { botId, kind: "approval" } : {}),
+    });
   push("test-push");
   push("poisoned", "poison");
   push("after-poison", "shared");
   const presentation = store.presentation.bind(store);
-  vi.spyOn(store, "presentation").mockImplementation(botId => { if (botId === "poison") throw new Error("boom"); return presentation(botId); });
+  vi.spyOn(store, "presentation").mockImplementation((botId) => {
+    if (botId === "poison") throw new Error("boom");
+    return presentation(botId);
+  });
   const sent: string[] = [];
-  await new BackgroundWorker(store, offline, household(), async (_subscription, payload) => { sent.push(JSON.parse(payload).title); }).tick();
+  await new BackgroundWorker(store, offline, household(), async (_subscription, payload) => {
+    sent.push(JSON.parse(payload).title);
+  }).tick();
   expect(sent).toEqual(["test-push", "after-poison"]);
-  const poisoned = store.db.prepare("SELECT state,attempts,last_error FROM outbox WHERE event_id='poisoned'").get();
+  const poisoned = store.db
+    .prepare("SELECT state,attempts,last_error FROM outbox WHERE event_id='poisoned'")
+    .get();
   expect(poisoned).toEqual({ state: "pending", attempts: 1, last_error: "Delivery error: boom" });
   store.close();
 });
 it("re-sweeps only events from the last day for new recipients", () => {
   const store = storeWithUsers();
-  store.recordEvents([{ ...event, id: "old" }, { ...event, id: "recent" }], "cursor");
-  store.db.prepare("UPDATE notification_events SET created_at=? WHERE id='old'").run(Date.now() - 2 * day);
-  store.savePreferences("two", { presentation: "simple", theme: "system", favorites: [], sections: [], followBots: ["shared"] });
+  store.recordEvents(
+    [
+      { ...event, id: "old" },
+      { ...event, id: "recent" },
+    ],
+    "cursor",
+  );
+  store.db
+    .prepare("UPDATE notification_events SET created_at=? WHERE id='old'")
+    .run(Date.now() - 2 * day);
+  store.savePreferences("two", {
+    presentation: "simple",
+    theme: "system",
+    favorites: [],
+    sections: [],
+    followBots: ["shared"],
+  });
   store.enqueueKnownEvents();
-  expect(store.db.prepare("SELECT event_id FROM outbox WHERE user_id='two'").all()).toEqual([{ event_id: "recent" }]);
+  expect(store.db.prepare("SELECT event_id FROM outbox WHERE user_id='two'").all()).toEqual([
+    { event_id: "recent" },
+  ]);
   store.close();
 });
 it("prunes expired sessions and month-old settled notifications without breaking a pending batch", () => {
@@ -444,53 +630,118 @@ it("prunes expired sessions and month-old settled notifications without breaking
   queue(store, "old-alone", old, "expired");
   queue(store, "old-event-still-known", old, "delivered");
   queue(store, "old-pending", old);
-  store.db.prepare("INSERT INTO notification_events VALUES('event-old-event-still-known','{}',?)").run(Date.now());
-  for (const id of ["old-in-shared-batch", "old-alone", "old-event-still-known"]) store.markDelivered(id, "https://push.example.test/device");
+  store.db
+    .prepare("INSERT INTO notification_events VALUES('event-old-event-still-known','{}',?)")
+    .run(Date.now());
+  for (const id of ["old-in-shared-batch", "old-alone", "old-event-still-known"])
+    store.markDelivered(id, "https://push.example.test/device");
   const batch = (id: string, ...items: string[]) => {
-    store.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run(id, "one", JSON.stringify({ title: id, body: "", url: "/?view=today", tag: id }));
-    for (const item of items) store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(item, id);
+    store.db
+      .prepare("INSERT INTO notification_batches VALUES(?,?,?)")
+      .run(id, "one", JSON.stringify({ title: id, body: "", url: "/?view=today", tag: id }));
+    for (const item of items)
+      store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(item, id);
   };
   batch("shared", "old-in-shared-batch", "waiting-in-shared-batch");
   batch("emptied", "old-alone");
   expect(store.pruneRetention()).toEqual({ sessions: 1, notifications: 2 });
-  const ids = (sql: string) => (store.db.prepare(sql).all() as { id: string }[]).map(row => row.id).sort();
-  expect(ids("SELECT id FROM outbox")).toEqual(["old-event-still-known", "old-pending", "waiting-in-shared-batch"]);
+  const ids = (sql: string) =>
+    (store.db.prepare(sql).all() as { id: string }[]).map((row) => row.id).sort();
+  expect(ids("SELECT id FROM outbox")).toEqual([
+    "old-event-still-known",
+    "old-pending",
+    "waiting-in-shared-batch",
+  ]);
   expect(ids("SELECT outbox_id AS id FROM delivered")).toEqual(["old-event-still-known"]);
   expect(ids("SELECT id FROM notification_batches")).toEqual(["shared"]);
   expect(ids("SELECT hash AS id FROM sessions")).toEqual(["current"]);
-  expect(store.db.prepare("SELECT count(*) AS count FROM session_confirmations").get()).toEqual({ count: 0 });
+  expect(store.db.prepare("SELECT count(*) AS count FROM session_confirmations").get()).toEqual({
+    count: 0,
+  });
   const groups = store.deliveryGroups();
-  expect(groups.find(group => group.id === "shared")!.items.map(row => row.id)).toEqual(["waiting-in-shared-batch"]);
+  expect(groups.find((group) => group.id === "shared")!.items.map((row) => row.id)).toEqual([
+    "waiting-in-shared-batch",
+  ]);
   store.close();
 });
 it("delivers security alerts at once, through quiet hours and digest batching, and coalesces repeats", async () => {
   const store = storeWithUsers();
-  const hour = new Date().getUTCHours(), at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
-  store.savePreferences("one", { ...store.preferences("one"), notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 10 } });
-  store.subscribe("one", { endpoint: "https://push.example.test/one", keys: { p256dh: "key", auth: "auth" } });
-  store.queueNotification("evt-quiet", "one", { title: "Work complete", body: "", url: "/?bot=shared", tag: "evt-quiet", kind: "completed", botId: "shared", queuedAt: Date.now() });
-  const alert = { title: "System terminal opened", body: "one opened the system terminal.", url: "/?computer=1", tag: "terminal-open:abc:1", kind: "security", queuedAt: Date.now() };
+  const hour = new Date().getUTCHours(),
+    at = (offset: number) => `${String((hour + offset + 24) % 24).padStart(2, "0")}:00`;
+  store.savePreferences("one", {
+    ...store.preferences("one"),
+    notifications: { timezone: "UTC", quietStart: at(-1), quietEnd: at(1), batchMinutes: 10 },
+  });
+  store.subscribe("one", {
+    endpoint: "https://push.example.test/one",
+    keys: { p256dh: "key", auth: "auth" },
+  });
+  store.queueNotification("evt-quiet", "one", {
+    title: "Work complete",
+    body: "",
+    url: "/?bot=shared",
+    tag: "evt-quiet",
+    kind: "completed",
+    botId: "shared",
+    queuedAt: Date.now(),
+  });
+  const alert = {
+    title: "System terminal opened",
+    body: "one opened the system terminal.",
+    url: "/?computer=1",
+    tag: "terminal-open:abc:1",
+    kind: "security",
+    queuedAt: Date.now(),
+  };
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(true);
   expect(store.queueNotification("terminal-open:abc:1", "one", alert)).toBe(false);
   const sent: string[] = [];
-  const runtime = fakeRuntime({ capabilities: async () => capabilitiesFixture({ idempotency: { supported: false }, durableEvents: { supported: false } }) });
-  const worker = new BackgroundWorker(store, runtime, loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }),
-    async (_subscription, payload) => { sent.push(JSON.parse(payload).title); });
+  const runtime = fakeRuntime({
+    capabilities: async () =>
+      capabilitiesFixture({
+        idempotency: { supported: false },
+        durableEvents: { supported: false },
+      }),
+  });
+  const worker = new BackgroundWorker(
+    store,
+    runtime,
+    loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" }),
+    async (_subscription, payload) => {
+      sent.push(JSON.parse(payload).title);
+    },
+  );
   await worker.tick();
   expect(sent).toEqual(["System terminal opened"]);
-  expect(store.outbox().map(row => JSON.parse(row.payload).kind)).toEqual(["completed"]);
+  expect(store.outbox().map((row) => JSON.parse(row.payload).kind)).toEqual(["completed"]);
   store.close();
 });
 
 it("drains the worker before closing its runtime and database", async () => {
   const store = storeWithUsers();
-  store.intent({ requestId: "shutdown", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-  const entered = deferred(), release = deferred();
+  store.intent({
+    requestId: "shutdown",
+    botId: "shared",
+    senderId: "one",
+    text: "Hello",
+    attachments: [],
+  });
+  const entered = deferred(),
+    release = deferred();
   const close = vi.fn(async () => {});
   const runtime = fakeRuntime({
-    capabilities: async () => capabilitiesFixture({ idempotency: { supported: true }, durableEvents: { supported: false } }),
-    lookupSubmission: async () => { entered.resolve(); await release.promise; return null; },
-    listBots: async () => [], close,
+    capabilities: async () =>
+      capabilitiesFixture({
+        idempotency: { supported: true },
+        durableEvents: { supported: false },
+      }),
+    lookupSubmission: async () => {
+      entered.resolve();
+      await release.promise;
+      return null;
+    },
+    listBots: async () => [],
+    close,
   });
   const { app, worker } = await createApp(household(), runtime, { store, background: false });
   await app.ready();
@@ -514,45 +765,77 @@ it("never replaces settled admission with a delayed uncertain or conflicting rec
   const store = storeWithUsers();
   try {
     for (const status of ["accepted", "rejected", "interrupted"] as const) {
-      store.intent({ requestId: status, botId: "shared", senderId: "one", text: "Hello", attachments: [] });
-      const settled = { requestId: status, status, messageId: status === "accepted" ? "message" : undefined };
+      store.intent({
+        requestId: status,
+        botId: "shared",
+        senderId: "one",
+        text: "Hello",
+        attachments: [],
+      });
+      const settled = {
+        requestId: status,
+        status,
+        messageId: status === "accepted" ? "message" : undefined,
+      };
       store.receipt(settled);
       store.receipt({ requestId: status, status: "uncertain" });
       store.receipt({ requestId: status, status: status === "accepted" ? "rejected" : "accepted" });
       expect(store.submission(status)?.receipt).toEqual(settled);
     }
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });
 
 it("preserves a reviewed interruption retry as the only explicit reopening of rejection", () => {
   const store = storeWithUsers();
   try {
-    store.intent({ requestId: "reviewed", botId: "shared", senderId: "one", text: "Hello", attachments: [] });
+    store.intent({
+      requestId: "reviewed",
+      botId: "shared",
+      senderId: "one",
+      text: "Hello",
+      attachments: [],
+    });
     store.receipt({ requestId: "reviewed", status: "rejected" }, "interruption_pending");
     store.receipt({ requestId: "reviewed", status: "accepted", runId: "run" }, undefined, true);
     expect(store.submission("reviewed")?.receipt.status).toBe("accepted");
     expect(store.participants("run")).toEqual(["one"]);
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });
 
-it.each([404, 410, 500])("handles web push status %i for queued notifications", async status => {
+it.each([404, 410, 500])("handles web push status %i for queued notifications", async (status) => {
   const store = storeWithUsers();
-  const endpoint = "https://push.example.test/device", healthy = "https://push.example.test/healthy";
+  const endpoint = "https://push.example.test/device",
+    healthy = "https://push.example.test/healthy";
   store.subscribe("one", { endpoint, keys: { p256dh: "key", auth: "auth" } });
   store.subscribe("one", { endpoint: healthy, keys: { p256dh: "key", auth: "auth" } });
   queue(store, "first-push", Date.now());
   queue(store, "second-push", Date.now());
-  store.db.prepare("INSERT INTO notification_batches VALUES(?,?,?)").run("push-batch", "one", JSON.stringify({ title: "Batch", body: "", url: "/", tag: "batch" }));
-  for (const id of ["first-push", "second-push"]) store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(id, "push-batch");
+  store.db
+    .prepare("INSERT INTO notification_batches VALUES(?,?,?)")
+    .run("push-batch", "one", JSON.stringify({ title: "Batch", body: "", url: "/", tag: "batch" }));
+  for (const id of ["first-push", "second-push"])
+    store.db.prepare("INSERT INTO notification_batch_items VALUES(?,?)").run(id, "push-batch");
   const sender = vi.fn(async (subscription: { endpoint: string }) => {
-    if (subscription.endpoint === endpoint) throw Object.assign(new Error("push failure"), { statusCode: status });
+    if (subscription.endpoint === endpoint)
+      throw Object.assign(new Error("push failure"), { statusCode: status });
   });
   try {
     await new BackgroundWorker(store, offline, household(), sender).tick();
     // One batched send per endpoint; only the dead endpoint is pruned, and only on 404/410.
     expect(sender).toHaveBeenCalledTimes(2);
-    expect(sender.mock.calls.map(call => call[0].endpoint).sort()).toEqual([endpoint, healthy].sort());
-    expect(store.subscriptions("one").map(item => item.endpoint).sort(byText)).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
+    expect(sender.mock.calls.map((call) => call[0].endpoint).sort()).toEqual(
+      [endpoint, healthy].sort(),
+    );
+    expect(
+      store
+        .subscriptions("one")
+        .map((item) => item.endpoint)
+        .sort(byText),
+    ).toEqual((status === 500 ? [endpoint, healthy] : [healthy]).sort());
     for (const id of ["first-push", "second-push"]) {
       expect(store.delivered(id, healthy)).toBe(true);
       // A dead endpoint is recorded apart, so it never reads as having shown the notification.
@@ -560,7 +843,9 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
       expect(store.delivered(id, `dead:${endpoint}`)).toBe(status !== 500);
       expect(outboxRow(store, id)?.state).toBe(status === 500 ? "pending" : "delivered");
     }
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });
 
 // A browser whose member's session lapsed still holds that member's subscription. When the next
@@ -568,25 +853,37 @@ it.each([404, 410, 500])("handles web push status %i for queued notifications", 
 const sharedKeys = { p256dh: "shared-key", auth: "shared-auth" };
 it("sends nothing of one member to an endpoint another member has taken over, and everything of the other", async () => {
   const store = storeWithUsers();
-  const shared = "https://push.example.test/shared", elsewhere = "https://push.example.test/elsewhere";
+  const shared = "https://push.example.test/shared",
+    elsewhere = "https://push.example.test/elsewhere";
   store.subscribe("one", { endpoint: shared, keys: sharedKeys });
-  store.subscribe("one", { endpoint: elsewhere, keys: { p256dh: "other-key", auth: "other-auth" } });
+  store.subscribe("one", {
+    endpoint: elsewhere,
+    keys: { p256dh: "other-key", auth: "other-auth" },
+  });
   store.subscribe("two", { endpoint: shared, keys: sharedKeys });
   queue(store, "for-one", Date.now(), "pending", "one");
   queue(store, "for-two", Date.now(), "pending", "two");
   const sent: [string, string][] = [];
-  const sender = vi.fn(async (subscription: { endpoint: string }, payload: string) => { sent.push([subscription.endpoint, JSON.parse(payload).tag]); });
+  const sender = vi.fn(async (subscription: { endpoint: string }, payload: string) => {
+    sent.push([subscription.endpoint, JSON.parse(payload).tag]);
+  });
   try {
     await new BackgroundWorker(store, offline, household(), sender).tick();
-    expect(sent.sort(byTuple)).toEqual([[elsewhere, "for-one"], [shared, "for-two"]]);
+    expect(sent.sort(byTuple)).toEqual([
+      [elsewhere, "for-one"],
+      [shared, "for-two"],
+    ]);
     expect(outboxRow(store, "for-one")?.state).toBe("delivered");
     expect(outboxRow(store, "for-two")?.state).toBe("delivered");
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });
 
 it("stops a push already being delivered to a member's endpoints when another member takes one of them meanwhile", async () => {
   const store = storeWithUsers();
-  const first = "https://push.example.test/first", shared = "https://push.example.test/shared";
+  const first = "https://push.example.test/first",
+    shared = "https://push.example.test/shared";
   store.subscribe("one", { endpoint: first, keys: { p256dh: "first-key", auth: "first-auth" } });
   store.subscribe("one", { endpoint: shared, keys: sharedKeys });
   queue(store, "for-one", Date.now(), "pending", "one");
@@ -594,16 +891,19 @@ it("stops a push already being delivered to a member's endpoints when another me
   // Member two signs in on the shared browser while member one's push is on its way to the first.
   const sender = vi.fn(async (subscription: { endpoint: string }) => {
     sent.push(subscription.endpoint);
-    if (subscription.endpoint === first) store.subscribe("two", { endpoint: shared, keys: sharedKeys });
+    if (subscription.endpoint === first)
+      store.subscribe("two", { endpoint: shared, keys: sharedKeys });
   });
   try {
     await new BackgroundWorker(store, offline, household(), sender).tick();
     expect(sent).toEqual([first]);
-    expect(store.subscriptions("two").map(item => item.endpoint)).toEqual([shared]);
+    expect(store.subscriptions("two").map((item) => item.endpoint)).toEqual([shared]);
     // Nothing is left to retry: the push reached member one's other browser, and the taken one is recorded apart.
     expect(outboxRow(store, "for-one")?.state).toBe("delivered");
     expect(store.delivered("for-one", shared)).toBe(false);
     expect(store.delivered("for-one", `dead:${shared}`)).toBe(true);
     expect(store.delivered("for-one", first)).toBe(true);
-  } finally { store.close(); }
+  } finally {
+    store.close();
+  }
 });

@@ -14,12 +14,17 @@ export function withoutRecommendation(option: string): string | undefined {
 
 /** The one recommended option's index. Several marked options are ambiguous, so none is recommended. */
 export function recommendedOption(options: readonly string[] | undefined): number | undefined {
-  const marked = (options ?? []).flatMap((option, index) => withoutRecommendation(option) === undefined ? [] : [index]);
+  const marked = (options ?? []).flatMap((option, index) =>
+    withoutRecommendation(option) === undefined ? [] : [index],
+  );
   return marked.length === 1 ? marked[0] : undefined;
 }
 
 /** What a question's option reads as: the recommended one loses its suffix, which a tag shows instead. */
-export function optionLabel(question: { options?: string[]; recommended?: number }, index: number): string {
+export function optionLabel(
+  question: { options?: string[]; recommended?: number },
+  index: number,
+): string {
   const option = question.options?.[index] ?? "";
-  return index === question.recommended ? withoutRecommendation(option) ?? option : option;
+  return index === question.recommended ? (withoutRecommendation(option) ?? option) : option;
 }

@@ -33,7 +33,7 @@ Each line broken by hand, the two vitest files run (or, for the browser, the bui
 - the `present()` call after the wait removed: 2 fail (nested order, Settings order).
 - the observer's `disconnect()` in the cleanup removed: 1 fails (unmounted while waiting).
 - the condition replaced by `... && Date.now() < 0` and rebuilt: in Chromium the new smoke test fails (`hit: false,
-  focused: false`), and so do the two specs that now click Sign out for real (pointer events intercepted by the
+focused: false`), and so do the two specs that now click Sign out for real (pointer events intercepted by the
   sheet's rows).
 
 An earlier browser red run that replaced the condition with `if (false)` did not build (TypeScript flagged the unused

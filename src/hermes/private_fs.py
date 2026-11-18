@@ -9,6 +9,7 @@ Three callers keep their own copy because this file is not beside them on the ho
 qualification.py (tools run it from other release trees), hermes-qualified-python.py
 (frozen into the candidate stage) and recover-app-after-native-update.py (staged alone).
 """
+
 import json
 import os
 import stat
@@ -60,7 +61,12 @@ def owner_private(path, kind="file", max_bytes=None):
     path raises FileNotFoundError.
     """
     info = os.fstat(path) if isinstance(path, int) else os.lstat(path)
-    if (not KINDS[kind](info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077
-            or max_bytes is not None and info.st_size > max_bytes):
+    if (
+        not KINDS[kind](info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) & 0o077
+        or max_bytes is not None
+        and info.st_size > max_bytes
+    ):
         return None
     return info

@@ -27,7 +27,10 @@ class UpstreamFailure(Exception):
     """OpenAI answered with an error or an unreadable secret."""
 
     def __init__(self, status=None):
-        super().__init__("OpenAI did not issue a voice session" + (f" (HTTP {status})." if status else "."))
+        super().__init__(
+            "OpenAI did not issue a voice session"
+            + (f" (HTTP {status})." if status else ".")
+        )
         self.status = status
 
 
@@ -38,7 +41,11 @@ def _secret(payload):
     nested = payload.get("client_secret")
     source = nested if isinstance(nested, dict) else payload
     value, expires = source.get("value"), source.get("expires_at")
-    if not isinstance(value, str) or not 8 <= len(value) <= 4096 or any(ch.isspace() for ch in value):
+    if (
+        not isinstance(value, str)
+        or not 8 <= len(value) <= 4096
+        or any(ch.isspace() for ch in value)
+    ):
         raise UpstreamFailure()
     if isinstance(expires, bool) or not isinstance(expires, int) or expires <= 0:
         raise UpstreamFailure()
@@ -58,16 +65,30 @@ def mint_client_secret(session, *, request=None, timeout=20):
         ProviderNotSignedIn = None
     if request is None:
         try:
-            from hermes_cli.plugin_provider_requests import credentialed_provider_request as request
+            from hermes_cli.plugin_provider_requests import (
+                credentialed_provider_request as request,
+            )
         except ImportError:
-            raise Refused("This Hermes version cannot share its ChatGPT sign-in with plugins.") from None
+            raise Refused(
+                "This Hermes version cannot share its ChatGPT sign-in with plugins."
+            ) from None
     try:
-        response = request(PROVIDER, "POST", URL, json={"session": session},
-                           headers={"Content-Type": "application/json"}, timeout=timeout)
+        response = request(
+            PROVIDER,
+            "POST",
+            URL,
+            json={"session": session},
+            headers={"Content-Type": "application/json"},
+            timeout=timeout,
+        )
     except PermissionError:
         raise Refused("Hermes refused the voice plugin's request.") from None
     except Exception as error:
-        if ProviderNotSignedIn is not None and isinstance(error, ProviderNotSignedIn) or type(error).__name__ == "ProviderNotSignedIn":
+        if (
+            ProviderNotSignedIn is not None
+            and isinstance(error, ProviderNotSignedIn)
+            or type(error).__name__ == "ProviderNotSignedIn"
+        ):
             raise SignedOut("Sign in to ChatGPT in Hermes.") from None
         raise UpstreamFailure() from None
     status = getattr(response, "status", None)

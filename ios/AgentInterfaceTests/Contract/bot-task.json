@@ -8,9 +8,7 @@
     "priority": 5,
     "assignee": "garden",
     "owner": "household",
-    "dependencies": [
-      "task-supplies"
-    ],
+    "dependencies": ["task-supplies"],
     "blockedReason": "Waiting for supplies."
   }
 }

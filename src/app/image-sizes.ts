@@ -12,7 +12,10 @@ const sizes = new Map<string, ImageSize>();
 export const MAX_REMEMBERED = 500;
 export const imageSize = (id: string): ImageSize | undefined => sizes.get(id);
 /** Keeps a loaded image's natural size. An image without one, such as a broken file, is not kept. */
-export function rememberImageSize(id: string, image: Pick<HTMLImageElement, "naturalWidth" | "naturalHeight">) {
+export function rememberImageSize(
+  id: string,
+  image: Pick<HTMLImageElement, "naturalWidth" | "naturalHeight">,
+) {
   if (!(image.naturalWidth > 0 && image.naturalHeight > 0)) return;
   sizes.delete(id);
   sizes.set(id, { width: image.naturalWidth, height: image.naturalHeight });
@@ -29,7 +32,7 @@ const RESHAPE_FACTOR = 1.1;
 /** Whether a loaded image should take its own shape instead of the frame it was given (`undefined`: the 4:3 one). */
 export function reshapes(frame: ImageSize | undefined, loaded: ImageSize) {
   if (!(loaded.width > 0 && loaded.height > 0)) return false;
-  const ratio = (loaded.width / loaded.height) / (frame ? frame.width / frame.height : FRAME_RATIO);
+  const ratio = loaded.width / loaded.height / (frame ? frame.width / frame.height : FRAME_RATIO);
   return Math.max(ratio, 1 / ratio) > RESHAPE_FACTOR;
 }
 
@@ -50,7 +53,8 @@ export const rowOf = (frame: Element) => frame.closest("[data-message-id]") ?? f
 export function readerSees(frame: Element) {
   const scroller = scrollerOf(frame);
   if (!scroller) return false;
-  const view = scroller.getBoundingClientRect(), box = rowOf(frame).getBoundingClientRect();
+  const view = scroller.getBoundingClientRect(),
+    box = rowOf(frame).getBoundingClientRect();
   const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 1;
   return !atEnd && box.bottom > view.top && box.top < view.bottom;
 }
@@ -61,8 +65,10 @@ export function readerSees(frame: Element) {
 export function neverLeaves(frame: Element) {
   const scroller = scrollerOf(frame);
   if (!scroller) return false;
-  const view = scroller.getBoundingClientRect(), box = rowOf(frame).getBoundingClientRect();
+  const view = scroller.getBoundingClientRect(),
+    box = rowOf(frame).getBoundingClientRect();
   // The row's place in the scroller's content, against the view at the top and at the end.
-  const top = box.top - view.top + scroller.scrollTop, bottom = box.bottom - view.top + scroller.scrollTop;
+  const top = box.top - view.top + scroller.scrollTop,
+    bottom = box.bottom - view.top + scroller.scrollTop;
   return top < scroller.clientHeight && bottom > scroller.scrollHeight - scroller.clientHeight;
 }

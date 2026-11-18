@@ -26,15 +26,15 @@ sibling add-ons and other processes included. `Journal.version(profile)` replace
 
 `python3 .agents/tools/mutate-py.py --batch` against `python3 tests/hermes_extension_journal_test.py`:
 
-| Mutation | Result |
-| --- | --- |
-| global counter again | failed: test_poll_never_shows_half_of_a_concurrent_write (exit 1) |
-| version never moves | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1) |
-| receipts only | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1) |
-| no delete trigger | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
-| no update trigger | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
-| no moved trigger | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
-| fill keyed on stale version | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1) |
+| Mutation                    | Result                                                                                    |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| global counter again        | failed: test_poll_never_shows_half_of_a_concurrent_write (exit 1)                         |
+| version never moves         | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1)        |
+| receipts only               | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1)        |
+| no delete trigger           | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
+| no update trigger           | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
+| no moved trigger            | failed: test_every_write_to_a_profiles_receipts_and_tools_moves_only_its_version (exit 1) |
+| fill keyed on stale version | failed: test_decorated_cache_skips_projection_and_binding_and_invalidates (exit 1)        |
 
 The existing cache test used an `events` insert to prove invalidation, which held only because of the global
 counter. Decorated history reads no events; the test now shows an event and another profile's receipt keep the

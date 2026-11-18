@@ -18,75 +18,137 @@ const AUDIO_TTL = 5 * 60_000;
 const MAX_CACHED_AUDIO = 32 * 1024 * 1024;
 
 /** Install after authentication and multipart plugins. Audio never becomes a shared artifact. */
-export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRuntime, options: { now?: () => number; visible?: (botId: string, userId: string) => boolean; redact?: (message: Message, userId: string) => Promise<Message> } = {}) {
+export async function registerVoiceRoutes(
+  app: FastifyInstance,
+  runtime: VoiceRuntime,
+  options: {
+    now?: () => number;
+    visible?: (botId: string, userId: string) => boolean;
+    redact?: (message: Message, userId: string) => Promise<Message>;
+  } = {},
+) {
   const now = options.now ?? Date.now;
-  const audio = new Map<string, { userId: string; botId: string; expires: number; data: Buffer; mime: string; messageId: string }>();
+  const audio = new Map<
+    string,
+    {
+      userId: string;
+      botId: string;
+      expires: number;
+      data: Buffer;
+      mime: string;
+      messageId: string;
+    }
+  >();
   const busy = new Set<string>();
-  const prune = () => { for (const [key, entry] of audio) if (entry.expires <= now()) audio.delete(key); };
-  const cleanup = setInterval(prune, 30_000); cleanup.unref();
-  app.addHook("onClose", async () => { clearInterval(cleanup); audio.clear(); });
+  const prune = () => {
+    for (const [key, entry] of audio) if (entry.expires <= now()) audio.delete(key);
+  };
+  const cleanup = setInterval(prune, 30_000);
+  cleanup.unref();
+  app.addHook("onClose", async () => {
+    clearInterval(cleanup);
+    audio.clear();
+  });
   const checkBot = async (req: FastifyRequest, botId: string) => {
     // Cached speech outlives the request that made it, so it is checked again when fetched.
-    if (options.visible && !options.visible(botId, signedIn(req).id)) throw httpError(404, "This assistant is no longer available.");
-    if (!(await runtime.listBots()).some(bot => bot.id === botId)) throw httpError(404, "This assistant is no longer available.");
+    if (options.visible && !options.visible(botId, signedIn(req).id))
+      throw httpError(404, "This assistant is no longer available.");
+    if (!(await runtime.listBots()).some((bot) => bot.id === botId))
+      throw httpError(404, "This assistant is no longer available.");
   };
   const readableReply = async (req: FastifyRequest, botId: string, messageId: string) => {
     const found = await readMessage(runtime, botId, messageId);
     const raw = found && isConversationReply(found) ? found : undefined;
     const message = raw && (options.redact ? await options.redact(raw, signedIn(req).id) : raw);
-    if (!message || !isConversationReply(message) || !message.text.trim()) throw httpError(404, "Choose a completed assistant reply to listen to.");
+    if (!message || !isConversationReply(message) || !message.text.trim())
+      throw httpError(404, "Choose a completed assistant reply to listen to.");
     return message;
   };
   const operation = async <T>(req: FastifyRequest, fn: () => Promise<T>) => {
     const key = signedIn(req).id;
-    if (busy.has(key)) throw httpError(429, "A voice request is already running. Wait for it to finish.");
+    if (busy.has(key))
+      throw httpError(429, "A voice request is already running. Wait for it to finish.");
     busy.add(key);
-    try { return await fn(); } finally { busy.delete(key); }
+    try {
+      return await fn();
+    } finally {
+      busy.delete(key);
+    }
   };
   app.post("/api/bots/:id/voice/transcribe", async (req, reply) => {
     const botId = botParams.parse(req.params).id;
     await checkBot(req, botId);
-    if (!runtime.transcribeVoice) throw httpError(409, "Voice transcription is unavailable on this Hermes connection.");
+    if (!runtime.transcribeVoice)
+      throw httpError(409, "Voice transcription is unavailable on this Hermes connection.");
     return operation(req, async () => {
       let input: { data: Buffer; mime: string } | undefined;
       // Consume the complete multipart body before paying for transcription, so
       // extra files/fields cannot sneak past the first-file convenience API.
-      for await (const part of req.parts({ limits: { fileSize: MAX_VOICE_BYTES, files: 1, fields: 0, parts: 1 } })) {
-        if (part.type !== "file") throw httpError(400, "Send one audio recording without extra fields.");
+      for await (const part of req.parts({
+        limits: { fileSize: MAX_VOICE_BYTES, files: 1, fields: 0, parts: 1 },
+      })) {
+        if (part.type !== "file")
+          throw httpError(400, "Send one audio recording without extra fields.");
         const mime = part.mimetype.split(";", 1)[0]!.trim().toLowerCase();
-        if (!VOICE_MIMES.has(mime)) { part.file.resume(); throw httpError(415, "Choose a WebM, Ogg, WAV, MP4, AAC, MP3 or FLAC audio recording."); }
+        if (!VOICE_MIMES.has(mime)) {
+          part.file.resume();
+          throw httpError(415, "Choose a WebM, Ogg, WAV, MP4, AAC, MP3 or FLAC audio recording.");
+        }
         const data = await part.toBuffer();
-        if (part.file.truncated || data.length > MAX_VOICE_BYTES) throw httpError(413, "Audio recordings must be 8 MB or smaller.");
+        if (part.file.truncated || data.length > MAX_VOICE_BYTES)
+          throw httpError(413, "Audio recordings must be 8 MB or smaller.");
         if (!data.length) throw httpError(400, "This audio recording is empty.");
         input = { data, mime };
       }
       if (!input) throw httpError(400, "Choose an audio recording.");
       const result = await runtime.transcribeVoice!(botId, input);
-      if (typeof result.text !== "string" || result.text.length > 50000) throw httpError(502, "Hermes returned an invalid transcript.");
-      return reply.header("Cache-Control", "private, no-store").send({ text: result.text.trim(), ...(typeof result.provider === "string" ? { provider: result.provider } : {}) });
+      if (typeof result.text !== "string" || result.text.length > 50000)
+        throw httpError(502, "Hermes returned an invalid transcript.");
+      return reply.header("Cache-Control", "private, no-store").send({
+        text: result.text.trim(),
+        ...(typeof result.provider === "string" ? { provider: result.provider } : {}),
+      });
     });
   });
   app.post("/api/bots/:id/voice/speak", async (req, reply) => {
     const botId = botParams.parse(req.params).id;
-    const { messageId } = z.object({ messageId: z.string().min(1).max(300) }).strict().parse(req.body);
+    const { messageId } = z
+      .object({ messageId: z.string().min(1).max(300) })
+      .strict()
+      .parse(req.body);
     await checkBot(req, botId);
-    if (!runtime.synthesizeVoice) throw httpError(409, "Spoken replies are unavailable on this Hermes connection.");
+    if (!runtime.synthesizeVoice)
+      throw httpError(409, "Spoken replies are unavailable on this Hermes connection.");
     return operation(req, async () => {
       const message = await readableReply(req, botId, messageId);
-      if (message.id.endsWith("-inflight")) throw httpError(409, "Wait for this assistant reply to finish before listening.");
-      if (message.text.length > MAX_SPOKEN_TEXT) throw httpError(400, "This reply is too long to read aloud. Ask for a shorter summary.");
+      if (message.id.endsWith("-inflight"))
+        throw httpError(409, "Wait for this assistant reply to finish before listening.");
+      if (message.text.length > MAX_SPOKEN_TEXT)
+        throw httpError(400, "This reply is too long to read aloud. Ask for a shorter summary.");
       const result = await runtime.synthesizeVoice!(botId, message.text);
       const mime = result.mime.split(";", 1)[0]!.trim().toLowerCase();
-      if (!VOICE_MIMES.has(mime) || !Buffer.isBuffer(result.data) || !result.data.length || result.data.length > MAX_VOICE_BYTES)
+      if (
+        !VOICE_MIMES.has(mime) ||
+        !Buffer.isBuffer(result.data) ||
+        !result.data.length ||
+        result.data.length > MAX_VOICE_BYTES
+      )
         throw httpError(502, "Hermes did not return a supported audio reply under 8 MB.");
       prune();
       const userId = signedIn(req).id;
       for (const [key, entry] of audio) if (entry.userId === userId) audio.delete(key);
       let total = [...audio.values()].reduce((sum, entry) => sum + entry.data.length, 0);
-      for (const [key, entry] of audio) { if (total + result.data.length <= MAX_CACHED_AUDIO) break; total -= entry.data.length; audio.delete(key); }
-      const key = randomUUID(), expires = now() + AUDIO_TTL;
+      for (const [key, entry] of audio) {
+        if (total + result.data.length <= MAX_CACHED_AUDIO) break;
+        total -= entry.data.length;
+        audio.delete(key);
+      }
+      const key = randomUUID(),
+        expires = now() + AUDIO_TTL;
       audio.set(key, { userId, botId, messageId, data: result.data, mime, expires });
-      return reply.header("Cache-Control", "private, no-store").send({ url: `/api/voice/audio/${key}`, mime, expiresAt: new Date(expires).toISOString() });
+      return reply
+        .header("Cache-Control", "private, no-store")
+        .send({ url: `/api/voice/audio/${key}`, mime, expiresAt: new Date(expires).toISOString() });
     });
   });
   app.get("/api/voice/audio/:audioId", async (req, reply) => {
@@ -94,10 +156,15 @@ export async function registerVoiceRoutes(app: FastifyInstance, runtime: VoiceRu
     const { audioId } = z.object({ audioId: z.string().uuid() }).parse(req.params);
     prune();
     const entry = audio.get(audioId);
-    if (!entry || entry.userId !== userId) throw httpError(404, "This audio reply expired. Request speech again.");
+    if (!entry || entry.userId !== userId)
+      throw httpError(404, "This audio reply expired. Request speech again.");
     audio.delete(audioId);
     await checkBot(req, entry.botId);
     await readableReply(req, entry.botId, entry.messageId);
-    return reply.header("Cache-Control", "private, no-store").header("Content-Disposition", 'inline; filename="reply.audio"').type(entry.mime).send(entry.data);
+    return reply
+      .header("Cache-Control", "private, no-store")
+      .header("Content-Disposition", 'inline; filename="reply.audio"')
+      .type(entry.mime)
+      .send(entry.data);
   });
 }

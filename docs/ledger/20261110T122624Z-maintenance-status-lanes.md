@@ -28,16 +28,16 @@ A send whose lane submission raises is removed with its reservation.
 
 ## Callers of maintenance `status`
 
-| Caller | When | What it checks | With a send listed |
-| --- | --- | --- | --- |
-| `.agents/tools/deploy-guarded-app-release.py:71` | preflight, no lease, before any state write or service stop; also under `--check` | `active is False and busy == []` | Fence "maintenance gate inactive with no busy work": exits before writing state or stopping anything |
-| `.agents/tools/prepare-when-idle.py` (through `release-app.py prepare`, which runs the tool above with `--check`, `release-app.py:622-624`) | preflight | its `BUSY` pattern matches that fence (line 34) | discards the stage and retries as "app or routine session running" |
-| `deploy-guarded-app-release.py:96`, `:119` | under this operation's lease | `busy == []` | cannot happen: under a lease a send is refused 409 before it reaches a lane |
-| `.agents/tools/recover-app-after-native-update.py:348` | under this operation's lease | `busy == []` | cannot happen, as above |
-| `recover-app-after-native-update.py:417` | after release | `active is False` only | unaffected |
-| `scripts/hermes-upgrade-linux.py:666` | verification, under lease | `active` and `operationId` only | unaffected |
-| `scripts/hermes-upgrade-linux.py:772` | recovery, under lease | `busy == []` | cannot happen, as above |
-| `scripts/spike/service_probe.py:203`, `:208` | qualification probe, idle disposable gateway | `active` only | unaffected |
+| Caller                                                                                                                                      | When                                                                              | What it checks                                  | With a send listed                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `.agents/tools/deploy-guarded-app-release.py:71`                                                                                            | preflight, no lease, before any state write or service stop; also under `--check` | `active is False and busy == []`                | Fence "maintenance gate inactive with no busy work": exits before writing state or stopping anything |
+| `.agents/tools/prepare-when-idle.py` (through `release-app.py prepare`, which runs the tool above with `--check`, `release-app.py:622-624`) | preflight                                                                         | its `BUSY` pattern matches that fence (line 34) | discards the stage and retries as "app or routine session running"                                   |
+| `deploy-guarded-app-release.py:96`, `:119`                                                                                                  | under this operation's lease                                                      | `busy == []`                                    | cannot happen: under a lease a send is refused 409 before it reaches a lane                          |
+| `.agents/tools/recover-app-after-native-update.py:348`                                                                                      | under this operation's lease                                                      | `busy == []`                                    | cannot happen, as above                                                                              |
+| `recover-app-after-native-update.py:417`                                                                                                    | after release                                                                     | `active is False` only                          | unaffected                                                                                           |
+| `scripts/hermes-upgrade-linux.py:666`                                                                                                       | verification, under lease                                                         | `active` and `operationId` only                 | unaffected                                                                                           |
+| `scripts/hermes-upgrade-linux.py:772`                                                                                                       | recovery, under lease                                                             | `busy == []`                                    | cannot happen, as above                                                                              |
+| `scripts/spike/service_probe.py:203`, `:208`                                                                                                | qualification probe, idle disposable gateway                                      | `active` only                                   | unaffected                                                                                           |
 
 `src/server/upgrades.ts` sends no maintenance RPC; it reads the lease file. The upgrade helper (`hermes-upgrade-linux.py:464`)
 and `scripts/spike/extension_probe.py:121` call `acquire` without a `status` preflight; `acquire` already refused for
@@ -76,12 +76,12 @@ staging (`[] != [('sid-slow', 'slow', 'admitting')]`) and in Hermes's call, and 
 
 Each line was then broken with a scripted text replacement, the test run, and the source restored and checked:
 
-| Broken | Red |
-| --- | --- |
+| Broken                                         | Red                                                                                                             |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `busy_sessions` lists sessions only, as before | `test_maintenance_status_lists_sends_that_hold_or_wait_for_a_lane_as_acquire_counts_them`, all three busy cases |
-| A send never registered | the same three cases |
-| A running send left `queued` | the same three cases |
-| An answered send never removed | the same three cases, at the idle check after the answers |
+| A send never registered                        | the same three cases                                                                                            |
+| A running send left `queued`                   | the same three cases                                                                                            |
+| An answered send never removed                 | the same three cases, at the idle check after the answers                                                       |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS and production. The release tool itself was not run.
 
@@ -135,13 +135,13 @@ the registry cleanup removed from the enqueue-exception handler.
 Each line was then broken with a scripted text replacement, the test run, and the source restored and checked. The script
 runs tests without writing bytecode and deletes the source's `__pycache__` after restoring:
 
-| Broken | Red |
-| --- | --- |
-| The send listed after the lock and its reservation | the boundary test, acquire case |
-| The send unlisted before the lock and its release | the boundary test, release case |
-| The release outside the maintenance lock | the boundary test, release case: maintenance saw the send listed mid-release |
-| A send refused at the fence left listed | `test_maintenance_treats_queued_and_running_sends_as_active_work` |
-| The refused-submission path releasing without unlisting | `test_a_send_the_executor_refuses_leaves_maintenance_free` |
+| Broken                                                  | Red                                                                          |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| The send listed after the lock and its reservation      | the boundary test, acquire case                                              |
+| The send unlisted before the lock and its release       | the boundary test, release case                                              |
+| The release outside the maintenance lock                | the boundary test, release case: maintenance saw the send listed mid-release |
+| A send refused at the fence left listed                 | `test_maintenance_treats_queued_and_running_sends_as_active_work`            |
+| The refused-submission path releasing without unlisting | `test_a_send_the_executor_refuses_leaves_maintenance_free`                   |
 
 Survives, equivalent: listing and reserving without the maintenance lock. Because the send is listed before its
 reservation is taken, no moment exists in which `acquire` counts it and `status` does not list it, and a maintenance
@@ -187,10 +187,10 @@ Source fingerprint sha256:2dd08b075bca0d038358a65ddfed65d77c6dfa5eb1d92eae398a70
 The boundary mutants were applied again with a scripted text replacement, the boundary test run without writing bytecode,
 and the source restored, checked by hash, and every `__pycache__` deleted. Each is still red:
 
-| Broken | Red |
-| --- | --- |
-| The send listed after the lock and its reservation | the acquire case: `[] != [('slow', 'queued')]` |
-| The send unlisted before the lock and its release | the release case: `[] != [('slow', 'admitting')]` |
-| The release outside the maintenance lock | the release case: maintenance saw `[('slow', 'admitting')]` mid-release |
+| Broken                                             | Red                                                                     |
+| -------------------------------------------------- | ----------------------------------------------------------------------- |
+| The send listed after the lock and its reservation | the acquire case: `[] != [('slow', 'queued')]`                          |
+| The send unlisted before the lock and its release  | the release case: `[] != [('slow', 'admitting')]`                       |
+| The release outside the maintenance lock           | the release case: maintenance saw `[('slow', 'admitting')]` mid-release |
 
 Not run: real Hermes, the qualification run, `npm test`, iOS, production, and the release tool.

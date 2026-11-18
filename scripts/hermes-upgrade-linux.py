@@ -4,6 +4,7 @@ Run with a private --config JSON and one fixed action. Cold recovery archives
 contain credentials and must never be published. Rollback restores source and
 managed dependency state, never old rotating OAuth grants from the home archive.
 """
+
 import argparse
 import base64
 import contextlib
@@ -26,7 +27,17 @@ import urllib.error
 import urllib.request
 import uuid
 
-ACTIONS = ("regressions", "quiescence", "backup", "install", "verify", "rollback", "finish", "recover", "restart_service")
+ACTIONS = (
+    "regressions",
+    "quiescence",
+    "backup",
+    "install",
+    "verify",
+    "rollback",
+    "finish",
+    "recover",
+    "restart_service",
+)
 MAX_QUALIFIED_PACK_BYTES = 4 * 1024 * 1024 * 1024
 # Packing 133,000 missing objects took 4 min 18 s on the Hermes host; indexing them took 1 min.
 OBJECT_TRANSFER_SECONDS = 900
@@ -67,7 +78,9 @@ qualification = hermes_module("qualification")
 def private(path, directory=False):
     path = Path(path)
     if not private_fs.owner_private(path, "dir" if directory else "file"):
-        raise RuntimeError("Expected installer-owned private configuration or operation record")
+        raise RuntimeError(
+            "Expected installer-owned private configuration or operation record"
+        )
     return path
 
 
@@ -78,7 +91,8 @@ def atomic(path, value):
 def digest(path):
     hash = hashlib.sha256()
     with Path(path).open("rb") as source:
-        for block in iter(lambda: source.read(1024 * 1024), b""): hash.update(block)
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            hash.update(block)
     return hash.hexdigest()
 
 
@@ -102,7 +116,7 @@ def timestamp(value):
 # A failure after the send waits out the rest of `wait` first, so a dropped socket gets the same
 # proof as a silent one. Method `capabilities` asks `agent-interface.capabilities`, which takes no
 # credentials; every other method is a maintenance action. Successful output is the add-on's result alone.
-NATIVE = r'''
+NATIVE = r"""
 import json,sys
 from pathlib import Path
 v=json.load(sys.stdin)
@@ -147,13 +161,16 @@ elif v['action']=='rpc':
                 time.sleep(max(0,sent+v['wait']-time.monotonic()))
                 print(json.dumps({'deadlinePassed':True}),flush=True)
             raise
-'''
+"""
 
 # The add-on's answer to an acquire while it sees active work. Its handler returns this before it
 # writes any lease (src/hermes/extension.py, maintenance), so it is the one finished refusal a later
 # check can outwait. The guarded release tool keeps the same value (.agents/tools/deploy_common.py);
 # tests/hermes_send_lanes_test.py pins both against the add-on's real answer.
-BUSY_REFUSAL = {"code": 409, "message": "Hermes still has active work; no maintenance lease acquired"}
+BUSY_REFUSAL = {
+    "code": 409,
+    "message": "Hermes still has active work; no maintenance lease acquired",
+}
 # How long NATIVE waits for each WebSocket message. An acquire that would succeed first preempts each
 # canonical Bot Chat's idle compaction for up to 30 s (src/hermes/compaction.py PREEMPT_WAIT), one
 # at a time, and nothing caps the chain. 120 s covers three full waits, as in the release tool.
@@ -207,7 +224,9 @@ class NotSent(RuntimeError):
     connection. The add-on never saw it, so nothing can still be running there."""
 
     def __init__(self, method, failure):
-        super().__init__("Hermes was not asked for maintenance " + method + ": " + describe(failure))
+        super().__init__(
+            "Hermes was not asked for maintenance " + method + ": " + describe(failure)
+        )
 
 
 class Answered(RuntimeError):
@@ -215,7 +234,9 @@ class Answered(RuntimeError):
 
     def __init__(self, error):
         # Only the code: the log never records text a command printed.
-        super().__init__("Hermes answered maintenance with error code " + str(error.get("code")))
+        super().__init__(
+            "Hermes answered maintenance with error code " + str(error.get("code"))
+        )
         self.error = error
 
 
@@ -225,7 +246,13 @@ class DeadlinePassed(RuntimeError):
     watch (DEADLINE_WATCH_SECONDS) for a handler that started late."""
 
     def __init__(self, method, deadline):
-        super().__init__("Hermes did not answer maintenance " + method + " within its " + str(deadline) + " s deadline")
+        super().__init__(
+            "Hermes did not answer maintenance "
+            + method
+            + " within its "
+            + str(deadline)
+            + " s deadline"
+        )
 
 
 class Unanswered(RuntimeError):
@@ -233,7 +260,9 @@ class Unanswered(RuntimeError):
     still be running, and an acquire handler can still write the lease."""
 
     def __init__(self, method, failure):
-        super().__init__("Hermes did not answer maintenance " + method + ": " + describe(failure))
+        super().__init__(
+            "Hermes did not answer maintenance " + method + ": " + describe(failure)
+        )
 
 
 def last_line(stdout):
@@ -248,7 +277,11 @@ def last_line(stdout):
 def answered_error(stdout):
     """The add-on's error when NATIVE's last stdout line is exactly its answered-error line."""
     answer = last_line(stdout)
-    if isinstance(answer, dict) and list(answer) == ["answeredError"] and isinstance(answer["answeredError"], dict):
+    if (
+        isinstance(answer, dict)
+        and list(answer) == ["answeredError"]
+        and isinstance(answer["answeredError"], dict)
+    ):
         return answer["answeredError"]
     return None
 
@@ -275,105 +308,235 @@ class Platform:
         self.config = json.loads(private(config).read_text())
         self.env = dict(os.environ if environment is None else environment)
         self.check_config(self.config)
-        self.source, self.home = Path(self.config["source"]), Path(self.config["hermesHome"])
+        self.source, self.home = (
+            Path(self.config["source"]),
+            Path(self.config["hermesHome"]),
+        )
         self.objects = self.source / ".git/objects"
         # Set by baseline() before the operation record holds it.
         self.interpreter = None
         self.operation = self.env.get("HERMES_UPGRADE_OPERATION_ID", "")
         uuid.UUID(self.operation)
-        if self.env.get("HERMES_UPGRADE_SOURCE") != str(self.source): raise RuntimeError("Worker source differs from fixed host configuration")
+        if self.env.get("HERMES_UPGRADE_SOURCE") != str(self.source):
+            raise RuntimeError("Worker source differs from fixed host configuration")
         self.stage = Path(self.env["HERMES_UPGRADE_STAGE_HOME"])
         private(self.stage, directory=True)
-        if self.stage.parent.resolve() != Path(self.config["stageRoot"]).resolve(): raise RuntimeError("Operation escaped the configured staging directory")
+        if self.stage.parent.resolve() != Path(self.config["stageRoot"]).resolve():
+            raise RuntimeError("Operation escaped the configured staging directory")
         self.target = Path(self.env["HERMES_UPGRADE_STAGE_SOURCE"])
-        if self.target != self.stage / "source" or self.target.is_symlink(): raise RuntimeError("Unexpected staged source")
+        if self.target != self.stage / "source" or self.target.is_symlink():
+            raise RuntimeError("Unexpected staged source")
         self.backup_dir = Path(self.env["HERMES_UPGRADE_BACKUP_DIR"])
-        if self.backup_dir != self.stage / "backup": raise RuntimeError("Unexpected backup directory")
-        if self.env.get("HERMES_UPGRADE_RECEIPT") != str(self.stage / "qualification.json"): raise RuntimeError("Unexpected qualification receipt")
+        if self.backup_dir != self.stage / "backup":
+            raise RuntimeError("Unexpected backup directory")
+        if self.env.get("HERMES_UPGRADE_RECEIPT") != str(
+            self.stage / "qualification.json"
+        ):
+            raise RuntimeError("Unexpected qualification receipt")
         self.record = self.stage / "platform.json"
         self.candidate = self.env.get("HERMES_UPGRADE_CANDIDATE", "")
-        if not re.fullmatch(r"[a-f0-9]{40}", self.candidate): raise RuntimeError("The candidate must be an exact qualified commit")
-        self.child_env = {"PATH": self.env.get("PATH", "/usr/bin:/bin"), "HOME": self.env["HOME"], "LANG": "C.UTF-8", "HERMES_HOME": str(self.home)}
+        if not re.fullmatch(r"[a-f0-9]{40}", self.candidate):
+            raise RuntimeError("The candidate must be an exact qualified commit")
+        self.child_env = {
+            "PATH": self.env.get("PATH", "/usr/bin:/bin"),
+            "HOME": self.env["HOME"],
+            "LANG": "C.UTF-8",
+            "HERMES_HOME": str(self.home),
+        }
         # The app deliberately launches detached workers with a minimal env.
         # Address this Unix user's systemd manager even without a login session.
         runtime_dir = "/run/user/" + str(os.getuid())
-        self.child_env.update(XDG_RUNTIME_DIR=runtime_dir, DBUS_SESSION_BUS_ADDRESS="unix:path=" + runtime_dir + "/bus")
-        self.child_env.update({k: v for k, v in self.env.items() if k.startswith("HERMES_UPGRADE_")})
+        self.child_env.update(
+            XDG_RUNTIME_DIR=runtime_dir,
+            DBUS_SESSION_BUS_ADDRESS="unix:path=" + runtime_dir + "/bus",
+        )
+        self.child_env.update(
+            {k: v for k, v in self.env.items() if k.startswith("HERMES_UPGRADE_")}
+        )
         if "HERMES_UPDATE_HANDOFF_PID" in self.env:
-            self.child_env["HERMES_UPDATE_HANDOFF_PID"] = self.env["HERMES_UPDATE_HANDOFF_PID"]
+            self.child_env["HERMES_UPDATE_HANDOFF_PID"] = self.env[
+                "HERMES_UPDATE_HANDOFF_PID"
+            ]
 
     @classmethod
     def check_config(cls, config):
         """Refuse a host configuration this helper cannot run safely. It also checks a refreshed
         configuration before that replaces the file."""
-        for key in ("source", "hermesHome", "managedLauncher", "managedPython", "serviceEnvFile", "qualificationReceipt", "maintenanceFile", "stageRoot", "systemctl"):
-            if not isinstance(config.get(key), str) or not Path(config[key]).is_absolute(): raise RuntimeError("Installer paths must be fixed and absolute: " + key)
+        for key in (
+            "source",
+            "hermesHome",
+            "managedLauncher",
+            "managedPython",
+            "serviceEnvFile",
+            "qualificationReceipt",
+            "maintenanceFile",
+            "stageRoot",
+            "systemctl",
+        ):
+            if (
+                not isinstance(config.get(key), str)
+                or not Path(config[key]).is_absolute()
+            ):
+                raise RuntimeError("Installer paths must be fixed and absolute: " + key)
         source, home = Path(config["source"]), Path(config["hermesHome"])
-        if source.is_symlink() or home.is_symlink(): raise RuntimeError("Source and Hermes home must be real directories")
-        if not source.is_relative_to(home): raise RuntimeError("Managed source must be inside the shared Hermes home")
-        if Path(config["stageRoot"]).is_relative_to(home): raise RuntimeError("Staging and backups must be outside the live Hermes home")
-        if config.get("dashboardOrigin") != "http://127.0.0.1:" + str(config.get("dashboardPort")): raise RuntimeError("Only the fixed direct loopback dashboard is supported")
+        if source.is_symlink() or home.is_symlink():
+            raise RuntimeError("Source and Hermes home must be real directories")
+        if not source.is_relative_to(home):
+            raise RuntimeError("Managed source must be inside the shared Hermes home")
+        if Path(config["stageRoot"]).is_relative_to(home):
+            raise RuntimeError(
+                "Staging and backups must be outside the live Hermes home"
+            )
+        if config.get("dashboardOrigin") != "http://127.0.0.1:" + str(
+            config.get("dashboardPort")
+        ):
+            raise RuntimeError("Only the fixed direct loopback dashboard is supported")
         for name in ("dashboardUnit", "gatewayUnit", "appUnit"):
-            if not re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", config.get(name, "")): raise RuntimeError("Invalid fixed user service")
-        if len({config[k] for k in ("dashboardUnit", "gatewayUnit", "appUnit")}) != 3: raise RuntimeError("User service names must be distinct")
+            if not re.fullmatch(r"[A-Za-z0-9_.@-]+\.service", config.get(name, "")):
+                raise RuntimeError("Invalid fixed user service")
+        if len({config[k] for k in ("dashboardUnit", "gatewayUnit", "appUnit")}) != 3:
+            raise RuntimeError("User service names must be distinct")
         commands = config.get("regressionCommands", {})
         regression_python = config.get("regressionPython", config["managedPython"])
-        if not isinstance(regression_python, str) or not Path(regression_python).is_absolute(): raise RuntimeError("Regression Python must be fixed")
+        if (
+            not isinstance(regression_python, str)
+            or not Path(regression_python).is_absolute()
+        ):
+            raise RuntimeError("Regression Python must be fixed")
         for name in ("sharedOAuth", "googleAuth"):
             cls.command(commands.get(name))
-            if Path(commands[name][0]).absolute() != Path(regression_python).absolute(): raise RuntimeError("Regression commands must use the fixed Python interpreter")
+            if Path(commands[name][0]).absolute() != Path(regression_python).absolute():
+                raise RuntimeError(
+                    "Regression commands must use the fixed Python interpreter"
+                )
         cls.command(config.get("googleVerificationCommand"))
-        if not isinstance(config.get("discordConnections"), list) or len(config["discordConnections"]) != 2 or len(set(config["discordConnections"])) != 2:
-            raise RuntimeError("Exactly two native Discord connection keys must be configured")
+        if (
+            not isinstance(config.get("discordConnections"), list)
+            or len(config["discordConnections"]) != 2
+            or len(set(config["discordConnections"])) != 2
+        ):
+            raise RuntimeError(
+                "Exactly two native Discord connection keys must be configured"
+            )
 
     @staticmethod
     def command(argv):
-        if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and "\0" not in arg for arg in argv) or not Path(argv[0]).is_absolute(): raise RuntimeError("Expected a fixed installer-owned argv")
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or not all(isinstance(arg, str) and "\0" not in arg for arg in argv)
+            or not Path(argv[0]).is_absolute()
+        ):
+            raise RuntimeError("Expected a fixed installer-owned argv")
 
     def run(self, argv, capture=False, input=None, env=None, timeout=1800):
-        return subprocess.run(argv, cwd=self.source if self.source.exists() else self.home, env=env or self.child_env, input=input, text=True,
-            stdout=subprocess.PIPE if capture else None, stderr=subprocess.PIPE if capture else None, check=True, timeout=timeout,
-            pass_fds=tuple(int(self.env[key]) for key in ("HERMES_UPGRADE_LOCK_FD", "HERMES_UPGRADE_CLAIM_FD") if self.env.get(key))).stdout
+        return subprocess.run(
+            argv,
+            cwd=self.source if self.source.exists() else self.home,
+            env=env or self.child_env,
+            input=input,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.PIPE if capture else None,
+            check=True,
+            timeout=timeout,
+            pass_fds=tuple(
+                int(self.env[key])
+                for key in ("HERMES_UPGRADE_LOCK_FD", "HERMES_UPGRADE_CLAIM_FD")
+                if self.env.get(key)
+            ),
+        ).stdout
 
     def git(self, path, *args):
         return self.run(["git", *GIT_ABBREV, "-C", str(path), *args], capture=True)
 
     def source_state(self, path=None):
         path = path or self.source
-        return self.git(path, "rev-parse", "HEAD").strip(), hashlib.sha256(self.git(path, "diff", "HEAD", "--binary").encode()).hexdigest()
+        return self.git(path, "rev-parse", "HEAD").strip(), hashlib.sha256(
+            self.git(path, "diff", "HEAD", "--binary").encode()
+        ).hexdigest()
 
     def load(self):
         value = json.loads(private(self.record).read_text())
-        if value.get("operationId") != self.operation: raise RuntimeError("Platform record belongs to another operation")
+        if value.get("operationId") != self.operation:
+            raise RuntimeError("Platform record belongs to another operation")
         return value
 
     def save(self, value):
         atomic(self.record, dict(value, operationId=self.operation))
 
     def unit(self, name, require_active=True):
-        output = self.run([self.config["systemctl"], "--user", "show", self.config[name], "--property=ActiveState,SubState,MainPID,FragmentPath,ControlGroup"], capture=True, timeout=15)
+        output = self.run(
+            [
+                self.config["systemctl"],
+                "--user",
+                "show",
+                self.config[name],
+                "--property=ActiveState,SubState,MainPID,FragmentPath,ControlGroup",
+            ],
+            capture=True,
+            timeout=15,
+        )
         value = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
-        if require_active and (value.get("ActiveState") != "active" or not value.get("MainPID", "").isdigit() or int(value["MainPID"]) < 1): raise RuntimeError("Required native/app user service is not active")
+        if require_active and (
+            value.get("ActiveState") != "active"
+            or not value.get("MainPID", "").isdigit()
+            or int(value["MainPID"]) < 1
+        ):
+            raise RuntimeError("Required native/app user service is not active")
         fragment = Path(value["FragmentPath"])
         value["fragmentSha256"] = digest(fragment)
         return value
 
     def settings(self):
-        paths = [self.home / "config.yaml", self.home / ".env", Path(self.config["serviceEnvFile"])]
+        paths = [
+            self.home / "config.yaml",
+            self.home / ".env",
+            Path(self.config["serviceEnvFile"]),
+        ]
         profiles = self.home / "profiles"
         if profiles.exists():
             for profile in sorted(profiles.iterdir()):
-                if profile.is_symlink(): raise RuntimeError("Profile symlinks require installer review")
-                if profile.is_dir(): paths.extend([profile / "config.yaml", profile / ".env"])
+                if profile.is_symlink():
+                    raise RuntimeError("Profile symlinks require installer review")
+                if profile.is_dir():
+                    paths.extend([profile / "config.yaml", profile / ".env"])
         plugins = self.home / "plugins"
-        if plugins.exists(): paths.extend(path for path in plugins.rglob("*") if path.is_file() and path.suffix in (".py", ".yaml", ".toml"))
+        if plugins.exists():
+            paths.extend(
+                path
+                for path in plugins.rglob("*")
+                if path.is_file() and path.suffix in (".py", ".yaml", ".toml")
+            )
         return {str(path): digest(path) for path in paths if path.exists()}
 
     def launcher_python(self):
         """The interpreter the native launcher selects now. Hermes updates move it between tool
         versions (Oct 30, 2026: 3.14.7 to 3.14.9), so no fixed configuration path is authoritative."""
-        command = json.loads(self.run([self.config["managedLauncher"], "--print-runtime-command", "--module", "hermes_cli.venv_sync", "--", "--project-root", str(self.source), "--check", "--json"], capture=True, timeout=30))
-        if not isinstance(command, list) or not command or not isinstance(command[0], str) or not Path(command[0]).is_absolute(): raise RuntimeError("Native managed launcher did not export its interpreter")
+        command = json.loads(
+            self.run(
+                [
+                    self.config["managedLauncher"],
+                    "--print-runtime-command",
+                    "--module",
+                    "hermes_cli.venv_sync",
+                    "--",
+                    "--project-root",
+                    str(self.source),
+                    "--check",
+                    "--json",
+                ],
+                capture=True,
+                timeout=30,
+            )
+        )
+        if (
+            not isinstance(command, list)
+            or not command
+            or not isinstance(command[0], str)
+            or not Path(command[0]).is_absolute()
+        ):
+            raise RuntimeError("Native managed launcher did not export its interpreter")
         return command[0]
 
     def in_tool_store(self, python):
@@ -382,8 +545,10 @@ class Platform:
     def baseline_interpreter(self):
         """The interpreter this operation's baseline ran, or None before baseline() or for a
         record an older helper wrote."""
-        if self.interpreter is not None: return self.interpreter
-        if not self.record.exists(): return None
+        if self.interpreter is not None:
+            return self.interpreter
+        if not self.record.exists():
+            return None
         return self.load().get("baseline", {}).get("interpreter")
 
     def store_python(self):
@@ -391,22 +556,48 @@ class Platform:
         current = self.source_state()[0]
         if current == self.env.get("HERMES_UPGRADE_CURRENT"):
             expected = self.baseline_interpreter()
-            if expected is not None and Path(python).absolute() != Path(expected).absolute(): raise RuntimeError("Baseline managed interpreter selection changed")
-            if not self.in_tool_store(python): raise RuntimeError("The baseline managed interpreter is outside the native tool store")
+            if (
+                expected is not None
+                and Path(python).absolute() != Path(expected).absolute()
+            ):
+                raise RuntimeError("Baseline managed interpreter selection changed")
+            if not self.in_tool_store(python):
+                raise RuntimeError(
+                    "The baseline managed interpreter is outside the native tool store"
+                )
         elif current != self.candidate or not self.in_tool_store(python):
-            raise RuntimeError("The updated managed interpreter escaped the native tool store")
+            raise RuntimeError(
+                "The updated managed interpreter escaped the native tool store"
+            )
         return python
 
     def native(self, action, python=None, timeout=45, **values):
-        payload = dict(values, action=action, source=str(self.source), home=str(self.home))
-        return json.loads(self.run([python or self.store_python(), "-I", "-c", NATIVE], input=json.dumps(payload), capture=True, timeout=timeout))
+        payload = dict(
+            values, action=action, source=str(self.source), home=str(self.home)
+        )
+        return json.loads(
+            self.run(
+                [python or self.store_python(), "-I", "-c", NATIVE],
+                input=json.dumps(payload),
+                capture=True,
+                timeout=timeout,
+            )
+        )
 
     def key(self):
         text = private(self.config["serviceEnvFile"]).read_text()
-        matches = re.findall(r"^HERMES_AGENT_INTERFACE_TOKEN=([A-Za-z0-9_-]{43})$", text, re.M)
-        gates = re.findall(r"^HERMES_AGENT_INTERFACE_MAINTENANCE_FILE=(/[^\n]+)$", text, re.M)
-        if gates != [self.config["maintenanceFile"]]: raise RuntimeError("Native maintenance file differs from the fixed host configuration")
-        if len(matches) != 1: raise RuntimeError("Private service key is missing or ambiguous")
+        matches = re.findall(
+            r"^HERMES_AGENT_INTERFACE_TOKEN=([A-Za-z0-9_-]{43})$", text, re.M
+        )
+        gates = re.findall(
+            r"^HERMES_AGENT_INTERFACE_MAINTENANCE_FILE=(/[^\n]+)$", text, re.M
+        )
+        if gates != [self.config["maintenanceFile"]]:
+            raise RuntimeError(
+                "Native maintenance file differs from the fixed host configuration"
+            )
+        if len(matches) != 1:
+            raise RuntimeError("Private service key is missing or ambiguous")
         return matches[0]
 
     def rpc(self, method, deadline=None):
@@ -416,35 +607,78 @@ class Platform:
         Unanswered when the request may have reached it but no answer came back. A failure before NATIVE runs,
         such as a missing key, raises as itself."""
         wait = MAINTENANCE_WAIT.get(method, DEFAULT_MAINTENANCE_WAIT)
-        values = dict(origin=self.config["dashboardOrigin"], key=self.key(), method=method, operation=self.operation, wait=wait)
+        values = dict(
+            origin=self.config["dashboardOrigin"],
+            key=self.key(),
+            method=method,
+            operation=self.operation,
+            wait=wait,
+        )
         if deadline is not None:
-            if deadline >= wait: raise ValueError("A deadline must be shorter than the wait for its answer")
+            if deadline >= wait:
+                raise ValueError(
+                    "A deadline must be shorter than the wait for its answer"
+                )
             values["deadline"] = deadline
         python = self.store_python()
         try:
-            return self.native("rpc", python=python, timeout=wait + MAINTENANCE_OVERHEAD, **values)
+            return self.native(
+                "rpc", python=python, timeout=wait + MAINTENANCE_OVERHEAD, **values
+            )
         except subprocess.CalledProcessError as failed:
             error = answered_error(failed.stdout)
-            if error is not None: raise Answered(error) from None
-            if unsent(failed.stdout): raise NotSent(method, failed) from None
-            if deadline is not None and deadline_passed(failed.stdout): raise DeadlinePassed(method, deadline) from None
+            if error is not None:
+                raise Answered(error) from None
+            if unsent(failed.stdout):
+                raise NotSent(method, failed) from None
+            if deadline is not None and deadline_passed(failed.stdout):
+                raise DeadlinePassed(method, deadline) from None
             raise Unanswered(method, failed) from None
         except subprocess.TimeoutExpired as failed:
             raise Unanswered(method, failed) from None
 
     def gateway(self, draining=False, after=None):
         record = json.loads((self.home / "gateway_state.json").read_text())
-        if type(record.get("pid")) is not int or str(record["pid"]) != self.unit("gatewayUnit")["MainPID"]: raise RuntimeError("Gateway record is not from the active native process")
+        if (
+            type(record.get("pid")) is not int
+            or str(record["pid"]) != self.unit("gatewayUnit")["MainPID"]
+        ):
+            raise RuntimeError("Gateway record is not from the active native process")
         age = time.time() - timestamp(record.get("updated_at", ""))
-        if age < -5 or age > (10 if draining else 120): raise RuntimeError("Gateway work status is stale")
+        if age < -5 or age > (10 if draining else 120):
+            raise RuntimeError("Gateway work status is stale")
         guard = record.get("agent_interface_gateway_guard")
-        if (not isinstance(guard, dict) or guard.get("schemaVersion") != 1 or guard.get("maintenanceFile") != self.config["maintenanceFile"]
-                or type(guard.get("pendingIngress")) is not int or guard["pendingIngress"] < 0): raise RuntimeError("Gateway supervisor has not loaded the persistent maintenance guard")
-        if record.get("hermes_home") != str(self.home) or record.get("code_sha") != self.source_state()[0]: raise RuntimeError("Gateway process has not loaded this exact source and home")
-        if after is not None and timestamp(record["updated_at"]) <= after: raise RuntimeError("Gateway has not acknowledged this drain")
-        if record.get("gateway_state") != ("draining" if draining else "running"): raise RuntimeError("Gateway state is not confirmed")
-        if draining and (guard["pendingIngress"] != 0 or type(record.get("active_agents")) is not int or record["active_agents"] != 0 or "active_work" not in record or record["active_work"] not in (None, [])):
-            raise ActiveWork("Gateway has active or unknown chat, cron, API or deferred work")
+        if (
+            not isinstance(guard, dict)
+            or guard.get("schemaVersion") != 1
+            or guard.get("maintenanceFile") != self.config["maintenanceFile"]
+            or type(guard.get("pendingIngress")) is not int
+            or guard["pendingIngress"] < 0
+        ):
+            raise RuntimeError(
+                "Gateway supervisor has not loaded the persistent maintenance guard"
+            )
+        if (
+            record.get("hermes_home") != str(self.home)
+            or record.get("code_sha") != self.source_state()[0]
+        ):
+            raise RuntimeError(
+                "Gateway process has not loaded this exact source and home"
+            )
+        if after is not None and timestamp(record["updated_at"]) <= after:
+            raise RuntimeError("Gateway has not acknowledged this drain")
+        if record.get("gateway_state") != ("draining" if draining else "running"):
+            raise RuntimeError("Gateway state is not confirmed")
+        if draining and (
+            guard["pendingIngress"] != 0
+            or type(record.get("active_agents")) is not int
+            or record["active_agents"] != 0
+            or "active_work" not in record
+            or record["active_work"] not in (None, [])
+        ):
+            raise ActiveWork(
+                "Gateway has active or unknown chat, cron, API or deferred work"
+            )
         return record
 
     def runtime(self, expected=None):
@@ -455,19 +689,51 @@ class Platform:
             # stage's on a mismatch. Every faithful copy of the Oct 14 install matched; only the
             # real hook's rows could show why.
             dump = self.stage / ("runtime-rows-" + uuid.uuid4().hex[:8] + ".json")
-            value = json.loads(self.run([self.store_python(), "-I", str(utility), "fingerprint", "--source", str(self.source), "--home", str(self.home), "--dump", str(dump)], capture=True, timeout=180))
+            value = json.loads(
+                self.run(
+                    [
+                        self.store_python(),
+                        "-I",
+                        str(utility),
+                        "fingerprint",
+                        "--source",
+                        str(self.source),
+                        "--home",
+                        str(self.home),
+                        "--dump",
+                        str(dump),
+                    ],
+                    capture=True,
+                    timeout=180,
+                )
+            )
         else:
             tested = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
-            if not tested or not Path(tested).is_absolute(): raise RuntimeError("The tested managed interpreter must be fixed")
+            if not tested or not Path(tested).is_absolute():
+                raise RuntimeError("The tested managed interpreter must be fixed")
             selected = self.native("runtime")["python"]
-            if Path(selected).absolute() != Path(tested).absolute(): raise RuntimeError("Managed dependency selection differs from the qualified interpreter")
+            if Path(selected).absolute() != Path(tested).absolute():
+                raise RuntimeError(
+                    "Managed dependency selection differs from the qualified interpreter"
+                )
             value = upgrade_worker().runtime_fingerprint(selected)
         if expected is not None and value != expected:
-            if value.get("interpreterSha256") != expected.get("interpreterSha256"): raise RuntimeError("The managed interpreter differs from the qualified runtime")
-            raise RuntimeError("Managed dependencies differ from the qualified runtime" + (". Its package rows are in the stage as " + dump.name if descriptor and dump.exists() else ""))
+            if value.get("interpreterSha256") != expected.get("interpreterSha256"):
+                raise RuntimeError(
+                    "The managed interpreter differs from the qualified runtime"
+                )
+            raise RuntimeError(
+                "Managed dependencies differ from the qualified runtime"
+                + (
+                    ". Its package rows are in the stage as " + dump.name
+                    if descriptor and dump.exists()
+                    else ""
+                )
+            )
         if descriptor:
             for path in (dump, dump.with_name(dump.name + ".editable.json")):
-                with contextlib.suppress(OSError): path.unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
         return value
 
     def sync(self):
@@ -527,15 +793,39 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # takes the newest release wherever that lock no longer fits: on Oct 14, 2026 live took
         # nemo-relay 0.10.1 where qualification had built 0.10.0. Seeded from the qualified
         # lock instead, uv keeps every version it holds.
-        seed = Path(qualified["generation"]).parent / "workspace/uv.lock" if qualified.get("generation") else None
-        if seed is not None and not seed.is_file(): raise RuntimeError("The qualified dependency lock is missing")
+        seed = (
+            Path(qualified["generation"]).parent / "workspace/uv.lock"
+            if qualified.get("generation")
+            else None
+        )
+        if seed is not None and not seed.is_file():
+            raise RuntimeError("The qualified dependency lock is missing")
         # PM sync runs in the interpreter the baseline ran. A record from an older helper has none.
         python = self.baseline_interpreter() or self.config["managedPython"]
-        return json.loads(self.run([python, "-I", "-c", code, str(self.source), json.dumps(qualified.get("extras")), str(seed or ""), "1" if descriptor else "0"], capture=True))
+        return json.loads(
+            self.run(
+                [
+                    python,
+                    "-I",
+                    "-c",
+                    code,
+                    str(self.source),
+                    json.dumps(qualified.get("extras")),
+                    str(seed or ""),
+                    "1" if descriptor else "0",
+                ],
+                capture=True,
+            )
+        )
 
     def google(self):
-        value = json.loads(self.run(self.config["googleVerificationCommand"], capture=True, timeout=60))
-        if value != {"authenticatedHttp": True, "freshWebsocket": True}: raise RuntimeError("Original Google HTTP and fresh WebSocket authentication were not verified")
+        value = json.loads(
+            self.run(self.config["googleVerificationCommand"], capture=True, timeout=60)
+        )
+        if value != {"authenticatedHttp": True, "freshWebsocket": True}:
+            raise RuntimeError(
+                "Original Google HTTP and fresh WebSocket authentication were not verified"
+            )
         return value
 
     def wait_dashboard(self):
@@ -545,46 +835,82 @@ print(json.dumps({'ok':True,'state':'synced'}))
         deadline = time.monotonic() + self.config.get("dashboardStartSeconds", 600)
         while True:
             try:
-                urllib.request.urlopen(self.config["dashboardOrigin"] + "/api/status", timeout=5).close()
+                urllib.request.urlopen(
+                    self.config["dashboardOrigin"] + "/api/status", timeout=5
+                ).close()
                 return
             except urllib.error.HTTPError as response:
                 response.close()
                 return
-            except (urllib.error.URLError, OSError):
+            except urllib.error.URLError, OSError:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("The dashboard did not start listening in time") from None
+                    raise RuntimeError(
+                        "The dashboard did not start listening in time"
+                    ) from None
                 time.sleep(1)
 
     def anonymous_rejection(self):
         for path in ("/api/config", "/api/profiles"):
             try:
-                urllib.request.urlopen(self.config["dashboardOrigin"] + path, timeout=10).close()
+                urllib.request.urlopen(
+                    self.config["dashboardOrigin"] + path, timeout=10
+                ).close()
             except urllib.error.HTTPError as error:
-                if error.code in (401, 403): continue
-            raise RuntimeError("Original Google authentication gate did not reject anonymous access")
+                if error.code in (401, 403):
+                    continue
+            raise RuntimeError(
+                "Original Google authentication gate did not reject anonymous access"
+            )
 
     def baseline(self):
         # Bind the interpreter first: every later store_python() call compares against it.
         interpreter = self.launcher_python()
-        if not self.in_tool_store(interpreter): raise RuntimeError("The baseline managed interpreter is outside the native tool store")
+        if not self.in_tool_store(interpreter):
+            raise RuntimeError(
+                "The baseline managed interpreter is outside the native tool store"
+            )
         self.interpreter = interpreter
         # Neither changes anything, so a missing key or an existing drain exits 75 like the other
         # baseline refusals. After phase `acquiring` is saved, a failure exits 1 and holds the update.
         self.key()
-        if (self.home / ".drain_request.json").exists(): raise RuntimeError("An existing native drain requires installer review")
-        units = {name: self.unit(name) for name in ("gatewayUnit", "dashboardUnit", "appUnit")}
+        if (self.home / ".drain_request.json").exists():
+            raise RuntimeError("An existing native drain requires installer review")
+        units = {
+            name: self.unit(name)
+            for name in ("gatewayUnit", "dashboardUnit", "appUnit")
+        }
         gateway = self.gateway()
-        if any(gateway.get("platforms", {}).get(key, {}).get("state") != "connected" for key in self.config["discordConnections"]): raise RuntimeError("Both baseline Discord connections must be connected")
-        self.anonymous_rejection(); self.google()
+        if any(
+            gateway.get("platforms", {}).get(key, {}).get("state") != "connected"
+            for key in self.config["discordConnections"]
+        ):
+            raise RuntimeError("Both baseline Discord connections must be connected")
+        self.anonymous_rejection()
+        self.google()
         runtime = self.runtime()
-        return {"interpreter": interpreter, "runtime": runtime, "source": self.source_state(), "settings": self.settings(), "units": units, "discordConnections": self.config["discordConnections"]}
+        return {
+            "interpreter": interpreter,
+            "runtime": runtime,
+            "source": self.source_state(),
+            "settings": self.settings(),
+            "units": units,
+            "discordConnections": self.config["discordConnections"],
+        }
 
     def regressions(self):
-        environment = dict(self.child_env, HERMES_HOME=str(self.stage / "regression-home"), PYTHONPATH=str(self.target))
+        environment = dict(
+            self.child_env,
+            HERMES_HOME=str(self.stage / "regression-home"),
+            PYTHONPATH=str(self.target),
+        )
         Path(environment["HERMES_HOME"]).mkdir(mode=0o700, exist_ok=True)
         python = self.env.get("HERMES_UPGRADE_QUALIFICATION_PYTHON")
-        if not python or not Path(python).is_absolute(): raise RuntimeError("Regression checks require the qualified candidate interpreter")
-        for argv in self.config["regressionCommands"].values(): self.run([python, *argv[1:]], env=environment)
+        if not python or not Path(python).is_absolute():
+            raise RuntimeError(
+                "Regression checks require the qualified candidate interpreter"
+            )
+        for argv in self.config["regressionCommands"].values():
+            self.run([python, *argv[1:]], env=environment)
         # Copy the candidate's objects now, while the household works normally. The backup hook
         # repeats this after the drain, and then finds little left. On Nov 4, 2026 a candidate
         # 1,100 commits ahead lacked 133,000 objects; packing them took over four minutes, the
@@ -592,33 +918,57 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # Hermes is serving, so keep the same live reserve the backup keeps. The staged object
         # store bounds both the temporary pack in staging and what lands in the live store.
         objects = tree_bytes(self.target / ".git")
-        self.require_space(objects, objects + self.config.get("backupReserveBytes", 5 * 1024 ** 3))
-        try: self.materialize_candidate()
-        except Exception as error: raise RuntimeError("Copying the candidate's Git objects failed: " + describe(error)) from None
+        self.require_space(
+            objects, objects + self.config.get("backupReserveBytes", 5 * 1024**3)
+        )
+        try:
+            self.materialize_candidate()
+        except Exception as error:
+            raise RuntimeError(
+                "Copying the candidate's Git objects failed: " + describe(error)
+            ) from None
 
     def require_space(self, staging, live):
         """Refuse before writing when staging or the live Hermes filesystem lacks the bytes needed."""
-        budgets = {self.stage: staging + live} if os.stat(self.stage).st_dev == os.stat(self.home).st_dev else {self.stage: staging, self.home: live}
+        budgets = (
+            {self.stage: staging + live}
+            if os.stat(self.stage).st_dev == os.stat(self.home).st_dev
+            else {self.stage: staging, self.home: live}
+        )
         for location, needed in budgets.items():
             free = shutil.disk_usage(location).free
             if free < needed:
-                raise RuntimeError("The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
-                                   % (-(-needed // 1024 ** 3), location, free // 1024 ** 3))
+                raise RuntimeError(
+                    "The update needs about %d GB free at %s and only %d GB is free. Free space on the Hermes host before updating"
+                    % (-(-needed // 1024**3), location, free // 1024**3)
+                )
 
     def clear_drain(self):
         marker = self.home / ".drain_request.json"
-        if not marker.exists(): return
-        if json.loads(marker.read_text()).get("principal") != "agent-interface:" + self.operation: raise RuntimeError("Refusing to release another owner's gateway drain")
+        if not marker.exists():
+            return
+        if (
+            json.loads(marker.read_text()).get("principal")
+            != "agent-interface:" + self.operation
+        ):
+            raise RuntimeError("Refusing to release another owner's gateway drain")
         marker.unlink()
 
     def wait_gateway(self, draining=False, after=None, seconds=None):
-        deadline = time.monotonic() + (self.config.get("drainAcknowledgeSeconds", 15) if seconds is None else seconds)
+        deadline = time.monotonic() + (
+            self.config.get("drainAcknowledgeSeconds", 15)
+            if seconds is None
+            else seconds
+        )
         while True:
-            try: return self.gateway(draining=draining, after=after)
-            except ActiveWork: raise
+            try:
+                return self.gateway(draining=draining, after=after)
+            except ActiveWork:
+                raise
             except Exception:
-                if time.monotonic() >= deadline: raise
-                time.sleep(.25)
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.25)
 
     def quiescence(self):
         # The baseline takes no gate or drain and changes no Hermes source, setting or service, so its
@@ -627,9 +977,13 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # gate until someone reviewed it by hand.
         try:
             baseline = self.baseline()
-            if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"): raise RuntimeError("The original source changed before maintenance")
+            if baseline["source"][0] != self.env.get("HERMES_UPGRADE_CURRENT"):
+                raise RuntimeError("The original source changed before maintenance")
         except Exception as refusal:
-            print("Quiescence refused before maintenance: " + describe(refusal), file=sys.stderr)
+            print(
+                "Quiescence refused before maintenance: " + describe(refusal),
+                file=sys.stderr,
+            )
             raise SystemExit(75) from None
         # Read before the phase is saved: asking for capabilities changes nothing and may fail without consequence.
         deadline, epoch = self.acquire_deadline()
@@ -645,7 +999,11 @@ print(json.dumps({'ok':True,'state':'synced'}))
         except Answered as answer:
             # Every error answer comes before the handler writes a lease, but only the busy one is
             # work a later check can outwait. Any other is a configuration or ownership problem.
-            if answer.error != BUSY_REFUSAL: raise RuntimeError("Hermes refused maintenance for a reason other than active work, error code " + str(answer.error.get("code"))) from None
+            if answer.error != BUSY_REFUSAL:
+                raise RuntimeError(
+                    "Hermes refused maintenance for a reason other than active work, error code "
+                    + str(answer.error.get("code"))
+                ) from None
             refusal = answer
         except NotSent as unsent_request:
             # The request never reached the add-on, so no lease can appear. The release below proves
@@ -655,39 +1013,79 @@ print(json.dumps({'ok':True,'state':'synced'}))
             # The add-on writes no lease after its deadline, but the deadline counts from when its handler started,
             # which may be late: the release below is followed by a watch for one (DEADLINE_WATCH_SECONDS). A restart
             # since the capability read puts an add-on there that may ignore the deadline, so that is held like any lost answer.
-            refusal = passed if self.same_add_on(epoch) else self.unanswered(baseline, Unanswered("acquire", passed))
+            refusal = (
+                passed
+                if self.same_add_on(epoch)
+                else self.unanswered(baseline, Unanswered("acquire", passed))
+            )
         except Unanswered as lost:
             refusal = self.unanswered(baseline, lost)
         else:
             try:
-                if gate.get("active") is not True or gate.get("operationId") != self.operation or gate.get("busy") != []: raise RuntimeError("The native dashboard gate was not acquired without active work")
-                drain = self.native("drain", principal="agent-interface:" + self.operation)
+                if (
+                    gate.get("active") is not True
+                    or gate.get("operationId") != self.operation
+                    or gate.get("busy") != []
+                ):
+                    raise RuntimeError(
+                        "The native dashboard gate was not acquired without active work"
+                    )
+                drain = self.native(
+                    "drain", principal="agent-interface:" + self.operation
+                )
                 self.wait_gateway(draining=True, after=timestamp(drain["requested_at"]))
-                if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"]: raise RuntimeError("Host inputs changed while acquiring maintenance")
+                if (
+                    self.source_state() != tuple(baseline["source"])
+                    or self.settings() != baseline["settings"]
+                ):
+                    raise RuntimeError(
+                        "Host inputs changed while acquiring maintenance"
+                    )
                 self.save({"baseline": baseline, "phase": "quiescent"})
                 return
             except Exception as error:
                 refusal = error
         self.clear_drain()
         release = self.rpc("release")
-        if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed") from refusal
+        if release.get("active") is not False:
+            raise RuntimeError("Maintenance release was not confirmed") from refusal
         if isinstance(refusal, DeadlinePassed):
             # Held while the watch runs, so a worker that dies in it leaves the phase recovery works from.
             self.save({"baseline": baseline, "phase": "acquire_unanswered"})
             if self.late_lease(DEADLINE_WATCH_SECONDS):
                 # The handler started late and wrote its lease after the release. It has returned, so a second release is final.
                 release = self.rpc("release")
-                if release.get("active") is not False: raise RuntimeError("Maintenance release was not confirmed after a late lease") from refusal
+                if release.get("active") is not False:
+                    raise RuntimeError(
+                        "Maintenance release was not confirmed after a late lease"
+                    ) from refusal
             elif os.path.lexists(self.config["maintenanceFile"]):
                 # A lease that is not this operation's, or cannot be read, appeared: another operation took maintenance, or
                 # something this worker cannot name did. It is not this worker's to release, and exit 75 would tell the app
                 # Hermes is open. Held for review like an unanswered acquire, with the file untouched.
-                print("Quiescence held for review, a maintenance lease that is not this operation's appeared: " + describe(refusal), file=sys.stderr)
+                print(
+                    "Quiescence held for review, a maintenance lease that is not this operation's appeared: "
+                    + describe(refusal),
+                    file=sys.stderr,
+                )
                 raise SystemExit(upgrade_worker().MAINTENANCE_UNANSWERED) from None
         self.wait_gateway()
-        if self.source_state() != tuple(baseline["source"]) or self.settings() != baseline["settings"] or any(self.unit(name)["MainPID"] != unit["MainPID"] for name, unit in baseline["units"].items()): raise RuntimeError("Quiescence refusal changed live host state") from refusal
+        if (
+            self.source_state() != tuple(baseline["source"])
+            or self.settings() != baseline["settings"]
+            or any(
+                self.unit(name)["MainPID"] != unit["MainPID"]
+                for name, unit in baseline["units"].items()
+            )
+        ):
+            raise RuntimeError(
+                "Quiescence refusal changed live host state"
+            ) from refusal
         self.save({"baseline": baseline, "phase": "rejected"})
-        print("Quiescence refused and released maintenance: " + describe(refusal), file=sys.stderr)
+        print(
+            "Quiescence refused and released maintenance: " + describe(refusal),
+            file=sys.stderr,
+        )
         raise SystemExit(75) from None
 
     def acquire_deadline(self):
@@ -696,27 +1094,46 @@ print(json.dumps({'ok':True,'state':'synced'}))
         A read that fails is (None, None) as well: an older add-on is held for review exactly as before, and a
         dashboard that cannot be asked will fail the acquire the same way. An add-on that names no process epoch
         cannot be told apart from a restart later, so it gets no deadline either."""
-        try: capabilities = self.rpc("capabilities")
-        except (Answered, NotSent, Unanswered, ValueError): return None, None
-        if not isinstance(capabilities, dict) or capabilities.get("maintenance_deadline") is not True: return None, None
+        try:
+            capabilities = self.rpc("capabilities")
+        except Answered, NotSent, Unanswered, ValueError:
+            return None, None
+        if (
+            not isinstance(capabilities, dict)
+            or capabilities.get("maintenance_deadline") is not True
+        ):
+            return None, None
         epoch = capabilities.get("executor_epoch")
-        return (ACQUIRE_DEADLINE, epoch) if isinstance(epoch, str) and epoch else (None, None)
+        return (
+            (ACQUIRE_DEADLINE, epoch)
+            if isinstance(epoch, str) and epoch
+            else (None, None)
+        )
 
     def same_add_on(self, epoch):
         """Whether the add-on that was asked for its capabilities before the acquire is still the process answering.
 
         A restart between the two can put an add-on that ignores the deadline in its place, and its silence then
         proves nothing. A read that fails is not the same add-on."""
-        try: capabilities = self.rpc("capabilities")
-        except (Answered, NotSent, Unanswered, ValueError): return False
-        return isinstance(capabilities, dict) and capabilities.get("executor_epoch") == epoch
+        try:
+            capabilities = self.rpc("capabilities")
+        except Answered, NotSent, Unanswered, ValueError:
+            return False
+        return (
+            isinstance(capabilities, dict)
+            and capabilities.get("executor_epoch") == epoch
+        )
 
     def unanswered(self, baseline, lost):
         """An acquire that may still be running: hold for review unless this operation's lease shows up within
         LATE_LEASE_SECONDS, and return `lost` as the refusal when it does."""
         self.save({"baseline": baseline, "phase": "acquire_unanswered"})
         if not self.late_lease():
-            print("Quiescence held for review, maintenance may still be taken: " + describe(lost), file=sys.stderr)
+            print(
+                "Quiescence held for review, maintenance may still be taken: "
+                + describe(lost),
+                file=sys.stderr,
+            )
             raise SystemExit(upgrade_worker().MAINTENANCE_UNANSWERED) from None
         # The handler wrote this operation's lease, so it has returned and a release is final.
         return lost
@@ -726,35 +1143,74 @@ print(json.dumps({'ok':True,'state':'synced'}))
         acquire. The handler writes it last, so its lease means the handler returned. Anything else in the
         file ends the watch: it is not this operation's to release."""
         path = Path(self.config["maintenanceFile"])
-        deadline = time.monotonic() + (LATE_LEASE_SECONDS if seconds is None else seconds)
+        deadline = time.monotonic() + (
+            LATE_LEASE_SECONDS if seconds is None else seconds
+        )
         while True:
             if os.path.lexists(path):
-                try: return json.loads(private(path).read_text()) == {"operationId": self.operation}
-                except (OSError, ValueError, RuntimeError): return False
-            if time.monotonic() >= deadline: return False
-            time.sleep(.25)
+                try:
+                    return json.loads(private(path).read_text()) == {
+                        "operationId": self.operation
+                    }
+                except OSError, ValueError, RuntimeError:
+                    return False
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.25)
 
     def control(self, verb):
         # The app unit is deliberately never stopped: it owns the detached worker
         # and its durable UI maintenance record, while Hermes's own gate is closed.
-        order = ("gatewayUnit", "dashboardUnit") if verb == "stop" else ("dashboardUnit", "gatewayUnit")
-        for name in order: self.run([self.config["systemctl"], "--user", verb, self.config[name]], timeout=90)
+        order = (
+            ("gatewayUnit", "dashboardUnit")
+            if verb == "stop"
+            else ("dashboardUnit", "gatewayUnit")
+        )
+        for name in order:
+            self.run(
+                [self.config["systemctl"], "--user", verb, self.config[name]],
+                timeout=90,
+            )
         if verb == "stop":
             for name in order:
-                state = self.run([self.config["systemctl"], "--user", "show", self.config[name], "--property=ActiveState,MainPID"], capture=True, timeout=15)
-                if "ActiveState=inactive" not in state or "MainPID=0" not in state: raise RuntimeError("Native service did not stop cleanly")
+                state = self.run(
+                    [
+                        self.config["systemctl"],
+                        "--user",
+                        "show",
+                        self.config[name],
+                        "--property=ActiveState,MainPID",
+                    ],
+                    capture=True,
+                    timeout=15,
+                )
+                if "ActiveState=inactive" not in state or "MainPID=0" not in state:
+                    raise RuntimeError("Native service did not stop cleanly")
 
     def archive(self, path, source, excluded=None):
         # Fast compression: most bytes are packages and binaries that barely shrink at higher levels.
         with tarfile.open(path, "w:gz", compresslevel=1, dereference=False) as archive:
-            archive.add(source, arcname=source.name, filter=lambda entry: None if excluded and (entry.name == excluded or entry.name.startswith(excluded + "/")) else entry)
+            archive.add(
+                source,
+                arcname=source.name,
+                filter=lambda entry: (
+                    None
+                    if excluded
+                    and (
+                        entry.name == excluded or entry.name.startswith(excluded + "/")
+                    )
+                    else entry
+                ),
+            )
         path.chmod(0o600)
-        with tarfile.open(path) as archive: archive.getmembers()
+        with tarfile.open(path) as archive:
+            archive.getmembers()
         return digest(path)
 
     def backup(self):
         record = self.load()
-        if record["phase"] != "quiescent": raise RuntimeError("Cold backup requires verified quiescence")
+        if record["phase"] != "quiescent":
+            raise RuntimeError("Cold backup requires verified quiescence")
         self.gateway(draining=True)
         # Archives read every file while Hermes is stopped. Find an unreadable one, or too little
         # room, before anything is written: on Oct 13, 2026 a full disk stopped a backup mid-archive.
@@ -764,13 +1220,29 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # Hermes's own writes. Archives and the temporary object pack use the staging filesystem,
         # which may differ from the live one.
         # Rollback can rebuild a staged repair blob from its working file only if they match.
-        staged = set(self.git(self.source, "diff", "--cached", "--name-only", "-z").split("\0")) - {""}
-        mixed = sorted(staged & set(self.git(self.source, "diff", "--name-only", "-z").split("\0")))
-        if mixed: raise RuntimeError("Staged Hermes repair files have further unstaged edits: " + ", ".join(mixed) + ". Stage or unstage them fully before updating")
-        archives = self.readable(self.source, excluded=self.objects) + self.readable(self.home, excluded=self.source)
+        staged = set(
+            self.git(self.source, "diff", "--cached", "--name-only", "-z").split("\0")
+        ) - {""}
+        mixed = sorted(
+            staged & set(self.git(self.source, "diff", "--name-only", "-z").split("\0"))
+        )
+        if mixed:
+            raise RuntimeError(
+                "Staged Hermes repair files have further unstaged edits: "
+                + ", ".join(mixed)
+                + ". Stage or unstage them fully before updating"
+            )
+        archives = self.readable(self.source, excluded=self.objects) + self.readable(
+            self.home, excluded=self.source
+        )
         objects = tree_bytes(self.target / ".git")
-        install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(self.stage / "pm-home/installs")
-        staging, live = archives + objects, objects + install + self.config.get("backupReserveBytes", 5 * 1024 ** 3)
+        install = tree_bytes(self.target, excluded=self.target / ".git") + tree_bytes(
+            self.stage / "pm-home/installs"
+        )
+        staging, live = (
+            archives + objects,
+            objects + install + self.config.get("backupReserveBytes", 5 * 1024**3),
+        )
         self.require_space(staging, live)
         self.materialize_candidate()
         self.gateway(draining=True)
@@ -780,30 +1252,66 @@ print(json.dumps({'ok':True,'state':'synced'}))
             self.backup_dir.mkdir(mode=0o700)
             # Git's object store stays out of the archive: installation only adds objects, so the
             # live store still holds the baseline at rollback. It was 6 GB of a 29-minute backup.
-            hashes = {"source.tar.gz": self.archive(self.backup_dir / "source.tar.gz", self.source, str(self.objects.relative_to(self.source.parent))),
-                "home.tar.gz": self.archive(self.backup_dir / "home.tar.gz", self.home, str(self.source.relative_to(self.home.parent)))}
+            hashes = {
+                "source.tar.gz": self.archive(
+                    self.backup_dir / "source.tar.gz",
+                    self.source,
+                    str(self.objects.relative_to(self.source.parent)),
+                ),
+                "home.tar.gz": self.archive(
+                    self.backup_dir / "home.tar.gz",
+                    self.home,
+                    str(self.source.relative_to(self.home.parent)),
+                ),
+            }
             protected = {}
             for filename, expected in record["baseline"]["settings"].items():
                 path = Path(filename)
-                if path.is_symlink() or not stat.S_ISREG(path.lstat().st_mode) or digest(path) != expected: raise RuntimeError("Protected configuration changed during cold backup")
-                protected[filename] = {"content": base64.b64encode(path.read_bytes()).decode(), "mode": stat.S_IMODE(path.stat().st_mode), "sha256": expected}
+                if (
+                    path.is_symlink()
+                    or not stat.S_ISREG(path.lstat().st_mode)
+                    or digest(path) != expected
+                ):
+                    raise RuntimeError(
+                        "Protected configuration changed during cold backup"
+                    )
+                protected[filename] = {
+                    "content": base64.b64encode(path.read_bytes()).decode(),
+                    "mode": stat.S_IMODE(path.stat().st_mode),
+                    "sha256": expected,
+                }
             atomic(self.backup_dir / "protected.json", protected)
             hashes["protected.json"] = digest(self.backup_dir / "protected.json")
             self.save(dict(record, phase="backed_up", archives=hashes))
         except Exception as error:
             # Restart Hermes before writing anything: a full disk can make even logging fail.
             # The cause is named either way, so a restart problem cannot hide it.
-            try: self.control("start")
+            try:
+                self.control("start")
             finally:
-                with contextlib.suppress(OSError): print("Cold backup failed: " + describe(error), file=sys.stderr, flush=True)
-            self.wait_gateway(draining=True, seconds=self.config.get("gatewayStartSeconds", 120))
+                with contextlib.suppress(OSError):
+                    print(
+                        "Cold backup failed: " + describe(error),
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            self.wait_gateway(
+                draining=True, seconds=self.config.get("gatewayStartSeconds", 120)
+            )
             self.save(dict(record, phase="quiescent"))
             raise
 
     def readable(self, root, excluded=None):
         def refuse(path):
-            raise RuntimeError("The cold backup cannot read " + str(path) + ". Make it readable by this account or move it out of Hermes before updating")
-        def failed(error): refuse(error.filename)
+            raise RuntimeError(
+                "The cold backup cannot read "
+                + str(path)
+                + ". Make it readable by this account or move it out of Hermes before updating"
+            )
+
+        def failed(error):
+            refuse(error.filename)
+
         total = 0
         for directory, names, files in os.walk(root, onerror=failed):
             current = Path(directory)
@@ -812,12 +1320,19 @@ print(json.dumps({'ok':True,'state':'synced'}))
                 continue
             for name in names:
                 path = current / name
-                if not path.is_symlink() and path != excluded and not os.access(path, os.R_OK | os.X_OK): refuse(path)
+                if (
+                    not path.is_symlink()
+                    and path != excluded
+                    and not os.access(path, os.R_OK | os.X_OK)
+                ):
+                    refuse(path)
             for name in files:
                 path = current / name
                 # Archives keep links as links; only regular files are read.
-                if path.is_symlink() or not path.is_file(): continue
-                if not os.access(path, os.R_OK): refuse(path)
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if not os.access(path, os.R_OK):
+                    refuse(path)
                 total += path.lstat().st_size
         return total
 
@@ -825,75 +1340,196 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # A production promisor clone can have the candidate commit but none of
         # its trees. Transfer the tested closure locally before service downtime;
         # fetch negotiation would skip objects for that already-present commit.
-        offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+        offline = dict(
+            self.child_env,
+            GIT_NO_LAZY_FETCH="1",
+            GIT_TERMINAL_PROMPT="0",
+            GIT_OPTIONAL_LOCKS="0",
+        )
+
         def read_git(*args):
-            return subprocess.check_output(["git", *GIT_ABBREV, "-C", str(self.source), *args], env=offline, stderr=subprocess.PIPE).decode()
+            return subprocess.check_output(
+                ["git", *GIT_ABBREV, "-C", str(self.source), *args],
+                env=offline,
+                stderr=subprocess.PIPE,
+            ).decode()
+
         def metadata():
-            rows = [read_git("rev-parse", "HEAD"), read_git("diff", "HEAD", "--binary"), read_git("for-each-ref", "--format=%(objectname) %(refname)"),
-                read_git("rev-parse", "--symbolic-full-name", "HEAD"), read_git("config", "--local", "--null", "--list")]
+            rows = [
+                read_git("rev-parse", "HEAD"),
+                read_git("diff", "HEAD", "--binary"),
+                read_git("for-each-ref", "--format=%(objectname) %(refname)"),
+                read_git("rev-parse", "--symbolic-full-name", "HEAD"),
+                read_git("config", "--local", "--null", "--list"),
+            ]
             for name in ("index", "shallow"):
                 filename = Path(read_git("rev-parse", "--git-path", name).strip())
-                if not filename.is_absolute(): filename = self.source / filename
+                if not filename.is_absolute():
+                    filename = self.source / filename
                 rows.append(digest(filename) if filename.exists() else None)
             return rows
+
         before = metadata()
-        if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate: raise RuntimeError("Qualified candidate changed before object preparation")
+        if self.git(self.target, "rev-parse", "HEAD").strip() != self.candidate:
+            raise RuntimeError("Qualified candidate changed before object preparation")
+
         # Copy exactly what the installed store lacks: a full copy each time grew it by 1 GB per
         # update, and a partial clone can lack old objects the candidate's history still reaches.
         # Enumerate what the installed store holds rather than look objects up: git 2.43 dies on
         # a lookup of an object a promisor clone lacks when lazy fetch is off, instead of
         # reporting it missing. Names are held as 20-byte keys, about 70 MB for a million.
         def listed(repository, *args):
-            process = subprocess.Popen(["git", "-C", str(repository), *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
-            timer = threading.Timer(600, process.kill); timer.start()
+            process = subprocess.Popen(
+                ["git", "-C", str(repository), *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=offline,
+            )
+            timer = threading.Timer(600, process.kill)
+            timer.start()
             try:
-                yield from (bytes.fromhex(line.strip().decode()) for line in process.stdout)
-                if process.wait(timeout=30): raise RuntimeError("Listing the qualified candidate's objects failed")
+                yield from (
+                    bytes.fromhex(line.strip().decode()) for line in process.stdout
+                )
+                if process.wait(timeout=30):
+                    raise RuntimeError(
+                        "Listing the qualified candidate's objects failed"
+                    )
             finally:
                 timer.cancel()
-                if process.poll() is None: process.kill(); process.wait(timeout=10)
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
                 process.stdout.close()
-        present = set(listed(self.source, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"))
+
+        present = set(
+            listed(
+                self.source,
+                "cat-file",
+                "--batch-all-objects",
+                "--batch-check=%(objectname)",
+            )
+        )
         # On the Hermes host: 564,000 objects present, 295 missing, 10 seconds, before any downtime.
-        missing = [name.hex().encode() + b"\n" for name in listed(self.target, "rev-list", "--objects", "--no-object-names", self.candidate) if name not in present]
+        missing = [
+            name.hex().encode() + b"\n"
+            for name in listed(
+                self.target,
+                "rev-list",
+                "--objects",
+                "--no-object-names",
+                self.candidate,
+            )
+            if name not in present
+        ]
         del present
         if missing:
             pack = self.stage / ("qualified-objects-" + uuid.uuid4().hex + ".pack")
             try:
-                with os.fdopen(os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                    def bounded_pack(): resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES))
-                    subprocess.run(["git", "-C", str(self.target), "pack-objects", "--stdout"],
-                        input=b"".join(missing), stdout=output, stderr=subprocess.PIPE, env=offline,
-                        check=True, timeout=OBJECT_TRANSFER_SECONDS, preexec_fn=bounded_pack)
-                    output.flush(); os.fsync(output.fileno())
+                with os.fdopen(
+                    os.open(pack, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+                ) as output:
+
+                    def bounded_pack():
+                        resource.setrlimit(
+                            resource.RLIMIT_FSIZE,
+                            (MAX_QUALIFIED_PACK_BYTES, MAX_QUALIFIED_PACK_BYTES),
+                        )
+
+                    subprocess.run(
+                        ["git", "-C", str(self.target), "pack-objects", "--stdout"],
+                        input=b"".join(missing),
+                        stdout=output,
+                        stderr=subprocess.PIPE,
+                        env=offline,
+                        check=True,
+                        timeout=OBJECT_TRANSFER_SECONDS,
+                        preexec_fn=bounded_pack,
+                    )
+                    output.flush()
+                    os.fsync(output.fileno())
                 with pack.open("rb") as payload:
-                    subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=payload,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=OBJECT_TRANSFER_SECONDS)
+                    subprocess.run(
+                        ["git", "-C", str(self.source), "index-pack", "--stdin"],
+                        stdin=payload,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.PIPE,
+                        env=offline,
+                        check=True,
+                        timeout=OBJECT_TRANSFER_SECONDS,
+                    )
             finally:
                 pack.unlink(missing_ok=True)
-        subprocess.run(["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", self.candidate],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=600)
-        if metadata() != before: raise RuntimeError("Object preparation changed installed refs, configuration, index, or repair")
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.source),
+                "rev-list",
+                "--objects",
+                "--missing=error",
+                self.candidate,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=offline,
+            check=True,
+            timeout=600,
+        )
+        if metadata() != before:
+            raise RuntimeError(
+                "Object preparation changed installed refs, configuration, index, or repair"
+            )
 
     def install(self):
         record = self.load()
-        if record["phase"] != "backed_up": raise RuntimeError("Installation requires a cold recovery backup")
+        if record["phase"] != "backed_up":
+            raise RuntimeError("Installation requires a cold recovery backup")
         receipt = json.loads(private(self.env["HERMES_UPGRADE_RECEIPT"]).read_text())
         candidate, patch = self.source_state(self.target)
-        if candidate != self.candidate or receipt["revision"] != candidate or (receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest()) != patch: raise RuntimeError("Staged source is not the exact qualified source and repair")
+        if (
+            candidate != self.candidate
+            or receipt["revision"] != candidate
+            or (receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest())
+            != patch
+        ):
+            raise RuntimeError(
+                "Staged source is not the exact qualified source and repair"
+            )
         if not self.env.get("HERMES_UPGRADE_RUNTIME_DESCRIPTOR"):
             for name in ("uv.lock", "pyproject.toml", "pm/lock.json"):
                 before, target = self.source / name, self.target / name
-                if before.exists() != target.exists() or before.exists() and digest(before) != digest(target): raise RuntimeError("Dependency changes require isolated managed-runtime preparation by the installer")
+                if (
+                    before.exists() != target.exists()
+                    or before.exists()
+                    and digest(before) != digest(target)
+                ):
+                    raise RuntimeError(
+                        "Dependency changes require isolated managed-runtime preparation by the installer"
+                    )
         preserved = self.git(self.target, "diff", "HEAD", "--binary")
         # No fetch, pull or stash: checkout exactly the already-qualified object.
         self.git(self.source, "reset", "--hard", candidate)
-        if preserved: self.run(["git", "-C", str(self.source), "apply", "--index", "--binary", "-"], input=preserved)
+        if preserved:
+            self.run(
+                ["git", "-C", str(self.source), "apply", "--index", "--binary", "-"],
+                input=preserved,
+            )
         # After object preparation, which refuses any configuration change it did not make.
         qualification.protect_clone(self.source, self.child_env)
         result = self.sync()
-        if result.get("ok") is not True or result.get("state") not in ("current", "synced"): raise RuntimeError("Native managed dependency sync did not finish")
-        if self.source_state() != (candidate, patch) or self.settings() != record["baseline"]["settings"]: raise RuntimeError("Native installation changed protected source repair or household settings")
+        if result.get("ok") is not True or result.get("state") not in (
+            "current",
+            "synced",
+        ):
+            raise RuntimeError("Native managed dependency sync did not finish")
+        if (
+            self.source_state() != (candidate, patch)
+            or self.settings() != record["baseline"]["settings"]
+        ):
+            raise RuntimeError(
+                "Native installation changed protected source repair or household settings"
+            )
         expected_runtime = json.loads(self.env["HERMES_UPGRADE_RUNTIME_FINGERPRINT"])
         self.runtime(expected_runtime)
         self.save(dict(record, phase="installed"))
@@ -905,52 +1541,99 @@ print(json.dumps({'ok':True,'state':'synced'}))
         if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1":
             expected = tuple(baseline["source"])
         else:
-            receipt = json.loads(private(self.env["HERMES_UPGRADE_RECEIPT"]).read_text())
-            expected = (receipt["revision"], receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest())
-            if expected[0] != self.candidate: raise RuntimeError("Candidate qualification changed")
-        if self.source_state() != expected or self.settings() != baseline["settings"]: raise RuntimeError("Source repair or protected household settings changed")
+            receipt = json.loads(
+                private(self.env["HERMES_UPGRADE_RECEIPT"]).read_text()
+            )
+            expected = (
+                receipt["revision"],
+                receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest(),
+            )
+            if expected[0] != self.candidate:
+                raise RuntimeError("Candidate qualification changed")
+        if self.source_state() != expected or self.settings() != baseline["settings"]:
+            raise RuntimeError("Source repair or protected household settings changed")
         for name, original in baseline["units"].items():
             current = self.unit(name)
-            if current["FragmentPath"] != original["FragmentPath"] or current["fragmentSha256"] != original["fragmentSha256"]: raise RuntimeError("A native/app unit changed")
+            if (
+                current["FragmentPath"] != original["FragmentPath"]
+                or current["fragmentSha256"] != original["fragmentSha256"]
+            ):
+                raise RuntimeError("A native/app unit changed")
         # The dashboard can take minutes to rebuild after an update, so Discord is checked after it, while still fresh.
         verifying("dashboard start", self.wait_dashboard)
         deadline = time.monotonic() + self.config.get("verificationSeconds", 120)
         while True:
             # A just-started gateway takes a while to report; the whole verification window applies.
-            gateway = self.wait_gateway(draining=True, seconds=max(1, deadline - time.monotonic()))
-            if all(gateway.get("platforms", {}).get(key, {}).get("state") == "connected" for key in baseline["discordConnections"]): break
-            if time.monotonic() >= deadline: raise RuntimeError("Both original Discord connections were not restored")
-            time.sleep(.5)
+            gateway = self.wait_gateway(
+                draining=True, seconds=max(1, deadline - time.monotonic())
+            )
+            if all(
+                gateway.get("platforms", {}).get(key, {}).get("state") == "connected"
+                for key in baseline["discordConnections"]
+            ):
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "Both original Discord connections were not restored"
+                )
+            time.sleep(0.5)
         gate = verifying("native maintenance status", lambda: self.rpc("status"))
-        if gate.get("active") is not True or gate.get("operationId") != self.operation: raise RuntimeError("Native maintenance gate ownership was lost")
+        if gate.get("active") is not True or gate.get("operationId") != self.operation:
+            raise RuntimeError("Native maintenance gate ownership was lost")
         verifying("anonymous rejection", self.anonymous_rejection)
         verifying("original Google sign-in", self.google)
-        expected_runtime = baseline["runtime"] if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1" else json.loads(self.env["HERMES_UPGRADE_RUNTIME_FINGERPRINT"])
+        expected_runtime = (
+            baseline["runtime"]
+            if self.env.get("HERMES_UPGRADE_ROLLBACK") == "1"
+            else json.loads(self.env["HERMES_UPGRADE_RUNTIME_FINGERPRINT"])
+        )
         verifying("managed runtime", lambda: self.runtime(expected_runtime))
-        self.save(dict(record, phase="verified", verifiedRevision=expected[0], verifiedSource=expected))
+        self.save(
+            dict(
+                record,
+                phase="verified",
+                verifiedRevision=expected[0],
+                verifiedSource=expected,
+            )
+        )
 
     def extract(self, name, destination, prefix=None):
         record = self.load()
         file = private(self.backup_dir / name)
-        if digest(file) != record["archives"][name]: raise RuntimeError("Cold archive integrity failed")
+        if digest(file) != record["archives"][name]:
+            raise RuntimeError("Cold archive integrity failed")
         with tarfile.open(file) as archive:
             members = archive.getmembers()
-            if prefix: members = [item for item in members if item.name == prefix or item.name.startswith(prefix + "/")]
+            if prefix:
+                members = [
+                    item
+                    for item in members
+                    if item.name == prefix or item.name.startswith(prefix + "/")
+                ]
             # Only our just-created, hash-checked private archives are trusted.
             archive.extractall(destination, members=members, filter="fully_trusted")
 
     def rollback(self):
         record = self.load()
         for name, expected in record["archives"].items():
-            if digest(private(self.backup_dir / name)) != expected: raise RuntimeError("Cold recovery archive integrity failed before restoring")
+            if digest(private(self.backup_dir / name)) != expected:
+                raise RuntimeError(
+                    "Cold recovery archive integrity failed before restoring"
+                )
         self.control("stop")
         if self.source.exists():
             git_dir = self.objects.parent
             keep_git = git_dir.is_dir() and not git_dir.is_symlink()
-            for path in [*self.source.iterdir(), *(git_dir.iterdir() if keep_git else ())]:
-                if path == self.objects or path == git_dir and keep_git: continue
-                if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
-                else: path.unlink()
+            for path in [
+                *self.source.iterdir(),
+                *(git_dir.iterdir() if keep_git else ()),
+            ]:
+                if path == self.objects or path == git_dir and keep_git:
+                    continue
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
         self.extract("source.tar.gz", self.source.parent)
         self.restore_baseline_objects(record["baseline"]["source"][0])
         # The archived configuration is the one before installation, which may predate the protection.
@@ -960,115 +1643,251 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # restore .env, auth.json, profile OAuth files or sessions from home.tar.gz.
         for name in ("installs", "tools"):
             path = self.home / name
-            if path.exists(): shutil.rmtree(path)
+            if path.exists():
+                shutil.rmtree(path)
             self.extract("home.tar.gz", self.home.parent, self.home.name + "/" + name)
         protected = json.loads(private(self.backup_dir / "protected.json").read_text())
-        if set(protected) != set(record["baseline"]["settings"]): raise RuntimeError("Protected backup paths differ from the original host snapshot")
+        if set(protected) != set(record["baseline"]["settings"]):
+            raise RuntimeError(
+                "Protected backup paths differ from the original host snapshot"
+            )
         for filename, saved in protected.items():
             content = base64.b64decode(saved["content"], validate=True)
-            if hashlib.sha256(content).hexdigest() != record["baseline"]["settings"][filename]: raise RuntimeError("Protected backup content changed")
+            if (
+                hashlib.sha256(content).hexdigest()
+                != record["baseline"]["settings"][filename]
+            ):
+                raise RuntimeError("Protected backup content changed")
             path = Path(filename)
-            if path.is_symlink(): raise RuntimeError("Protected configuration became a symlink")
+            if path.is_symlink():
+                raise RuntimeError("Protected configuration became a symlink")
             path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             private_fs.atomic_write(path, content, mode=saved["mode"])
-        if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Rollback source or repair does not match the cold snapshot")
+        if self.source_state() != tuple(record["baseline"]["source"]):
+            raise RuntimeError(
+                "Rollback source or repair does not match the cold snapshot"
+            )
         self.save(dict(record, phase="restored"))
         self.control("start")
 
     def restore_baseline_objects(self, revision):
         """The kept object store must hold the whole baseline tree, offline. A crash or a damaged
         store can lose objects; the staged repository holds the baseline's full history."""
-        offline = dict(self.child_env, GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
-        check = ["git", "-C", str(self.source), "rev-list", "--objects", "--missing=error", "--no-walk", revision]
-        if subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=offline, timeout=180, check=False).returncode != 0:
-            for name in ("pack", "info"): (self.objects / name).mkdir(parents=True, exist_ok=True)
-            packer = subprocess.Popen(["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"], stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=offline)
+        offline = dict(
+            self.child_env,
+            GIT_NO_LAZY_FETCH="1",
+            GIT_TERMINAL_PROMPT="0",
+            GIT_OPTIONAL_LOCKS="0",
+        )
+        check = [
+            "git",
+            "-C",
+            str(self.source),
+            "rev-list",
+            "--objects",
+            "--missing=error",
+            "--no-walk",
+            revision,
+        ]
+        if (
+            subprocess.run(
+                check,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=offline,
+                timeout=180,
+                check=False,
+            ).returncode
+            != 0
+        ):
+            for name in ("pack", "info"):
+                (self.objects / name).mkdir(parents=True, exist_ok=True)
+            packer = subprocess.Popen(
+                ["git", "-C", str(self.target), "pack-objects", "--stdout", "--revs"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=offline,
+            )
             try:
-                packer.stdin.write((revision + "\n").encode()); packer.stdin.close()
-                subprocess.run(["git", "-C", str(self.source), "index-pack", "--stdin"], stdin=packer.stdout,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=900)
-                if packer.wait(timeout=60): raise RuntimeError("The staged repository cannot supply the baseline's objects")
+                packer.stdin.write((revision + "\n").encode())
+                packer.stdin.close()
+                subprocess.run(
+                    ["git", "-C", str(self.source), "index-pack", "--stdin"],
+                    stdin=packer.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    env=offline,
+                    check=True,
+                    timeout=900,
+                )
+                if packer.wait(timeout=60):
+                    raise RuntimeError(
+                        "The staged repository cannot supply the baseline's objects"
+                    )
             finally:
-                if packer.poll() is None: packer.kill(); packer.wait(timeout=10)
+                if packer.poll() is None:
+                    packer.kill()
+                    packer.wait(timeout=10)
                 packer.stdout.close()
-            subprocess.run(check, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=offline, check=True, timeout=180)
+            subprocess.run(
+                check,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                env=offline,
+                check=True,
+                timeout=180,
+            )
         # The repair's staged additions are in no commit. Their blobs equal the archived working
         # files, because the repair is applied to the index and working tree together.
-        entries = [row.partition(b"\t") for row in subprocess.check_output(["git", "-C", str(self.source), "ls-files", "-s", "-z"],
-            env=offline, timeout=180).split(b"\0") if row]
-        entries = [(meta.split()[1].decode(), path.decode()) for meta, _, path in entries if not meta.startswith(b"160000")]
-        found = subprocess.run(["git", "-C", str(self.source), "cat-file", "--batch-check=%(objectname)"], input="".join(oid + "\n" for oid, _ in entries).encode(),
-            capture_output=True, env=offline, check=True, timeout=180).stdout.decode().splitlines()
+        entries = [
+            row.partition(b"\t")
+            for row in subprocess.check_output(
+                ["git", "-C", str(self.source), "ls-files", "-s", "-z"],
+                env=offline,
+                timeout=180,
+            ).split(b"\0")
+            if row
+        ]
+        entries = [
+            (meta.split()[1].decode(), path.decode())
+            for meta, _, path in entries
+            if not meta.startswith(b"160000")
+        ]
+        found = (
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(self.source),
+                    "cat-file",
+                    "--batch-check=%(objectname)",
+                ],
+                input="".join(oid + "\n" for oid, _ in entries).encode(),
+                capture_output=True,
+                env=offline,
+                check=True,
+                timeout=180,
+            )
+            .stdout.decode()
+            .splitlines()
+        )
         for (oid, path), line in zip(entries, found, strict=True):
-            if line != oid + " missing": continue
+            if line != oid + " missing":
+                continue
             if self.git(self.source, "hash-object", "-w", "--", path).strip() != oid:
-                raise RuntimeError("A staged repair file is missing from Git and its working copy differs: " + path)
+                raise RuntimeError(
+                    "A staged repair file is missing from Git and its working copy differs: "
+                    + path
+                )
 
     def recovery_guard(self):
         record = self.load()
         if record["phase"] in ("releasing", "finished", "rejected"):
-            raise RuntimeError("Admission may have reopened. Restarting or rollback requires installer review")
+            raise RuntimeError(
+                "Admission may have reopened. Restarting or rollback requires installer review"
+            )
         gate = json.loads(private(self.config["maintenanceFile"]).read_text())
-        if gate.get("operationId") != self.operation: raise RuntimeError("The persistent maintenance gate belongs to another update")
+        if gate.get("operationId") != self.operation:
+            raise RuntimeError(
+                "The persistent maintenance gate belongs to another update"
+            )
         baseline = record["baseline"]
-        if self.settings() != baseline["settings"]: raise RuntimeError("Protected settings changed during interrupted maintenance")
+        if self.settings() != baseline["settings"]:
+            raise RuntimeError(
+                "Protected settings changed during interrupted maintenance"
+            )
         states = {}
         for name, saved in baseline["units"].items():
             current = self.unit(name, require_active=name == "appUnit")
-            if current["FragmentPath"] != saved["FragmentPath"] or current["fragmentSha256"] != saved["fragmentSha256"]:
+            if (
+                current["FragmentPath"] != saved["FragmentPath"]
+                or current["fragmentSha256"] != saved["fragmentSha256"]
+            ):
                 raise RuntimeError("Saved native/app service identity changed")
             states[name] = current
         if states["gatewayUnit"].get("ActiveState") == "active":
             # Reassert the owned drain before checking current native work.
             marker = self.home / ".drain_request.json"
             if marker.exists():
-                if json.loads(private(marker).read_text()).get("principal") != "agent-interface:" + self.operation:
+                if (
+                    json.loads(private(marker).read_text()).get("principal")
+                    != "agent-interface:" + self.operation
+                ):
                     raise RuntimeError("Another owner holds the gateway drain")
-            else: self.native("drain", principal="agent-interface:" + self.operation)
+            else:
+                self.native("drain", principal="agent-interface:" + self.operation)
             self.wait_gateway(draining=True)
-        elif states["gatewayUnit"].get("ActiveState") != "inactive" or states["gatewayUnit"].get("MainPID") != "0":
+        elif (
+            states["gatewayUnit"].get("ActiveState") != "inactive"
+            or states["gatewayUnit"].get("MainPID") != "0"
+        ):
             raise RuntimeError("Gateway shutdown is ambiguous")
         if states["dashboardUnit"].get("ActiveState") == "active":
             live = self.rpc("status")
-            if live.get("active") is not True or live.get("operationId") != self.operation or live.get("busy") != []:
+            if (
+                live.get("active") is not True
+                or live.get("operationId") != self.operation
+                or live.get("busy") != []
+            ):
                 raise RuntimeError("Dashboard gate has active work or lost ownership")
-        elif states["dashboardUnit"].get("ActiveState") != "inactive" or states["dashboardUnit"].get("MainPID") != "0":
+        elif (
+            states["dashboardUnit"].get("ActiveState") != "inactive"
+            or states["dashboardUnit"].get("MainPID") != "0"
+        ):
             raise RuntimeError("Dashboard shutdown is ambiguous")
         return record
 
     def recovery_receipt(self, path, expected):
         receipt = json.loads(private(path).read_text())
         patch = receipt.get("trackedPatchSha256") or hashlib.sha256(b"").hexdigest()
-        if (receipt.get("schemaVersion") != 1 or (receipt.get("revision"), patch) != tuple(expected)
-                or receipt.get("checks") != {"realIntegration": True, "hostRegressions": True}
-                or receipt.get("integrationDigest") != self.env.get("HERMES_UPGRADE_INTEGRATION_DIGEST") or not receipt.get("qualifiedAt")):
-            raise RuntimeError("Saved qualification does not attest the recovery source and current integration")
+        if (
+            receipt.get("schemaVersion") != 1
+            or (receipt.get("revision"), patch) != tuple(expected)
+            or receipt.get("checks")
+            != {"realIntegration": True, "hostRegressions": True}
+            or receipt.get("integrationDigest")
+            != self.env.get("HERMES_UPGRADE_INTEGRATION_DIGEST")
+            or not receipt.get("qualifiedAt")
+        ):
+            raise RuntimeError(
+                "Saved qualification does not attest the recovery source and current integration"
+            )
         return receipt
 
     def recover(self):
         record = self.recovery_guard()
         # Legacy interrupted updates can recover when the deployed baseline
         # receipt still exists. Never fabricate lost qualification evidence.
-        previous = self.env.get("HERMES_UPGRADE_PREVIOUS_RECEIPT", self.config["qualificationReceipt"])
+        previous = self.env.get(
+            "HERMES_UPGRADE_PREVIOUS_RECEIPT", self.config["qualificationReceipt"]
+        )
         receipt = self.recovery_receipt(previous, record["baseline"]["source"])
         atomic(self.config["qualificationReceipt"], receipt)
         if record.get("archives"):
             self.rollback()
         else:
-            if self.source_state() != tuple(record["baseline"]["source"]): raise RuntimeError("Source changed without a complete recovery archive")
+            if self.source_state() != tuple(record["baseline"]["source"]):
+                raise RuntimeError("Source changed without a complete recovery archive")
             self.control("start")
         self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
-        self.verify(); self.finish()
+        self.verify()
+        self.finish()
 
     def restart_service(self):
         record = self.recovery_guard()
         expected = self.source_state()
         self.recovery_receipt(self.config["qualificationReceipt"], expected)
-        if expected == tuple(record["baseline"]["source"]): self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
-        elif expected != self.source_state(self.target): raise RuntimeError("Interrupted source differs from the baseline and qualified target")
-        self.control("stop"); self.control("start")
-        self.verify(); self.finish()
+        if expected == tuple(record["baseline"]["source"]):
+            self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
+        elif expected != self.source_state(self.target):
+            raise RuntimeError(
+                "Interrupted source differs from the baseline and qualified target"
+            )
+        self.control("stop")
+        self.control("start")
+        self.verify()
+        self.finish()
 
     def finish(self):
         record = self.load()
@@ -1078,12 +1897,20 @@ print(json.dumps({'ok':True,'state':'synced'}))
         # was restarted, the record still says stopped; verification proves the actual state.
         if record["phase"] in ("quiescent", "stopped"):
             self.env["HERMES_UPGRADE_ROLLBACK"] = "1"
-            self.verify(); record = self.load()
-        if record["phase"] != "verified" or tuple(record.get("verifiedSource", ())) != self.source_state(): raise RuntimeError("Release requires verified live source repair and services")
+            self.verify()
+            record = self.load()
+        if (
+            record["phase"] != "verified"
+            or tuple(record.get("verifiedSource", ())) != self.source_state()
+        ):
+            raise RuntimeError(
+                "Release requires verified live source repair and services"
+            )
         self.save(dict(record, phase="releasing"))
         self.clear_drain()
         released = self.rpc("release")
-        if released.get("active") is not False: raise RuntimeError("Native gate release was not confirmed")
+        if released.get("active") is not False:
+            raise RuntimeError("Native gate release was not confirmed")
         self.wait_gateway()
         self.save(dict(record, phase="finished"))
         self.refresh_interpreter()
@@ -1096,30 +1923,80 @@ print(json.dumps({'ok':True,'state':'synced'}))
             new = self.launcher_python()
             # Only tool-store Pythons are launcher selections. Anything else is the installer's choice.
             if not self.in_tool_store(new) or not Path(new).is_file():
-                raise RuntimeError("The launcher's interpreter is not inside the native tool store")
-            self.config, replaced = upgrade_worker().replace_interpreter_paths(self.config_file, new, self.home / "tools", self.check_config)
-            if replaced: print("Updated %d interpreter path(s) in %s to %s" % (replaced, self.config_file, new), file=sys.stderr, flush=True)
+                raise RuntimeError(
+                    "The launcher's interpreter is not inside the native tool store"
+                )
+            self.config, replaced = upgrade_worker().replace_interpreter_paths(
+                self.config_file, new, self.home / "tools", self.check_config
+            )
+            if replaced:
+                print(
+                    "Updated %d interpreter path(s) in %s to %s"
+                    % (replaced, self.config_file, new),
+                    file=sys.stderr,
+                    flush=True,
+                )
         except Exception as error:
             with contextlib.suppress(OSError):
-                print("Interpreter path refresh skipped: " + describe(error), file=sys.stderr, flush=True)
+                print(
+                    "Interpreter path refresh skipped: " + describe(error),
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 
 # Only these exception class names are logged; any other text from a failed command is untrusted.
-KNOWN_ERRORS = frozenset((
-    "ModuleNotFoundError", "ImportError", "AttributeError", "TypeError", "ValueError", "KeyError", "IndexError",
-    "RuntimeError", "AssertionError", "NotImplementedError", "SystemExit", "KeyboardInterrupt", "RecursionError",
-    "OSError", "FileNotFoundError", "PermissionError", "TimeoutError", "ConnectionError", "ConnectionRefusedError",
-    "ConnectionResetError", "BrokenPipeError", "JSONDecodeError", "UnicodeDecodeError", "HTTPError", "URLError",
-    "SSLError", "InvalidStatus", "InvalidHandshake", "InvalidURI", "ConnectionClosed", "ConnectionClosedError",
-    "ConnectionClosedOK", "HTTPStatusError", "ConnectError", "ReadTimeout", "ConnectTimeout"))
+KNOWN_ERRORS = frozenset(
+    (
+        "ModuleNotFoundError",
+        "ImportError",
+        "AttributeError",
+        "TypeError",
+        "ValueError",
+        "KeyError",
+        "IndexError",
+        "RuntimeError",
+        "AssertionError",
+        "NotImplementedError",
+        "SystemExit",
+        "KeyboardInterrupt",
+        "RecursionError",
+        "OSError",
+        "FileNotFoundError",
+        "PermissionError",
+        "TimeoutError",
+        "ConnectionError",
+        "ConnectionRefusedError",
+        "ConnectionResetError",
+        "BrokenPipeError",
+        "JSONDecodeError",
+        "UnicodeDecodeError",
+        "HTTPError",
+        "URLError",
+        "SSLError",
+        "InvalidStatus",
+        "InvalidHandshake",
+        "InvalidURI",
+        "ConnectionClosed",
+        "ConnectionClosedError",
+        "ConnectionClosedOK",
+        "HTTPStatusError",
+        "ConnectError",
+        "ReadTimeout",
+        "ConnectTimeout",
+    )
+)
 
 
 def upgrade_worker():
     """The worker beside this script, loaded once. It holds helpers both share."""
     name = "agent_interface_upgrade_worker"
     if name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("hermes-upgrade-worker.py"))
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        spec = importlib.util.spec_from_file_location(
+            name, Path(__file__).with_name("hermes-upgrade-worker.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
         sys.modules[name] = module
     return sys.modules[name]
 
@@ -1132,36 +2009,60 @@ def tree_bytes(root, excluded=None):
             names[:] = [name for name in names if Path(directory) / name != excluded]
         for name in files:
             path = Path(directory) / name
-            if not path.is_symlink() and path.is_file(): total += path.lstat().st_size
+            if not path.is_symlink() and path.is_file():
+                total += path.lstat().st_size
     return total
 
 
 def describe(error):
     """A failure class and, for file errors, the path. Never command output or exception text.
     A failed command reports its exit code and the exception class its last error line names."""
-    if isinstance(error, RuntimeError): return str(error)
-    if isinstance(error, OSError) and error.filename: return type(error).__name__ + " on " + str(error.filename)
+    if isinstance(error, RuntimeError):
+        return str(error)
+    if isinstance(error, OSError) and error.filename:
+        return type(error).__name__ + " on " + str(error.filename)
     if isinstance(error, subprocess.CalledProcessError):
-        stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
+        stderr = (
+            error.stderr.decode(errors="replace")
+            if isinstance(error.stderr, bytes)
+            else error.stderr or ""
+        )
         lines = [line.strip() for line in stderr.splitlines() if line.strip()]
         named = re.match(r"([A-Za-z_][\w.]*)\s*(?::|$)", lines[-1]) if lines else None
         known = named.group(1).rsplit(".", 1)[-1] if named else None
-        return "CalledProcessError (exit " + str(error.returncode) + ", " + (known if known in KNOWN_ERRORS else "unrecognized error") + ")"
+        return (
+            "CalledProcessError (exit "
+            + str(error.returncode)
+            + ", "
+            + (known if known in KNOWN_ERRORS else "unrecognized error")
+            + ")"
+        )
     if isinstance(error, subprocess.TimeoutExpired):
-        return "TimeoutExpired after %gs (%s)" % (error.timeout, command_name(error.cmd))
+        return "TimeoutExpired after %gs (%s)" % (
+            error.timeout,
+            command_name(error.cmd),
+        )
     return type(error).__name__
 
 
 def command_name(argv):
     """The program and, for git, its subcommand. Never paths or other arguments."""
-    argv = [str(part) for part in argv] if isinstance(argv, (list, tuple)) else str(argv or "").split()
-    if not argv: return "unknown command"
+    argv = (
+        [str(part) for part in argv]
+        if isinstance(argv, (list, tuple))
+        else str(argv or "").split()
+    )
+    if not argv:
+        return "unknown command"
     program = os.path.basename(argv[0])
-    if program != "git": return program
+    if program != "git":
+        return program
     rest = iter(argv[1:])
     for part in rest:
-        if part in ("-C", "-c"): next(rest, None)
-        elif not part.startswith("-"): return "git " + part
+        if part in ("-C", "-c"):
+            next(rest, None)
+        elif not part.startswith("-"):
+            return "git " + part
     return "git"
 
 
@@ -1181,13 +2082,20 @@ def main():
     parser.add_argument("action", choices=ACTIONS)
     args = parser.parse_args()
     os.umask(0o077)
-    try: getattr(Platform(args.config), args.action)()
-    except SystemExit: raise
+    try:
+        getattr(Platform(args.config), args.action)()
+    except SystemExit:
+        raise
     except Exception as error:
         # Private worker logs record only the fixed failure class, never source
         # command output which could contain credentials or native session keys.
         detail = describe(error)
-        raise SystemExit("Linux upgrade hook failed: " + detail + ". Maintenance remains closed for installer review") from None
+        raise SystemExit(
+            "Linux upgrade hook failed: "
+            + detail
+            + ". Maintenance remains closed for installer review"
+        ) from None
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

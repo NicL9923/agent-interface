@@ -24,10 +24,10 @@ pass or during the rest of an open. Outside a pass the two threads share only th
 load average about 4 on 32 cores. Each cell is median, p90 and max. The 5,000-row line is three runs.
 
 | Rows (tool rows) | Attribution pass | Cold first pass | Frame lock wait during a pass | Frame call outside a pass |
-| --- | --- | --- | --- | --- |
-| 101 (60) | 0.4, 0.5 ms | 1.0 ms | 0.8 ms (1 call) | not sampled |
-| 1,001 (600) | 2.5, 3.1 ms | 10.7 ms | 2.2, 2.5, 3.6 ms | 0.2, 0.3, 0.3 ms |
-| 5,001 (3,000) | 13.1, 13.4 ms | 44.5 to 52.2 ms | 13.1, 13.5, 20.7 ms | 0.4, 0.6, 4.9 ms |
+| ---------------- | ---------------- | --------------- | ----------------------------- | ------------------------- |
+| 101 (60)         | 0.4, 0.5 ms      | 1.0 ms          | 0.8 ms (1 call)               | not sampled               |
+| 1,001 (600)      | 2.5, 3.1 ms      | 10.7 ms         | 2.2, 2.5, 3.6 ms              | 0.2, 0.3, 0.3 ms          |
+| 5,001 (3,000)    | 13.1, 13.4 ms    | 44.5 to 52.2 ms | 13.1, 13.5, 20.7 ms           | 0.4, 0.6, 4.9 ms          |
 
 A frame that arrives during a pass waits for the rest of it, so the wait equals the pass. The cold first pass
 parses every tool row and journal record once per process.
@@ -64,7 +64,7 @@ no Python, add-on or tool file.
 - `npm run test:py`: 42 files passed, 0 skipped, 0 failed (Python 3.14.10). It also passed on `f436f66`.
 - `npm run lint:py` with ruff 0.17.3 from `.github/requirements-ci.txt`: passed.
 - `npm ci`, then `npm run typecheck`: passed. `npx vitest run tests/hermes-adapter.test.ts
-  tests/hermes-qualification.test.ts`: 2 files, 233 tests passed.
+tests/hermes-qualification.test.ts`: 2 files, 233 tests passed.
 
 No test was added: only the benchmark changed, and it is a measuring tool, not behavior.
 

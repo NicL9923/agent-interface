@@ -39,11 +39,11 @@ export class WidgetRefresh {
     const now = this.now();
     if (now - this.checkedAt < WIDGET_CHECK_MS) return;
     this.checkedAt = now;
-    const devices = this.store.allNativeDevices(this.config.apns.environment).filter(device => {
+    const devices = this.store.allNativeDevices(this.config.apns.environment).filter((device) => {
       const user = this.store.getUser(device.userId);
       return !!user && allowedIdentity(this.config, user);
     });
-    const known = new Set(devices.map(device => `${device.deviceId}:${device.token}`));
+    const known = new Set(devices.map((device) => `${device.deviceId}:${device.token}`));
     for (const key of this.sent.keys()) if (!known.has(key)) this.sent.delete(key);
     if (!devices.length) return;
     const roster = await this.runtime.listBots();
@@ -51,11 +51,15 @@ export class WidgetRefresh {
     for (const device of devices) {
       const key = `${device.deviceId}:${device.token}`;
       let signature = signatures.get(device.userId);
-      if (signature === undefined) signatures.set(device.userId, signature = this.signature(device.userId, roster));
+      if (signature === undefined)
+        signatures.set(device.userId, (signature = this.signature(device.userId, roster)));
       const last = this.sent.get(key);
       // A device first seen since this server started already has what the app last read; wake it
       // for the next change instead of waking every phone on each restart.
-      if (!last) { this.sent.set(key, { signature, at: Number.NEGATIVE_INFINITY }); continue; }
+      if (!last) {
+        this.sent.set(key, { signature, at: Number.NEGATIVE_INFINITY });
+        continue;
+      }
       if (last.signature === signature || now - last.at < WIDGET_REFRESH_MS) continue;
       // Recorded before sending, so a failure waits out the window instead of retrying every pass.
       this.sent.set(key, { signature, at: now });
@@ -64,7 +68,10 @@ export class WidgetRefresh {
         this.push.success();
       } catch (error) {
         // Apple says the token is gone: forget the device, as alert delivery does.
-        if (error instanceof ApnsError && error.apnsStatus === 410) { this.store.removeNativeDevice(device.userId, device.deviceId); continue; }
+        if (error instanceof ApnsError && error.apnsStatus === 410) {
+          this.store.removeNativeDevice(device.userId, device.deviceId);
+          continue;
+        }
         // Not delivered: the change is still due once the window ends.
         this.sent.set(key, { signature: last.signature, at: now });
         this.push.failure(error);
@@ -75,9 +82,22 @@ export class WidgetRefresh {
   /** What this person's widgets show, as the app's snapshot builds it. */
   private signature(userId: string, roster: Bot[]) {
     const pinned = new Set(this.store.preferences(userId).favorites);
-    return JSON.stringify(roster.map(bot => ({ ...bot, ...this.store.presentation(bot.id) }) as Bot).filter(bot => visible(bot, userId)).map(bot => {
-      const avatar = bot.avatar?.mode === "portrait" ? undefined : bot.avatar?.color;
-      return [bot.id, bot.name, bot.activity, bot.lastMessage?.at, bot.lastMessage?.text.slice(0, 200), avatar, pinned.has(bot.id)];
-    }));
+    return JSON.stringify(
+      roster
+        .map((bot) => ({ ...bot, ...this.store.presentation(bot.id) }) as Bot)
+        .filter((bot) => visible(bot, userId))
+        .map((bot) => {
+          const avatar = bot.avatar?.mode === "portrait" ? undefined : bot.avatar?.color;
+          return [
+            bot.id,
+            bot.name,
+            bot.activity,
+            bot.lastMessage?.at,
+            bot.lastMessage?.text.slice(0, 200),
+            avatar,
+            pinned.has(bot.id),
+          ];
+        }),
+    );
   }
 }

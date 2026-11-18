@@ -11,7 +11,10 @@ it("maps typed text to one keysym per character", () => {
 it("names the same keys as the iOS keyboard", () => {
   // The app sends keys by name; one the page does not know would be dropped without a word.
   const swift = readFileSync("ios/AgentInterface/DesktopKeyboard.swift", "utf8");
-  const cases = /enum Key: String, CaseIterable \{ case ([^}]+) \}/.exec(swift)?.[1].split(",").map(name => name.trim());
+  const cases = /enum Key: String, CaseIterable \{ case ([^}]+) \}/
+    .exec(swift)?.[1]
+    .split(",")
+    .map((name) => name.trim());
   expect(cases).toEqual(Object.keys(desktopKeys));
 });
 

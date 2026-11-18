@@ -11,15 +11,23 @@ const deciding = new Set(["waiting", "blocked"]);
  * The app badge: chats home marks unread, plus assistants waiting on a decision that are not
  * already counted. The server counts the same way for push payloads.
  */
-export function badgeCount(bots: readonly Bot[], shownBotId: string | undefined, readThrough: ReadThrough) {
-  return bots.filter(bot => isUnread(bot, shownBotId, readThrough) || deciding.has(bot.activity)).length;
+export function badgeCount(
+  bots: readonly Bot[],
+  shownBotId: string | undefined,
+  readThrough: ReadThrough,
+) {
+  return bots.filter((bot) => isUnread(bot, shownBotId, readThrough) || deciding.has(bot.activity))
+    .length;
 }
 
 export function badgeTitle(count: number) {
   return count > 0 ? `(${count > 99 ? "99+" : count}) ${APP_NAME}` : APP_NAME;
 }
 
-type BadgingNavigator = Navigator & { setAppBadge?(count?: number): Promise<void>; clearAppBadge?(): Promise<void> };
+type BadgingNavigator = Navigator & {
+  setAppBadge?(count?: number): Promise<void>;
+  clearAppBadge?(): Promise<void>;
+};
 
 let plainIcon: string | undefined;
 let dotWanted = false;
@@ -27,11 +35,12 @@ let dottedIcon: Promise<string | null> | undefined;
 
 /** The tab icon with a dot in its corner, drawn once from the app icon. */
 function drawDottedIcon(source: string) {
-  return dottedIcon ??= new Promise<string | null>(resolve => {
+  return (dottedIcon ??= new Promise<string | null>((resolve) => {
     const image = new Image();
     image.onload = () => {
       try {
-        const size = 64, canvas = document.createElement("canvas");
+        const size = 64,
+          canvas = document.createElement("canvas");
         canvas.width = canvas.height = size;
         const context = canvas.getContext("2d");
         if (!context) return resolve(null);
@@ -44,17 +53,21 @@ function drawDottedIcon(source: string) {
         context.strokeStyle = "#ffffff";
         context.stroke();
         resolve(canvas.toDataURL("image/png"));
-      } catch { resolve(null); }
+      } catch {
+        resolve(null);
+      }
     };
     image.onerror = () => resolve(null);
     image.src = source;
-  });
+  }));
 }
 
 /** How long a worker has to answer a badge write before the page makes it itself. */
 export const BADGE_ANSWER_MS = 3000;
 /** The newest write a worker has not answered yet. */
-let unanswered: { timer: ReturnType<typeof setTimeout> | undefined; channel: MessageChannel } | undefined;
+let unanswered:
+  | { timer: ReturnType<typeof setTimeout> | undefined; channel: MessageChannel }
+  | undefined;
 /** Whether a worker has answered a badge write on this page: one that answers once answers always, so none is waited on again. */
 let workerAnswered = false;
 function writeBadgeHere(count: number) {
@@ -82,14 +95,25 @@ function stopWaiting(waiting: NonNullable<typeof unanswered>) {
 function writeBadge(user: string | undefined, count: number) {
   if (unanswered) stopWaiting(unanswered);
   if (typeof MessageChannel === "undefined") return writeBadgeHere(count);
-  const channel = new MessageChannel(), asked = accountGeneration();
+  const channel = new MessageChannel(),
+    asked = accountGeneration();
   if (!tellWorkerInOrder({ type: "BADGE", user: user ?? null, count }, [channel.port2])) {
     channel.port1.close();
     return writeBadgeHere(count);
   }
-  const writeHere = () => { if (accountGeneration() === asked) writeBadgeHere(count); };
-  const waiting = unanswered = { channel, timer: workerAnswered ? undefined : setTimeout(() => { stopWaiting(waiting); writeHere(); }, BADGE_ANSWER_MS) };
-  channel.port1.onmessage = event => {
+  const writeHere = () => {
+    if (accountGeneration() === asked) writeBadgeHere(count);
+  };
+  const waiting = (unanswered = {
+    channel,
+    timer: workerAnswered
+      ? undefined
+      : setTimeout(() => {
+          stopWaiting(waiting);
+          writeHere();
+        }, BADGE_ANSWER_MS),
+  });
+  channel.port1.onmessage = (event) => {
     stopWaiting(waiting);
     if (event.data?.badge === false) writeHere();
     else workerAnswered = true;
@@ -102,7 +126,7 @@ function clearBadge(user: string | undefined) {
   writeBadge(user, 0);
   dotWanted = false;
   const icons = Array.from(document.querySelectorAll<HTMLLinkElement>("link[rel='icon']"));
-  const png = icons.find(link => link.type === "image/png");
+  const png = icons.find((link) => link.type === "image/png");
   if (!png || plainIcon === undefined) return;
   png.href = plainIcon;
   for (const link of icons) if (link !== png) link.removeAttribute("media");
@@ -121,17 +145,18 @@ export function useAppBadge(count: number, user?: string) {
     document.title = badgeTitle(count);
     writeBadge(user, count);
     const icons = Array.from(document.querySelectorAll<HTMLLinkElement>("link[rel='icon']"));
-    const png = icons.find(link => link.type === "image/png");
+    const png = icons.find((link) => link.type === "image/png");
     if (!png) return;
     plainIcon ??= png.href;
     // The icon draws once; a count back to zero before it is ready keeps the plain one.
     dotWanted = count > 0;
-    if (dotWanted) void drawDottedIcon(plainIcon).then(dotted => {
-      if (!dotWanted || !dotted) return;
-      png.href = dotted;
-      // Browsers prefer the SVG when present; set it aside while the dot shows.
-      for (const link of icons) if (link !== png) link.media = "not all";
-    });
+    if (dotWanted)
+      void drawDottedIcon(plainIcon).then((dotted) => {
+        if (!dotWanted || !dotted) return;
+        png.href = dotted;
+        // Browsers prefer the SVG when present; set it aside while the dot shows.
+        for (const link of icons) if (link !== png) link.media = "not all";
+      });
     else {
       png.href = plainIcon;
       for (const link of icons) if (link !== png) link.removeAttribute("media");

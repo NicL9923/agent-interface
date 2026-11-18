@@ -64,39 +64,39 @@ A scratch runner applied each replacement, deleted every `__pycache__`, ran `tes
 `tests/deploy_guarded_release_test.py` with `python3 -B` and `PYTHONDONTWRITEBYTECODE=1`, and restored the file. All 19 went red; the restored
 tree then passed both files.
 
-| Broken | Red |
-| --- | --- |
-| A busy acquire never asked again | 2 + 2 failures: both retry tests |
-| Retry without the 2 s pause | 2 + 1: both retry tests, the refusal pauses |
-| 2 attempts, not 3 | 2 + 1 |
-| An unsent acquire not handled | 2 + 1: the refusal and the unsent-release test |
-| `maintenance_rpc` never raises `NotSent` | 4 errors in `deploy_common_test`, 2 in the tool test |
-| `NotSent` accepts extra keys | the exact-marker test |
-| `NotSent` accepts an equal value (`1`) | the exact-marker test |
-| The gateway refusal does nothing (the app stops) | 7 + 1 |
-| The gateway check removed | 7 + 1 |
-| The gateway count accepts a boolean | the gateway cases |
-| The gateway count accepts any non-negative number | 2 |
-| Listed gateway work ignored | the gateway cases |
-| The preflight busy exit is 1 | 7 failures in the tool test |
-| Busy under `--check` no longer a `Fence` | 6 |
-| An unsent status is not a refusal | the unreachable test |
-| An unsent status refused under `--check` | the unreachable test |
-| The dashboard's session count ignored | 2 |
-| The gateway guard's name changed | the `prepare-when-idle` wiring test and 4 in the tool test |
-| The gateway preflight is `fence` again | the wiring test and 17 errors |
+| Broken                                            | Red                                                        |
+| ------------------------------------------------- | ---------------------------------------------------------- |
+| A busy acquire never asked again                  | 2 + 2 failures: both retry tests                           |
+| Retry without the 2 s pause                       | 2 + 1: both retry tests, the refusal pauses                |
+| 2 attempts, not 3                                 | 2 + 1                                                      |
+| An unsent acquire not handled                     | 2 + 1: the refusal and the unsent-release test             |
+| `maintenance_rpc` never raises `NotSent`          | 4 errors in `deploy_common_test`, 2 in the tool test       |
+| `NotSent` accepts extra keys                      | the exact-marker test                                      |
+| `NotSent` accepts an equal value (`1`)            | the exact-marker test                                      |
+| The gateway refusal does nothing (the app stops)  | 7 + 1                                                      |
+| The gateway check removed                         | 7 + 1                                                      |
+| The gateway count accepts a boolean               | the gateway cases                                          |
+| The gateway count accepts any non-negative number | 2                                                          |
+| Listed gateway work ignored                       | the gateway cases                                          |
+| The preflight busy exit is 1                      | 7 failures in the tool test                                |
+| Busy under `--check` no longer a `Fence`          | 6                                                          |
+| An unsent status is not a refusal                 | the unreachable test                                       |
+| An unsent status refused under `--check`          | the unreachable test                                       |
+| The dashboard's session count ignored             | 2                                                          |
+| The gateway guard's name changed                  | the `prepare-when-idle` wiring test and 4 in the tool test |
+| The gateway preflight is `fence` again            | the wiring test and 17 errors                              |
 
 ## Checks
 
 `.agents/tools/check-all --keep-going` on the merged branch: all 7 passed in 5m46s, none of it queued.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` (0.17.3) | passed |
-| `npm test` | 204 files, 3,588 tests passed |
-| `npm run build` | 891 modules |
-| `npm run test:e2e` | 39 tests passed (ports 24754, 24755) |
-| `npm run test:py` | 46 files passed in 4m17s |
+| Check                                    | Result                               |
+| ---------------------------------------- | ------------------------------------ |
+| typecheck, lint, `ruff check .` (0.17.3) | passed                               |
+| `npm test`                               | 204 files, 3,588 tests passed        |
+| `npm run build`                          | 891 modules                          |
+| `npm run test:e2e`                       | 39 tests passed (ports 24754, 24755) |
+| `npm run test:py`                        | 46 files passed in 4m17s             |
 
 ## Not exercised
 
@@ -137,23 +137,23 @@ changed files is in `src/shared/qualification-inputs.json`. Line numbers are thi
 Each break was made by a scratch runner that applied the replacement, ran the named file with `python3 -B -m unittest`, and restored the file.
 The restored tree passed all three files.
 
-| Broken | File run | Red |
-| --- | --- | --- |
+| Broken                                                                           | File run                      | Red                                                                                        |
+| -------------------------------------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------ |
 | The held gate is `idle(gate["active"] is False and gate["busy"]==[], ...)` again | `deploy_guarded_release_test` | the other-failures test, for both held-gate cases, with and without `--check` (4 failures) |
-| Same | `deploy_common_test` | the idle-wait wiring test |
-| The unsent marker found on any line | `deploy_common_test` | the last-line test (and an unrelated answered-error test, since the break was crude) |
-| `gateway_reports_idle` without the `active_work` key requirement | `deploy_common_test` | the gateway test, case "no work list" |
+| Same                                                                             | `deploy_common_test`          | the idle-wait wiring test                                                                  |
+| The unsent marker found on any line                                              | `deploy_common_test`          | the last-line test (and an unrelated answered-error test, since the break was crude)       |
+| `gateway_reports_idle` without the `active_work` key requirement                 | `deploy_common_test`          | the gateway test, case "no work list"                                                      |
 
 ### Checks
 
 `.agents/tools/check-all --keep-going --py always`: all 7 passed in 18m16s, 12m06s of it queued for the machine's heavy slot.
 
-| Check | Result |
-| --- | --- |
-| typecheck, lint, `ruff check .` | passed |
-| `npm test` | 205 files, 3,645 tests passed |
-| `npm run build` | 891 modules |
-| `npm run test:e2e` | 40 tests passed |
-| `npm run test:py` | 46 files passed in 4m29s |
+| Check                           | Result                        |
+| ------------------------------- | ----------------------------- |
+| typecheck, lint, `ruff check .` | passed                        |
+| `npm test`                      | 205 files, 3,645 tests passed |
+| `npm run build`                 | 891 modules                   |
+| `npm run test:e2e`              | 40 tests passed               |
+| `npm run test:py`               | 46 files passed in 4m29s      |
 
 Not exercised: no host ran the guarded tool; every test drives it against fakes, as before this round.

@@ -19,9 +19,23 @@ const reach = (manifest, keys) => {
   keys.forEach(visit);
   return seen;
 };
-const filesOf = (manifest, keys) => new Set([...keys].flatMap((key) => [manifest[key].file, ...(manifest[key].css ?? []), ...(manifest[key].assets ?? [])]));
+const filesOf = (manifest, keys) =>
+  new Set(
+    [...keys].flatMap((key) => [
+      manifest[key].file,
+      ...(manifest[key].css ?? []),
+      ...(manifest[key].assets ?? []),
+    ]),
+  );
 /** The files every page load needs: the static import graph of each HTML entry. */
-const eagerFiles = (manifest) => filesOf(manifest, reach(manifest, Object.keys(manifest).filter((key) => manifest[key].isEntry)));
+const eagerFiles = (manifest) =>
+  filesOf(
+    manifest,
+    reach(
+      manifest,
+      Object.keys(manifest).filter((key) => manifest[key].isEntry),
+    ),
+  );
 
 /**
  * Fails the build when the popup library is back in what every page load downloads. It is only
@@ -29,8 +43,13 @@ const eagerFiles = (manifest) => filesOf(manifest, reach(manifest, Object.keys(m
  * component would quietly put it back in front of first paint. `read` returns a built file's text.
  */
 export function assertPopupLibraryIsLazy(manifest, read) {
-  const offenders = [...eagerFiles(manifest)].filter((file) => file.endsWith('.js') && popupLibraryMarkers.test(read(file)));
-  if (offenders.length) throw new Error(`The popup library (Base UI) is in the entry's static imports (${offenders.join(', ')}). Import its components only from lazily loaded modules.`);
+  const offenders = [...eagerFiles(manifest)].filter(
+    (file) => file.endsWith(".js") && popupLibraryMarkers.test(read(file)),
+  );
+  if (offenders.length)
+    throw new Error(
+      `The popup library (Base UI) is in the entry's static imports (${offenders.join(", ")}). Import its components only from lazily loaded modules.`,
+    );
 }
 
 /**
@@ -43,13 +62,24 @@ export function assertPopupLibraryIsLazy(manifest, read) {
  * - `network`: files the worker never caches or intercepts, such as the voice previews.
  */
 export function precachePlan(manifest, files) {
-  const roots = Object.keys(manifest).filter((key) => onDemandSources.test(key) && manifest[key].isDynamicEntry);
+  const roots = Object.keys(manifest).filter(
+    (key) => onDemandSources.test(key) && manifest[key].isDynamicEntry,
+  );
   // A silent mismatch would put 500 KB back on every phone, so a renamed or removed import fails the build.
-  if (!roots.length) throw new Error('The build has no terminal or remote desktop chunks to keep out of the install cache.');
+  if (!roots.length)
+    throw new Error(
+      "The build has no terminal or remote desktop chunks to keep out of the install cache.",
+    );
   const eager = eagerFiles(manifest);
-  if (!eager.size) throw new Error('The build has no HTML entries to install.');
-  const adminOnly = new Set([...filesOf(manifest, reach(manifest, roots))].filter((file) => !eager.has(file)));
-  const lazy = new Set([...filesOf(manifest, Object.keys(manifest))].filter((file) => !eager.has(file) && !adminOnly.has(file)));
+  if (!eager.size) throw new Error("The build has no HTML entries to install.");
+  const adminOnly = new Set(
+    [...filesOf(manifest, reach(manifest, roots))].filter((file) => !eager.has(file)),
+  );
+  const lazy = new Set(
+    [...filesOf(manifest, Object.keys(manifest))].filter(
+      (file) => !eager.has(file) && !adminOnly.has(file),
+    ),
+  );
   const cached = files.filter((file) => !networkOnly.test(file));
   return {
     install: cached.filter((file) => !lazy.has(file) && !adminOnly.has(file)),

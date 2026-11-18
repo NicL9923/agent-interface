@@ -16,13 +16,19 @@ export const CHECK_IN_ROUTINE_NAME = "Check-ins";
  * followers are scoped to its profile, so only an owned personal assistant keeps check-ins private
  * to that member. Shared assistants and older personal ones without a recorded owner are excluded.
  */
-export const mainEligible = (bot: { shared?: boolean; ownerId?: string } | undefined, userId: string) =>
-  !!bot && bot.shared === false && bot.ownerId === userId;
+export const mainEligible = (
+  bot: { shared?: boolean; ownerId?: string } | undefined,
+  userId: string,
+) => !!bot && bot.shared === false && bot.ownerId === userId;
 
 /** Why an assistant cannot be this member's main one, in words for the picker, or undefined when it can. */
-export function mainIneligibleReason(bot: { shared?: boolean; ownerId?: string }, userId: string): string | undefined {
+export function mainIneligibleReason(
+  bot: { shared?: boolean; ownerId?: string },
+  userId: string,
+): string | undefined {
   if (mainEligible(bot, userId)) return undefined;
-  if (bot.shared !== false) return "Shared with the household. Check-ins stay private only on your own personal assistant.";
+  if (bot.shared !== false)
+    return "Shared with the household. Check-ins stay private only on your own personal assistant.";
   return "Visible to the whole household because it has no recorded owner.";
 }
 
@@ -38,28 +44,46 @@ export function scheduleMinutes(schedule: string) {
 
 /** Whether this many hours is a frequency the server accepts. */
 export const validCheckInHours = (hours: unknown): hours is number =>
-  typeof hours === "number" && Number.isInteger(hours) && hours >= CHECK_IN_HOURS.min && hours <= CHECK_IN_HOURS.max;
+  typeof hours === "number" &&
+  Number.isInteger(hours) &&
+  hours >= CHECK_IN_HOURS.min &&
+  hours <= CHECK_IN_HOURS.max;
 
 /** "Every 2 hours", for the switch's frequency choices and the routine list. */
-export const checkInFrequencyLabel = (hours: number) => hours === 1 ? "Every hour" : `Every ${hours} hours`;
+export const checkInFrequencyLabel = (hours: number) =>
+  hours === 1 ? "Every hour" : `Every ${hours} hours`;
 
 /**
  * Hermes's own silence matcher for routine answers, mirrored for an add-on too old to drop silent
  * answers itself (gateway/response_filters.py is_autonomous_silence_response): `[SILENT]`, SILENT,
  * NO_REPLY or NO REPLY as the whole answer or its own first or last line, or `[SILENT]` opening it.
  */
-const silentWords = new Set(["[SILENT]", "SILENT", "NO_REPLY", "NO REPLY", "[NO_REPLY]", "[NO REPLY]"]);
-const bare = (line: string) => line.trim().replace(/[.!。]+$/u, "").toUpperCase();
+const silentWords = new Set([
+  "[SILENT]",
+  "SILENT",
+  "NO_REPLY",
+  "NO REPLY",
+  "[NO_REPLY]",
+  "[NO REPLY]",
+]);
+const bare = (line: string) =>
+  line
+    .trim()
+    .replace(/[.!。]+$/u, "")
+    .toUpperCase();
 export function isSilentAnswer(text: string | undefined | null) {
   const stripped = (text ?? "").trim();
   if (!stripped) return false;
-  const lines = stripped.split(/\r?\n/).filter(line => line.trim());
-  return stripped.toUpperCase().startsWith("[SILENT]") || [stripped, lines[0], lines.at(-1)!].some(line => silentWords.has(bare(line)));
+  const lines = stripped.split(/\r?\n/).filter((line) => line.trim());
+  return (
+    stripped.toUpperCase().startsWith("[SILENT]") ||
+    [stripped, lines[0], lines.at(-1)!].some((line) => silentWords.has(bare(line)))
+  );
 }
 
 /** The assistant this person made their main one, when it is still on their home. */
 export function mainBot(preferences: Pick<Preferences, "mainBotId">, bots: Bot[]) {
-  return preferences.mainBotId ? bots.find(bot => bot.id === preferences.mainBotId) : undefined;
+  return preferences.mainBotId ? bots.find((bot) => bot.id === preferences.mainBotId) : undefined;
 }
 
 /**
@@ -68,14 +92,26 @@ export function mainBot(preferences: Pick<Preferences, "mainBotId">, bots: Bot[]
  * named, so another member's personal assistant never resolves; nor does the chat already open.
  * A message to several assistants at once, "ranch, notes", matches no single name, so it names none.
  */
-export function exchangePartner(message: Pick<Message, "toolCall" | "role">, incomingName: string | undefined, bots: Bot[], currentBotId: string): Bot | undefined {
+export function exchangePartner(
+  message: Pick<Message, "toolCall" | "role">,
+  incomingName: string | undefined,
+  bots: Bot[],
+  currentBotId: string,
+): Bot | undefined {
   let name = incomingName;
   if (!name) {
-    try { const target = (JSON.parse(message.toolCall?.arguments || "{}") as { target?: unknown }).target; if (typeof target === "string") name = target; }
-    catch { return undefined; }
+    try {
+      const target = (JSON.parse(message.toolCall?.arguments || "{}") as { target?: unknown })
+        .target;
+      if (typeof target === "string") name = target;
+    } catch {
+      return undefined;
+    }
   }
   const wanted = name?.trim().replace(/^@/, "").toLowerCase();
   if (!wanted) return undefined;
-  const bot = bots.find(row => row.id.toLowerCase() === wanted) ?? bots.find(row => row.name.trim().toLowerCase() === wanted);
+  const bot =
+    bots.find((row) => row.id.toLowerCase() === wanted) ??
+    bots.find((row) => row.name.trim().toLowerCase() === wanted);
   return bot && bot.id !== currentBotId ? bot : undefined;
 }

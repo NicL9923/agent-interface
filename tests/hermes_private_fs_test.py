@@ -1,4 +1,5 @@
 """Crash-safe writes, owner-only checks and the one sibling loader shared by the add-on."""
+
 import ast
 import json
 import os
@@ -29,20 +30,31 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(json.loads(target.read_text()), {"phase": "ready"})
         self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
         private_fs.atomic_write(target, "text", mode=0o644)
-        self.assertEqual((target.read_text(), stat.S_IMODE(target.stat().st_mode)), ("text", 0o644))
+        self.assertEqual(
+            (target.read_text(), stat.S_IMODE(target.stat().st_mode)), ("text", 0o644)
+        )
         private_fs.atomic_write(target, b"\x00bytes")
         self.assertEqual(target.read_bytes(), b"\x00bytes")
-        self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["state.json"])
+        self.assertEqual(
+            sorted(path.name for path in self.root.iterdir()), ["state.json"]
+        )
 
-    def test_a_failed_write_keeps_the_old_file_removes_its_temporary_and_a_retry_succeeds(self):
+    def test_a_failed_write_keeps_the_old_file_removes_its_temporary_and_a_retry_succeeds(
+        self,
+    ):
         target = self.root / "computer.env"
         target.write_text("old")
         for failing in ("fsync", "replace"):
-            with self.subTest(failing=failing), patch.object(private_fs.os, failing, side_effect=OSError("disk full")):
+            with (
+                self.subTest(failing=failing),
+                patch.object(private_fs.os, failing, side_effect=OSError("disk full")),
+            ):
                 with self.assertRaises(OSError):
                     private_fs.atomic_write(target, "new")
                 self.assertEqual(target.read_text(), "old")
-                self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["computer.env"])
+                self.assertEqual(
+                    sorted(path.name for path in self.root.iterdir()), ["computer.env"]
+                )
         private_fs.atomic_write(target, "new")
         self.assertEqual(target.read_text(), "new")
 
@@ -50,9 +62,11 @@ class AtomicWriteTests(unittest.TestCase):
         target = self.root / "lease.json"
         synced = []
         real_fsync = os.fsync
+
         def fsync(fd):
             synced.append(stat.S_ISDIR(os.fstat(fd).st_mode) and target.exists())
             real_fsync(fd)
+
         with patch.object(private_fs.os, "fsync", fsync):
             private_fs.atomic_json(target, {})
         self.assertEqual(synced, [False, True])
@@ -90,9 +104,16 @@ class OwnerPrivateTests(unittest.TestCase):
         open_folder = self.root / "open"
         open_folder.mkdir(mode=0o700)
         open_folder.chmod(0o750)
-        for path, kind, limit in ((fifo, "file", None), (self.folder, "file", None), (self.file, "dir", None),
-                                  (link, "file", None), (folder_link, "dir", None), (shared, "file", None),
-                                  (open_folder, "dir", None), (self.file, "file", 1)):
+        for path, kind, limit in (
+            (fifo, "file", None),
+            (self.folder, "file", None),
+            (self.file, "dir", None),
+            (link, "file", None),
+            (folder_link, "dir", None),
+            (shared, "file", None),
+            (open_folder, "dir", None),
+            (self.file, "file", 1),
+        ):
             with self.subTest(path=path.name, kind=kind, limit=limit):
                 self.assertIsNone(private_fs.owner_private(path, kind, limit))
         with self.assertRaises(FileNotFoundError):
@@ -110,11 +131,29 @@ def loaders(name, *patterns):
 class SiblingLoaderTests(unittest.TestCase):
     def test_every_copy_of_each_loader_is_identical(self):
         siblings = dict(loaders("sibling_module", "src/hermes/*.py"))
-        self.assertGreaterEqual(set(siblings), {"src/hermes/" + name for name in (
-            "extension.py", "gateway_guard.py", "dashboard.py", "computer_host.py", "computer.py", "integrations.py")})
+        self.assertGreaterEqual(
+            set(siblings),
+            {
+                "src/hermes/" + name
+                for name in (
+                    "extension.py",
+                    "gateway_guard.py",
+                    "dashboard.py",
+                    "computer_host.py",
+                    "computer.py",
+                    "integrations.py",
+                )
+            },
+        )
         releases = dict(loaders("hermes_module", "scripts/*.py", ".agents/tools/*.py"))
-        self.assertGreaterEqual(set(releases), {"scripts/hermes-upgrade-worker.py", "scripts/hermes-upgrade-linux.py",
-                                         ".agents/tools/setup-shared-computer.py"})
+        self.assertGreaterEqual(
+            set(releases),
+            {
+                "scripts/hermes-upgrade-worker.py",
+                "scripts/hermes-upgrade-linux.py",
+                ".agents/tools/setup-shared-computer.py",
+            },
+        )
         for found in (siblings, releases):
             self.assertEqual(len(set(found.values())), 1, sorted(found))
 
@@ -124,15 +163,39 @@ class SiblingLoaderTests(unittest.TestCase):
         # exception loads the stateless voice plugin by its plugins-root path, which Hermes's
         # credential check requires; see load_realtime in src/hermes/voice.py.
         loaders = {"sibling_module", "load_realtime"}
+
         def stray(node, inside=False):
             for child in ast.iter_child_nodes(node):
-                if isinstance(child, (ast.Attribute, ast.Name)) and "spec_from_file_location" in (getattr(child, "attr", None), getattr(child, "id", None)) and not inside:
+                if (
+                    isinstance(child, (ast.Attribute, ast.Name))
+                    and "spec_from_file_location"
+                    in (getattr(child, "attr", None), getattr(child, "id", None))
+                    and not inside
+                ):
                     yield child.lineno
-                yield from stray(child, inside or isinstance(child, ast.FunctionDef) and child.name in loaders)
-        found = {str(path.relative_to(ROOT)) + ":" + str(line) for path in sorted(ROOT.glob("src/hermes/*.py"))
-                 for line in stray(ast.parse(path.read_text()))}
+                yield from stray(
+                    child,
+                    inside
+                    or isinstance(child, ast.FunctionDef)
+                    and child.name in loaders,
+                )
+
+        found = {
+            str(path.relative_to(ROOT)) + ":" + str(line)
+            for path in sorted(ROOT.glob("src/hermes/*.py"))
+            for line in stray(ast.parse(path.read_text()))
+        }
         self.assertEqual(found, set())
-        self.assertEqual(list(stray(ast.parse("import importlib.util\nimportlib.util.spec_from_file_location('x', 'y')\n"))), [2])
+        self.assertEqual(
+            list(
+                stray(
+                    ast.parse(
+                        "import importlib.util\nimportlib.util.spec_from_file_location('x', 'y')\n"
+                    )
+                )
+            ),
+            [2],
+        )
 
     def add_on_copy(self):
         directory = tempfile.TemporaryDirectory()
@@ -146,9 +209,15 @@ class SiblingLoaderTests(unittest.TestCase):
             sys.modules.pop("agent_interface_private_fs", None)
             computer = load_source("src/hermes/computer.py", "private_fs_test_computer")
             self.assertIs(computer.sibling_module("private_fs"), computer.private_fs)
-            self.assertIs(sys.modules["agent_interface_private_fs"], computer.private_fs)
-            with self.assertRaisesRegex(ImportError, "agent_interface_private_fs is already loaded from"):
-                load_source(self.add_on_copy() / "computer.py", "private_fs_test_other_tree")
+            self.assertIs(
+                sys.modules["agent_interface_private_fs"], computer.private_fs
+            )
+            with self.assertRaisesRegex(
+                ImportError, "agent_interface_private_fs is already loaded from"
+            ):
+                load_source(
+                    self.add_on_copy() / "computer.py", "private_fs_test_other_tree"
+                )
 
     def test_a_module_that_fails_to_load_is_not_cached(self):
         copy = self.add_on_copy()
@@ -165,9 +234,18 @@ class ShippedInputTests(unittest.TestCase):
     def test_every_add_on_and_upgrade_module_is_a_qualification_input(self):
         # A receipt binds only listed files. An unlisted module the add-on loads could
         # change after qualification without invalidating the receipt.
-        inputs = set(json.loads((ROOT / "src/shared/qualification-inputs.json").read_text()))
-        shipped = {str(path.relative_to(ROOT)) for path in (*ROOT.glob("src/hermes/**/*.py"), *ROOT.glob("src/hermes/**/*.yaml"),
-                   *ROOT.glob("scripts/hermes-*.py")) if not path.name.endswith("-test.py") and "__pycache__" not in path.parts}
+        inputs = set(
+            json.loads((ROOT / "src/shared/qualification-inputs.json").read_text())
+        )
+        shipped = {
+            str(path.relative_to(ROOT))
+            for path in (
+                *ROOT.glob("src/hermes/**/*.py"),
+                *ROOT.glob("src/hermes/**/*.yaml"),
+                *ROOT.glob("scripts/hermes-*.py"),
+            )
+            if not path.name.endswith("-test.py") and "__pycache__" not in path.parts
+        }
         self.assertEqual(shipped - inputs, set())
 
 

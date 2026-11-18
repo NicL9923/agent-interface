@@ -4,30 +4,54 @@ import { loadConfig } from "../src/server/config.js";
 import { accountMarker } from "../src/server/apns.js";
 import { BackgroundWorker } from "../src/server/notifications.js";
 import { pushActionTtl, Store } from "../src/server/store.js";
-import { approvalFixture, botFixture, capabilitiesFixture, conversationFixture } from "./helpers/runtime-fixtures.js";
+import {
+  approvalFixture,
+  botFixture,
+  capabilitiesFixture,
+  conversationFixture,
+} from "./helpers/runtime-fixtures.js";
 import { fakeRuntime } from "./helpers/server.js";
 import { byTuple } from "./helpers/sort";
 
 const origin = "http://127.0.0.1:3000";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
-afterEach(async () => { await Promise.all(apps.splice(0).map(app => app.close())); vi.useRealTimers(); });
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()));
+  vi.useRealTimers();
+});
 
 async function installation() {
   const approve = vi.fn(async () => {});
   const runtime = fakeRuntime({
-    listBots: async () => [botFixture(), botFixture({ id: "other" })], close: async () => {},
+    listBots: async () => [botFixture(), botFixture({ id: "other" })],
+    close: async () => {},
     capabilities: async () => capabilitiesFixture({ approvals: { supported: true } }),
-    conversation: async botId => conversationFixture({ botId, approvals: [approvalFixture({ id: "approval-1" })], activity: { state: "waiting", runId: "run" } }),
+    conversation: async (botId) =>
+      conversationFixture({
+        botId,
+        approvals: [approvalFixture({ id: "approval-1" })],
+        activity: { state: "waiting", runId: "run" },
+      }),
     approve,
   });
-  const { app, store } = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), runtime, { background: false });
+  const { app, store } = await createApp(
+    loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+    runtime,
+    { background: false },
+  );
   apps.push(app);
-  for (const id of ["local-one", "local-two"]) store.user({ id, name: id, email: `${id}@localhost.invalid` });
+  for (const id of ["local-one", "local-two"])
+    store.user({ id, name: id, email: `${id}@localhost.invalid` });
   const act = (token: string, headers: Record<string, string> = { origin }) =>
     app.inject({ method: "POST", url: "/api/push/actions", headers, payload: { token } });
   return { app, store, approve, act };
 }
-const bound = { userId: "local-one", botId: "shared", approvalId: "approval-1", decision: "denied" as const };
+const bound = {
+  userId: "local-one",
+  botId: "shared",
+  approvalId: "approval-1",
+  decision: "denied" as const,
+};
 
 describe("web push Decline", () => {
   it("denies the bound approval as the bound person without a session or CSRF token, once", async () => {
@@ -70,42 +94,123 @@ describe("web push Decline", () => {
   it("puts a token only in a lone approval's web push, never in its APNs payload", async () => {
     const store = new Store(":memory:");
     store.user({ id: "one", name: "one", email: "one@example.test" });
-    store.subscribe("one", { endpoint: "https://push.test/one", keys: { p256dh: "key", auth: "auth" } });
+    store.subscribe("one", {
+      endpoint: "https://push.test/one",
+      keys: { p256dh: "key", auth: "auth" },
+    });
     store.nativeSession("phone-session", "one", Date.now() + 100000);
     store.registerNativeDevice("one", "phone-session", "phone", "ab".repeat(32), "sandbox");
     const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test" });
-    config.apns = { teamId: "TEAM123456", keyId: "KEY1234567", topic: "test.agentinterface", privateKeyFile: "unused", environment: "sandbox" };
-    const web: string[] = [], native: string[] = [];
-    const worker = new BackgroundWorker(store, fakeRuntime({ listBots: async () => [botFixture()], capabilities: async () => capabilitiesFixture() }), config,
-      async (_, payload) => { web.push(payload); }, async (_, payload) => { native.push(payload); });
+    config.apns = {
+      teamId: "TEAM123456",
+      keyId: "KEY1234567",
+      topic: "test.agentinterface",
+      privateKeyFile: "unused",
+      environment: "sandbox",
+    };
+    const web: string[] = [],
+      native: string[] = [];
+    const worker = new BackgroundWorker(
+      store,
+      fakeRuntime({
+        listBots: async () => [botFixture()],
+        capabilities: async () => capabilitiesFixture(),
+      }),
+      config,
+      async (_, payload) => {
+        web.push(payload);
+      },
+      async (_, payload) => {
+        native.push(payload);
+      },
+    );
     try {
-      store.queueNotification("approval-event", "one", { title: "Shared", body: "Allow?", url: "/?bot=shared", tag: "approval-event", kind: "approval", botId: "shared", approvalId: "approval-1" });
-      store.queueNotification("done-event", "one", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "done-event", kind: "completed", botId: "shared" });
+      store.queueNotification("approval-event", "one", {
+        title: "Shared",
+        body: "Allow?",
+        url: "/?bot=shared",
+        tag: "approval-event",
+        kind: "approval",
+        botId: "shared",
+        approvalId: "approval-1",
+      });
+      store.queueNotification("done-event", "one", {
+        title: "Shared",
+        body: "Done",
+        url: "/?bot=shared",
+        tag: "done-event",
+        kind: "completed",
+        botId: "shared",
+      });
       await worker.tick();
-      const [approval, done] = [web.find(payload => payload.includes("approval-event"))!, web.find(payload => payload.includes("done-event"))!].map(payload => JSON.parse(payload));
-      expect(store.consumePushAction(approval.declineToken)).toEqual({ userId: "one", botId: "shared", approvalId: "approval-1", decision: "denied" });
+      const [approval, done] = [
+        web.find((payload) => payload.includes("approval-event"))!,
+        web.find((payload) => payload.includes("done-event"))!,
+      ].map((payload) => JSON.parse(payload));
+      expect(store.consumePushAction(approval.declineToken)).toEqual({
+        userId: "one",
+        botId: "shared",
+        approvalId: "approval-1",
+        decision: "denied",
+      });
       expect(done).not.toHaveProperty("declineToken");
       expect(native).toHaveLength(2);
       for (const payload of native) expect(payload).not.toContain(approval.declineToken);
-    } finally { await worker.stop(); store.close(); }
+    } finally {
+      await worker.stop();
+      store.close();
+    }
   });
 
   it("names whose account each web push is for, as APNs payloads do, so a browser signed in as someone else since drops it", async () => {
     const store = new Store(":memory:");
     for (const id of ["one", "two"]) {
       store.user({ id, name: id, email: `${id}@example.test` });
-      store.subscribe(id, { endpoint: `https://push.test/${id}`, keys: { p256dh: "key", auth: "auth" } });
+      store.subscribe(id, {
+        endpoint: `https://push.test/${id}`,
+        keys: { p256dh: "key", auth: "auth" },
+      });
     }
     const config = loadConfig({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test" });
     const web: { endpoint: string; payload: Record<string, unknown> }[] = [];
-    const worker = new BackgroundWorker(store, fakeRuntime({ listBots: async () => [botFixture({ shared: true })], capabilities: async () => capabilitiesFixture() }), config,
-      async (subscription, payload) => { web.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) }); });
+    const worker = new BackgroundWorker(
+      store,
+      fakeRuntime({
+        listBots: async () => [botFixture({ shared: true })],
+        capabilities: async () => capabilitiesFixture(),
+      }),
+      config,
+      async (subscription, payload) => {
+        web.push({ endpoint: subscription.endpoint, payload: JSON.parse(payload) });
+      },
+    );
     try {
-      store.queueNotification("one-event", "one", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "one-event", kind: "completed", botId: "shared" });
-      store.queueNotification("two-event", "two", { title: "Shared", body: "Done", url: "/?bot=shared", tag: "two-event", kind: "completed", botId: "shared" });
+      store.queueNotification("one-event", "one", {
+        title: "Shared",
+        body: "Done",
+        url: "/?bot=shared",
+        tag: "one-event",
+        kind: "completed",
+        botId: "shared",
+      });
+      store.queueNotification("two-event", "two", {
+        title: "Shared",
+        body: "Done",
+        url: "/?bot=shared",
+        tag: "two-event",
+        kind: "completed",
+        botId: "shared",
+      });
       await worker.tick();
-      expect(web.map(({ endpoint, payload }) => [endpoint, payload.account as string]).sort(byTuple)).toEqual([
-        ["https://push.test/one", accountMarker("one")], ["https://push.test/two", accountMarker("two")]]);
-    } finally { await worker.stop(); store.close(); }
+      expect(
+        web.map(({ endpoint, payload }) => [endpoint, payload.account as string]).sort(byTuple),
+      ).toEqual([
+        ["https://push.test/one", accountMarker("one")],
+        ["https://push.test/two", accountMarker("two")],
+      ]);
+    } finally {
+      await worker.stop();
+      store.close();
+    }
   });
 });

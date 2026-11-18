@@ -27,15 +27,10 @@
           "scope": "account"
         }
       ],
-      "details": [
-        "Credits balance: $4.00"
-      ],
+      "details": ["Credits balance: $4.00"],
       "unavailableReason": null,
       "bankedResets": 2,
-      "botIds": [
-        "household",
-        "garden"
-      ],
+      "botIds": ["household", "garden"],
       "fallbackOnly": false
     }
   }

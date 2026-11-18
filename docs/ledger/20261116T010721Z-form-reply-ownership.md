@@ -17,7 +17,6 @@ Base: `62ea8cb992ad38fd4cd58e1612e98f8fc8df21ae`. The application and test diff 
 
 No browser or physical-device acceptance was run. The account guard uses the existing account mark, but an account-switch form regression was not verified. The native iOS form posts through `store.attempt` directly, rather than the central AppStore send path, and has the same ownership gap.
 
-
 ## Coordinator follow-up: uncertain acceptance after a chat remount
 
 GPT-6.1 Sol reproduced a missed path at `aea70c8a`: send a form, receive an uncertain
@@ -51,7 +50,6 @@ Chromium/WebKit validation must run on this follow-up. Both implementers are Ope
 independent review outside OpenAI remains incomplete. Native forms still bypass AppStore
 send bookkeeping, a pre-existing native gap outside this web-only diff. No Apple validation
 or production deployment ran.
-
 
 ## Final full validation at `1f179b27f737e37f684688e0fe8af14cfa39d8d4`
 

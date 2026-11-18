@@ -15,4 +15,5 @@ export const deviceBeatTtl = 45_000;
  */
 export const deviceIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Whether a device last used `usedAt` and last heard from `beatAt` counts as in use at `now`. */
-export const deviceInUse = (beatAt: number, usedAt: number, now: number) => now - beatAt < deviceBeatTtl && now - usedAt < deviceIdleMs;
+export const deviceInUse = (beatAt: number, usedAt: number, now: number) =>
+  now - beatAt < deviceBeatTtl && now - usedAt < deviceIdleMs;

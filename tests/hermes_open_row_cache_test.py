@@ -7,6 +7,7 @@ it under every mark the add-on could check. Hermes is a
 fake at its edges: the session table, its native history projection and a real SQLite state
 store with the columns the add-on reads. The journal is the add-on's own, in a temp directory.
 """
+
 import contextlib
 import json
 import sqlite3
@@ -20,7 +21,11 @@ from unittest.mock import patch
 from hermes_extension_journal_test import FakeHermes, extension, receipt, tool
 
 REPORT = {"path": "/srv/report.pdf", "name": "report.pdf", "mime": "application/pdf"}
-RESTORED = {"path": "/srv/restored.pdf", "name": "restored.pdf", "mime": "application/pdf"}
+RESTORED = {
+    "path": "/srv/restored.pdf",
+    "name": "restored.pdf",
+    "mime": "application/pdf",
+}
 
 
 class TranscriptHermes(FakeHermes):
@@ -38,19 +43,43 @@ class TranscriptHermes(FakeHermes):
         # The JSON row IDs of each lookup the add-on ran against the store.
         self.store_reads = []
         server = self.server
-        self.session = {"session_key": "stored", "history": [], "history_lock": threading.Lock(), "running": True}
+        self.session = {
+            "session_key": "stored",
+            "history": [],
+            "history_lock": threading.Lock(),
+            "running": True,
+        }
         server._sessions["sid"] = self.session
 
         def handle(request):
             method, params = request["method"], request.get("params") or {}
             self.native_calls.append((method, dict(params)))
             if method == "profiles.list":
-                return server._ok(request["id"], {"profiles": [{"name": "default", "canonical_session": {"resolved_id": "stored"}}]})
-            messages = [] if params.get("omit_messages") else server._history_to_messages(list(self.session["history"]))
-            return server._ok(request["id"], {"session_id": "sid", "messages": messages})
+                return server._ok(
+                    request["id"],
+                    {
+                        "profiles": [
+                            {
+                                "name": "default",
+                                "canonical_session": {"resolved_id": "stored"},
+                            }
+                        ]
+                    },
+                )
+            messages = (
+                []
+                if params.get("omit_messages")
+                else server._history_to_messages(list(self.session["history"]))
+            )
+            return server._ok(
+                request["id"], {"session_id": "sid", "messages": messages}
+            )
+
         server.handle_request = handle
         server._history_to_messages = self.project
-        server.project_compaction_message_for_display = lambda row: None if row.get("display_kind") == "handoff" else dict(row)
+        server.project_compaction_message_for_display = lambda row: (
+            None if row.get("display_kind") == "handoff" else dict(row)
+        )
 
         server._session_db = self.session_db
 
@@ -63,8 +92,11 @@ class TranscriptHermes(FakeHermes):
             if "json_each" in sql:
                 self.store_reads.append(json.loads(params[-1]))
             return connection.execute(sql, params).fetchall()
+
         try:
-            yield types.SimpleNamespace(db_path=str(self.store_path), _read_all=read_all)
+            yield types.SimpleNamespace(
+                db_path=str(self.store_path), _read_all=read_all
+            )
         finally:
             connection.close()
 
@@ -79,7 +111,10 @@ class TranscriptHermes(FakeHermes):
 
     def restore_store(self, source):
         """Hermes's snapshot restore: SQLite's backup API writes the snapshot's pages into the live file."""
-        with contextlib.closing(sqlite3.connect(source)) as snapshot, contextlib.closing(sqlite3.connect(self.store_path)) as live:
+        with (
+            contextlib.closing(sqlite3.connect(source)) as snapshot,
+            contextlib.closing(sqlite3.connect(self.store_path)) as live,
+        ):
             snapshot.backup(live)
 
     def snapshot_store(self, name):
@@ -94,45 +129,89 @@ class TranscriptHermes(FakeHermes):
         return super().__exit__(*exc)
 
     def project(self, history, **kwargs):
-        secrets = [value for values in self.redact._VAULT_REDACTION_VALUES.values() for value in values]
+        secrets = [
+            value
+            for values in self.redact._VAULT_REDACTION_VALUES.values()
+            for value in values
+        ]
         messages = []
         for row in history:
             row = self.server.project_compaction_message_for_display(row)
             if row is None:
                 continue
             if row["role"] == "tool":
-                messages.append({"role": "tool", "name": "terminal", "tool_call_id": row["tool_call_id"], "timestamp": row["timestamp"]})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "name": "terminal",
+                        "tool_call_id": row["tool_call_id"],
+                        "timestamp": row["timestamp"],
+                    }
+                )
                 continue
             text = row["content"]
             for secret in secrets:
                 text = text.replace(secret, "[REDACTED]")
-            messages.append({"role": row["role"], "text": text, "timestamp": row["timestamp"],
-                             **({"row_id": row["_row_id"]} if "_row_id" in row else {})})
+            messages.append(
+                {
+                    "role": row["role"],
+                    "text": text,
+                    "timestamp": row["timestamp"],
+                    **({"row_id": row["_row_id"]} if "_row_id" in row else {}),
+                }
+            )
         return messages
 
     def stored(self, uid, session="stored"):
         """A committed state.db row; its ID."""
         with self.store:
-            return self.store.execute("INSERT INTO messages(session_id,message_uid) VALUES(?,?)", (session, uid)).lastrowid
+            return self.store.execute(
+                "INSERT INTO messages(session_id,message_uid) VALUES(?,?)",
+                (session, uid),
+            ).lastrowid
 
     def add(self, role, uid, content, **fields):
         """A raw history row for a new committed message."""
-        row = {"role": role, "content": content, "timestamp": float(len(self.session["history"])), "_row_id": self.stored(uid), **fields}
+        row = {
+            "role": role,
+            "content": content,
+            "timestamp": float(len(self.session["history"])),
+            "_row_id": self.stored(uid),
+            **fields,
+        }
         self.session["history"].append(row)
         return row
 
     def replace(self, rows):
         """Hermes's ``replace_messages(active_only=True)``, as the gateway's /retry calls it: these rows deleted, then each stored again with its uid under a new ID."""
-        uids = [self.store.execute("SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],)).fetchone()[0] for row in rows]
+        uids = [
+            self.store.execute(
+                "SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],)
+            ).fetchone()[0]
+            for row in rows
+        ]
         with self.store:
-            self.store.executemany("DELETE FROM messages WHERE id=?", [(row["_row_id"],) for row in rows])
-        self.session["history"] = [{**row, "_row_id": self.stored(uid)} for row, uid in zip(rows, uids)]
+            self.store.executemany(
+                "DELETE FROM messages WHERE id=?", [(row["_row_id"],) for row in rows]
+            )
+        self.session["history"] = [
+            {**row, "_row_id": self.stored(uid)} for row, uid in zip(rows, uids)
+        ]
 
     def compact(self, rows):
         """Hermes's in-place compaction: a handoff, then each kept row stored again under a new ID."""
-        self.session["history"] = [{"role": "user", "content": "Summary of earlier work", "display_kind": "handoff", "timestamp": 0.0}]
+        self.session["history"] = [
+            {
+                "role": "user",
+                "content": "Summary of earlier work",
+                "display_kind": "handoff",
+                "timestamp": 0.0,
+            }
+        ]
         for row in rows:
-            uid = self.store.execute("SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],)).fetchone()[0]
+            uid = self.store.execute(
+                "SELECT message_uid FROM messages WHERE id=?", (row["_row_id"],)
+            ).fetchone()[0]
             self.session["history"].append({**row, "_row_id": self.stored(uid)})
 
     def __enter__(self):
@@ -152,10 +231,15 @@ class TranscriptHermes(FakeHermes):
 def state_store(path, application_id, uids=()):
     """A state.db with the columns the add-on reads and Hermes's per-file generation stamp; rows of session ``stored``."""
     store = sqlite3.connect(path, check_same_thread=False)
-    store.execute("CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message_uid TEXT)")
+    store.execute(
+        "CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, message_uid TEXT)"
+    )
     store.execute(f"PRAGMA application_id={application_id}")
     with store:
-        store.executemany("INSERT INTO messages(session_id,message_uid) VALUES('stored',?)", [(uid,) for uid in uids])
+        store.executemany(
+            "INSERT INTO messages(session_id,message_uid) VALUES('stored',?)",
+            [(uid,) for uid in uids],
+        )
     return store
 
 
@@ -169,14 +253,21 @@ def state_store_file(hermes, name, uids, application_id):
 def alice_and_bob(hermes):
     """Rows 1 to 4: Alice's message, Bob's, then two more, each uid unique; each sender's receipt bound to its row."""
     with hermes.journal.db:
-        rows = [hermes.add("user", uid, f"Message {uid}") for uid in ("A", "B", "C", "Z")]
-        receipt(hermes.journal.db, "alice-request", rows[0]["_row_id"], 1, actor="alice")
+        rows = [
+            hermes.add("user", uid, f"Message {uid}") for uid in ("A", "B", "C", "Z")
+        ]
+        receipt(
+            hermes.journal.db, "alice-request", rows[0]["_row_id"], 1, actor="alice"
+        )
         receipt(hermes.journal.db, "bob-request", rows[1]["_row_id"], 2, actor="bob")
     return rows
 
 
 def senders(value):
-    return [(message["row_id"], message.get("app_sender_id")) for message in value["messages"]]
+    return [
+        (message["row_id"], message.get("app_sender_id"))
+        for message in value["messages"]
+    ]
 
 
 def tool_row(hermes, uid, call, content):
@@ -201,7 +292,9 @@ class WarmAndColdTests(unittest.TestCase):
         self.assertEqual(warm, hermes.answer())
         return warm
 
-    def test_an_open_answers_the_same_with_warm_and_cold_caches_through_every_change(self):
+    def test_an_open_answers_the_same_with_warm_and_cold_caches_through_every_change(
+        self,
+    ):
         with TranscriptHermes() as hermes:
             first_turn(hermes)
             hermes.answer()
@@ -217,12 +310,20 @@ class WarmAndColdTests(unittest.TestCase):
             # A vault value registered mid-turn redacts text already shown.
             hermes.redact._VAULT_REDACTION_VALUES["/home/default"] = {"hunter2": None}
             value = self.assert_warm_matches_cold(hermes)
-            self.assertEqual(value["messages"][-1]["text"], "Done. The token is [REDACTED].")
+            self.assertEqual(
+                value["messages"][-1]["text"], "Done. The token is [REDACTED]."
+            )
             # Hermes's prune rewrites a tool row's content in place, under the same row ID.
             pruned = hermes.session["history"][2]
             hermes.session["history"][2] = {**pruned, "content": "[pruned]"}
             value = self.assert_warm_matches_cold(hermes)
-            self.assertEqual((value["messages"][1]["app_tool_result"], "app_artifacts" in value["messages"][1]), ("[pruned]", False))
+            self.assertEqual(
+                (
+                    value["messages"][1]["app_tool_result"],
+                    "app_artifacts" in value["messages"][1],
+                ),
+                ("[pruned]", False),
+            )
             hermes.session["history"][2] = pruned
             # A second record for the same call in the same run means neither can claim the detail.
             with hermes.journal.db:
@@ -235,9 +336,21 @@ class WarmAndColdTests(unittest.TestCase):
             hermes.answer()
             with hermes.journal.db:
                 receipt(hermes.journal.db, "second", user["_row_id"], 2)
-                tool(hermes.journal.db, "second", "list", {"files": 2}, artifacts=[REPORT])
+                tool(
+                    hermes.journal.db,
+                    "second",
+                    "list",
+                    {"files": 2},
+                    artifacts=[REPORT],
+                )
             value = self.assert_warm_matches_cold(hermes)
-            self.assertEqual((value["messages"][-2]["app_request_id"], value["messages"][-1]["app_artifacts"]), ("second", [REPORT]))
+            self.assertEqual(
+                (
+                    value["messages"][-2]["app_request_id"],
+                    value["messages"][-1]["app_artifacts"],
+                ),
+                ("second", [REPORT]),
+            )
             # Another stored session: rows of the first one are not its rows, and its tool records are its own.
             hermes.session["session_key"] = "stored-2"
             value = self.assert_warm_matches_cold(hermes)
@@ -246,7 +359,9 @@ class WarmAndColdTests(unittest.TestCase):
 
 
 class ReuseTests(unittest.TestCase):
-    def test_a_warm_open_parses_only_rows_it_has_not_seen_and_asks_the_store_about_every_row(self):
+    def test_a_warm_open_parses_only_rows_it_has_not_seen_and_asks_the_store_about_every_row(
+        self,
+    ):
         with TranscriptHermes() as hermes:
             first_turn(hermes)
             hermes.compact(hermes.session["history"])
@@ -259,10 +374,14 @@ class ReuseTests(unittest.TestCase):
             with patch.object(extension.json, "loads", wraps=json.loads) as loads:
                 warm = hermes.answer()
             # Which row each copy copies is never cached: both lookups ask about every visible row.
-            visible = [row["_row_id"] for row in hermes.session["history"] if "_row_id" in row]
+            visible = [
+                row["_row_id"] for row in hermes.session["history"] if "_row_id" in row
+            ]
             self.assertEqual(hermes.store_reads, [visible, visible])
             self.assertFalse([sql for sql in statements if "SELECT id,result" in sql])
-            self.assertNotIn(content, [call.args[0] for call in loads.call_args_list if call.args])
+            self.assertNotIn(
+                content, [call.args[0] for call in loads.call_args_list if call.args]
+            )
             self.assertEqual(warm, cold)
             statements.clear()
             hermes.store_reads.clear()
@@ -284,10 +403,20 @@ class ReuseTests(unittest.TestCase):
                 user = hermes.add("user", "u1", "Read both")
                 receipt(hermes.journal.db, "first", user["_row_id"], 1)
                 tool_row(hermes, "t1", "read", json.dumps({"pages": 3}))
-                tool(hermes.journal.db, "first", "read", {"pages": 9}, artifacts=[{"path": "/srv/other.pdf"}])
-                tool(hermes.journal.db, "first", "read", {"pages": 3}, artifacts=[REPORT])
+                tool(
+                    hermes.journal.db,
+                    "first",
+                    "read",
+                    {"pages": 9},
+                    artifacts=[{"path": "/srv/other.pdf"}],
+                )
+                tool(
+                    hermes.journal.db, "first", "read", {"pages": 3}, artifacts=[REPORT]
+                )
                 tool_row(hermes, "t2", "named", json.dumps({"ok": True}))
-                tool(hermes.journal.db, "first", "named", {"ok": True}, name="read_file")
+                tool(
+                    hermes.journal.db, "first", "named", {"ok": True}, name="read_file"
+                )
             for _ in range(2):
                 value = hermes.answer()
                 self.assertEqual(value["messages"][1]["app_artifacts"], [REPORT])
@@ -304,8 +433,14 @@ class ReuseTests(unittest.TestCase):
                 tool_message["app_artifacts"][0]["path"] = "/srv/other.pdf"
                 tool_message["app_tool_call"]["name"] = "changed"
                 value = hermes.answer()["messages"][1]
-                self.assertEqual((value["app_tool_result"], value.get("app_artifacts"), value.get("app_tool_call", {}).get("name")),
-                                 ({"pages": 3}, [REPORT], "terminal"))
+                self.assertEqual(
+                    (
+                        value["app_tool_result"],
+                        value.get("app_artifacts"),
+                        value.get("app_tool_call", {}).get("name"),
+                    ),
+                    ({"pages": 3}, [REPORT], "terminal"),
+                )
 
     def test_other_native_history_readers_never_fill_the_cache(self):
         with TranscriptHermes() as hermes:
@@ -314,7 +449,9 @@ class ReuseTests(unittest.TestCase):
             rows = hermes.bridge.row_caches["sid"]
             rows.tool_results.clear()
             # Another client's session.history goes through the same native seam, outside an app open.
-            projected = hermes.server._history_to_messages(list(hermes.session["history"]))
+            projected = hermes.server._history_to_messages(
+                list(hermes.session["history"])
+            )
             self.assertEqual(projected[1]["app_tool_result"], {"pages": 3})
             self.assertEqual(rows.tool_results, {})
 
@@ -329,9 +466,17 @@ class InvalidationTests(unittest.TestCase):
             hermes.session["history"].append(copy)
             self.assertEqual(hermes.answer()["messages"][-1]["row_id"], 99)
             with hermes.store:
-                hermes.store.execute("INSERT INTO messages(id,session_id,message_uid) VALUES(99,'stored','u1')")
+                hermes.store.execute(
+                    "INSERT INTO messages(id,session_id,message_uid) VALUES(99,'stored','u1')"
+                )
             value = hermes.answer()
-            self.assertEqual((value["messages"][-1]["row_id"], value["messages"][-1]["app_request_id"]), (1, "first"))
+            self.assertEqual(
+                (
+                    value["messages"][-1]["row_id"],
+                    value["messages"][-1]["app_request_id"],
+                ),
+                (1, "first"),
+            )
 
     def test_a_replaced_or_restored_state_database_answers_as_a_cold_open(self):
         # Each case starts from rows 1 to 4 (uids A, B, C, Z), a snapshot of them, and their
@@ -376,24 +521,44 @@ class InvalidationTests(unittest.TestCase):
 
         cases = {
             # A new inode with the same generation stamp.
-            "replaced file": (lambda hermes, rows, copies, snapshot: hermes.replace_store(other, application_id=1),
-                              [(3, None), (6, None), (7, None), (8, None)]),
+            "replaced file": (
+                lambda hermes, rows, copies, snapshot: hermes.replace_store(
+                    other, application_id=1
+                ),
+                [(3, None), (6, None), (7, None), (8, None)],
+            ),
             # Pages written into the same inode, with another generation stamp.
-            "another database restored into the file": (lambda hermes, rows, copies, snapshot: hermes.restore_store(
-                state_store_file(hermes, "other.db", other, application_id=2)), [(3, None), (6, None), (7, None), (8, None)]),
+            "another database restored into the file": (
+                lambda hermes, rows, copies, snapshot: hermes.restore_store(
+                    state_store_file(hermes, "other.db", other, application_id=2)
+                ),
+                [(3, None), (6, None), (7, None), (8, None)],
+            ),
             # An older snapshot, then new rows under the IDs the copies had.
-            "an older snapshot restored, then written again": (lambda hermes, rows, copies, snapshot: (
-                hermes.restore_store(snapshot), [hermes.stored(f"n{index}") for index in range(5, 9)]),
-                [(5, None), (6, None), (7, None), (8, None)]),
+            "an older snapshot restored, then written again": (
+                lambda hermes, rows, copies, snapshot: (
+                    hermes.restore_store(snapshot),
+                    [hermes.stored(f"n{index}") for index in range(5, 9)],
+                ),
+                [(5, None), (6, None), (7, None), (8, None)],
+            ),
             # The second review's sequence: same inode, stamp and newest row (8, Z) as before the restore.
             "an older snapshot restored, then compacted again": (
-                lambda hermes, rows, copies, snapshot: (hermes.restore_store(snapshot), compacted_again(hermes, rows)),
-                [(1, "alice"), (3, None), (4, None)]),
+                lambda hermes, rows, copies, snapshot: (
+                    hermes.restore_store(snapshot),
+                    compacted_again(hermes, rows),
+                ),
+                [(1, "alice"), (3, None), (4, None)],
+            ),
             "a newer snapshot of the same history restored after the file diverged": (
-                newer_after_divergence, [(2, "bob"), (3, None), (4, None)]),
+                newer_after_divergence,
+                [(2, "bob"), (3, None), (4, None)],
+            ),
             # A copy and its recorded original both still hold their uid, yet an earlier row holds it too.
             "a divergent history in which replace_messages had moved an earlier row": (
-                divergent_replace, [(1, "alice"), (2, "bob"), (3, None), (4, None)]),
+                divergent_replace,
+                [(1, "alice"), (2, "bob"), (3, None), (4, None)],
+            ),
         }
         for name, (change, expected) in cases.items():
             with self.subTest(name), TranscriptHermes() as hermes:
@@ -401,7 +566,10 @@ class InvalidationTests(unittest.TestCase):
                 snapshot = hermes.snapshot_store("snapshot.db")
                 hermes.compact(rows)
                 copies = hermes.session["history"]
-                self.assertEqual(senders(hermes.answer()), [(1, "alice"), (2, "bob"), (3, None), (4, None)])
+                self.assertEqual(
+                    senders(hermes.answer()),
+                    [(1, "alice"), (2, "bob"), (3, None), (4, None)],
+                )
                 change(hermes, rows, copies, snapshot)
                 warm = hermes.answer()
                 self.assertEqual(senders(warm), expected)
@@ -417,8 +585,16 @@ class InvalidationTests(unittest.TestCase):
             with contextlib.closing(sqlite3.connect(snapshot)) as copy:
                 hermes.journal.db.backup(copy)
                 with copy:
-                    copy.execute("UPDATE tools SET artifacts=? WHERE id=1", (json.dumps([RESTORED]),))
-            with contextlib.closing(sqlite3.connect(snapshot)) as source, contextlib.closing(sqlite3.connect(Path(hermes.directory.name) / "agent-interface.db")) as live:
+                    copy.execute(
+                        "UPDATE tools SET artifacts=? WHERE id=1",
+                        (json.dumps([RESTORED]),),
+                    )
+            with (
+                contextlib.closing(sqlite3.connect(snapshot)) as source,
+                contextlib.closing(
+                    sqlite3.connect(Path(hermes.directory.name) / "agent-interface.db")
+                ) as live,
+            ):
                 source.backup(live)
             warm = hermes.answer()
             hermes.bridge.row_caches.clear()
@@ -428,9 +604,17 @@ class InvalidationTests(unittest.TestCase):
     def test_new_content_under_the_same_tool_row_is_parsed_again(self):
         with TranscriptHermes() as hermes:
             first_turn(hermes)
-            self.assertEqual(hermes.answer()["messages"][1]["app_tool_result"], {"pages": 3})
-            hermes.session["history"][1] = {**hermes.session["history"][1], "content": json.dumps({"pages": 0, "pruned": True})}
-            self.assertEqual(hermes.answer()["messages"][1]["app_tool_result"], {"pages": 0, "pruned": True})
+            self.assertEqual(
+                hermes.answer()["messages"][1]["app_tool_result"], {"pages": 3}
+            )
+            hermes.session["history"][1] = {
+                **hermes.session["history"][1],
+                "content": json.dumps({"pages": 0, "pruned": True}),
+            }
+            self.assertEqual(
+                hermes.answer()["messages"][1]["app_tool_result"],
+                {"pages": 0, "pruned": True},
+            )
 
     def test_a_new_stored_session_starts_from_an_empty_cache(self):
         with TranscriptHermes() as hermes:
@@ -447,7 +631,10 @@ class InvalidationTests(unittest.TestCase):
             first_turn(hermes)
             hermes.answer()
             bridge, sessions = hermes.bridge, hermes.server._sessions
-            bridge.canonical["other"], sessions["other-sid"] = "other-sid", {"session_key": "elsewhere"}
+            bridge.canonical["other"], sessions["other-sid"] = (
+                "other-sid",
+                {"session_key": "elsewhere"},
+            )
             bridge.row_cache("other-sid", sessions["other-sid"])
             hermes.answer()
             self.assertIn("other-sid", bridge.row_caches)
@@ -457,20 +644,35 @@ class InvalidationTests(unittest.TestCase):
             self.assertNotIn("other-sid", bridge.row_caches)
 
     def test_each_table_keeps_only_its_newest_entries(self):
-        with TranscriptHermes() as hermes, patch.object(extension, "ROW_CACHE_LIMIT", 2):
+        with (
+            TranscriptHermes() as hermes,
+            patch.object(extension, "ROW_CACHE_LIMIT", 2),
+        ):
             first_turn(hermes)
             for index in range(3):
-                tool_row(hermes, f"extra{index}", f"call{index}", json.dumps({"index": index}))
+                tool_row(
+                    hermes,
+                    f"extra{index}",
+                    f"call{index}",
+                    json.dumps({"index": index}),
+                )
                 with hermes.journal.db:
                     tool(hermes.journal.db, "first", f"call{index}", {"index": index})
             hermes.compact(hermes.session["history"])
             value = hermes.answer()
             rows = hermes.bridge.row_caches["sid"]
             ids = [row["_row_id"] for row in hermes.session["history"][1:]]
-            self.assertEqual((list(rows.tool_results), list(rows.tool_records)), (ids[-2:], [3, 4]))
+            self.assertEqual(
+                (list(rows.tool_results), list(rows.tool_records)), (ids[-2:], [3, 4])
+            )
             # Rows evicted while this open filled the tables still answered it.
-            self.assertEqual([m["row_id"] for m in value["messages"]], list(range(1, 8)))
-            self.assertEqual([m.get("app_tool_result") for m in value["messages"][-3:]], [{"index": 0}, {"index": 1}, {"index": 2}])
+            self.assertEqual(
+                [m["row_id"] for m in value["messages"]], list(range(1, 8))
+            )
+            self.assertEqual(
+                [m.get("app_tool_result") for m in value["messages"][-3:]],
+                [{"index": 0}, {"index": 1}, {"index": 2}],
+            )
             # A warm open that fills the tables again evicts entries it found there; it still uses them.
             for _ in range(2):
                 self.assertEqual(hermes.answer(), value)
@@ -495,9 +697,25 @@ class ConcurrencyTests(unittest.TestCase):
                 # The frame hook records each completed tool while the transcript grows.
                 try:
                     for index in range(40):
-                        tool_row(hermes, f"w{index}", f"live{index}", json.dumps({"n": index}))
-                        server.write_json({"method": "event", "params": {"session_id": "sid", "type": "tool.complete",
-                                                                         "payload": {"tool_id": f"live{index}", "result": {"n": index}}}})
+                        tool_row(
+                            hermes,
+                            f"w{index}",
+                            f"live{index}",
+                            json.dumps({"n": index}),
+                        )
+                        server.write_json(
+                            {
+                                "method": "event",
+                                "params": {
+                                    "session_id": "sid",
+                                    "type": "tool.complete",
+                                    "payload": {
+                                        "tool_id": f"live{index}",
+                                        "result": {"n": index},
+                                    },
+                                },
+                            }
+                        )
                 except Exception as exc:
                     failures.append(exc)
 

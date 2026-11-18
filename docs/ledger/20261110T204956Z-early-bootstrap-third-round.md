@@ -73,16 +73,16 @@ The reviewer's sequence, before the fix: both cases failed with `data-theme` sti
 connecting screen (`expected 'dark' to be 'system'`). `boot.js` under a fresh mark, before its
 change: `dark`.
 
-| Mutation | Result |
-| --- | --- |
-| The first-draw theme step removed | failed: both reviewer cases |
-| Saved theme kept during another tab's change | failed: the base's "screen between two accounts" case |
-| Saved theme never used at the first draw | failed: "stays on the first draw while the hint still names its account" |
-| The first-draw step in `useEffect` instead of `useLayoutEffect` | jsdom passed (it runs both before the assertion); the e2e first-frame case failed with `dark` |
-| `uncover` restores the theme after a change | failed: the restore after member two's sign-in recorded `system, dark, system` |
-| `uncover` gives no theme back | failed: the base's restore case and the new one |
-| Activation deletes every cache but its own | failed: the account cache across activation |
-| `api()`'s post-send check removed | failed: "drops member one from a tab that shows them as soon as another tab starts signing member two in" |
+| Mutation                                                        | Result                                                                                                    |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| The first-draw theme step removed                               | failed: both reviewer cases                                                                               |
+| Saved theme kept during another tab's change                    | failed: the base's "screen between two accounts" case                                                     |
+| Saved theme never used at the first draw                        | failed: "stays on the first draw while the hint still names its account"                                  |
+| The first-draw step in `useEffect` instead of `useLayoutEffect` | jsdom passed (it runs both before the assertion); the e2e first-frame case failed with `dark`             |
+| `uncover` restores the theme after a change                     | failed: the restore after member two's sign-in recorded `system, dark, system`                            |
+| `uncover` gives no theme back                                   | failed: the base's restore case and the new one                                                           |
+| Activation deletes every cache but its own                      | failed: the account cache across activation                                                               |
+| `api()`'s post-send check removed                               | failed: "drops member one from a tab that shows them as soon as another tab starts signing member two in" |
 
 ## Checks
 
@@ -168,4 +168,3 @@ after the badge clear passed, as redundant.
 `npm run typecheck`, `npm run lint`, `ruff check .` (0.17.3): pass. `npm test`: 200 files, 3423
 tests. `npm run build`: pass. `npm run test:e2e`: 29 passed. Ran on the merge commit, after a real
 `npm ci`; the ledger commit after it changes no code.
-

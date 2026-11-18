@@ -41,15 +41,15 @@ of a badge. This replaces the case that expected `{ badge: true }`.
 
 Each protecting line broken by hand, the file restored, over `tests/app-badge.test.ts` and `tests/service-worker.test.ts`.
 
-| Mutation | Result |
-| --- | --- |
-| Timeout always armed | failed: the after-an-answer test (1) |
-| An answer never recorded | failed: the after-an-answer test (1) |
-| No generation check on either path | failed: the timeout drop and the late `{ badge: false }` tests (2) |
-| No generation check on the `{ badge: false }` path only | failed: the late `{ badge: false }` test (1) |
-| `{ badge: false }` ignored | failed: the write-at-once test (1) |
-| `{ badge: false }` counted as an answer | failed: the write-at-once test, on its last assertion (1) |
-| Worker answers `{ badge: true }` without the API | failed: the worker test (1) |
+| Mutation                                                | Result                                                             |
+| ------------------------------------------------------- | ------------------------------------------------------------------ |
+| Timeout always armed                                    | failed: the after-an-answer test (1)                               |
+| An answer never recorded                                | failed: the after-an-answer test (1)                               |
+| No generation check on either path                      | failed: the timeout drop and the late `{ badge: false }` tests (2) |
+| No generation check on the `{ badge: false }` path only | failed: the late `{ badge: false }` test (1)                       |
+| `{ badge: false }` ignored                              | failed: the write-at-once test (1)                                 |
+| `{ badge: false }` counted as an answer                 | failed: the write-at-once test, on its last assertion (1)          |
+| Worker answers `{ badge: true }` without the API        | failed: the worker test (1)                                        |
 
 ### Orderings
 

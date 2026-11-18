@@ -58,7 +58,6 @@ This local runtime validation does not replace independent review, which remains
 Before publication, main's separately reviewed compaction-test change #433 was merged.
 The production and regression-test files described above are unchanged by that merge.
 
-
 ## GPT review P1: preserve the signed-out word after cleanup
 
 Nicolas explicitly authorized GPT review and merging for this round. GPT-6.1 Sol high

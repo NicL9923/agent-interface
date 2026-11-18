@@ -7,7 +7,9 @@ export function UpdateNotice({ update }: { update: AppUpdate | null }) {
   return (
     <div className="app-update" role="status">
       <Icon name="upgrade" size={18} />
-      <span><strong>Update available</strong> Refresh to get the latest WildBots.</span>
+      <span>
+        <strong>Update available</strong> Refresh to get the latest WildBots.
+      </span>
       <button type="button" className="primary" disabled={update.applying} onClick={update.apply}>
         {update.applying ? "Refreshing…" : "Refresh"}
       </button>

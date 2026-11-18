@@ -29,7 +29,9 @@ export function sendTimingHeader(phases: SendPhases, now: number): string {
   const { arrival, hermesStart, admitted } = phases;
   return [
     ...(hermesStart !== undefined ? [metric("prepare", hermesStart - arrival)] : []),
-    ...(hermesStart !== undefined && admitted !== undefined ? [metric("hermes", admitted - hermesStart)] : []),
+    ...(hermesStart !== undefined && admitted !== undefined
+      ? [metric("hermes", admitted - hermesStart)]
+      : []),
     metric("total", now - arrival),
   ].join(", ");
 }
@@ -46,7 +48,13 @@ export type SendRoute = "messages" | "steer" | "talk";
  * - not-started: Hermes's answer says the send's turn did not start (`queued`, `none` or `unknown`), so no text
  *   or live event is its own turn's. Logged at the answer, with no moments after it.
  */
-export type SendEnded = "measured" | "uncorrelated" | "next-run" | "deadline" | "disconnected" | "not-started";
+export type SendEnded =
+  | "measured"
+  | "uncorrelated"
+  | "next-run"
+  | "deadline"
+  | "disconnected"
+  | "not-started";
 
 /** One turn of one session: from its message.start, or the first frame seen of it, to its message.complete. */
 interface Turn {
@@ -92,7 +100,12 @@ export interface SendRecord {
   lost: boolean;
   /** Released before Hermes answered. The answer logs this at once. */
   released?: "deadline" | "disconnected";
-  admission?: { route: SendRoute; steered: boolean; phases: Required<SendPhases>; turn?: AdmissionTurn };
+  admission?: {
+    route: SendRoute;
+    steered: boolean;
+    phases: Required<SendPhases>;
+    turn?: AdmissionTurn;
+  };
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -153,11 +166,23 @@ export class SendTimings implements TurnWatcher {
   private turns = 0;
   /** Advances when a record begins, the one event after which a current turn may be needed again. */
   private generation = 0;
-  constructor(private log: Log, private now: () => number = () => performance.now(), private giveUpMs = SEND_TIMING_GIVE_UP_MS) {}
+  constructor(
+    private log: Log,
+    private now: () => number = () => performance.now(),
+    private giveUpMs = SEND_TIMING_GIVE_UP_MS,
+  ) {}
 
   /** Starts measuring a send before it reaches Hermes. */
   begin(botId: string, requestId: string, arrival: number): SendRecord {
-    const record: SendRecord = { botId, requestId, arrival, frames: new Map(), blind: new Map(), lives: new Map(), lost: false };
+    const record: SendRecord = {
+      botId,
+      requestId,
+      arrival,
+      frames: new Map(),
+      blind: new Map(),
+      lives: new Map(),
+      lost: false,
+    };
     record.timer = setTimeout(() => this.expire(record), this.giveUpMs);
     record.timer.unref?.();
     this.records.add(record);
@@ -169,13 +194,25 @@ export class SendTimings implements TurnWatcher {
    * Hermes accepted the send into runId. steered is its admission decision when it reports one, and turn what
    * its answer said about the send's turn, when it says.
    */
-  admitted(record: SendRecord, route: SendRoute, steered: boolean, phases: Required<SendPhases>, runId: string | undefined,
-    turn?: AdmissionTurn): void {
+  admitted(
+    record: SendRecord,
+    route: SendRoute,
+    steered: boolean,
+    phases: Required<SendPhases>,
+    runId: string | undefined,
+    turn?: AdmissionTurn,
+  ): void {
     if (record.admission) return;
-    record.admission = { route, steered: steered || turn === "joined", phases, ...(turn ? { turn } : {}) };
+    record.admission = {
+      route,
+      steered: steered || turn === "joined",
+      phases,
+      ...(turn ? { turn } : {}),
+    };
     if (record.released) return this.write(record, record.released);
     if (!this.records.has(record)) return;
-    if (turn === "queued" || turn === "none" || turn === "unknown") return this.finish(record, "not-started");
+    if (turn === "queued" || turn === "none" || turn === "unknown")
+      return this.finish(record, "not-started");
     if (runId === undefined) return this.finish(record, "uncorrelated");
     record.runId = runId;
     record.firstLive = record.lives.get(runId);
@@ -211,15 +248,23 @@ export class SendTimings implements TurnWatcher {
       turn = this.open(this.session(sessionId), sessionId);
     }
     const run = runId ?? null;
-    if (turn.run === undefined) { turn.run = run; turn.botId = botId; }
-    else if (turn.run !== run && !turn.conflicted) {
+    if (turn.run === undefined) {
+      turn.run = run;
+      turn.botId = botId;
+    } else if (turn.run !== run && !turn.conflicted) {
       turn.conflicted = true;
       // A send may have skipped its text as another run's, so none may take a later first text there.
       for (const record of this.records) this.blind(record, turn);
     }
     for (const record of this.records) {
       // An assistant's runs follow each other, so another one running means this send's run is over.
-      if (record.admission && record.botId === botId && runId !== undefined && runId !== record.runId) this.finish(record, "next-run");
+      if (
+        record.admission &&
+        record.botId === botId &&
+        runId !== undefined &&
+        runId !== record.runId
+      )
+        this.finish(record, "next-run");
       else if (record.frames.has(turn)) this.resolve(record);
     }
   }
@@ -227,7 +272,10 @@ export class SendTimings implements TurnWatcher {
   disconnected(): void {
     for (const record of this.records) {
       if (record.admission) this.finish(record, "disconnected");
-      else { this.release(record); record.released = "disconnected"; }
+      else {
+        this.release(record);
+        record.released = "disconnected";
+      }
     }
     this.sessions.clear();
   }
@@ -243,7 +291,7 @@ export class SendTimings implements TurnWatcher {
         this.settle(record);
       } else if (runId !== undefined && !record.lives.has(runId)) {
         if (record.lives.size >= SEND_TIMING_HELD) this.lose(record);
-        else record.lives.set(runId, at ??= this.now());
+        else record.lives.set(runId, (at ??= this.now()));
       }
     }
   }
@@ -283,10 +331,22 @@ export class SendTimings implements TurnWatcher {
     const turn = session.turn && !session.turn.ended ? session.turn : this.open(session, sessionId);
     let at: number | undefined;
     for (const record of this.records) {
-      if (record.firstFrame !== undefined || record.lost || record.frames.has(turn) || this.ruledOut(record, turn)) continue;
-      if (turn.conflicted) { this.blind(record, turn); continue; }
-      if (record.frames.size >= SEND_TIMING_HELD) { this.lose(record); continue; }
-      record.frames.set(turn, at ??= this.now());
+      if (
+        record.firstFrame !== undefined ||
+        record.lost ||
+        record.frames.has(turn) ||
+        this.ruledOut(record, turn)
+      )
+        continue;
+      if (turn.conflicted) {
+        this.blind(record, turn);
+        continue;
+      }
+      if (record.frames.size >= SEND_TIMING_HELD) {
+        this.lose(record);
+        continue;
+      }
+      record.frames.set(turn, (at ??= this.now()));
       this.resolve(record);
     }
     session.framed = this.generation;
@@ -295,13 +355,17 @@ export class SendTimings implements TurnWatcher {
   /** Identified as a turn that is not this send's run. */
   private ruledOut(record: SendRecord, turn: Turn): boolean {
     if (turn.conflicted || turn.run === undefined) return false;
-    return turn.run === null || turn.botId !== record.botId || record.runId !== undefined && turn.run !== record.runId;
+    return (
+      turn.run === null ||
+      turn.botId !== record.botId ||
+      (record.runId !== undefined && turn.run !== record.runId)
+    );
   }
 
   private turnEnded(turn: Turn): void {
     turn.ended = true;
     for (const record of this.records) {
-      if (!record.frames.has(turn) || turn.run !== undefined && !turn.conflicted) continue;
+      if (!record.frames.has(turn) || (turn.run !== undefined && !turn.conflicted)) continue;
       this.blind(record, turn);
       this.resolve(record);
     }
@@ -319,7 +383,10 @@ export class SendTimings implements TurnWatcher {
   private resolve(record: SendRecord): void {
     if (record.runId === undefined || record.firstFrame !== undefined || record.lost) return;
     for (const [turn, at] of record.frames) {
-      if (this.ruledOut(record, turn)) { record.frames.delete(turn); continue; }
+      if (this.ruledOut(record, turn)) {
+        record.frames.delete(turn);
+        continue;
+      }
       // A conflicted turn never holds an entry: it blinds its session instead.
       if (turn.run !== record.runId) continue;
       if ((record.blind.get(turn.session) ?? Infinity) < turn.seq) return this.lose(record);
@@ -337,7 +404,8 @@ export class SendTimings implements TurnWatcher {
   }
 
   private settle(record: SendRecord): void {
-    if (record.admission && record.firstFrame !== undefined && record.firstLive !== undefined) this.finish(record, "measured");
+    if (record.admission && record.firstFrame !== undefined && record.firstLive !== undefined)
+      this.finish(record, "measured");
   }
 
   private expire(record: SendRecord): void {
@@ -361,13 +429,30 @@ export class SendTimings implements TurnWatcher {
   }
 
   private write(record: SendRecord, ended: SendEnded): void {
-    const { route, steered, turn, phases: { arrival, hermesStart, admitted } } = record.admission!;
-    const since = (at: number | undefined) => at === undefined ? undefined : round(at - arrival);
-    this.log.info({ sendTiming: {
-      route, botId: record.botId, requestId: record.requestId, steered, ...(turn ? { turn } : {}),
-      prepareMs: since(hermesStart), admissionMs: since(admitted),
-      firstFrameMs: since(record.firstFrame), firstLiveMs: since(record.firstLive), ended,
-      ...(ended === "deadline" ? { gaveUpAfterMs: this.giveUpMs } : {}),
-    } }, messages[ended]);
+    const {
+      route,
+      steered,
+      turn,
+      phases: { arrival, hermesStart, admitted },
+    } = record.admission!;
+    const since = (at: number | undefined) => (at === undefined ? undefined : round(at - arrival));
+    this.log.info(
+      {
+        sendTiming: {
+          route,
+          botId: record.botId,
+          requestId: record.requestId,
+          steered,
+          ...(turn ? { turn } : {}),
+          prepareMs: since(hermesStart),
+          admissionMs: since(admitted),
+          firstFrameMs: since(record.firstFrame),
+          firstLiveMs: since(record.firstLive),
+          ended,
+          ...(ended === "deadline" ? { gaveUpAfterMs: this.giveUpMs } : {}),
+        },
+      },
+      messages[ended],
+    );
   }
 }

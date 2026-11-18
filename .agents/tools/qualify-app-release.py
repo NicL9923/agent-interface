@@ -9,6 +9,7 @@ Each run leaves about 3 GB of disposable checkout and runtime. The run removes i
 own when it ends, and earlier stages that were interrupted more than a day ago,
 keeping receipts, logs and native probe evidence.
 """
+
 import argparse
 import importlib.util
 import json
@@ -72,7 +73,9 @@ def sweep_stale_stages(operations, now):
             prune_stage(stage)
 '''
 
-REMOTE = PRUNE + r'''
+REMOTE = (
+    PRUNE
+    + r'''
 import datetime, importlib.util, stat, types, uuid
 base = Path(PAYLOAD["appBase"])
 release = Path(PAYLOAD["release"])
@@ -237,22 +240,34 @@ finish(dict(qualificationComplete=True, receipt=str(receipt_path), integrationDi
     revision=baseline[0], trackedPatchSha256=baseline[1], browserExecutableSha256=host_files[str(browser)], productionSourceUnchanged=True,
     computerProbeBrowser=probe_browser, disposableFilesRemoved=pruned))
 '''
+)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name", help="staged release name from release-app.py prepare")
     browser = parser.add_mutually_exclusive_group()
-    browser.add_argument("--computer-probe-browser", help="absolute host path to a sandboxed browser ELF for the local-network probe only; "
-                         "by default the live qualification receipt's selection is reused")
-    browser.add_argument("--pinned-probe-browser", action="store_true",
-                         help="use the release's pinned PM Chromium even when the live receipt selected another browser")
+    browser.add_argument(
+        "--computer-probe-browser",
+        help="absolute host path to a sandboxed browser ELF for the local-network probe only; "
+        "by default the live qualification receipt's selection is reused",
+    )
+    browser.add_argument(
+        "--pinned-probe-browser",
+        action="store_true",
+        help="use the release's pinned PM Chromium even when the live receipt selected another browser",
+    )
     args = parser.parse_args(argv)
     if Path(args.name).name != args.name:
         parser.error("Use a release name, not a path")
-    if args.computer_probe_browser and not Path(args.computer_probe_browser).is_absolute():
+    if (
+        args.computer_probe_browser
+        and not Path(args.computer_probe_browser).is_absolute()
+    ):
         parser.error("--computer-probe-browser must be an absolute host path")
-    spec = importlib.util.spec_from_file_location("release_app", Path(__file__).with_name("release-app.py"))
+    spec = importlib.util.spec_from_file_location(
+        "release_app", Path(__file__).with_name("release-app.py")
+    )
     release_app = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(release_app)
     manifest = release_app.load_manifest(args.name)
@@ -260,11 +275,19 @@ def main(argv=None):
         parser.error("Qualify an unactivated staged release only")
     facts = release_app.host_facts(manifest["host"], manifest["appBase"])
     # The runtime the staged release was built with and will deploy with, recorded at preparation.
-    payload = {**manifest, "node": manifest.get("node") or facts["prior"]["node"], "computerProbeBrowser": args.computer_probe_browser,
-               "inheritComputerProbeBrowser": not (args.computer_probe_browser or args.pinned_probe_browser),
-               "liveQualificationReceipt": facts["prior"]["qualificationReceipt"]}
+    payload = {
+        **manifest,
+        "node": manifest.get("node") or facts["prior"]["node"],
+        "computerProbeBrowser": args.computer_probe_browser,
+        "inheritComputerProbeBrowser": not (
+            args.computer_probe_browser or args.pinned_probe_browser
+        ),
+        "liveQualificationReceipt": facts["prior"]["qualificationReceipt"],
+    }
     result = release_app.remote(manifest["host"], REMOTE, payload, timeout=7200)
-    release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(json.dumps(result, indent=2) + "\n")
+    release_app.MANIFESTS.joinpath(args.name + "-qualification.json").write_text(
+        json.dumps(result, indent=2) + "\n"
+    )
     print(json.dumps(result, indent=2))
 
 

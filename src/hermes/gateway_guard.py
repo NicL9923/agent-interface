@@ -4,6 +4,7 @@ Install agent_interface_gateway.py beside hermes_cli as a symlink to this file.
 Use the native managed launcher --run-module agent_interface_gateway, retaining
 its existing gateway.run arguments. Hermes still owns execution and shutdown.
 """
+
 import asyncio
 import importlib.util
 import os
@@ -33,16 +34,34 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
         raise RuntimeError("Persistent gateway maintenance file must be absolute")
     runner = startup.GatewayStartupMixin
     ingress = inbound.GatewayInboundMixin
-    for target, name in ((drain, "drain_requested"), (runner, "start"),
-                         (runner, "_serving_state"), (runner, "_run_startup_resume_event"),
-                         (status, "_get_code_identity_fields"), (ingress, "_handle_message"), (inbound, "t")):
+    for target, name in (
+        (drain, "drain_requested"),
+        (runner, "start"),
+        (runner, "_serving_state"),
+        (runner, "_run_startup_resume_event"),
+        (status, "_get_code_identity_fields"),
+        (ingress, "_handle_message"),
+        (inbound, "t"),
+    ):
         if not callable(getattr(target, name, None)):
             raise RuntimeError("Native gateway maintenance seams require qualification")
-    if authority is not None and (refusal is None or not callable(getattr(getattr(authority, "SessionAuthority", None), "_require_admission_open", None))):
-        raise RuntimeError("Native session authority admission seam requires qualification")
+    if authority is not None and (
+        refusal is None
+        or not callable(
+            getattr(
+                getattr(authority, "SessionAuthority", None),
+                "_require_admission_open",
+                None,
+            )
+        )
+    ):
+        raise RuntimeError(
+            "Native session authority admission seam requires qualification"
+        )
     previous = getattr(drain, "_agent_interface_persistent_gate", None)
     if previous is not None:
-        if previous != str(path): raise RuntimeError("Gateway maintenance was already bound to another file")
+        if previous != str(path):
+            raise RuntimeError("Gateway maintenance was already bound to another file")
         return
     requested = drain.drain_requested
     start = runner.start
@@ -58,16 +77,20 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
     async def guarded_start(self, *args, **kwargs):
         # The fresh native runner inherits this shared startup method. Set before
         # adapters and cron start, after its constructor initializes lifecycle.
-        if maintenance_active(path): self._external_drain_active = True
+        if maintenance_active(path):
+            self._external_drain_active = True
         return await start(self, *args, **kwargs)
 
     def guarded_serving(self, *args, **kwargs):
-        return "draining" if maintenance_active(path) else serving(self, *args, **kwargs)
+        return (
+            "draining" if maintenance_active(path) else serving(self, *args, **kwargs)
+        )
 
     async def guarded_resume(self, *args, **kwargs):
         # Keep native resume ownership and its pending work. Never execute the
         # synthetic startup turn while the installer still holds maintenance.
-        while maintenance_active(path): await asyncio.sleep(.25)
+        while maintenance_active(path):
+            await asyncio.sleep(0.25)
         return await resume(self, *args, **kwargs)
 
     async def guarded_message(self, event, *args, **kwargs):
@@ -75,7 +98,11 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
         # Native preflight awaits before reserving a turn, and internal/idle
         # commands can bypass its later drain check. Fence every inbound path.
         if maintenance_active(path):
-            return None if getattr(event, "internal", False) else inbound.t("gateway.busy.draining_maintenance")
+            return (
+                None
+                if getattr(event, "internal", False)
+                else inbound.t("gateway.busy.draining_maintenance")
+            )
         pending_ingress += 1
         try:
             return await handle_message(self, event, *args, **kwargs)
@@ -83,7 +110,14 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
             pending_ingress -= 1
 
     def guarded_identity():
-        return dict(identity(), agent_interface_gateway_guard={"schemaVersion": 1, "maintenanceFile": str(path), "pendingIngress": pending_ingress})
+        return dict(
+            identity(),
+            agent_interface_gateway_guard={
+                "schemaVersion": 1,
+                "maintenanceFile": str(path),
+                "pendingIngress": pending_ingress,
+            },
+        )
 
     drain.drain_requested = guarded_drain
     runner.start = guarded_start
@@ -98,8 +132,10 @@ def install(drain, startup, status, path, inbound, authority=None, refusal=None)
         def guarded_admission(self, *args, **kwargs):
             # The inbound fence below closes an admitted turn without running it. Refuse
             # admission the way a native drain does, so held maintenance admits nothing.
-            if maintenance_active(path): raise refusal("runtime_draining")
+            if maintenance_active(path):
+                raise refusal("runtime_draining")
             return admission_open(self, *args, **kwargs)
+
         owner._require_admission_open = guarded_admission
     drain._agent_interface_persistent_gate = str(path)
 
@@ -110,7 +146,10 @@ def sibling_module(name):
     A second load under another name would be a separate instance with its own state.
     Keep every copy of this function identical; tests/hermes_private_fs_test.py checks.
     """
-    canonical, path = "agent_interface_" + name, Path(__file__).resolve().with_name(name + ".py")
+    canonical, path = (
+        "agent_interface_" + name,
+        Path(__file__).resolve().with_name(name + ".py"),
+    )
     if canonical not in sys.modules:
         spec = importlib.util.spec_from_file_location(canonical, path)
         sys.modules[canonical] = module = importlib.util.module_from_spec(spec)
@@ -128,7 +167,9 @@ def sibling_module(name):
 def bootstrap():
     configured = os.environ.get("HERMES_AGENT_INTERFACE_MAINTENANCE_FILE", "")
     if not configured or not Path(configured).is_absolute():
-        raise SystemExit("Configure the fixed persistent gateway maintenance file before starting this wrapper")
+        raise SystemExit(
+            "Configure the fixed persistent gateway maintenance file before starting this wrapper"
+        )
     # The same exact revision/repair receipt as the dashboard protects these
     # native method seams. An unqualified gateway cannot bypass a held lease.
     extension = sibling_module("extension")
@@ -145,11 +186,13 @@ def bootstrap():
     # The gateway delivers routine output. Keep household Bot Chat deliveries with the dashboard add-on.
     delivery = sibling_module("bot_delivery")
     import tools.bot_live_delivery as mailbox
+
     delivery.install_producer(mailbox)
     import gateway.drain_control as drain
     import gateway.run_startup as startup
     import gateway.status as status
     import gateway.run_inbound as inbound
+
     authority = refusal = None
     if importlib.util.find_spec("gateway.session_authority") is not None:
         import gateway.session_authority as authority
@@ -164,19 +207,23 @@ def native_command(source, python, args, guard=None):
     hermes_cli, so qualification runs the add-on under test.
     """
     source = Path(source).resolve()
-    load = "import agent_interface_gateway; " if guard is None else (
-        "import importlib.util; "
-        f"spec = importlib.util.spec_from_file_location('agent_interface_gateway', {str(Path(guard).resolve())!r}); "
-        "agent_interface_gateway = importlib.util.module_from_spec(spec); "
-        "sys.modules['agent_interface_gateway'] = agent_interface_gateway; spec.loader.exec_module(agent_interface_gateway); ")
+    load = (
+        "import agent_interface_gateway; "
+        if guard is None
+        else (
+            "import importlib.util; "
+            f"spec = importlib.util.spec_from_file_location('agent_interface_gateway', {str(Path(guard).resolve())!r}); "
+            "agent_interface_gateway = importlib.util.module_from_spec(spec); "
+            "sys.modules['agent_interface_gateway'] = agent_interface_gateway; spec.loader.exec_module(agent_interface_gateway); "
+        )
+    )
     code = (
         f"import sys, runpy; sys.path.insert(0, {str(source)!r}); import os; "
         "os.environ.pop('PYTHONHOME', None); os.environ.pop('PYTHONPATH', None); "
         "os.environ.pop('VIRTUAL_ENV', None); "
         "os.environ['HERMES_HOME'] = os.environ.get('HERMES_HOME') or "
         "str(__import__('hermes_constants').get_default_hermes_root()); "
-        "import hermes_bootstrap; " + load +
-        "agent_interface_gateway.bootstrap(); "
+        "import hermes_bootstrap; " + load + "agent_interface_gateway.bootstrap(); "
         f"runpy.run_path({str(source / 'gateway/run.py')!r}, run_name='__main__')"
     )
     return [str(python), "-I", "-c", code, *args]
@@ -188,6 +235,7 @@ def main():
     # native status can miss the owner and another CLI can start a second gateway.
     import hermes_cli
     from hermes_cli._launchers import runtime_command
+
     source = Path(hermes_cli.__file__).resolve().parents[1]
     bootstrap()
     python = runtime_command(source, module="gateway.run")[0]
@@ -195,4 +243,5 @@ def main():
     os.execv(command[0], command)
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,15 @@
 import { capabilitiesFixture } from "./helpers/runtime-fixtures.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { statfs } from "node:fs/promises";
 import { createServer, Socket, type AddressInfo } from "node:net";
 import { DatabaseSync } from "node:sqlite";
@@ -10,20 +18,31 @@ import { dirname, join } from "node:path";
 import * as webpush from "web-push";
 import { createApp } from "../src/server/app.js";
 import { loadConfig, type Config } from "../src/server/config.js";
-import { attemptConnect, defaultMetadataProbe, metadataTargets, metadataVerdict, probeMetadata, type MetadataAttempt, type MetadataProbe, type StatFs } from "../src/server/health.js";
+import {
+  attemptConnect,
+  defaultMetadataProbe,
+  metadataTargets,
+  metadataVerdict,
+  probeMetadata,
+  type MetadataAttempt,
+  type MetadataProbe,
+  type StatFs,
+} from "../src/server/health.js";
 import { FailureTracker } from "../src/server/logging.js";
 import type { HermesUpgrades } from "../src/server/upgrades.js";
 import type { Runtime, RuntimeStatus } from "../src/shared/types.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
-const minute = 60_000, hour = 60 * minute;
+const minute = 60_000,
+  hour = 60 * minute;
 const origin = "http://127.0.0.1:3000";
 const apps: Awaited<ReturnType<typeof createApp>>["app"][] = [];
 const directories: string[] = [];
 afterEach(async () => {
   vi.useRealTimers();
   for (const app of apps.splice(0)) await app.close();
-  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
 const temporary = () => {
   const directory = mkdtempSync(join(tmpdir(), "agent-ops-"));
@@ -34,27 +53,63 @@ function runtime(overrides: Partial<Runtime> = {}) {
   let status: RuntimeStatus = { connected: true };
   const value = fakeRuntime({
     status: async () => status,
-    capabilities: async () => capabilitiesFixture({ durableEvents: { supported: false }, idempotency: { supported: false }, generatedFiles: { supported: true } }),
-    listBots: async () => [{ id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" }],
-    download: async () => ({ body: new Blob(["hello"]).stream(), name: "note.txt", mime: "text/plain" }),
+    capabilities: async () =>
+      capabilitiesFixture({
+        durableEvents: { supported: false },
+        idempotency: { supported: false },
+        generatedFiles: { supported: true },
+      }),
+    listBots: async () => [
+      { id: "shared", name: "Shared", model: "test", shared: true, activity: "idle" },
+    ],
+    download: async () => ({
+      body: new Blob(["hello"]).stream(),
+      name: "note.txt",
+      mime: "text/plain",
+    }),
     close: async () => {},
     ...overrides,
   });
-  return { value, set status(next: RuntimeStatus) { status = next; } };
+  return {
+    value,
+    set status(next: RuntimeStatus) {
+      status = next;
+    },
+  };
 }
 const GiB = 1024 ** 3;
 // Real paths, chosen free space: a missing path still fails the way the real filesystem does.
-const freeSpace = (bytes: () => number, measured: string[] = []): StatFs => async path => {
-  await statfs(path);
-  measured.push(path);
-  return { bavail: bytes(), bsize: 1 };
-};
-async function setup(env: Record<string, string> = {}, options: { runtime?: Runtime; maintenance?: boolean; lines?: string[]; metadataProbe?: MetadataProbe; statfs?: StatFs } = {}) {
+const freeSpace =
+  (bytes: () => number, measured: string[] = []): StatFs =>
+  async (path) => {
+    await statfs(path);
+    measured.push(path);
+    return { bavail: bytes(), bsize: 1 };
+  };
+async function setup(
+  env: Record<string, string> = {},
+  options: {
+    runtime?: Runtime;
+    maintenance?: boolean;
+    lines?: string[];
+    metadataProbe?: MetadataProbe;
+    statfs?: StatFs;
+  } = {},
+) {
   const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", ...env });
   const upgrades = { maintenance: () => options.maintenance ?? false } as unknown as HermesUpgrades;
   const result = await createApp(config, options.runtime ?? runtime().value, {
-    background: false, upgrades, logStream: options.lines ? { write: line => { options.lines!.push(line); } } : undefined,
-    metadataProbe: options.metadataProbe, statfs: options.statfs ?? freeSpace(() => 100 * GiB),
+    background: false,
+    upgrades,
+    logStream: options.lines
+      ? {
+          write: (line) => {
+            options.lines!.push(line);
+          },
+        }
+      : undefined,
+    metadataProbe: options.metadataProbe,
+    statfs: options.statfs ?? freeSpace(() => 100 * GiB),
   });
   apps.push(result.app);
   return result;
@@ -63,7 +118,10 @@ const login = (app: Awaited<ReturnType<typeof createApp>>["app"]) => localLogin(
 
 describe("health", () => {
   it("keeps the liveness response unchanged", async () => {
-    const { app } = await setup({}, { runtime: runtime({ status: async () => ({ connected: false }) }).value });
+    const { app } = await setup(
+      {},
+      { runtime: runtime({ status: async () => ({ connected: false }) }).value },
+    );
     const response = await app.inject("/api/health");
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe('{"ok":true}');
@@ -73,32 +131,50 @@ describe("health", () => {
     const { app } = await setup();
     const direct = await app.inject("/api/health/ready");
     expect(direct.statusCode).toBe(200);
-    expect(direct.json()).toEqual({ ok: true, checks: {
-      database: { status: "ok", detail: "Responding" },
-      hermes: { status: "ok", detail: "Connected" },
-      worker: { status: "ok", detail: "Starting" },
-      push: { status: "unconfigured", detail: expect.any(String) },
-      backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
-      disk: { status: "ok", detail: `100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB` },
-      metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
-    }, eventLoopP99Ms: null });
-    for (const headers of [{ "x-forwarded-for": "203.0.113.9" }, { forwarded: "for=203.0.113.9" }, { "x-real-ip": "203.0.113.9" }])
+    expect(direct.json()).toEqual({
+      ok: true,
+      checks: {
+        database: { status: "ok", detail: "Responding" },
+        hermes: { status: "ok", detail: "Connected" },
+        worker: { status: "ok", detail: "Starting" },
+        push: { status: "unconfigured", detail: expect.any(String) },
+        backup: { status: "unconfigured", detail: "APP_BACKUP_DIR is not set" },
+        disk: {
+          status: "ok",
+          detail: `100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB`,
+        },
+        metadataFloor: { status: "unconfigured", detail: "Checked only in production" },
+      },
+      eventLoopP99Ms: null,
+    });
+    for (const headers of [
+      { "x-forwarded-for": "203.0.113.9" },
+      { forwarded: "for=203.0.113.9" },
+      { "x-real-ip": "203.0.113.9" },
+    ])
       expect((await app.inject({ url: "/api/health/ready", headers })).body).toBe('{"ok":true}');
-    expect((await app.inject({ url: "/api/health/ready", remoteAddress: "203.0.113.9" })).body).toBe('{"ok":true}');
+    expect(
+      (await app.inject({ url: "/api/health/ready", remoteAddress: "203.0.113.9" })).body,
+    ).toBe('{"ok":true}');
   });
 
   it("shows the event loop's last p99 to direct loopback callers only", async () => {
     const { app, eventLoop } = await setup();
     eventLoop.start();
     try {
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise((resolve) => setTimeout(resolve, 30));
       for (const end = performance.now() + 120; performance.now() < end;);
-      await new Promise(resolve => setTimeout(resolve, 30));
+      await new Promise((resolve) => setTimeout(resolve, 30));
       eventLoop.sample();
-    } finally { eventLoop.stop(); }
+    } finally {
+      eventLoop.stop();
+    }
     const direct = (await app.inject("/api/health/ready")).json();
     expect(direct.eventLoopP99Ms).toBeGreaterThan(50);
-    for (const request of [{ headers: { "x-forwarded-for": "203.0.113.9" } }, { remoteAddress: "203.0.113.9" }])
+    for (const request of [
+      { headers: { "x-forwarded-for": "203.0.113.9" } },
+      { remoteAddress: "203.0.113.9" },
+    ])
       expect((await app.inject({ url: "/api/health/ready", ...request })).body).toBe('{"ok":true}');
   });
 
@@ -108,10 +184,22 @@ describe("health", () => {
     worker.loop.failure(new Error("database is locked"));
     let response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(503);
-    expect(response.json().checks.worker).toEqual({ status: "fail", detail: "No successful pass for 3 min: database is locked" });
-    expect((await app.inject({ url: "/api/health/ready", headers: { "x-forwarded-for": "203.0.113.9" } })).body).toBe('{"ok":false}');
+    expect(response.json().checks.worker).toEqual({
+      status: "fail",
+      detail: "No successful pass for 3 min: database is locked",
+    });
+    expect(
+      (
+        await app.inject({
+          url: "/api/health/ready",
+          headers: { "x-forwarded-for": "203.0.113.9" },
+        })
+      ).body,
+    ).toBe('{"ok":false}');
     worker.loop.success();
-    vi.spyOn(store.db, "prepare").mockImplementationOnce(() => { throw new Error("disk I/O error"); });
+    vi.spyOn(store.db, "prepare").mockImplementationOnce(() => {
+      throw new Error("disk I/O error");
+    });
     response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(503);
     expect(response.json().checks.database).toEqual({ status: "fail", detail: "disk I/O error" });
@@ -124,7 +212,10 @@ describe("health", () => {
     const { app, worker } = await setup({}, { runtime: hermes.value });
     let response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({ status: "warn", detail: "Disconnected for 0 s: Hermes gateway is restarting." });
+    expect(response.json().checks.hermes).toEqual({
+      status: "warn",
+      detail: "Disconnected for 0 s: Hermes gateway is restarting.",
+    });
     vi.setSystemTime(Date.now() + 4 * minute);
     worker.loop.success();
     expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
@@ -141,24 +232,38 @@ describe("health", () => {
     const { app: maintained } = await setup({}, { runtime: draining.value, maintenance: true });
     response = await maintained.inject("/api/health/ready");
     expect(response.statusCode).toBe(200);
-    expect(response.json().checks.hermes).toEqual({ status: "unconfigured", detail: "A Hermes update is in progress" });
+    expect(response.json().checks.hermes).toEqual({
+      status: "unconfigured",
+      detail: "A Hermes update is in progress",
+    });
   });
 
   it("warns about push failures without failing readiness", async () => {
     const keys = webpush.generateVAPIDKeys();
-    const { app, worker } = await setup({ VAPID_PUBLIC_KEY: keys.publicKey, VAPID_PRIVATE_KEY: keys.privateKey, VAPID_SUBJECT: "mailto:one@example.test" });
-    expect((await app.inject("/api/health/ready")).json().checks.push).toEqual({ status: "ok", detail: "No deliveries since start" });
+    const { app, worker } = await setup({
+      VAPID_PUBLIC_KEY: keys.publicKey,
+      VAPID_PRIVATE_KEY: keys.privateKey,
+      VAPID_SUBJECT: "mailto:one@example.test",
+    });
+    expect((await app.inject("/api/health/ready")).json().checks.push).toEqual({
+      status: "ok",
+      detail: "No deliveries since start",
+    });
     worker.push.success(Date.now() - 2 * minute);
     worker.push.failure("Web Push 503: unavailable");
     const response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(200);
-    expect(response.json().checks.push).toEqual({ status: "warn", detail: "Last delivery failed 0 s ago: Web Push 503: unavailable" });
+    expect(response.json().checks.push).toEqual({
+      status: "warn",
+      detail: "Last delivery failed 0 s ago: Web Push 503: unavailable",
+    });
     worker.push.success();
     expect((await app.inject("/api/health/ready")).json().checks.push.status).toBe("ok");
   });
 
   it("checks only completed backups written by the backup tool", async () => {
-    const directory = temporary(), backups = join(directory, "backups");
+    const directory = temporary(),
+      backups = join(directory, "backups");
     const source = join(directory, "app.sqlite");
     const db = new DatabaseSync(source);
     db.exec("PRAGMA journal_mode=WAL; CREATE TABLE t(a); INSERT INTO t VALUES(1);");
@@ -166,7 +271,8 @@ describe("health", () => {
     const { app } = await setup({ APP_BACKUP_DIR: backups });
     const backup = async () => (await app.inject("/api/health/ready")).json().checks.backup;
     expect((await backup()).status).toBe("warn");
-    const leftover = "agent-interface-2026-01-01T00-00-00.000Z-12345678-1234-1234-1234-123456789abc.sqlite.partial";
+    const leftover =
+      "agent-interface-2026-01-01T00-00-00.000Z-12345678-1234-1234-1234-123456789abc.sqlite.partial";
     execFileSync(process.execPath, [".agents/tools/backup-app.mjs", source, backups]);
     expect(await backup()).toEqual({ status: "ok", detail: "Newest backup is 0 s old" });
     const [completed] = readdirSync(backups);
@@ -182,14 +288,18 @@ describe("health", () => {
     expect(await backup()).toEqual({ status: "warn", detail: "Newest backup is 37 h old" });
     expect((await app.inject("/api/health/ready")).statusCode).toBe(200);
     execFileSync(process.execPath, [".agents/tools/backup-app.mjs", source, backups]);
-    expect(readdirSync(backups).filter(file => file.includes(".partial"))).toEqual([]);
+    expect(readdirSync(backups).filter((file) => file.includes(".partial"))).toEqual([]);
     expect((await backup()).status).toBe("ok");
   });
 
   describe("free disk space", () => {
     const upgradeEnv = (workerConfig: string) => ({
-      HERMES_UPGRADE_ENABLED: "true", HERMES_UPGRADE_ADMINS: "one@example.test", HOUSEHOLD_EMAILS: "one@example.test",
-      HERMES_UPGRADE_CONFIG: workerConfig, HERMES_UPGRADE_STATE_DIR: join(dirname(workerConfig), "state"), HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
+      HERMES_UPGRADE_ENABLED: "true",
+      HERMES_UPGRADE_ADMINS: "one@example.test",
+      HOUSEHOLD_EMAILS: "one@example.test",
+      HERMES_UPGRADE_CONFIG: workerConfig,
+      HERMES_UPGRADE_STATE_DIR: join(dirname(workerConfig), "state"),
+      HERMES_UPGRADE_PYTHON: "/usr/bin/python3",
     });
     const workerConfig = (contents: string) => {
       const path = join(temporary(), "worker.json");
@@ -199,10 +309,14 @@ describe("health", () => {
 
     it("warns below the worker's own floor on its stage root's filesystem, and alerts administrators", async () => {
       const directory = temporary();
-      const config = workerConfig(JSON.stringify({ minimumFreeBytes: 30 * GiB, stageRoot: join(directory, "stages") }));
+      const config = workerConfig(
+        JSON.stringify({ minimumFreeBytes: 30 * GiB, stageRoot: join(directory, "stages") }),
+      );
       let free = 30 * GiB - 1;
       const measured: string[] = [];
-      const { app, store, worker, health } = await setup(upgradeEnv(config), { statfs: freeSpace(() => free, measured) });
+      const { app, store, worker, health } = await setup(upgradeEnv(config), {
+        statfs: freeSpace(() => free, measured),
+      });
       store.user({ id: "one", name: "One", email: "one@example.test" });
       const ready = async () => {
         worker.loop.success();
@@ -210,49 +324,101 @@ describe("health", () => {
         return [response.statusCode, response.json().checks.disk] as const;
       };
       // The worker has not created its stage root yet, so the check measures the parent it will be made in.
-      expect(await ready()).toEqual([200, { status: "warn", detail: `30 GB free at ${directory}; a Hermes update check needs 30 GB` }]);
+      expect(await ready()).toEqual([
+        200,
+        { status: "warn", detail: `30 GB free at ${directory}; a Hermes update check needs 30 GB` },
+      ]);
       expect(measured).toEqual([directory]);
       // The worker refuses only below its floor.
       free = 30 * GiB;
       expect((await ready())[1].status).toBe("ok");
       free = 31.5 * GiB;
       mkdirSync(join(directory, "stages"));
-      expect(await ready()).toEqual([200, { status: "ok", detail: `31.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB` }]);
+      expect(await ready()).toEqual([
+        200,
+        {
+          status: "ok",
+          detail: `31.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB`,
+        },
+      ]);
 
       // Low disk reaches the same administrators as push and backup problems.
       free = 9.5 * GiB;
       const start = Date.now();
-      const at = async (offset: number) => { worker.loop.success(start + offset); await health.evaluate(start + offset); };
+      const at = async (offset: number) => {
+        worker.loop.success(start + offset);
+        await health.evaluate(start + offset);
+      };
       await at(0);
       await at(10 * minute);
-      const alerts = store.db.prepare("SELECT event_id,user_id,payload FROM outbox WHERE event_id LIKE 'health:%'").all() as { event_id: string; user_id: string; payload: string }[];
-      expect(alerts.map(row => [row.event_id, row.user_id])).toEqual([[`health:disk:${start}`, "one"]]);
-      expect(JSON.parse(alerts[0].payload).body).toBe(`Free disk space needs attention. 9.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB`);
+      const alerts = store.db
+        .prepare("SELECT event_id,user_id,payload FROM outbox WHERE event_id LIKE 'health:%'")
+        .all() as { event_id: string; user_id: string; payload: string }[];
+      expect(alerts.map((row) => [row.event_id, row.user_id])).toEqual([
+        [`health:disk:${start}`, "one"],
+      ]);
+      expect(JSON.parse(alerts[0].payload).body).toBe(
+        `Free disk space needs attention. 9.5 GB free at ${join(directory, "stages")}; a Hermes update check needs 30 GB`,
+      );
     });
 
     it("warns when it cannot measure free space, without failing readiness", async () => {
-      const { app } = await setup({}, { statfs: async () => { throw Object.assign(new Error("I/O error"), { code: "EIO" }); } });
+      const { app } = await setup(
+        {},
+        {
+          statfs: async () => {
+            throw Object.assign(new Error("I/O error"), { code: "EIO" });
+          },
+        },
+      );
       const response = await app.inject("/api/health/ready");
       expect(response.statusCode).toBe(200);
-      expect(response.json().checks.disk).toEqual({ status: "warn", detail: `Cannot measure free space at ${process.cwd()}: EIO` });
+      expect(response.json().checks.disk).toEqual({
+        status: "warn",
+        detail: `Cannot measure free space at ${process.cwd()}: EIO`,
+      });
     });
 
     it.each([
-      ["is unreadable", () => { const path = workerConfig("{}"); chmodSync(path, 0o000); return path; }, "EACCES"],
+      [
+        "is unreadable",
+        () => {
+          const path = workerConfig("{}");
+          chmodSync(path, 0o000);
+          return path;
+        },
+        "EACCES",
+      ],
       ["is not JSON", () => workerConfig("{"), "it is not valid JSON"],
       ["is not an object", () => workerConfig("null"), "it is not a JSON object"],
-      ["sets a floor that is not a number", () => workerConfig(JSON.stringify({ minimumFreeBytes: "20000000000", stageRoot: "/" })), "its minimumFreeBytes is not a number"],
+      [
+        "sets a floor that is not a number",
+        () => workerConfig(JSON.stringify({ minimumFreeBytes: "20000000000", stageRoot: "/" })),
+        "its minimumFreeBytes is not a number",
+      ],
     ])("warns with the default floor when the worker's configuration %s", async (_, path, why) => {
       const { app } = await setup(upgradeEnv(path()));
-      expect((await app.inject("/api/health/ready")).json().checks.disk).toEqual({ status: "warn",
-        detail: `Cannot read the Hermes update worker's configuration (${why}), so this assumes its 20 GB default. 100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB` });
+      expect((await app.inject("/api/health/ready")).json().checks.disk).toEqual({
+        status: "warn",
+        detail: `Cannot read the Hermes update worker's configuration (${why}), so this assumes its 20 GB default. 100 GB free at ${process.cwd()}; a Hermes update check needs 20 GB`,
+      });
     });
   });
 
   it("is ready only while every metadata attempt is explicitly refused", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const v4 = (outcome: string, ms = 2): MetadataAttempt => ({ target: "169.254.169.254", family: 4, outcome, ms });
-    const v6 = (outcome: string, ms = 1): MetadataAttempt => ({ target: "fe80::a9fe:a9fe%ens3", family: 6, outcome, ms });
+    const v4 = (outcome: string, ms = 2): MetadataAttempt => ({
+      target: "169.254.169.254",
+      family: 4,
+      outcome,
+      ms,
+    });
+    const v6 = (outcome: string, ms = 1): MetadataAttempt => ({
+      target: "fe80::a9fe:a9fe%ens3",
+      family: 6,
+      outcome,
+      ms,
+    });
     let attempts: MetadataAttempt[] = [v4("connected")];
     const probe = vi.fn<MetadataProbe>(async () => attempts);
     const { app, worker } = await setup({}, { metadataProbe: probe });
@@ -265,18 +431,32 @@ describe("health", () => {
     let response = await app.inject("/api/health/ready");
     expect(response.statusCode).toBe(503);
     expect(response.json().checks.metadataFloor).toEqual({
-      status: "fail", detail: "Connected: 169.254.169.254 port 80 connected in 2 ms. Install the host's metadata egress floor; see docs/Hosting.md",
+      status: "fail",
+      detail:
+        "Connected: 169.254.169.254 port 80 connected in 2 ms. Install the host's metadata egress floor; see docs/Hosting.md",
     });
     // Requests between readiness ticks reuse the last probe.
     attempts = [v4("ECONNREFUSED"), v6("ECONNREFUSED")];
     expect((await app.inject("/api/health/ready")).statusCode).toBe(503);
     expect(probe).toHaveBeenCalledTimes(1);
-    expect(await ready()).toEqual([200, { status: "ok", detail: "Blocked: 169.254.169.254 ECONNREFUSED; fe80::a9fe:a9fe%ens3 ECONNREFUSED" }]);
+    expect(await ready()).toEqual([
+      200,
+      {
+        status: "ok",
+        detail: "Blocked: 169.254.169.254 ECONNREFUSED; fe80::a9fe:a9fe%ens3 ECONNREFUSED",
+      },
+    ]);
     // A link-local interface with no route sends nothing; IPv4 without a route proves nothing.
     attempts = [v4("ECONNREFUSED"), v6("ENETUNREACH")];
     expect((await ready())[0]).toBe(200);
     // Silence, a slow ICMP error, a full file table or a missing route are not proof of the floor.
-    for (const unproven of [[v4("timeout", 1500)], [v4("EHOSTUNREACH", 3000)], [v4("EMFILE", 0)], [v4("ENETUNREACH")], [v4("ECONNREFUSED"), v6("timeout", 1500)]]) {
+    for (const unproven of [
+      [v4("timeout", 1500)],
+      [v4("EHOSTUNREACH", 3000)],
+      [v4("EMFILE", 0)],
+      [v4("ENETUNREACH")],
+      [v4("ECONNREFUSED"), v6("timeout", 1500)],
+    ]) {
       attempts = unproven;
       const [status, check] = await ready();
       expect(status).toBe(503);
@@ -288,13 +468,13 @@ describe("health", () => {
   });
 
   it("probes metadata with bounded TCP connects on IPv4 and each link-local interface", async () => {
-    const server = createServer(socket => socket.destroy());
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const server = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
     try {
       expect((await attemptConnect("127.0.0.1", port)).outcome).toBe("connected");
     } finally {
-      await new Promise(resolve => server.close(resolve));
+      await new Promise((resolve) => server.close(resolve));
     }
     const refused = await attemptConnect("127.0.0.1", port);
     expect(refused.outcome).toBe("ECONNREFUSED");
@@ -308,11 +488,24 @@ describe("health", () => {
     vi.useRealTimers();
     expect(silent).toEqual({ outcome: "timeout", ms: 50 });
     expect(metadataVerdict(silent)).toBe("inconclusive");
-    const exhausted = await attemptConnect("127.0.0.1", port, { open: () => { throw Object.assign(new Error("too many open files"), { code: "EMFILE" }); } });
+    const exhausted = await attemptConnect("127.0.0.1", port, {
+      open: () => {
+        throw Object.assign(new Error("too many open files"), { code: "EMFILE" });
+      },
+    });
     expect([exhausted.outcome, metadataVerdict(exhausted)]).toEqual(["EMFILE", "inconclusive"]);
-    const address = (name: string, family: "IPv4" | "IPv6", internal = false) => ({ address: name, family, internal, netmask: "", mac: "", cidr: null, scopeid: 2 }) as never;
-    expect(metadataTargets({ lo: [address("::1", "IPv6", true)], ens3: [address("10.0.0.5", "IPv4"), address("fe80::f816:3eff:fe00:1", "IPv6")], wg0: [address("10.8.0.1", "IPv4")] }))
-      .toEqual([{ target: "169.254.169.254", family: 4 }, { target: "fe80::a9fe:a9fe%ens3", family: 6 }]);
+    const address = (name: string, family: "IPv4" | "IPv6", internal = false) =>
+      ({ address: name, family, internal, netmask: "", mac: "", cidr: null, scopeid: 2 }) as never;
+    expect(
+      metadataTargets({
+        lo: [address("::1", "IPv6", true)],
+        ens3: [address("10.0.0.5", "IPv4"), address("fe80::f816:3eff:fe00:1", "IPv6")],
+        wg0: [address("10.8.0.1", "IPv4")],
+      }),
+    ).toEqual([
+      { target: "169.254.169.254", family: 4 },
+      { target: "fe80::a9fe:a9fe%ens3", family: 6 },
+    ]);
     // Only production runs on the host that has the floor; tests and development never probe a real address.
     expect(defaultMetadataProbe({ production: true } as Config)).toBe(probeMetadata);
     expect(defaultMetadataProbe({ production: false } as Config)).toBeUndefined();
@@ -322,40 +515,74 @@ describe("health", () => {
     const hermes = runtime();
     hermes.status = { connected: false, detail: "Hermes is unreachable." };
     const lines: string[] = [];
-    const { store, worker, health } = await setup({ HOUSEHOLD_EMAILS: "one@example.test,two@example.test", HERMES_INTEGRATION_ADMINS: "one@example.test", LOG_LEVEL: "info" }, { runtime: hermes.value, lines });
+    const { store, worker, health } = await setup(
+      {
+        HOUSEHOLD_EMAILS: "one@example.test,two@example.test",
+        HERMES_INTEGRATION_ADMINS: "one@example.test",
+        LOG_LEVEL: "info",
+      },
+      { runtime: hermes.value, lines },
+    );
     for (const id of ["one", "two"]) store.user({ id, name: id, email: `${id}@example.test` });
-    const alerts = () => store.db.prepare("SELECT event_id,user_id,payload FROM outbox WHERE event_id LIKE 'health:%' ORDER BY rowid").all() as { event_id: string; user_id: string; payload: string }[];
+    const alerts = () =>
+      store.db
+        .prepare(
+          "SELECT event_id,user_id,payload FROM outbox WHERE event_id LIKE 'health:%' ORDER BY rowid",
+        )
+        .all() as { event_id: string; user_id: string; payload: string }[];
     const start = Date.now();
-    const at = async (offset: number) => { worker.loop.success(start + offset); await health.evaluate(start + offset); };
+    const at = async (offset: number) => {
+      worker.loop.success(start + offset);
+      await health.evaluate(start + offset);
+    };
     await at(0);
     await at(9 * minute);
     expect(alerts()).toEqual([]);
     await at(10 * minute);
     await at(11 * minute);
-    expect(alerts().map(row => [row.event_id, row.user_id])).toEqual([[`health:hermes:${start}`, "one"]]);
+    expect(alerts().map((row) => [row.event_id, row.user_id])).toEqual([
+      [`health:hermes:${start}`, "one"],
+    ]);
     expect(JSON.parse(alerts()[0].payload)).toMatchObject({
-      title: "WildBots needs attention", url: "/", kind: "failed",
-      body: expect.stringMatching(/^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./),
+      title: "WildBots needs attention",
+      url: "/",
+      kind: "failed",
+      body: expect.stringMatching(
+        /^The Hermes connection needs attention\. Disconnected for 10 min: Hermes is unreachable\./,
+      ),
     });
     // A maintenance window cannot close an existing incident.
-    const maintenance = vi.spyOn(health['deps'], 'maintenance').mockReturnValue(true);
+    const maintenance = vi.spyOn(health["deps"], "maintenance").mockReturnValue(true);
     await at(12 * minute);
     expect(alerts()).toHaveLength(1);
     maintenance.mockReturnValue(false);
     hermes.status = { connected: true };
     await at(12 * minute);
     await at(13 * minute);
-    expect(alerts().map(row => row.event_id)).toEqual([`health:hermes:${start}`, `health:hermes:${start}:recovered`]);
-    expect(JSON.parse(alerts()[1].payload)).toMatchObject({ title: "WildBots recovered", body: "The Hermes connection is working again.", kind: "failed" });
-    const messages = lines.map(line => JSON.parse(line).msg);
-    expect(messages.filter(message => message.startsWith("Readiness check"))).toEqual([
-      "Readiness check degraded", "Readiness check degraded for 10 minutes; alerting administrators", "Readiness check recovered",
+    expect(alerts().map((row) => row.event_id)).toEqual([
+      `health:hermes:${start}`,
+      `health:hermes:${start}:recovered`,
+    ]);
+    expect(JSON.parse(alerts()[1].payload)).toMatchObject({
+      title: "WildBots recovered",
+      body: "The Hermes connection is working again.",
+      kind: "failed",
+    });
+    const messages = lines.map((line) => JSON.parse(line).msg);
+    expect(messages.filter((message) => message.startsWith("Readiness check"))).toEqual([
+      "Readiness check degraded",
+      "Readiness check degraded for 10 minutes; alerting administrators",
+      "Readiness check recovered",
     ]);
     // A later outage is a new incident with its own alert.
     hermes.status = { connected: false };
     await at(20 * minute);
     await at(30 * minute);
-    expect(alerts().map(row => row.event_id).at(-1)).toBe(`health:hermes:${start + 20 * minute}`);
+    expect(
+      alerts()
+        .map((row) => row.event_id)
+        .at(-1),
+    ).toBe(`health:hermes:${start + 20 * minute}`);
   });
 });
 
@@ -363,49 +590,95 @@ describe("logging", () => {
   it("logs a repeated server error once, then a count every ten minutes, without secrets", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const lines: string[] = [];
-    const failing = runtime({ listBots: async () => { throw new Error("Hermes offline"); } });
+    const failing = runtime({
+      listBots: async () => {
+        throw new Error("Hermes offline");
+      },
+    });
     const { app } = await setup({ LOG_LEVEL: "info" }, { runtime: failing.value, lines });
     const headers = await login(app);
     for (let request = 0; request < 3; request++)
-      expect((await app.inject({ url: "/api/bots?ticket=secret-ticket", headers })).statusCode).toBe(502);
+      expect(
+        (await app.inject({ url: "/api/bots?ticket=secret-ticket", headers })).statusCode,
+      ).toBe(502);
     expect((await app.inject({ url: "/api/bootstrap" })).statusCode).toBe(401);
     // The 401 is the request log's line; the 502s are the error handler's, and the request log adds none of its own.
-    expect(lines.map(line => JSON.parse(line))).toEqual([
-      expect.objectContaining({ level: 50, msg: "Request failed", route: "GET /api/bots", status: 502, error: expect.objectContaining({ type: "Error", message: "Hermes offline" }) }),
-      expect.objectContaining({ level: 40, msg: "Request answered with an error status", route: "/api/bootstrap", status: 401 }),
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({
+        level: 50,
+        msg: "Request failed",
+        route: "GET /api/bots",
+        status: 502,
+        error: expect.objectContaining({ type: "Error", message: "Hermes offline" }),
+      }),
+      expect.objectContaining({
+        level: 40,
+        msg: "Request answered with an error status",
+        route: "/api/bootstrap",
+        status: 401,
+      }),
     ]);
     vi.setSystemTime(Date.now() + 10 * minute);
     await app.inject({ url: "/api/bots", headers });
-    expect(JSON.parse(lines[2])).toMatchObject({ msg: "Request failure repeated", route: "GET /api/bots", repeats: 3 });
+    expect(JSON.parse(lines[2])).toMatchObject({
+      msg: "Request failure repeated",
+      route: "GET /api/bots",
+      repeats: 3,
+    });
     expect(lines).toHaveLength(3);
     const output = lines.join("");
-    for (const secret of ["secret-ticket", headers.cookie.split("=")[1], headers["x-csrf-token"]]) expect(output).not.toContain(secret);
+    for (const secret of ["secret-ticket", headers.cookie.split("=")[1], headers["x-csrf-token"]])
+      expect(output).not.toContain(secret);
   });
 
   it("never logs extra properties or causes from upstream errors", async () => {
     const lines: string[] = [];
-    const leaky = Object.assign(new Error("Hermes rejected the request", { cause: new Error("private cause text") }),
-      { rpcCode: -32000, rpcMessage: "private request text" });
-    const failing = runtime({ listBots: async () => { throw leaky; } });
+    const leaky = Object.assign(
+      new Error("Hermes rejected the request", { cause: new Error("private cause text") }),
+      { rpcCode: -32000, rpcMessage: "private request text" },
+    );
+    const failing = runtime({
+      listBots: async () => {
+        throw leaky;
+      },
+    });
     const { app } = await setup({ LOG_LEVEL: "info" }, { runtime: failing.value, lines });
     const headers = await login(app);
     expect((await app.inject({ url: "/api/bots", headers })).statusCode).toBe(502);
-    expect(JSON.parse(lines[0]).error).toMatchObject({ type: "Error", message: "Hermes rejected the request" });
-    for (const secret of ["private request text", "private cause text", "-32000"]) expect(lines.join("")).not.toContain(secret);
+    expect(JSON.parse(lines[0]).error).toMatchObject({
+      type: "Error",
+      message: "Hermes rejected the request",
+    });
+    for (const secret of ["private request text", "private cause text", "-32000"])
+      expect(lines.join("")).not.toContain(secret);
   });
 
   it("logs a failing operation when it starts, every ten minutes while it lasts, and when it recovers", () => {
     const messages: string[] = [];
-    const record = (...args: unknown[]) => { messages.push(String(args[1])); };
-    const tracker = new FailureTracker({ info: record, warn: record, error: record }, "Hermes event discovery");
+    const record = (...args: unknown[]) => {
+      messages.push(String(args[1]));
+    };
+    const tracker = new FailureTracker(
+      { info: record, warn: record, error: record },
+      "Hermes event discovery",
+    );
     tracker.failure(new Error("offline"), 0);
     tracker.failure(new Error("offline"), 9 * minute);
     tracker.failure(new Error("offline"), 10 * minute);
     tracker.failure(new Error("offline"), 15 * minute);
     tracker.success(16 * minute);
     tracker.success(17 * minute);
-    expect(messages).toEqual(["Hermes event discovery failed", "Hermes event discovery is still failing", "Hermes event discovery recovered"]);
-    expect(tracker).toMatchObject({ consecutiveFailures: 0, failingSince: undefined, lastError: "offline", lastSuccessAt: 17 * minute });
+    expect(messages).toEqual([
+      "Hermes event discovery failed",
+      "Hermes event discovery is still failing",
+      "Hermes event discovery recovered",
+    ]);
+    expect(tracker).toMatchObject({
+      consecutiveFailures: 0,
+      failingSince: undefined,
+      lastError: "offline",
+      lastSuccessAt: 17 * minute,
+    });
   });
 
   it("stays silent unless a log level is configured", async () => {
@@ -421,14 +694,25 @@ describe("ETags", () => {
     const first = await app.inject({ url: "/api/bots/shared/draft", headers });
     const etag = first.headers.etag as string;
     expect(etag).toMatch(/^W\/"[A-Za-z0-9_-]{22}"$/);
-    const unchanged = await app.inject({ url: "/api/bots/shared/draft", headers: { ...headers, "if-none-match": etag } });
+    const unchanged = await app.inject({
+      url: "/api/bots/shared/draft",
+      headers: { ...headers, "if-none-match": etag },
+    });
     expect(unchanged.statusCode).toBe(304);
     expect(unchanged.body).toBe("");
     expect(unchanged.headers).toMatchObject({ etag, "cache-control": "no-store" });
-    const saved = await app.inject({ method: "PUT", url: "/api/bots/shared/draft", headers, payload: { text: "New draft", attachments: [] } });
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/bots/shared/draft",
+      headers,
+      payload: { text: "New draft", attachments: [] },
+    });
     expect(saved.statusCode).toBe(200);
     expect(saved.headers.etag).toBeUndefined();
-    const changed = await app.inject({ url: "/api/bots/shared/draft", headers: { ...headers, "if-none-match": etag } });
+    const changed = await app.inject({
+      url: "/api/bots/shared/draft",
+      headers: { ...headers, "if-none-match": etag },
+    });
     expect(changed.statusCode).toBe(200);
     expect(changed.json().text).toBe("New draft");
     expect(changed.headers.etag).not.toBe(etag);
@@ -447,19 +731,41 @@ describe("ETags", () => {
     let reads = 0;
     const conversation: Runtime["conversation"] = async (botId, options) => {
       reads++;
-      Object.assign(options!.timing!, reads === 1 ? { shared: false, hermes: 42.25, addon: { wait: 0, activate: 30.5, total: 40 }, caches: { decorated: 0, pieces: 12, reused: 11 } } : { shared: true });
-      return { botId, messages: [{ id: "m1", role: "assistant", text: "Hello" }], activity: { state: "idle" }, approvals: [], attention: [], files: [] };
+      Object.assign(
+        options!.timing!,
+        reads === 1
+          ? {
+              shared: false,
+              hermes: 42.25,
+              addon: { wait: 0, activate: 30.5, total: 40 },
+              caches: { decorated: 0, pieces: 12, reused: 11 },
+            }
+          : { shared: true },
+      );
+      return {
+        botId,
+        messages: [{ id: "m1", role: "assistant", text: "Hello" }],
+        activity: { state: "idle" },
+        approvals: [],
+        attention: [],
+        files: [],
+      };
     };
     const { app } = await setup({}, { runtime: runtime({ conversation }).value });
     const headers = await login(app);
     const first = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
     expect(first.statusCode).toBe(200);
-    expect(first.headers["server-timing"]).toMatch(/^cache;desc=miss, hermes;dur=42\.3, addon-wait;dur=0, addon-activate;dur=30\.5, addon-total;dur=40, addon-cache;desc="decorated=0 pieces=12 reused=11", transit;dur=2\.3, runtime;dur=[\d.]+, node;dur=[\d.]+, total;dur=[\d.]+$/);
+    expect(first.headers["server-timing"]).toMatch(
+      /^cache;desc=miss, hermes;dur=42\.3, addon-wait;dur=0, addon-activate;dur=30\.5, addon-total;dur=40, addon-cache;desc="decorated=0 pieces=12 reused=11", transit;dur=2\.3, runtime;dur=[\d.]+, node;dur=[\d.]+, total;dur=[\d.]+$/,
+    );
     expect(first.body).not.toMatch(/timing|dur=|hermes/i);
     const second = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers });
     expect(second.headers["server-timing"]).toMatch(/^cache;desc=shared, runtime;dur=/);
     expect([second.body, second.headers.etag]).toEqual([first.body, first.headers.etag]);
-    const unchanged = await app.inject({ url: "/api/bots/shared/conversation?turns=20", headers: { ...headers, "if-none-match": first.headers.etag as string } });
+    const unchanged = await app.inject({
+      url: "/api/bots/shared/conversation?turns=20",
+      headers: { ...headers, "if-none-match": first.headers.etag as string },
+    });
     expect(unchanged.statusCode).toBe(304);
     expect(unchanged.headers["server-timing"]).toMatch(/^cache;desc=shared, /);
   });

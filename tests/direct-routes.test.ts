@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHash, createPrivateKey, generateKeyPairSync, randomBytes, X509Certificate } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  generateKeyPairSync,
+  randomBytes,
+  X509Certificate,
+} from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { request } from "node:https";
 import { connect, type TLSSocket } from "node:tls";
@@ -9,21 +15,37 @@ import type { NetworkInterfaceInfo } from "node:os";
 import { createApp } from "../src/server/app.js";
 import { hash } from "../src/server/auth.js";
 import { loadConfig } from "../src/server/config.js";
-import { directAddresses, loadDirectIdentity, type DirectAddress } from "../src/server/direct-routes.js";
+import {
+  directAddresses,
+  loadDirectIdentity,
+  type DirectAddress,
+} from "../src/server/direct-routes.js";
 import { requireSecondLoopback, SECOND_LOOPBACK } from "./helpers/loopback.js";
 import { fakeRuntime, localLogin } from "./helpers/server.js";
 
 const directories: string[] = [];
 const closers: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
-  await Promise.all(closers.splice(0).map(close => close()));
-  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  await Promise.all(closers.splice(0).map((close) => close()));
+  for (const directory of directories.splice(0))
+    rmSync(directory, { recursive: true, force: true });
 });
-const scratch = () => { const directory = mkdtempSync(join(tmpdir(), "direct-routes-")); directories.push(directory); return directory; };
+const scratch = () => {
+  const directory = mkdtempSync(join(tmpdir(), "direct-routes-"));
+  directories.push(directory);
+  return directory;
+};
 
-const nic = (address: string, extra: Partial<NetworkInterfaceInfo> = {}): NetworkInterfaceInfo => ({
-  address, family: address.includes(":") ? "IPv6" : "IPv4", internal: false, netmask: "", mac: "00:00:00:00:00:00", cidr: null, ...extra,
-} as NetworkInterfaceInfo);
+const nic = (address: string, extra: Partial<NetworkInterfaceInfo> = {}): NetworkInterfaceInfo =>
+  ({
+    address,
+    family: address.includes(":") ? "IPv6" : "IPv4",
+    internal: false,
+    netmask: "",
+    mac: "00:00:00:00:00:00",
+    cidr: null,
+    ...extra,
+  }) as NetworkInterfaceInfo;
 
 describe("direct route addresses", () => {
   it("advertises Tailscale and household LAN addresses and nothing a phone could not reach", () => {
@@ -54,8 +76,11 @@ describe("direct route addresses", () => {
       { kind: "lan", address: "172.20.1.1" },
     ]);
     // A VPS turns on only its tailnet: its provider's private network is no household's LAN.
-    expect(directAddresses(interfaces, ["tailnet"]).map(entry => entry.kind)).toEqual(["tailnet", "tailnet"]);
-    expect(directAddresses(interfaces, ["lan"]).every(entry => entry.kind === "lan")).toBe(true);
+    expect(directAddresses(interfaces, ["tailnet"]).map((entry) => entry.kind)).toEqual([
+      "tailnet",
+      "tailnet",
+    ]);
+    expect(directAddresses(interfaces, ["lan"]).every((entry) => entry.kind === "lan")).toBe(true);
   });
 });
 
@@ -66,7 +91,9 @@ describe("direct route identity", () => {
     const certificate = new X509Certificate(first.cert);
     expect(certificate.verify(certificate.publicKey)).toBe(true);
     expect(certificate.publicKey.asymmetricKeyDetails?.namedCurve).toBe("prime256v1");
-    expect(first.fingerprint).toBe(createHash("sha256").update(certificate.raw).digest("base64url"));
+    expect(first.fingerprint).toBe(
+      createHash("sha256").update(certificate.raw).digest("base64url"),
+    );
     expect(statSync(join(directory, "key.pem")).mode & 0o777).toBe(0o600);
     expect(loadDirectIdentity(directory).fingerprint).toBe(first.fingerprint);
   });
@@ -74,12 +101,21 @@ describe("direct route identity", () => {
   it("replaces a key that does not match its certificate instead of serving a broken pair", () => {
     const directory = scratch();
     const first = loadDirectIdentity(directory);
-    writeFileSync(join(directory, "key.pem"), generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({ type: "pkcs8", format: "pem" }));
+    writeFileSync(
+      join(directory, "key.pem"),
+      generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey.export({
+        type: "pkcs8",
+        format: "pem",
+      }),
+    );
     const warn = vi.fn();
     const second = loadDirectIdentity(directory, { warn });
     expect(second.fingerprint).not.toBe(first.fingerprint);
-    expect(new X509Certificate(readFileSync(join(directory, "cert.pem"))).checkPrivateKey(
-      createPrivateKey(readFileSync(join(directory, "key.pem"))))).toBe(true);
+    expect(
+      new X509Certificate(readFileSync(join(directory, "cert.pem"))).checkPrivateKey(
+        createPrivateKey(readFileSync(join(directory, "key.pem"))),
+      ),
+    ).toBe(true);
     expect(warn).toHaveBeenCalledWith({ directory }, expect.stringContaining("do not match"));
   });
 
@@ -96,7 +132,10 @@ describe("direct route config", () => {
   it("is off unless asked for, and keeps its key beside the database by default", () => {
     expect(loadConfig(base).directRoutes).toBeUndefined();
     expect(loadConfig({ ...base, DIRECT_ROUTES: "tailnet, lan,tailnet" }).directRoutes).toEqual({
-      kinds: ["tailnet", "lan"], port: 3443, stateDirectory: "/srv/wildbots/data/direct-tls" });
+      kinds: ["tailnet", "lan"],
+      port: 3443,
+      stateDirectory: "/srv/wildbots/data/direct-tls",
+    });
   });
   it.each([
     [{ DIRECT_ROUTES: "lan,wifi" }, "DIRECT_ROUTES must list"],
@@ -111,31 +150,71 @@ describe("direct route config", () => {
 });
 
 describe("direct route listener", () => {
-  async function installation(addresses: DirectAddress[] = [{ kind: "lan", address: "127.0.0.1" }]) {
+  async function installation(
+    addresses: DirectAddress[] = [{ kind: "lan", address: "127.0.0.1" }],
+  ) {
     let current = addresses;
-    const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", DIRECT_ROUTES: "lan,tailnet", DIRECT_TLS_DIR: scratch() });
+    const config = loadConfig({
+      LOCAL_DEV_AUTH: "true",
+      APP_DATABASE: ":memory:",
+      DIRECT_ROUTES: "lan,tailnet",
+      DIRECT_TLS_DIR: scratch(),
+    });
     config.directRoutes!.port = 0;
     const runtime = fakeRuntime({ close: async () => {} });
-    const result = await createApp(config, runtime, { background: false, directAddresses: () => current });
+    const result = await createApp(config, runtime, {
+      background: false,
+      directAddresses: () => current,
+    });
     closers.push(() => result.app.close());
     await result.app.ready();
     await result.directRoutes!.start(3_600_000);
     const token = randomBytes(32).toString("base64url");
     result.store.user({ id: "local-one", name: "One", email: "one@localhost.invalid" });
     result.store.nativeSession(hash(token), "local-one", Date.now() + 600_000);
-    return { ...result, token, setAddresses: (next: DirectAddress[]) => { current = next; } };
+    return {
+      ...result,
+      token,
+      setAddresses: (next: DirectAddress[]) => {
+        current = next;
+      },
+    };
   }
 
   /** A request to a direct route that trusts only the advertised certificate, as the app does. */
-  function call(url: string, path: string, headers: Record<string, string>, pin: string, method = "GET", body?: string) {
-    return new Promise<{ status: number; body: { code?: string; routes?: unknown[]; expiresAt?: string } }>((resolve, reject) => {
-      const req = request(`${url}${path}`, { method, headers: body === undefined ? headers : { ...headers, "content-type": "application/json" }, rejectUnauthorized: false }, res => {
-        const presented = (res.socket as TLSSocket).getPeerCertificate().raw;
-        if (createHash("sha256").update(presented).digest("base64url") !== pin) return reject(new Error("Pin mismatch"));
-        let text = "";
-        res.on("data", chunk => { text += chunk; });
-        res.on("end", () => resolve({ status: res.statusCode!, body: text ? JSON.parse(text) : {} }));
-      });
+  function call(
+    url: string,
+    path: string,
+    headers: Record<string, string>,
+    pin: string,
+    method = "GET",
+    body?: string,
+  ) {
+    return new Promise<{
+      status: number;
+      body: { code?: string; routes?: unknown[]; expiresAt?: string };
+    }>((resolve, reject) => {
+      const req = request(
+        `${url}${path}`,
+        {
+          method,
+          headers:
+            body === undefined ? headers : { ...headers, "content-type": "application/json" },
+          rejectUnauthorized: false,
+        },
+        (res) => {
+          const presented = (res.socket as TLSSocket).getPeerCertificate().raw;
+          if (createHash("sha256").update(presented).digest("base64url") !== pin)
+            return reject(new Error("Pin mismatch"));
+          let text = "";
+          res.on("data", (chunk) => {
+            text += chunk;
+          });
+          res.on("end", () =>
+            resolve({ status: res.statusCode!, body: text ? JSON.parse(text) : {} }),
+          );
+        },
+      );
       req.on("error", reject);
       req.end(body);
     });
@@ -144,45 +223,90 @@ describe("direct route listener", () => {
   it("serves the signed-in native API with the certificate it advertises", async () => {
     const { directRoutes, token } = await installation();
     const [route] = directRoutes!.routes();
-    expect(route).toMatchObject({ kind: "lan", url: expect.stringMatching(/^https:\/\/127\.0\.0\.1:\d+$/) });
-    const result = await call(route.url, "/api/native/routes", { authorization: `Bearer ${token}` }, route.certificateSha256);
+    expect(route).toMatchObject({
+      kind: "lan",
+      url: expect.stringMatching(/^https:\/\/127\.0\.0\.1:\d+$/),
+    });
+    const result = await call(
+      route.url,
+      "/api/native/routes",
+      { authorization: `Bearer ${token}` },
+      route.certificateSha256,
+    );
     expect(result.status).toBe(200);
     expect(result.body.routes).toEqual([route]);
   });
 
   it("lists LAN routes before tailnet routes and none when it is off", async () => {
     await requireSecondLoopback();
-    const { directRoutes, setAddresses } = await installation([{ kind: "tailnet", address: "127.0.0.1" }, { kind: "lan", address: SECOND_LOOPBACK }]);
-    expect(directRoutes!.routes().map(route => route.kind)).toEqual(["lan", "tailnet"]);
+    const { directRoutes, setAddresses } = await installation([
+      { kind: "tailnet", address: "127.0.0.1" },
+      { kind: "lan", address: SECOND_LOOPBACK },
+    ]);
+    expect(directRoutes!.routes().map((route) => route.kind)).toEqual(["lan", "tailnet"]);
     setAddresses([]);
-    const off = await createApp(loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }), fakeRuntime({ close: async () => {} }), { background: false });
+    const off = await createApp(
+      loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:" }),
+      fakeRuntime({ close: async () => {} }),
+      { background: false },
+    );
     closers.push(() => off.app.close());
     const headers = await localLogin(off.app, "http://127.0.0.1:3000");
-    expect((await off.app.inject({ url: "/api/native/routes", headers })).json()).toEqual({ routes: [] });
+    expect((await off.app.inject({ url: "/api/native/routes", headers })).json()).toEqual({
+      routes: [],
+    });
   });
 
   const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
   it.each([
     ["no credential", "/api/native/routes", () => ({})],
     ["a malformed bearer", "/api/native/routes", () => ({ authorization: "Bearer short" })],
-    ["a browser cookie beside the bearer", "/api/native/routes", (token: string) => ({ ...bearer(token), cookie: "session=abc" })],
-    ["a browser Origin beside the bearer", "/api/native/routes", (token: string) => ({ ...bearer(token), origin: "https://192.168.1.20:3443" })],
+    [
+      "a browser cookie beside the bearer",
+      "/api/native/routes",
+      (token: string) => ({ ...bearer(token), cookie: "session=abc" }),
+    ],
+    [
+      "a browser Origin beside the bearer",
+      "/api/native/routes",
+      (token: string) => ({ ...bearer(token), origin: "https://192.168.1.20:3443" }),
+    ],
     ["a web page", "/", bearer],
     ["the native viewer page", "/native/computer", bearer],
     ["an unknown API path", "/api/nothing-here", bearer],
     ["the native sign-in exchange", "/api/auth/native/exchange", bearer, "POST"],
     ["the sign-in configuration", "/api/auth/config", bearer],
-  ] as [string, string, (token: string) => Record<string, string>, string?][])("refuses %s", async (_reason, path, headers, method = "GET") => {
-    const { directRoutes, token } = await installation();
-    const [route] = directRoutes!.routes();
-    const result = await call(route.url, path, headers(token), route.certificateSha256, method, method === "POST" ? "{}" : undefined);
-    expect(result).toEqual({ status: 403, body: expect.objectContaining({ code: "direct_route_refused" }) });
-  });
+  ] as [string, string, (token: string) => Record<string, string>, string?][])(
+    "refuses %s",
+    async (_reason, path, headers, method = "GET") => {
+      const { directRoutes, token } = await installation();
+      const [route] = directRoutes!.routes();
+      const result = await call(
+        route.url,
+        path,
+        headers(token),
+        route.certificateSha256,
+        method,
+        method === "POST" ? "{}" : undefined,
+      );
+      expect(result).toEqual({
+        status: 403,
+        body: expect.objectContaining({ code: "direct_route_refused" }),
+      });
+    },
+  );
 
   it("lets a signed-in app renew its session there", async () => {
     const { directRoutes, token } = await installation();
     const [route] = directRoutes!.routes();
-    const result = await call(route.url, "/api/auth/native/renew", bearer(token), route.certificateSha256, "POST", "{}");
+    const result = await call(
+      route.url,
+      "/api/auth/native/renew",
+      bearer(token),
+      route.certificateSha256,
+      "POST",
+      "{}",
+    );
     expect(result.status).toBe(200);
     expect(Date.parse(result.body.expiresAt!)).toBeGreaterThan(Date.now());
   });
@@ -190,8 +314,16 @@ describe("direct route listener", () => {
   it("leaves a well-formed but unknown bearer to sign-in, which reports the session gone", async () => {
     const { directRoutes } = await installation();
     const [route] = directRoutes!.routes();
-    const result = await call(route.url, "/api/native/routes", { authorization: `Bearer ${randomBytes(32).toString("base64url")}` }, route.certificateSha256);
-    expect(result).toEqual({ status: 401, body: expect.objectContaining({ code: "session_expired" }) });
+    const result = await call(
+      route.url,
+      "/api/native/routes",
+      { authorization: `Bearer ${randomBytes(32).toString("base64url")}` },
+      route.certificateSha256,
+    );
+    expect(result).toEqual({
+      status: 401,
+      body: expect.objectContaining({ code: "session_expired" }),
+    });
   });
 
   it("does not change the primary origin, where browsers sign in as before", async () => {
@@ -207,25 +339,43 @@ describe("direct route listener", () => {
     setAddresses([{ kind: "tailnet", address: SECOND_LOOPBACK }]);
     await directRoutes!.reconcile();
     const routes = directRoutes!.routes();
-    expect(routes).toEqual([expect.objectContaining({ kind: "tailnet", url: expect.stringContaining(`https://${SECOND_LOOPBACK}:`) })]);
+    expect(routes).toEqual([
+      expect.objectContaining({
+        kind: "tailnet",
+        url: expect.stringContaining(`https://${SECOND_LOOPBACK}:`),
+      }),
+    ]);
     const port = Number(new URL(old.url).port);
-    await expect(new Promise((resolve, reject) => {
-      const socket = connect({ host: "127.0.0.1", port, rejectUnauthorized: false }, () => { socket.end(); resolve("open"); });
-      socket.on("error", reject);
-    })).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    await expect(
+      new Promise((resolve, reject) => {
+        const socket = connect({ host: "127.0.0.1", port, rejectUnauthorized: false }, () => {
+          socket.end();
+          resolve("open");
+        });
+        socket.on("error", reject);
+      }),
+    ).rejects.toMatchObject({ code: "ECONNREFUSED" });
   });
 
   it("stops rechecking addresses when it closes while starting", async () => {
-    const config = loadConfig({ LOCAL_DEV_AUTH: "true", APP_DATABASE: ":memory:", DIRECT_ROUTES: "lan", DIRECT_TLS_DIR: scratch() });
+    const config = loadConfig({
+      LOCAL_DEV_AUTH: "true",
+      APP_DATABASE: ":memory:",
+      DIRECT_ROUTES: "lan",
+      DIRECT_TLS_DIR: scratch(),
+    });
     config.directRoutes!.port = 0;
     const discover = vi.fn((): DirectAddress[] => [{ kind: "lan", address: "127.0.0.1" }]);
-    const { app, directRoutes } = await createApp(config, fakeRuntime({ close: async () => {} }), { background: false, directAddresses: discover });
+    const { app, directRoutes } = await createApp(config, fakeRuntime({ close: async () => {} }), {
+      background: false,
+      directAddresses: discover,
+    });
     closers.push(() => app.close());
     const starting = directRoutes!.start(5);
     await directRoutes!.close();
     await starting;
     const calls = discover.mock.calls.length;
-    await new Promise(resolve => setTimeout(resolve, 40));
+    await new Promise((resolve) => setTimeout(resolve, 40));
     expect(discover.mock.calls.length).toBe(calls);
     expect(directRoutes!.routes()).toEqual([]);
   });
@@ -234,9 +384,15 @@ describe("direct route listener", () => {
     const { directRoutes, setAddresses, app } = await installation();
     const warn = vi.spyOn(app.log, "warn");
     // TEST-NET-3 is assigned to no adapter, so listening there fails.
-    setAddresses([{ kind: "lan", address: "127.0.0.1" }, { kind: "tailnet", address: "203.0.113.7" }]);
+    setAddresses([
+      { kind: "lan", address: "127.0.0.1" },
+      { kind: "tailnet", address: "203.0.113.7" },
+    ]);
     await directRoutes!.reconcile();
-    expect(directRoutes!.routes().map(route => route.kind)).toEqual(["lan"]);
-    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ address: "203.0.113.7" }), "Direct route could not listen");
+    expect(directRoutes!.routes().map((route) => route.kind)).toEqual(["lan"]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ address: "203.0.113.7" }),
+      "Direct route could not listen",
+    );
   });
 });

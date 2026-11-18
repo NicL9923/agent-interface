@@ -23,14 +23,14 @@ parts that are the product should be ours.
 
 WildBots owns the system of record. Harnesses only run turns.
 
-| Owned by WildBots | Run by a harness |
-| --- | --- |
-| Bots, their instructions, harness, model, speed and reasoning settings | The model call and tool loop |
-| The visible transcript, paged and searchable, and its file references | Context management inside a harness session |
-| Memory and skills, with learning and cleaning | Streaming, and steering or interruption where the harness supports it |
-| Routines, goals, tasks and triggers, and the scheduler | Tool execution |
-| Questions, secret requests, receipts, notifications, drafts, read positions, presence | |
-| The MCP tools every harness gets | |
+| Owned by WildBots                                                                     | Run by a harness                                                      |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Bots, their instructions, harness, model, speed and reasoning settings                | The model call and tool loop                                          |
+| The visible transcript, paged and searchable, and its file references                 | Context management inside a harness session                           |
+| Memory and skills, with learning and cleaning                                         | Streaming, and steering or interruption where the harness supports it |
+| Routines, goals, tasks and triggers, and the scheduler                                | Tool execution                                                        |
+| Questions, secret requests, receipts, notifications, drafts, read positions, presence |                                                                       |
+| The MCP tools every harness gets                                                      |                                                                       |
 
 The app API stays. Clients gain a harness choice and drop Hermes-only screens: Hermes updates, the Discord status
 card and ChatGPT banked resets in Usage. The server's `Runtime` interface (`src/shared/types.ts`) gets one adapter
@@ -44,12 +44,12 @@ Integrations follow T3 Code's approach: each harness's own CLI or SDK in a child
 structured protocol, never terminal output. T3 Code is MIT licensed, so we may reuse its code and replay fixtures
 with attribution.
 
-| Harness | Integration | Full permissions | Steering |
-| --- | --- | --- | --- |
+| Harness     | Integration                                  | Full permissions                                                                                                | Steering                         |
+| ----------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------- |
 | Claude Code | `@anthropic-ai/claude-agent-sdk`, TypeScript | `permissionMode: "bypassPermissions"` with `allowDangerouslySkipPermissions: true`; it refuses to start as root | Messages queue for the next turn |
-| Codex | `codex app-server`, JSON-RPC over stdio | Sandbox `danger-full-access`, approval `never` | Native |
-| Grok | Grok Build, `grok agent stdio` over ACP | Permission requests approved automatically | Messages queue for the next turn |
-| OpenCode | `@opencode-ai/sdk` against `opencode serve` | Permissions set to allow | Messages queue for the next turn |
+| Codex       | `codex app-server`, JSON-RPC over stdio      | Sandbox `danger-full-access`, approval `never`                                                                  | Native                           |
+| Grok        | Grok Build, `grok agent stdio` over ACP      | Permission requests approved automatically                                                                      | Messages queue for the next turn |
+| OpenCode    | `@opencode-ai/sdk` against `opencode serve`  | Permissions set to allow                                                                                        | Messages queue for the next turn |
 
 The steering column is the expected result, confirmed by each adapter's capability flags in step 3. Without native
 steering, a message sent during a turn waits and starts the next turn, and the app says so.
@@ -79,16 +79,16 @@ belong to one person: each vendor's terms say you may not make your account avai
 shared assistant, or another member's personal one, cannot run on Nicolas's subscription. Pay-per-token API keys
 can: the developer agreements read allow the key owner to serve his own users.
 
-| Credential | Nicolas's own assistants | Shared or other members' assistants |
-| --- | --- | --- |
-| Claude Agent SDK on Nicolas's Pro, Max or Ultra login | Allowed with conditions | Not allowed |
-| Claude Agent SDK on a Console API key | Allowed | Allowed |
-| Codex app-server on Nicolas's ChatGPT login | Pending OpenAI; API key until then | Not allowed |
-| Codex on an OpenAI Platform API key | Allowed | Allowed |
-| Grok Build on Nicolas's X subscription | Allowed | Not allowed; a member may use their own xAI team-plan seat |
-| Grok Build on an xAI API key | Allowed | Allowed in principle; xAI's Enterprise Terms are unread, so read them first |
-| OpenCode with an OpenRouter key | Allowed | Allowed |
-| OpenCode with a Claude plan login | Not allowed | Not allowed |
+| Credential                                            | Nicolas's own assistants           | Shared or other members' assistants                                         |
+| ----------------------------------------------------- | ---------------------------------- | --------------------------------------------------------------------------- |
+| Claude Agent SDK on Nicolas's Pro, Max or Ultra login | Allowed with conditions            | Not allowed                                                                 |
+| Claude Agent SDK on a Console API key                 | Allowed                            | Allowed                                                                     |
+| Codex app-server on Nicolas's ChatGPT login           | Pending OpenAI; API key until then | Not allowed                                                                 |
+| Codex on an OpenAI Platform API key                   | Allowed                            | Allowed                                                                     |
+| Grok Build on Nicolas's X subscription                | Allowed                            | Not allowed; a member may use their own xAI team-plan seat                  |
+| Grok Build on an xAI API key                          | Allowed                            | Allowed in principle; xAI's Enterprise Terms are unread, so read them first |
+| OpenCode with an OpenRouter key                       | Allowed                            | Allowed                                                                     |
+| OpenCode with a Claude plan login                     | Not allowed                        | Not allowed                                                                 |
 
 - Anthropic says plan limits "assume ordinary, individual usage of Claude Code and the Agent SDK" and bars routing
   "requests through Free, Pro, Max, or Ultra plan credentials on behalf of their users"
@@ -153,24 +153,24 @@ and disabled in Hermes in one step, so it can never run on both.
 
 ## Hermes features that move
 
-| Feature | Where it goes |
-| --- | --- |
-| Questions with options and multi-select | Each harness's ask-the-user call, such as the Claude SDK's question tool and Codex's user-input request, maps to the existing question cards |
-| Secret, login and computer hand-off requests | The same request cards, served by WildBots through MCP |
-| Attachments: images, PDFs and text, up to 10 files of 20 MB | Passed in each harness's own input format; files a harness cannot read go as paths it can open |
-| Speed and reasoning settings, model warnings that need confirmation | Mapped per harness where it supports them, hidden where it does not |
-| Shared computer and browser | The computer host moves into the WildBots server; the browser is an MCP server every harness gets |
-| WildBots for Mac tools (`wildbots_mac` in `src/hermes/mac.py`) | An MCP server in WildBots that relays to the owner's linked Mac through the existing Mac link (`src/server/mac-link.ts`), offered only to that owner's personal bots; the Mac app and its permissions are unchanged |
-| Google Workspace and other OAuth tools, per-bot MCP servers in Access | MCP servers with tokens held by WildBots |
-| Vault | WildBots, exposed through MCP; redaction applied to transcripts and logs |
-| Voice: Talk, read-aloud and transcription | WildBots's own voice service; the realtime plugin moves out of Hermes |
-| Image generation | An MCP tool |
-| Hand-offs between bots | WildBots, as messages between bots' chats through MCP |
-| Group chats | WildBots's own coordinator: a lead assistant, rounds, mentions and threads |
-| Per-bot tool and skill toggles | The bot's MCP tool list and skills folder |
-| Account usage | Each harness's own usage reporting, where it has one |
-| Hermes updates screen | Pinned harness versions with an upgrade check; harnesses never update themselves, so Grok runs with `--no-auto-update` |
-| Discord and other gateways | Dropped; the web and iOS apps are the clients |
+| Feature                                                               | Where it goes                                                                                                                                                                                                       |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Questions with options and multi-select                               | Each harness's ask-the-user call, such as the Claude SDK's question tool and Codex's user-input request, maps to the existing question cards                                                                        |
+| Secret, login and computer hand-off requests                          | The same request cards, served by WildBots through MCP                                                                                                                                                              |
+| Attachments: images, PDFs and text, up to 10 files of 20 MB           | Passed in each harness's own input format; files a harness cannot read go as paths it can open                                                                                                                      |
+| Speed and reasoning settings, model warnings that need confirmation   | Mapped per harness where it supports them, hidden where it does not                                                                                                                                                 |
+| Shared computer and browser                                           | The computer host moves into the WildBots server; the browser is an MCP server every harness gets                                                                                                                   |
+| WildBots for Mac tools (`wildbots_mac` in `src/hermes/mac.py`)        | An MCP server in WildBots that relays to the owner's linked Mac through the existing Mac link (`src/server/mac-link.ts`), offered only to that owner's personal bots; the Mac app and its permissions are unchanged |
+| Google Workspace and other OAuth tools, per-bot MCP servers in Access | MCP servers with tokens held by WildBots                                                                                                                                                                            |
+| Vault                                                                 | WildBots, exposed through MCP; redaction applied to transcripts and logs                                                                                                                                            |
+| Voice: Talk, read-aloud and transcription                             | WildBots's own voice service; the realtime plugin moves out of Hermes                                                                                                                                               |
+| Image generation                                                      | An MCP tool                                                                                                                                                                                                         |
+| Hand-offs between bots                                                | WildBots, as messages between bots' chats through MCP                                                                                                                                                               |
+| Group chats                                                           | WildBots's own coordinator: a lead assistant, rounds, mentions and threads                                                                                                                                          |
+| Per-bot tool and skill toggles                                        | The bot's MCP tool list and skills folder                                                                                                                                                                           |
+| Account usage                                                         | Each harness's own usage reporting, where it has one                                                                                                                                                                |
+| Hermes updates screen                                                 | Pinned harness versions with an upgrade check; harnesses never update themselves, so Grok runs with `--no-auto-update`                                                                                              |
+| Discord and other gateways                                            | Dropped; the web and iOS apps are the clients                                                                                                                                                                       |
 
 ## Steps
 
@@ -201,6 +201,7 @@ Each step ships on its own and is accepted before the next.
    - A made-up assistant ID is never admitted, even when the roster is empty or every assistant is disconnected.
 
    Group chats, the shared computer, delegation limits and Talk sessions stay on the default runtime until step 6.
+
 3. **Other harnesses.** Claude Agent SDK, OpenCode with OpenRouter and Grok over ACP, each with capability flags and
    recorded replay fixtures for its protocol.
 4. **Memory and skills service,** with learning, cleaning and the review UI.

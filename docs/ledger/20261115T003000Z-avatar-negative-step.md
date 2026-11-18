@@ -24,8 +24,8 @@ is left for its own change.
 
 ## Red runs
 
-| Break | Test | Failure |
-| --- | --- | --- |
+| Break                                              | Test                                                                        | Failure  |
+| -------------------------------------------------- | --------------------------------------------------------------------------- | -------- |
 | `approach` computes `k` from a negative step again | `leaves the face where it is for a frame step of no time or a negative one` | 1 failed |
 
 The file was restored and `tests/avatar-motion.test.ts` passed 39 of 39.

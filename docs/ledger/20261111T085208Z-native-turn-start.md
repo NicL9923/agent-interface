@@ -107,25 +107,25 @@ the row's (tested); the compute-host dispatch (`_submit_prompt_to_compute_host`)
 
 Each line broken by hand, the stream and runtime files run (141 tests), the file restored.
 
-| Broken line | Result |
-| --- | --- |
-| `startedRow` ignored (the words only) | 12 failed: the four gap cases in three modes |
-| `nativeStartedAt` without `Math.trunc` | 1 failed |
-| `nativeStartedAt` without `Number.isFinite` | 2 failed |
-| `nativeStartedAt` without `> 0` | 2 failed |
-| `at < startedAt` as `at <= startedAt` | 5 failed |
-| an untimed message continues instead of falling back | 2 failed |
-| the scan reaches below `from` | 1 failed |
-| nothing saved as `-1` instead of `messages.length` | 12 failed |
-| `promptSaved` by the words only | 4 failed |
-| `promptSaved` true without a start | 1 failed |
-| `promptSaved` true with a start | 4 failed |
-| `inflightMessage` without the start in `savedPrompt` | 3 failed |
-| `inflightMessage` without the start in its last turn | 12 failed |
-| `turnRows` without the start | 5 failed (`hermes-mapping.ts`) / 4 failed (`hermes.ts` call) |
-| the snapshot without `started_at` | 3 failed |
-| the snapshot's rows without the start | 3 failed |
-| the snapshot's rows with the live reply left in | 3 failed (the steered-like-prompt case, after a read with unsaved text) |
+| Broken line                                          | Result                                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------------------------- |
+| `startedRow` ignored (the words only)                | 12 failed: the four gap cases in three modes                            |
+| `nativeStartedAt` without `Math.trunc`               | 1 failed                                                                |
+| `nativeStartedAt` without `Number.isFinite`          | 2 failed                                                                |
+| `nativeStartedAt` without `> 0`                      | 2 failed                                                                |
+| `at < startedAt` as `at <= startedAt`                | 5 failed                                                                |
+| an untimed message continues instead of falling back | 2 failed                                                                |
+| the scan reaches below `from`                        | 1 failed                                                                |
+| nothing saved as `-1` instead of `messages.length`   | 12 failed                                                               |
+| `promptSaved` by the words only                      | 4 failed                                                                |
+| `promptSaved` true without a start                   | 1 failed                                                                |
+| `promptSaved` true with a start                      | 4 failed                                                                |
+| `inflightMessage` without the start in `savedPrompt` | 3 failed                                                                |
+| `inflightMessage` without the start in its last turn | 12 failed                                                               |
+| `turnRows` without the start                         | 5 failed (`hermes-mapping.ts`) / 4 failed (`hermes.ts` call)            |
+| the snapshot without `started_at`                    | 3 failed                                                                |
+| the snapshot's rows without the start                | 3 failed                                                                |
+| the snapshot's rows with the live reply left in      | 3 failed (the steered-like-prompt case, after a read with unsaved text) |
 
 A first version of that last case survived this break: the live reply among the rows made the start fall back to the
 words, which a later pass over the rows hid. The case now reads with unsaved text and keeps growing after it.
@@ -144,16 +144,16 @@ And more." where "And more." is expected.
 
 The Python file, each break killed (`python3 .agents/tools/mutate-py.py --batch`, `--baseline`, `scripts/run-python-tests.py`):
 
-| Mutation | Result |
-| --- | --- |
-| the wrapper never keeps the row's time | failed: `test_a_queued_prompt_starts_where_its_row_was_saved_before_hermes_started_the_turn` |
-| the staged row's `content` is not checked against the turn's text | failed: `test_a_staged_row_that_is_not_this_turns_prompt_or_has_no_usable_time_is_ignored` |
-| the earlier time is not taken | failed: `test_a_queued_prompt_starts_where_its_row_was_saved_before_hermes_started_the_turn` |
-| the row's time is taken even when later (`min` dropped) | failed: `test_an_ordinary_prompt_whose_row_is_saved_after_the_turn_started_keeps_the_start` |
-| the row's prompt is not compared with the turn's | failed: `test_a_row_kept_for_another_prompt_does_not_start_a_turn_of_different_words` |
-| the row's time is not checked as usable | failed: `test_a_staged_row_that_is_not_this_turns_prompt_or_has_no_usable_time_is_ignored` |
-| the kept row is not cleared for the next turn | failed: `test_a_turn_never_carries_the_row_of_the_turn_before` |
-| the row's prompt is kept unstripped | failed: `test_the_row_is_read_for_the_text_the_turn_runs_whatever_its_spacing` |
+| Mutation                                                          | Result                                                                                       |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| the wrapper never keeps the row's time                            | failed: `test_a_queued_prompt_starts_where_its_row_was_saved_before_hermes_started_the_turn` |
+| the staged row's `content` is not checked against the turn's text | failed: `test_a_staged_row_that_is_not_this_turns_prompt_or_has_no_usable_time_is_ignored`   |
+| the earlier time is not taken                                     | failed: `test_a_queued_prompt_starts_where_its_row_was_saved_before_hermes_started_the_turn` |
+| the row's time is taken even when later (`min` dropped)           | failed: `test_an_ordinary_prompt_whose_row_is_saved_after_the_turn_started_keeps_the_start`  |
+| the row's prompt is not compared with the turn's                  | failed: `test_a_row_kept_for_another_prompt_does_not_start_a_turn_of_different_words`        |
+| the row's time is not checked as usable                           | failed: `test_a_staged_row_that_is_not_this_turns_prompt_or_has_no_usable_time_is_ignored`   |
+| the kept row is not cleared for the next turn                     | failed: `test_a_turn_never_carries_the_row_of_the_turn_before`                               |
+| the row's prompt is kept unstripped                               | failed: `test_the_row_is_read_for_the_text_the_turn_runs_whatever_its_spacing`               |
 
 A first version checked the time as usable twice (when keeping it and when reading it); either check alone hid a break of the
 other, so the second was removed.
@@ -162,15 +162,15 @@ other, so the second was removed.
 
 The first version, before the follow-up: `.agents/tools/check-all --py always` on the committed tree over `origin/main` at `7d794ef`:
 
-| Check | Result | Queued | Run | Counts |
-| --- | --- | --- | --- | --- |
-| typecheck | pass | - | 0.6s | - |
-| lint | pass | - | 0.2s | - |
-| ruff | pass | - | 0.0s | - |
-| test | pass | 16m00s | 15.0s | 208 files, 3804 tests |
-| build | pass | - | 2.7s | 894 modules |
-| e2e | pass | 15.3s | 1m58s | 55 tests |
-| py | pass | - | 5m05s | 47 files |
+| Check     | Result | Queued | Run   | Counts                |
+| --------- | ------ | ------ | ----- | --------------------- |
+| typecheck | pass   | -      | 0.6s  | -                     |
+| lint      | pass   | -      | 0.2s  | -                     |
+| ruff      | pass   | -      | 0.0s  | -                     |
+| test      | pass   | 16m00s | 15.0s | 208 files, 3804 tests |
+| build     | pass   | -      | 2.7s  | 894 modules           |
+| e2e       | pass   | 15.3s  | 1m58s | 55 tests              |
+| py        | pass   | -      | 5m05s | 47 files              |
 
 The queue time is other worktrees' suites holding the machine's one heavy slot. An earlier run on that version before the
 base moved from `884031a` to `7d794ef` (two commits that touch no file here) passed the same seven checks.
@@ -178,15 +178,15 @@ base moved from `884031a` to `7d794ef` (two commits that touch no file here) pas
 The follow-up, `.agents/tools/check-all --py always` on `fab63e9c` (the code, tests and `docs/native-api.md`), after merging
 `origin/main` at `fe4026f0`:
 
-| Check | Result | Queued | Run | Counts |
-| --- | --- | --- | --- | --- |
-| typecheck | pass | - | 0.9s | - |
-| lint | pass | - | 0.2s | - |
-| ruff | pass | - | 0.0s | - |
-| test | pass | 3m45s | 16.8s | 209 files, 3821 tests |
-| build | pass | - | 1.7s | 894 modules |
-| e2e | pass | 2m01s | 1m58s | 55 tests |
-| py | pass | - | 5m18s | 48 files |
+| Check     | Result | Queued | Run   | Counts                |
+| --------- | ------ | ------ | ----- | --------------------- |
+| typecheck | pass   | -      | 0.9s  | -                     |
+| lint      | pass   | -      | 0.2s  | -                     |
+| ruff      | pass   | -      | 0.0s  | -                     |
+| test      | pass   | 3m45s  | 16.8s | 209 files, 3821 tests |
+| build     | pass   | -      | 1.7s  | 894 modules           |
+| e2e       | pass   | 2m01s  | 1m58s | 55 tests              |
+| py        | pass   | -      | 5m18s | 48 files              |
 
 ## Not done
 

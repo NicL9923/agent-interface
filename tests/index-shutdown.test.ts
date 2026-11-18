@@ -24,11 +24,18 @@ beforeEach(() => {
   });
   vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
 });
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 it("closes once across signals and clears the deadline after clean shutdown", async () => {
   let finish!: () => void;
-  server.close.mockReturnValue(new Promise<void>(resolve => { finish = resolve; }));
+  server.close.mockReturnValue(
+    new Promise<void>((resolve) => {
+      finish = resolve;
+    }),
+  );
   await import("../src/server/index.js");
   signals.get("SIGINT")!();
   signals.get("SIGTERM")!();

@@ -8,17 +8,23 @@ import { reportClientError } from "./error-reports";
  */
 export class RootBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
-  static getDerivedStateFromError() { return { failed: true }; }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
   componentDidCatch(error: unknown, info: ErrorInfo) {
     reportClientError("render", error, info.componentStack ?? undefined);
   }
   render() {
     if (!this.state.failed) return this.props.children;
-    return <main className="welcome" role="alert">
-      <p className="eyebrow">WildBots</p>
-      <h1>Something went wrong</h1>
-      <p>Reload to try again. Your message drafts are kept.</p>
-      <Button className="primary" onClick={() => location.reload()}>Reload</Button>
-    </main>;
+    return (
+      <main className="welcome" role="alert">
+        <p className="eyebrow">WildBots</p>
+        <h1>Something went wrong</h1>
+        <p>Reload to try again. Your message drafts are kept.</p>
+        <Button className="primary" onClick={() => location.reload()}>
+          Reload
+        </Button>
+      </main>
+    );
   }
 }
