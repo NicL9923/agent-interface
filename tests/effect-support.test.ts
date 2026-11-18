@@ -21,7 +21,7 @@ describe('effect support', () => {
     const first = jobs.run('a', work, () => calls < 2);
     expect(jobs.run('a', work)).toBe(first);
     const drain = jobs.drain();
-    jobs.run('b', Effect.void);
+    void jobs.run('b', Effect.void);
     release();
     await drain;
     expect(calls).toBe(2);
@@ -30,7 +30,7 @@ describe('effect support', () => {
   it('interrupts a job without reporting interruption as failure', async () => {
     const failures: unknown[] = [];
     const jobs = makeJobs<string>(error => failures.push(error));
-    jobs.run('a', Effect.never);
+    void jobs.run('a', Effect.never);
     await jobs.interrupt('a');
     expect(jobs.size).toBe(0);
     expect(failures).toEqual([]);

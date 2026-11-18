@@ -14,25 +14,25 @@ function check(value) {
   return spawnSync(process.execPath, ["--import", "tsx", ".agents/tools/check-work-triggers-fixture.ts", path], { encoding: "utf8" });
 }
 after(() => rmSync(directory, { recursive: true, force: true }));
-  test("accepts the fixture and long hashes without treating substrings as tokens", () => {
+  void test("accepts the fixture and long hashes without treating substrings as tokens", () => {
     assert.equal(check(fixture).status, 0);
   });
-  test("rejects an altered route revision", () => {
+  void test("rejects an altered route revision", () => {
     const changed = structuredClone(fixture);
     changed.workFixture.triggerRoutes[2].description += " changed";
     assert.notEqual(check(changed).status, 0);
   });
-  test("rejects a state item that differs from its transport route", () => {
+  void test("rejects a state item that differs from its transport route", () => {
     const changed = structuredClone(fixture);
     changed.workStates.readonly.triggers.items[0].revision = "0".repeat(64);
     assert.notEqual(check(changed).status, 0);
   });
-  test("rejects a whole secret-shaped token", () => {
+  void test("rejects a whole secret-shaped token", () => {
     const changed = structuredClone(fixture);
     changed.workFixture.unexpected = "b".repeat(43);
     assert.notEqual(check(changed).status, 0);
   });
-  test("rejects another orphan", () => {
+  void test("rejects another orphan", () => {
     const changed = structuredClone(fixture);
     changed.routines = changed.routines.filter(routine => routine.id !== "routine-weekly");
     assert.notEqual(check(changed).status, 0);

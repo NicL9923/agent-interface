@@ -39,7 +39,9 @@ export function useEarlierFiles(botId: string, window: { sessionId?: string; mes
     const before = window!.messages[0]?.id;
     request("GET /bots/:id/files", { params: { id: botId }, query: { before } })
       .then(value => { entry.messages = value.messages; }, () => { entry.failed = true; })
-      .then(() => { for (const listener of listeners) listener(); });
+      .then(() => { for (const listener of listeners) listener(); })
+      // A listener that throws is a bug; report it as the page would an uncaught error instead of losing it.
+      .catch(error => reportError(error));
   }, [key, retry]);
   const entry = key ? cache.get(key) : undefined;
   return { needed, messages: needed ? entry?.messages : none, loading: !!key && !entry?.messages && !entry?.failed, failed: !!entry?.failed };

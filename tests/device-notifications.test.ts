@@ -7,7 +7,7 @@ import { useDeviceNotifications } from "../src/components/use-device-notificatio
 import { NotificationSettings, NotificationOnboarding } from "../src/components/DeviceNotifications";
 import { mountRoot, stubMatchMedia } from "./ui-harness";
 import { deviceIdPattern } from "../src/shared/device-activity";
-import { mockOf } from "./helpers/mock-of";
+import { mockOf, type AnyMock } from "./helpers/mock-of";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(
   { write: vi.fn(), ApiError: (await original<typeof import("../src/client-api")>()).ApiError }));
@@ -16,8 +16,8 @@ let notifications: ReturnType<typeof useDeviceNotifications>;
 let subscription: PushSubscription | null;
 let registered: boolean;
 let permission: NotificationPermission;
-let requestPermission: ReturnType<typeof vi.fn>;
-let unsubscribe: ReturnType<typeof vi.fn>;
+let requestPermission: AnyMock;
+let unsubscribe: AnyMock;
 let subscribe: ReturnType<typeof vi.fn>;
 let worker: ServiceWorkerRegistration;
 const endpoint = "https://push.example.invalid/device";

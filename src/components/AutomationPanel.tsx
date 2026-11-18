@@ -10,6 +10,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { NativeSelect } from "./ui/native-select";
 import { SettingsConfirmation } from "./SettingsConfirmation";
+import { fire } from "../app/fire";
 import "./automation.css";
 
 function useAutomation(botId: string) {
@@ -163,30 +164,30 @@ function GoalSection({ control, intentKey }: { control: Controls; intentKey?: st
         {state.interruptionPending && <div id={`${goalId}-interruption`} className="automation-confirm automation-goal-callout"><p>Review the interrupted work in this assistant's conversation before resuming.</p><label className="automation-check"><input type="checkbox" checked={reviewed} onChange={event => setReviewed(event.target.checked)} />I've reviewed the interrupted work in this conversation.</label></div>}
         {receipt?.status === "uncertain" && <div className="automation-confirm automation-goal-attempt"><p>The previous attempt may have started work. Refresh status and review this assistant's conversation before starting again.</p>
           <label className="automation-check"><input type="checkbox" checked={reviewedNewAttempt} onChange={event => setReviewedNewAttempt(event.target.checked)} />I've reviewed the conversation and want to start a new attempt.</label>
-          <Button className={!control.disabled && !editing && !clear && reviewedNewAttempt && goal.status === "paused" ? "primary" : undefined} disabled={control.disabled || editing || clear || !reviewedNewAttempt || goal.status !== "paused"} onClick={async () => {
+          <Button className={!control.disabled && !editing && !clear && reviewedNewAttempt && goal.status === "paused" ? "primary" : undefined} disabled={control.disabled || editing || clear || !reviewedNewAttempt || goal.status !== "paused"} onClick={fire(async () => {
             const requestId = crypto.randomUUID(); setResumeId(requestId);
             if (intentKey) try { localStorage.setItem(intentKey, requestId); } catch {}
             const result = await control.change(() => request("POST /bots/:id/automation/goal/resume", { params: { id: control.botId }, body: { requestId, reviewedInterruption: true } }), freshIntent);
             setReviewedNewAttempt(false);
             if (result && result.goals.resume?.status !== "uncertain") { freshIntent(); setReviewed(false); }
-          }}>Start a new attempt</Button>
+          })}>Start a new attempt</Button>
         </div>}
         <div className="actions automation-goal-actions">
-          {goal.status !== "done" && <Button className={!resumeDisabled ? "primary" : undefined} disabled={resumeDisabled} aria-describedby={descriptionIds || undefined} onClick={async () => {
+          {goal.status !== "done" && <Button className={!resumeDisabled ? "primary" : undefined} disabled={resumeDisabled} aria-describedby={descriptionIds || undefined} onClick={fire(async () => {
             const active = goal.status === "active";
             if (!active && intentKey) try { localStorage.setItem(intentKey, resumeId); } catch {}
             const result = await control.change(() => active
               ? request("POST /bots/:id/automation/goal/pause", { params: { id: control.botId }, body: {} })
               : request("POST /bots/:id/automation/goal/resume", { params: { id: control.botId }, body: { requestId: resumeId, ...(state.interruptionPending && reviewed ? { reviewedInterruption: true } : {}) } }), active ? undefined : freshIntent);
             if (!active && result?.goals.resume?.status !== "uncertain" && result) { freshIntent(); setReviewed(false); }
-          }}>{goal.status === "active" ? "Pause goal" : "Resume goal"}</Button>}
+          })}>{goal.status === "active" ? "Pause goal" : "Resume goal"}</Button>}
           <Button ref={replaceOpener} disabled={control.disabled || editing || clear} onClick={() => { setTitle(goal.title); setMaxTurns(goal.maxTurns); setReplacementConfirmed(false); setEditing(true); }}>Replace goal…</Button>
           <Button ref={clearOpener} className="danger automation-goal-clear" disabled={control.disabled || editing || clear} onClick={() => setClear(true)}>Clear goal…</Button>
         </div>
-        {clear && <div className="automation-confirm"><p>Clear this standing goal? The conversation stays saved.</p><div className="actions"><Button autoFocus onClick={() => { setClear(false); setReturnFocus("clear"); }}>Keep goal</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/goal/clear", { params: { id: control.botId }, body: {} }))) { setClear(false); setReturnFocus("clear"); } }}>Clear goal</Button></div></div>}
+        {clear && <div className="automation-confirm"><p>Clear this standing goal? The conversation stays saved.</p><div className="actions"><Button autoFocus onClick={() => { setClear(false); setReturnFocus("clear"); }}>Keep goal</Button><Button className="danger" disabled={control.disabled} onClick={fire(async () => { if (await control.change(() => request("POST /bots/:id/automation/goal/clear", { params: { id: control.botId }, body: {} }))) { setClear(false); setReturnFocus("clear"); } })}>Clear goal</Button></div></div>}
       </div> : <p className="muted">No standing goal. A goal keeps working across turns until it finishes, pauses, or reaches its budget.</p>}
       {!editing && !goal && <Button ref={setOpener} className="primary" onClick={() => setEditing(true)} disabled={control.disabled}>Set a goal</Button>}
-      {editing && <form className="automation-form" onSubmit={async event => { event.preventDefault(); if (goal && !replacementConfirmed) return; if (await control.change(() => request("PUT /bots/:id/automation/goal", { params: { id: control.botId }, body: { title, maxTurns } }))) { setEditing(false); setReturnFocus(goal ? "replace" : "set"); freshIntent(); setReviewed(false); setReviewedNewAttempt(false); } }}>
+      {editing && <form className="automation-form" onSubmit={fire(async event => { event.preventDefault(); if (goal && !replacementConfirmed) return; if (await control.change(() => request("PUT /bots/:id/automation/goal", { params: { id: control.botId }, body: { title, maxTurns } }))) { setEditing(false); setReturnFocus(goal ? "replace" : "set"); freshIntent(); setReviewed(false); setReviewedNewAttempt(false); } })}>
         <label>Objective<textarea autoFocus required maxLength={10000} rows={3} placeholder="What should the assistant work toward?" value={title} onChange={event => setTitle(event.target.value)} disabled={control.disabled} /></label>
         <label>Continuation turn budget<Input required type="number" min={1} max={1000} value={maxTurns} onChange={event => setMaxTurns(Number(event.target.value))} disabled={control.disabled} /></label>
         <p className="muted">Saves paused. Resume it when you're ready for the assistant to work.</p>
@@ -286,7 +287,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
         <h4><button type="button" className="automation-task-group-toggle" aria-expanded={!collapsed.includes(status)} onClick={() => setCollapsed(previous => previous.includes(status) ? previous.filter(item => item !== status) : [...previous, status])}>{taskStatusLabel(status)} · {state.items.filter(task => task.status === status).length}</button></h4>
         {!collapsed.includes(status) && state.items.filter(task => task.status === status).map(task => <TaskCard key={task.id} task={task} control={control} bots={bots} open={openTask === task.id} feedback={feedback[task.id]} runTask={runTask} summaryRef={node => { summaries.current[task.id] = node; }} onToggle={() => { if (openTask === task.id) { setOpenTask(null); setFeedback(previous => { const next = { ...previous }; delete next[task.id]; return next; }); setAnnouncement(""); } else { if (openTask) setFeedback(previous => { const next = { ...previous }; delete next[openTask]; return next; }); setAnnouncement(""); setOpenTask(task.id); } }} />)}
       </div>)}
-      {!creating ? <Button ref={createOpener} disabled={control.disabled} onClick={() => setCreating(true)}>New task</Button> : <form className="automation-form" aria-labelledby="new-task-heading" onSubmit={async event => {
+      {!creating ? <Button ref={createOpener} disabled={control.disabled} onClick={() => setCreating(true)}>New task</Button> : <form className="automation-form" aria-labelledby="new-task-heading" onSubmit={fire(async event => {
         event.preventDefault();
         const snapshot = { knownIds: state.items.map(item => item.id), title: draft.title.trim(), requestId: draft.requestId, refreshCount: control.refreshCount, unconfirmed: false };
         setAttempt(snapshot); setCreateFeedback("");
@@ -303,7 +304,7 @@ function TaskSection({ control, bots, botId }: { control: Controls; bots: Bot[];
           if (created) revealCreated(created, `Created. "${created.title}" stays blocked until you start it.`);
           else { setAnnouncement("Created in Hermes. Refresh status to review the task."); setRestoreCreateFocus(true); }
         } finally { setSubmitting(false); }
-      }}>
+      })}>
         <h4 id="new-task-heading">New task</h4>
         <label>Task title<Input autoFocus required maxLength={500} value={draft.title} disabled={control.disabled || !!likely} onChange={event => editDraft({ title: event.target.value })} /></label>
         <label>Instructions (optional)<textarea rows={3} maxLength={20000} value={draft.body} disabled={control.disabled || !!likely} onChange={event => editDraft({ body: event.target.value })} /></label>
@@ -366,7 +367,7 @@ function TaskCard({ task, control, bots, open, feedback, runTask, summaryRef, on
       <p className="automation-task-meta"><span className="automation-task-status">{taskStatusLabel(task.status)}</span><span>{name}</span>{task.priority !== 0 && <span>Priority {task.priority}</span>}</p>
       <p className="preserve-lines">{task.body || "No additional instructions."}</p>
       {task.blockedReason && <div className="automation-task-callout"><strong>Blocked</strong><p>{task.blockedReason}</p></div>}
-      {!running && (editing ? <form className="automation-form" aria-labelledby={`edit-task-${task.id}`} onSubmit={async event => { event.preventDefault(); setSubmitting(true); try { if (await runTask(task, () => request("PATCH /bots/:id/automation/tasks/:taskId", { params, body: { title, body, priority, assignee: assignee || null } }), false, true)) setEditing(false); } finally { setSubmitting(false); } }}>
+      {!running && (editing ? <form className="automation-form" aria-labelledby={`edit-task-${task.id}`} onSubmit={fire(async event => { event.preventDefault(); setSubmitting(true); try { if (await runTask(task, () => request("PATCH /bots/:id/automation/tasks/:taskId", { params, body: { title, body, priority, assignee: assignee || null } }), false, true)) setEditing(false); } finally { setSubmitting(false); } })}>
         <h4 id={`edit-task-${task.id}`}>Edit task</h4>
         <label>Task title<Input autoFocus required value={title} maxLength={500} disabled={control.disabled} onChange={event => setTitle(event.target.value)} /></label>
         <label>Instructions (optional)<textarea value={body} maxLength={20000} rows={3} disabled={control.disabled} onChange={event => setBody(event.target.value)} /></label>
@@ -378,7 +379,7 @@ function TaskCard({ task, control, bots, open, feedback, runTask, summaryRef, on
       <section className="automation-task-dependencies"><h5>Dependencies</h5>
         {!task.dependencies.length && <p className="muted">None.</p>}
         {task.dependencies.map(id => { const parent = control.value!.tasks.items.find(item => item.id === id); return <div className="automation-dependency" key={id}><span>{parent ? `${parent.title} · ${taskStatusLabel(parent.status)}` : id}</span>{!running && <Button aria-label={`Remove dependency on ${parent?.title || id}`} disabled={control.disabled} onClick={() => void runTask(task, () => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: id }, body: { remove: true } }))}>Remove dependency</Button>}</div>; })}
-        {!running && <div className="automation-task-add"><label>Wait for task<NativeSelect value={dependency} disabled={control.disabled} onChange={event => setDependency(event.target.value)}><option value="">Choose a task</option>{control.value!.tasks.items.filter(item => item.id !== task.id && !task.dependencies.includes(item.id)).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</NativeSelect></label><Button disabled={control.disabled || !dependency} onClick={async () => { if (await runTask(task, () => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: dependency }, body: { remove: false } }))) setDependency(""); }}>Add dependency</Button></div>}
+        {!running && <div className="automation-task-add"><label>Wait for task<NativeSelect value={dependency} disabled={control.disabled} onChange={event => setDependency(event.target.value)}><option value="">Choose a task</option>{control.value!.tasks.items.filter(item => item.id !== task.id && !task.dependencies.includes(item.id)).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</NativeSelect></label><Button disabled={control.disabled || !dependency} onClick={fire(async () => { if (await runTask(task, () => request("PUT /bots/:id/automation/tasks/:taskId/dependencies/:dependencyId", { params: { ...params, dependencyId: dependency }, body: { remove: false } }))) setDependency(""); })}>Add dependency</Button></div>}
         {feedback?.source === "dependency" && resultNotice}
       </section>
       <section className="automation-task-move"><h5>Move task</h5>
@@ -473,7 +474,7 @@ function TriggerSection({ control, botId, shared }: { control: Controls; botId: 
     try { await navigator.clipboard.writeText(value); setCopyResult(previous => ({ ...previous, [kind]: "Copied." })); if (kind === "secret") setSeen(true); }
     catch { setCopyResult(previous => ({ ...previous, [kind]: "Couldn't copy. Try again." })); }
   };
-  const form = (edit?: EventSubscription) => <form className="automation-form" aria-labelledby={`${id}-heading`} onSubmit={async event => {
+  const form = (edit?: EventSubscription) => <form className="automation-form" aria-labelledby={`${id}-heading`} onSubmit={fire(async event => {
     event.preventDefault();
     if (control.disabled || likely || staleMessage) return;
     const payload = reviewed && attempt ? attempt.payload : { ...draft, events: events.split(",").map(value => value.trim()).filter(Boolean) };
@@ -505,7 +506,7 @@ function TriggerSection({ control, botId, shared }: { control: Controls; botId: 
     }
     setAttempt(undefined);
     if (edit) { setEditing(undefined); publish(edit.id, "Saved in Hermes."); }
-  }}>
+  })}>
     <h4 id={`${id}-heading`}>{edit ? "Edit trigger" : "New event trigger"}</h4>
     {edit ? <p>Trigger ID: {edit.id}</p> : <div className="automation-trigger-field"><label htmlFor={`${id}-trigger-id`}>Trigger ID</label><Input id={`${id}-trigger-id`} autoFocus required pattern="[a-z0-9][a-z0-9_-]{0,79}" maxLength={80} aria-describedby={`${id}-id-hint`} value={draft.id} disabled={control.disabled || !!likely || reviewed} onChange={event => { clearCreateRefusal(); setDraft({ ...draft, id: event.target.value }); }} /><p id={`${id}-id-hint`} className="muted">Use lowercase letters, numbers, underscores or hyphens. Start with a letter or number, up to 80 characters.</p></div>}
     <div className="automation-trigger-field"><label htmlFor={`${id}-description`}>Description (optional)</label><textarea id={`${id}-description`} autoFocus={!!edit} rows={2} maxLength={1000} value={draft.description} disabled={control.disabled || !!likely || reviewed} onChange={event => setDraft({ ...draft, description: event.target.value })} /></div>
@@ -533,7 +534,7 @@ function TriggerSection({ control, botId, shared }: { control: Controls; botId: 
         {canManage && (editing?.id === trigger.id ? form(editing) : <><div className="actions"><Button disabled={control.disabled || !trigger.enabled && (!state.platformEnabled || missing || routineList.loading || !!routineList.error)} onClick={() => void run(trigger.id, () => request("PATCH /bots/:id/automation/triggers/:triggerId", { params: { id: botId, triggerId: trigger.id }, body: { enabled: !trigger.enabled, revision: trigger.revision } }), trigger.enabled ? "Disabled." : "Enabled.")}>{trigger.enabled ? "Disable trigger" : "Enable trigger"}</Button><Button className="trigger-edit-opener" disabled={control.disabled || creating} onClick={() => { clearFeedback(trigger.id); setEditing(trigger); setDraft({ id: trigger.id, description: trigger.description, events: trigger.events, routineId: trigger.routineId }); setEvents(trigger.events.join(", ")); }}>Edit trigger</Button><Button disabled={control.disabled} onClick={() => { clearFeedback(trigger.id); setDeleting(trigger.id); }}>Delete trigger…</Button></div>
           {!trigger.enabled && !state.platformEnabled && <p className="muted">Can't enable until the installer turns on Hermes's webhook channel.</p>}{!trigger.enabled && missing && <p className="muted">{creating ? "Its routine is no longer available. Finish or cancel the new trigger, then edit this trigger to choose another routine." : "Its routine is no longer available. Edit the trigger to choose another routine before enabling it."}</p>}
           {!trigger.enabled && routineList.loading && <p className="muted">Routines are still loading.</p>}{!trigger.enabled && routineList.error && <p className="muted">Routines couldn't load. Retry routines before enabling this trigger.</p>}
-          {deleting === trigger.id && <div className="automation-confirm"><p>{trigger.description || trigger.id} will be removed. Its routine stays saved.</p><div className="actions"><Button className="danger" disabled={control.disabled} onClick={async () => { if (await run(trigger.id, () => request("DELETE /bots/:id/automation/triggers/:triggerId", { params: { id: botId, triggerId: trigger.id }, body: { revision: trigger.revision } }), `Deleted ${trigger.id}.`)) setDeleting(""); }}>Delete trigger</Button><Button onClick={() => setDeleting("")}>Keep trigger</Button></div></div>}
+          {deleting === trigger.id && <div className="automation-confirm"><p>{trigger.description || trigger.id} will be removed. Its routine stays saved.</p><div className="actions"><Button className="danger" disabled={control.disabled} onClick={fire(async () => { if (await run(trigger.id, () => request("DELETE /bots/:id/automation/triggers/:triggerId", { params: { id: botId, triggerId: trigger.id }, body: { revision: trigger.revision } }), `Deleted ${trigger.id}.`)) setDeleting(""); })}>Delete trigger</Button><Button onClick={() => setDeleting("")}>Keep trigger</Button></div></div>}
           {feedback[trigger.id] && <p className={`automation-trigger-feedback ${taskFeedbackStyle(feedback[trigger.id])}`} tabIndex={-1}>{feedback[trigger.id].message}</p>}</>)}
       </article>; })}
       {editing && !stale && form(editing)}
@@ -578,7 +579,7 @@ export function LearningPanel({ botId, advanced = true }: { botId: string; advan
       {advanced && <section className="automation-section automation-learning-policy"><h3>Skill write policy</h3><label className="automation-check"><input ref={policyInput} type="checkbox" checked={state.approvalRequired} disabled={control.disabled || control.value?.canManageLearningPolicy === false} onChange={event => { if (event.target.checked) setPolicy(true); else setAllowingWrites(true); }} />Require approval before skill changes are saved</label><p className="muted">When enabled, Hermes stages new skills, edits and deletions for review.</p>{control.value?.canManageLearningPolicy === false && <p className="capability-note">Only an integration administrator can change the skill write policy.</p>}</section>}
       <section className="automation-section"><h3>Pending changes ({state.pending.length})</h3>{!state.pending.length && <p className="muted">No skill changes waiting for review.</p>}
         {state.pending.map(item => <article className="automation-item" key={item.id}><h4>{item.summary || item.id}</h4><p className="muted">Source: {item.origin ? item.origin[0].toUpperCase() + item.origin.slice(1) : "Not reported"}</p><Button disabled={reading || control.disabled} aria-expanded={diff?.id === item.id} aria-controls={`${id}-diff-${item.id}`} onClick={() => { if (diff?.id === item.id) setDiff(undefined); else void read(() => request("GET /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id } }), value => setDiff(value)); }}>{diff?.id === item.id ? "Hide change" : "Review change"}</Button>
-          {diff?.id === item.id && <><SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }), undefined, "Approved the skill change.")) setDiff(undefined); }}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }), undefined, "Rejected the skill change.")) setDiff(undefined); }}>Reject change</Button></div></>}
+          {diff?.id === item.id && <><SkillDiffPreview text={diff.diff} id={`${id}-diff-${item.id}`} />{diff.truncated && <p>The diff is truncated. Read the full change in Hermes before approving.</p>}<div className="actions"><Button className="primary" disabled={control.disabled || diff.truncated} onClick={fire(async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "approve" } }), undefined, "Approved the skill change.")) setDiff(undefined); })}>Approve change</Button><Button className="danger" disabled={control.disabled} onClick={fire(async () => { if (await control.change(() => request("POST /bots/:id/automation/skills/pending/:pendingId", { params: { id: botId, pendingId: item.id }, body: { revision: diff.revision, decision: "reject" } }), undefined, "Rejected the skill change.")) setDiff(undefined); })}>Reject change</Button></div></>}
         </article>)}
       </section>
     </>)}

@@ -33,7 +33,7 @@ function checkContracts(runtime: Runtime) {
   // @ts-expect-error Trigger creation must include the one-time native signing secret.
   automationRequester({trigger_create: () => ({subscription:{id:'trigger',description:'Fence',events:[],routineId:'routine',enabled:false,url:'https://example.invalid',secretSet:true,revision:'revision'}})});
   // @ts-expect-error A receipt request requires its stable request and sender identities.
-  runtime.experienceRequest!({operation:'run_receipt',profile:'shared',routineId:'routine'});
+  void runtime.experienceRequest!({operation:'run_receipt',profile:'shared',routineId:'routine'});
   void invalidMemory; void invalidTask;
 }
 void checkContracts;

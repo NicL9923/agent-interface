@@ -1,4 +1,5 @@
 // Evaluate in the collaborative loopback preview at phone and desktop widths.
+// oxlint-disable-next-line typescript/no-floating-promises -- the script is evaluated in the page and its promise is the result, so it must not be voided
 (async () => {
   if (location.origin !== 'http://127.0.0.1:3021' || !document.querySelector('script[src="/preview-fixture.js"]')) throw Error('Synthetic port-3021 preview required');
   const wait = async (predicate, description) => {

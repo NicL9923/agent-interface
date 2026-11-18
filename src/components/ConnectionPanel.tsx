@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RuntimeStatus } from "../shared/types";
 import { Avatar } from "./Avatar";
 import { When } from "./When";
+import { fire } from "../app/fire";
 
 const explanations: Record<string, { title: string; detail: string; setup?: boolean }> = {
   not_configured: { title: "Connect your household to Hermes", detail: "Set up the connection once on the computer running this app. Your existing assistants will appear here automatically.", setup: true },
@@ -20,13 +21,13 @@ export function SetupCommand() {
   const [failed, setFailed] = useState(false);
   return <div className="setup-command">
     <code>npm run setup</code>
-    <button type="button" onClick={async () => {
+    <button type="button" onClick={fire(async () => {
       setCopied(false); setFailed(false);
       try {
         await navigator.clipboard.writeText("npm run setup");
         setCopied(true); setFailed(false);
       } catch { setFailed(true); }
-    }}>{copied ? "Copied" : "Copy command"}</button>
+    })}>{copied ? "Copied" : "Copy command"}</button>
     {failed && <span role="status">Select the command to copy it.</span>}
   </div>;
 }

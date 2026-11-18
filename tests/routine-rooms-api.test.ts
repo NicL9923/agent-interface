@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AnyMock } from "./helpers/mock-of";
 import { createApp } from "../src/server/app.js";
 import { loadConfig } from "../src/server/config.js";
 import type { Routine, Runtime } from "../src/shared/types.js";
@@ -11,7 +12,7 @@ const base = { botId: "shared", name: "Morning", prompt: "Check the ranch", sche
 const room = (room_id: string, profiles: string[]) => ({ room_id, name: room_id, members: profiles.map(profile => ({ member_id: profile, profile, handle: profile })) });
 let created: Awaited<ReturnType<typeof createApp>>;
 let rows: Routine[];
-let save: ReturnType<typeof vi.fn>;
+let save: AnyMock;
 let catalog: GroupCatalog;
 let groupRequest: ReturnType<typeof vi.fn>;
 let saveBot: ReturnType<typeof vi.fn>;

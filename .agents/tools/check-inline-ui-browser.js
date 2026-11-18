@@ -1,5 +1,6 @@
 // Evaluate this expression in a running local WildBots preview. It creates and
 // removes its own sandbox, exercises the actual server policy, and returns facts.
+// oxlint-disable-next-line typescript/no-floating-promises -- the script is evaluated in the page and its promise is the result, so it must not be voided
 (async () => {
   if (!['127.0.0.1', 'localhost'].includes(location.hostname)) throw Error('Use a local fixture only.');
   const frame = document.createElement('iframe');

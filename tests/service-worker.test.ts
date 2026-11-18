@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import type { AnyMock } from "./helpers/mock-of";
 import { isHashedAsset } from '../src/server/static-cache';
 
 const INSTALL = ['/index.html', '/assets/app-a1234567.js', '/icon-192.png', '/assets/vendor.js'];
@@ -26,7 +27,7 @@ class FakeMessageChannel {
 type Port = FakeMessageChannel['port2'];
 // An open window of the app. `controlled` says whether this worker controls it; `answers` whether its page
 // says it opened what it was asked to at once. A page that does not can still answer later on `ports`.
-type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: ReturnType<typeof vi.fn>; navigate: ReturnType<typeof vi.fn> };
+type Window = { id: string; url: string; controlled: boolean; answers: boolean; focused?: boolean; visibilityState?: string; ports: Port[]; postMessage: ReturnType<typeof vi.fn>; focus: AnyMock; navigate: ReturnType<typeof vi.fn> };
 let windowIds = 0;
 const openWindowOf = ({ url = 'https://app.example/?bot=home', controlled = true, answers = true, focused = false } = {}): Window => {
   const client: Window = {
