@@ -51,7 +51,7 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
   stubMatchMedia(false);
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
-  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+  if (!Reflect.has(Range.prototype, "getBoundingClientRect")) Range.prototype.getBoundingClientRect = () => new DOMRect();
   // jsdom has no modal dialogs.
   for (const [name, open] of [["showModal", true], ["close", false]] as const) {
     Object.defineProperty(HTMLDialogElement.prototype, name, { configurable: true, value(this: HTMLDialogElement) { this.open = open; } });

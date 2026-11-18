@@ -20,8 +20,8 @@ const flagged = (run: RoutineRun) => run.status === "failed" || run.status === "
 export const RoutineRunCard = memo(function RoutineRunCard({ run, botId, onResults, onHide }: {
   run: RoutineRun;
   botId: string;
-  onResults(routineId: string, resultId: string): void;
-  onHide(routineId: string, routineName: string): void;
+  onResults: (routineId: string, resultId: string) => void;
+  onHide: (routineId: string, routineName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const body = useId();

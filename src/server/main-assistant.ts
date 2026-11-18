@@ -464,7 +464,7 @@ export function installMainAssistantRoutes(app: FastifyInstance, collaborators: 
   runtime: Runtime;
   store: Store;
   mains: MainAssistants;
-  preferences(userId: string): Preferences;
+  preferences: (userId: string) => Preferences;
   requireCapability: RequireCapability;
 }) {
   const { runtime, store, mains, preferences, requireCapability } = collaborators;

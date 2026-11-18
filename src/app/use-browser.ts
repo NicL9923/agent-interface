@@ -22,7 +22,7 @@ export const useFinePointer = () => useMediaQuery("(any-pointer: fine)");
 export const UPDATE_CHECK_MS = 30 * 60_000;
 export interface AppUpdate {
   applying: boolean;
-  apply(): void;
+  apply: () => void;
 }
 /**
  * Once the page is idle, asks the active worker to cache the lazy screens for offline use. The

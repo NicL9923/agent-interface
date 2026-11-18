@@ -14,6 +14,7 @@ import { contentHash } from "../src/app/draft-merge";
 import { authEpochKey } from "../src/app/storage";
 import { DISCONNECT_GRACE_MS } from "../src/app/use-conversation";
 import { advance, mountRoot, reducedMotionOnly, renderedProps, stubMatchMedia, typeInto, waitForUi } from "./ui-harness";
+import { mockOf } from "./helpers/mock-of";
 
 vi.mock("../src/client-api", async original => (await import("./helpers/request-mock")).withRequest(await (async (original) => ({
   ...await original<typeof import("../src/client-api")>(),
@@ -1350,7 +1351,7 @@ describe("conversation state", () => {
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Preview map.png"]')!.click());
       expect(container.querySelector(".attachment-preview img")?.getAttribute("src")).toBe("blob:local-preview");
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove map.png"]')!.click());
-      vi.mocked(URL.createObjectURL).mockReturnValue("blob:next-preview");
+      mockOf(URL, "createObjectURL").mockReturnValue("blob:next-preview");
       await dispatch(container.querySelector("textarea")!, "paste", "clipboardData", transfer([image("gate.png")]));
       expect(chips()).toHaveLength(1);
       expect(container.querySelector(".attachment-preview")).toBeNull();
@@ -1384,7 +1385,7 @@ describe("conversation state", () => {
       await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Cancel uploading map.png"]')!.click());
       expect(uploads[0]!.signal.aborted).toBe(true);
       expect(chips()).toHaveLength(0);
-      expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:local-preview");
+      expect(mockOf(URL, "revokeObjectURL")).toHaveBeenCalledWith("blob:local-preview");
     });
   });
 
@@ -2021,7 +2022,7 @@ describe("reply announcements", () => {
     bootstrap.bots.push(other);
     const written: string[] = [];
     const nodeValue = Object.getOwnPropertyDescriptor(Node.prototype, "nodeValue")!;
-    Object.defineProperty(Node.prototype, "nodeValue", { configurable: true, get: nodeValue.get, set(value: string) {
+    Object.defineProperty(Node.prototype, "nodeValue", { configurable: true, get() { return nodeValue.get!.call(this); }, set(value: string) {
       if (this.parentElement?.closest('.transcript-frame > [role="status"]')) written.push(String(value));
       nodeValue.set!.call(this, value);
     } });

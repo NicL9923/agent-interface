@@ -31,17 +31,17 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" };
   connectionLost: boolean;
   offline: boolean;
-  editPreferences(edit: PreferenceEdit): Promise<void>;
+  editPreferences: (edit: PreferenceEdit) => Promise<void>;
   notifications: ReturnType<typeof useDeviceNotifications>;
   installEvent: InstallEvent | null;
   notice: string;
-  onClose(): void;
-  onSignOut(): Promise<void>;
+  onClose: () => void;
+  onSignOut: () => Promise<void>;
   signOutOnDeviceOnly?: boolean;
-  onComputer(): void;
-  onIntegrations(): void;
-  onUpgrade(): void;
-  onShortcuts(): void;
+  onComputer: () => void;
+  onIntegrations: () => void;
+  onUpgrade: () => void;
+  onShortcuts: () => void;
   /** Where this sheet offers its own close to the app. See close-request.ts. */
   closer?: RefObject<SheetClose | null>;
 }) {
@@ -203,7 +203,7 @@ export function PreferencesDialog({ boot, connectionLost, offline, editPreferenc
   );
 }
 
-function NavRow({ icon, label, detail, badge, opens, onClick }: { icon: IconName; label: string; detail?: string; badge?: ReactNode; opens?: string; onClick(): void }) {
+function NavRow({ icon, label, detail, badge, opens, onClick }: { icon: IconName; label: string; detail?: string; badge?: ReactNode; opens?: string; onClick: () => void }) {
   return <Button type="button" className="settings-row" data-opens={opens} onClick={onClick}>
     <span className="row-icon"><Icon name={icon} size={18} />{badge}</span>
     <span className="row-text"><span className="row-label">{label}</span>{detail && <small>{detail}</small>}</span>
@@ -211,7 +211,7 @@ function NavRow({ icon, label, detail, badge, opens, onClick }: { icon: IconName
   </Button>;
 }
 
-function Switch({ label, detail, checked, onChange }: { label: string; detail?: string; checked: boolean; onChange(checked: boolean): void }) {
+function Switch({ label, detail, checked, onChange }: { label: string; detail?: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return <label className="settings-row">
     <span className="row-text"><span className="row-label">{label}</span>{detail && <small>{detail}</small>}</span>
     <Input type="checkbox" role="switch" className="switch" checked={checked} onChange={event => onChange(event.target.checked)} />
@@ -219,7 +219,7 @@ function Switch({ label, detail, checked, onChange }: { label: string; detail?: 
 }
 
 /** One row of a multi-select list: the assistant, and a check on the right. */
-function BotChoice({ bot, detail, checked, onChange }: { bot: Bot; detail?: string; checked: boolean; onChange(checked: boolean): void }) {
+function BotChoice({ bot, detail, checked, onChange }: { bot: Bot; detail?: string; checked: boolean; onChange: (checked: boolean) => void }) {
   return <label className="settings-row bot-choice">
     <span aria-hidden="true"><Avatar avatar={bot.avatar} size={30} name={bot.name} reducedMotion /></span>
     <span className="row-text"><span className="row-label">{bot.name}</span>{detail && <small>{detail}</small>}</span>
@@ -238,7 +238,7 @@ function FollowingPage({ preferences, bots, commit }: { preferences: Preferences
 }
 
 /** The sections on home, in order, with one field to add another. */
-function SectionList({ preferences, bots, commit, onOpen }: { preferences: Preferences; bots: Bot[]; commit: Commit; onOpen(id: string): void }) {
+function SectionList({ preferences, bots, commit, onOpen }: { preferences: Preferences; bots: Bot[]; commit: Commit; onOpen: (id: string) => void }) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const field = useRef<HTMLInputElement>(null);
@@ -287,7 +287,7 @@ function SectionList({ preferences, bots, commit, onOpen }: { preferences: Prefe
 
 /** One section: its name, its assistants as one multi-select, and delete. */
 function SectionPage({ preferences, bots, section, commit, beforeLeave, onDeleted }: {
-  preferences: Preferences; bots: Bot[]; section: Section; commit: Commit; beforeLeave: RefObject<(() => boolean) | null>; onDeleted(): void;
+  preferences: Preferences; bots: Bot[]; section: Section; commit: Commit; beforeLeave: RefObject<(() => boolean) | null>; onDeleted: () => void;
 }) {
   const [name, setName] = useState(section.name);
   const [error, setError] = useState("");

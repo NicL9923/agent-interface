@@ -13,8 +13,8 @@ export interface VoiceControlsProps {
   name?: string;
   botId: string;
   disabled?: boolean;
-  onTranscript(text: string): void;
-  onStateChange?(state: VoiceState): void;
+  onTranscript: (text: string) => void;
+  onStateChange?: (state: VoiceState) => void;
   /** A control shown beside Record voice, such as live Talk. */
   extra?: ReactNode;
 }

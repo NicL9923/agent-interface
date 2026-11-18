@@ -175,30 +175,30 @@ export const Composer = memo(function Composer({ boot, selected, botId, prompts,
   /** The chat shows it is disconnected, and the dock's connection notice explains it. */
   connectionShown: boolean;
   draft: Draft;
-  setDraft(update: (current: Draft) => Draft): void;
+  setDraft: (update: (current: Draft) => Draft) => void;
   draftReady: boolean;
   uploads: LocalUpload[];
   previews: Record<string, { url: string }>;
   uploading: boolean;
   /** Why photos that looked attachable could not be shrunk or converted, once their chips are gone. They belong to this assistant's draft, so they show again when the person returns to it. */
   refusals: string[];
-  dismissRefusals(): void;
-  upload(files: File[], botId: string): void;
-  retryUpload(id: string): void;
-  cancelUpload(id: string): void;
+  dismissRefusals: () => void;
+  upload: (files: File[], botId: string) => void;
+  retryUpload: (id: string) => void;
+  cancelUpload: (id: string) => void;
   pending: Pending | null;
   receipt: SubmissionReceipt | null;
   sending: boolean;
-  send(): Promise<void>;
-  retry(): void;
+  send: () => Promise<void>;
+  retry: () => void;
   /** Gives up on an unconfirmed send and puts its text back in the draft. */
-  discard(): void;
+  discard: () => void;
   reviewed: boolean;
-  setReviewed(value: boolean): void;
+  setReviewed: (value: boolean) => void;
   /** Notices from the rest of the app for the dock above the composer: connection, decisions, update. */
   dock?: DockItem[];
   stopping: boolean;
-  onStop(): void;
+  onStop: () => void;
 }) {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const talk = useTalk(botId, selected.name);

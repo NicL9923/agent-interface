@@ -83,24 +83,24 @@ export const Conversation = memo(function Conversation({ boot, selected, botId, 
   offline: boolean;
   appUnavailable: boolean;
   checkingConnection: boolean;
-  reconnect(): Promise<void>;
+  reconnect: () => Promise<void>;
   error: string;
-  setError(message: string): void;
+  setError: (message: string) => void;
   notifications: ReturnType<typeof useDeviceNotifications>;
   scroll: RefObject<HTMLDivElement | null>;
   endSpace: RefObject<HTMLDivElement | null>;
   content: RefCallback<HTMLDivElement>;
   history: ReturnType<typeof useConversation>["history"];
   reply: ReturnType<typeof useConversation>["reply"];
-  onScroll(): void;
-  onCreate(): void;
+  onScroll: () => void;
+  onCreate: () => void;
   /** Adds text to the draft. False while the draft is on its way, when it must not change. */
   /** Adds to the person's draft, never replacing it. False while a send is on its way; otherwise how many files didn't fit. */
-  onDraft(text: string, files?: FileRef[]): number | false;
+  onDraft: (text: string, files?: FileRef[]) => number | false;
   /** Opens a routine's full results at one run. */
-  onRoutineResults(routineId: string, resultId: string): void;
+  onRoutineResults: (routineId: string, resultId: string) => void;
   /** Keeps a routine's runs out of this chat, with a way back. */
-  onHideRoutineRuns(routineId: string, routineName: string): void;
+  onHideRoutineRuns: (routineId: string, routineName: string) => void;
   /** The full computer view is open, so the transcript's small live view steps aside. */
   computerOpen?: boolean;
   /** The person reviewed an interrupted task in the message box; form cards send under the same review. */
@@ -434,7 +434,7 @@ type TurnProps = {
   outgoingId?: string; outgoing?: SentEcho["status"];
   /** The files this turn produced and the reply they show under, when it has both. */
   files?: { replyId: string; artifacts: Artifact[] };
-  onOpenFile(fileId?: string): void;
+  onOpenFile: (fileId?: string) => void;
 };
 /**
  * Reply cards are the only part of a reply that reads `unavailable`, and a change to it re-parses the
@@ -444,7 +444,7 @@ const holdsCards = (message: Message) => message.text.includes("agent-ui");
 /** When a turn started, for placing routine runs: its first dated message, shown or folded. */
 const turnTime = (block: Turn) => block.messages.find(message => message.createdAt)?.createdAt
   ?? [...block.tools.values()].find(message => message.createdAt)?.createdAt;
-type RunActions = { onResults(routineId: string, resultId: string): void; onHide(routineId: string, routineName: string): void };
+type RunActions = { onResults: (routineId: string, resultId: string) => void; onHide: (routineId: string, routineName: string) => void };
 const runCards = (runs: RoutineRun[] | undefined, botId: string, actions: RunActions) => (runs ?? []).map(run =>
   <RoutineRunCard key={`run:${run.routineId}:${run.id}`} run={run} botId={botId} onResults={actions.onResults} onHide={actions.onHide} />);
 // Memoized so typing in the composer does not re-render the whole transcript.

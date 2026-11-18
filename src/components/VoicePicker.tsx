@@ -36,7 +36,7 @@ function usePreview() {
 
 /** The voice an assistant speaks with in live Talk. Choosing one saves it; each has a short sample. */
 export function VoicePicker({ botId, name, voice, liveVoice, onSaved }: {
-  botId: string; name: string; voice?: TalkVoice; liveVoice?: Capability; onSaved(voice: TalkVoice): void;
+  botId: string; name: string; voice?: TalkVoice; liveVoice?: Capability; onSaved: (voice: TalkVoice) => void;
 }) {
   const [chosen, setChosen] = useState<TalkVoice>(voice ?? DEFAULT_TALK_VOICE);
   const [saving, setSaving] = useState<TalkVoice | null>(null);

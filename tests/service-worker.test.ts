@@ -54,7 +54,7 @@ function worker(options: { maxActions?: number; older?: Record<string, Record<st
   // `holdShows`, each stays on its way until the test calls releaseShows, or releaseShow for one of
   // them, which can also refuse it as Chromium does when it cannot store the notification.
   const shown: Shown[] = [];
-  const onTheirWay: { title: string; resolve(): void; reject(error: Error): void }[] = [];
+  const onTheirWay: { title: string; resolve: () => void; reject: (error: Error) => void }[] = [];
   const releaseShows = () => { for (const { resolve } of onTheirWay.splice(0)) resolve(); };
   const releaseShow = (title: string, { refuse = false } = {}) => {
     const index = onTheirWay.findIndex(each => each.title === title);

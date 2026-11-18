@@ -27,7 +27,7 @@ function saved<T>(key: string): T | null { try { return JSON.parse(localStorage.
  * room chosen there: its messages, thread replies, approvals and stop control, and the composer.
  * `onChanged` tells home to refresh its preview when the room gets a message.
  */
-export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }: { bootstrap: Bootstrap; roomId: string; canSend: boolean; reason?: string; onChanged(): void }) {
+export function GroupRoomView({ bootstrap, roomId, canSend, reason, onChanged }: { bootstrap: Bootstrap; roomId: string; canSend: boolean; reason?: string; onChanged: () => void }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [events, setEvents] = useState<GroupEvent[]>([]);
   const [more, setMore] = useState(false);

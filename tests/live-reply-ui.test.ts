@@ -44,7 +44,7 @@ beforeEach(() => {
   Object.assign(SVGElement.prototype, { getTotalLength: () => 100, getPointAtLength: (length: number) => ({ x: length, y: 0 }) });
   vi.stubGlobal("IntersectionObserver", class { observe() {} disconnect() {} });
   // jsdom has no layout. The Quote button measures a selection in a reply.
-  Range.prototype.getBoundingClientRect ??= () => new DOMRect();
+  if (!Reflect.has(Range.prototype, "getBoundingClientRect")) Range.prototype.getBoundingClientRect = () => new DOMRect();
   unexpected = [];
   saves = [];
   retries = [];

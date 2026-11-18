@@ -17,7 +17,7 @@ export function notesBytes(notes: string) { return new TextEncoder().encode(note
  */
 export function GroupSettings({ roomId, name, members, context, writable, onClose, onSaved }: {
   roomId: string; name: string; members: GroupMember[]; context: GroupContext; writable: boolean;
-  onClose(): void; onSaved(): void;
+  onClose: () => void; onSaved: () => void;
 }) {
   const titleId = useId();
   const action = useAction();

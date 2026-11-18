@@ -23,8 +23,8 @@ export function FindBar({ botId, conversation, scroll, openMessage, onClose }: {
   botId: string;
   conversation: SavedConversation | null;
   scroll: RefObject<HTMLDivElement | null>;
-  openMessage(messageId: string, mark?: boolean, needle?: string): void;
-  onClose(): void;
+  openMessage: (messageId: string, mark?: boolean, needle?: string) => void;
+  onClose: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");

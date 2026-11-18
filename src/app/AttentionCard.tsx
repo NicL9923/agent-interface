@@ -18,7 +18,7 @@ export function answerText(question: Question, draft: Draft = empty) {
   return draft.own ? draft.text : draft.selected[0] ?? "";
 }
 
-export function AttentionCard({ request, botId, report, disconnected = false }: { request: AttentionRequest; botId: string; report(message: string): void; disconnected?: boolean }) {
+export function AttentionCard({ request, botId, report, disconnected = false }: { request: AttentionRequest; botId: string; report: (message: string) => void; disconnected?: boolean }) {
   // Hermes's recommended option starts chosen for a single-choice question, so one tap or Enter sends it.
   // Several picks are the person's to make, so a multi-select question starts empty.
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() => Object.fromEntries((request.questions ?? [])

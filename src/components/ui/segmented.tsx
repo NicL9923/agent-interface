@@ -13,7 +13,7 @@ export function Segmented<T extends string>({ label, value, options, busy = fals
   value: T;
   options: readonly SegmentOption<T>[];
   busy?: boolean;
-  onChange(value: T): void;
+  onChange: (value: T) => void;
 }) {
   const labelId = useId();
   const group = useRef<HTMLDivElement>(null);

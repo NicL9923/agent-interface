@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mockOf } from "./helpers/mock-of";
 
 const server = vi.hoisted(() => ({
   listen: vi.fn(async () => {}),
@@ -35,7 +36,7 @@ it("closes once across signals and clears the deadline after clean shutdown", as
   finish();
   await vi.advanceTimersByTimeAsync(30000);
   expect(server.log.info).toHaveBeenCalledWith("WildBots stopped");
-  expect(process.exit).toHaveBeenCalledWith(0);
+  expect(mockOf(process, "exit")).toHaveBeenCalledWith(0);
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -44,9 +45,9 @@ it("exits with failure when closing exceeds the shutdown deadline", async () => 
   await import("../src/server/index.js");
   signals.get("SIGTERM")!();
   await vi.advanceTimersByTimeAsync(29999);
-  expect(process.exit).not.toHaveBeenCalled();
+  expect(mockOf(process, "exit")).not.toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(1);
-  expect(process.exit).toHaveBeenCalledWith(1);
+  expect(mockOf(process, "exit")).toHaveBeenCalledWith(1);
   expect(server.log.error).toHaveBeenCalledWith("WildBots shutdown deadline reached");
 });
 
@@ -55,6 +56,6 @@ it("exits with failure when cleanup rejects instead of leaving resources running
   await import("../src/server/index.js");
   signals.get("SIGTERM")!();
   await vi.advanceTimersByTimeAsync(0);
-  expect(process.exit).toHaveBeenCalledWith(1);
+  expect(mockOf(process, "exit")).toHaveBeenCalledWith(1);
   expect(vi.getTimerCount()).toBe(0);
 });

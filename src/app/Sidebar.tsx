@@ -36,7 +36,7 @@ export type HomeGroups = {
   /** The rooms are this device's saved copy, from before the group catalog loaded: no latest message is known. */
   saved?: boolean;
   onSelect(id: string): void;
-  onCreate(): void;
+  onCreate: () => void;
 };
 
 /** Home without group chats, for a household whose Hermes cannot host them. */
@@ -68,19 +68,19 @@ export const Sidebar = memo(function Sidebar({ boot, saved = false, botId, shown
   mobile: boolean;
   open: boolean;
   update: AppUpdate | null;
-  onSelectBot(id: string): void;
-  onView(view: View): void;
-  onNewBot(): void;
-  onSettings(): void;
-  onUsage(): void;
-  onSignOut(): void;
-  onPin(bot: Bot): void;
-  onBotSettings(bot: Bot): void;
-  onMoveToSection(bot: Bot, sectionId: string | null): void;
-  onNewSection(bot: Bot): void;
+  onSelectBot: (id: string) => void;
+  onView: (view: View) => void;
+  onNewBot: () => void;
+  onSettings: () => void;
+  onUsage: () => void;
+  onSignOut: () => void;
+  onPin: (bot: Bot) => void;
+  onBotSettings: (bot: Bot) => void;
+  onMoveToSection: (bot: Bot, sectionId: string | null) => void;
+  onNewSection: (bot: Bot) => void;
   /** Opens the main assistant picker. Without it, home never suggests choosing one. */
-  onChooseMain?(): void;
-  onDismissMainSuggestion?(): void;
+  onChooseMain?: () => void;
+  onDismissMainSuggestion?: () => void;
 }) {
   const prefs = boot.preferences;
   // The main assistant leads home, above the pinned ones, and appears nowhere else on it.

@@ -37,9 +37,9 @@ export const ChatHeader = memo(function ChatHeader({ view, boot, selected, room,
   /** The model cannot change now: Hermes is out of reach, or a message is on its way. */
   modelLocked?: boolean;
   railOpen: boolean;
-  onOpenRail(): void;
-  onDetails(bot: Bot): void;
-  onModelSaved(): void;
+  onOpenRail: () => void;
+  onDetails: (bot: Bot) => void;
+  onModelSaved: () => void;
 }) {
   // Simple presentation never shows a model.
   const model = boot.preferences.presentation === "advanced";

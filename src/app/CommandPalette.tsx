@@ -30,25 +30,25 @@ export function CommandPalette({ boot, botId, rooms = [], onSelectRoom, onNewGro
   botId: string;
   /** The household's group chats, which open like assistants do. */
   rooms?: GroupRoom[];
-  onSelectRoom?(id: string): void;
+  onSelectRoom?: (id: string) => void;
   /** Absent when no group chat can be made right now. */
-  onNewGroup?(): void;
+  onNewGroup?: () => void;
   shownBotId?: string;
   readThrough: ReadThrough;
   connectionLost: boolean;
-  onClose(): void;
-  onSelectBot(id: string): void;
-  onView(view: View): void;
-  onSearch(query: string): void;
-  onSettings(destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" }): void;
-  onNewBot(): void;
-  onTheme(theme: Preferences["theme"]): void;
-  onShortcuts(): void;
-  onUsage(): void;
+  onClose: () => void;
+  onSelectBot: (id: string) => void;
+  onView: (view: View) => void;
+  onSearch: (query: string) => void;
+  onSettings: (destination?: { kind: "following" } | { kind: "section"; id: string } | { kind: "signout" }) => void;
+  onNewBot: () => void;
+  onTheme: (theme: Preferences["theme"]) => void;
+  onShortcuts: () => void;
+  onUsage: () => void;
   /** Find in the open chat, when one is open. */
-  onFind?(): void;
+  onFind?: () => void;
   /** Puts the typed text in an assistant's draft: "Ask <main>…" targets the main assistant. */
-  onAsk?(botId: string, text: string): void;
+  onAsk?: (botId: string, text: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);

@@ -18,7 +18,7 @@ import "./usage.css";
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 /** Plan limits and credits for the accounts behind the assistants this person can see. */
-export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) {
+export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose: () => void }) {
   const usage = useResource(routeUrl("GET /usage/accounts", {}), { load: (_, signal) => request("GET /usage/accounts", { signal }) });
   const refreshing = useAction();
   const [outcome, setOutcome] = useState<{ key: string; text: string } | null>(null);
@@ -54,7 +54,7 @@ export function UsagePanel({ bots, onClose }: { bots: Bot[]; onClose(): void }) 
   </Dialog>;
 }
 
-function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset(force: boolean, requestId: string): Promise<ResetStatus> }) {
+function AccountCard({ account, names, outcome, onReset }: { account: UsageAccount; names: string[]; outcome: string; onReset: (force: boolean, requestId: string) => Promise<ResetStatus> }) {
   const title = accountName(account.provider);
   return <article className="usage-card" aria-label={title}>
     <div className="usage-card-heading">
@@ -83,7 +83,7 @@ function Allowance({ window }: { window: UsageWindow }) {
 }
 
 /** Banked ChatGPT resets, spent only after a confirmation that says plainly when one would be wasted. */
-function Resets({ account, onReset }: { account: UsageAccount; onReset(force: boolean, requestId: string): Promise<ResetStatus> }) {
+function Resets({ account, onReset }: { account: UsageAccount; onReset: (force: boolean, requestId: string) => Promise<ResetStatus> }) {
   const [asking, setAsking] = useState(false);
   const action = useAction();
   // One ID per reset the person asked for. A failed attempt keeps it, so trying again can never spend a second reset.

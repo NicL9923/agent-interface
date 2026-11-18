@@ -18,9 +18,9 @@ export function AttachmentTray({ attachments, uploads, previews, canOpen, onRemo
   uploads: LocalUpload[];
   previews: Record<string, { url: string }>;
   canOpen: boolean;
-  onRemove(id: string): void;
-  onCancel(id: string): void;
-  onRetry(id: string): void;
+  onRemove: (id: string) => void;
+  onCancel: (id: string) => void;
+  onRetry: (id: string) => void;
 }) {
   const [opened, setPreview] = useState<Preview | null>(null);
   const urlOf = (file: FileRef) => previews[file.id]?.url ?? (canOpen ? file.url || `/api/files/${encodeURIComponent(file.id)}` : undefined);
@@ -63,11 +63,11 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
   url?: string;
   meta: string;
   upload?: LocalUpload;
-  onOpen?(): void;
-  onRetry?(): void;
-  onRemove(): void;
+  onOpen?: () => void;
+  onRetry?: () => void;
+  onRemove: () => void;
   removeLabel: string;
-  onImageLoad?(image: HTMLImageElement): void;
+  onImageLoad?: (image: HTMLImageElement) => void;
 }) {
   const image = mime.startsWith("image/") && !!url;
   const state = upload?.status ?? "ready";
@@ -93,7 +93,7 @@ function AttachmentChip({ name, mime, url, meta, upload, onOpen, onRetry, onRemo
   </li>;
 }
 
-function AttachmentPreview({ preview, onClose }: { preview: Preview; onClose(): void }) {
+function AttachmentPreview({ preview, onClose }: { preview: Preview; onClose: () => void }) {
   return <Dialog className="attachment-preview" aria-label={`Preview of ${preview.name}`}
     onCancel={onClose} onClose={onClose} onClick={event => { if (event.target === event.currentTarget) onClose(); }}>
     <img src={preview.url} alt={preview.name} />

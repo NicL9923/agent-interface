@@ -8,6 +8,7 @@ import { api, ApiError, write } from "../src/client-api";
 import { defaultPreferences } from "../src/shared/types";
 import type { Bootstrap, Bot } from "../src/shared/types";
 import { button, click, mountRoot, stubImmediateFrames, typeInto } from "./ui-harness";
+import { mockOf } from "./helpers/mock-of";
 
 // jsdom decodes no image and has no canvas, so the real resize and PNG encode cannot run; the upload and error paths around it do.
 vi.mock("../src/portrait-upload", () => ({ preparePortrait: vi.fn(async (file: File) => file) }));
@@ -453,10 +454,10 @@ describe("closing with unsaved edits", () => {
 
   it("reopens the dialog when the browser closes it without a cancelable Escape", async () => {
     await editInstructions();
-    vi.mocked(HTMLDialogElement.prototype.showModal).mockClear();
+    mockOf(HTMLDialogElement.prototype, "showModal").mockClear();
     dialog().open = false;
     await act(async () => dialog().dispatchEvent(new Event("close")));
-    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalledTimes(1);
+    expect(mockOf(HTMLDialogElement.prototype, "showModal")).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("Discard your unsaved changes?");
     expect(onClose).not.toHaveBeenCalled();
   });
@@ -597,7 +598,7 @@ describe("closing with unsaved edits", () => {
     ({ container, root } = mountRoot());
     opener.focus();
     await render();
-    expect(HTMLDialogElement.prototype.showModal).toHaveBeenCalled();
+    expect(mockOf(HTMLDialogElement.prototype, "showModal")).toHaveBeenCalled();
     (document.activeElement as HTMLElement | null)?.blur();
     await act(async () => root.unmount());
     expect(document.activeElement).toBe(opener);
@@ -1011,7 +1012,7 @@ describe("routines in Automation", () => {
   });
 
   it("keeps one schedule preview and focuses the editor when editing or choosing a recipe", async () => {
-    const scroll = vi.mocked(HTMLElement.prototype.scrollIntoView);
+    const scroll = mockOf(HTMLElement.prototype, "scrollIntoView");
     serve("/routines", [morning]);
     await click("Automation");
     const editor = () => container.querySelector<HTMLFormElement>(".routine-manager > form")!;

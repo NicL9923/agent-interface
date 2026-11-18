@@ -69,7 +69,7 @@ export function ArtifactsButton({ bot, conversation, unavailable = false }: {
  * chips. `focus` selects one file when it opens, with no search or type filter hiding it.
  */
 export function ArtifactsPanel({ bot, conversation, unavailable = false, focus, onClose }: {
-  bot: Pick<Bot, "id" | "name">; conversation?: ConversationWindow | null; unavailable?: boolean; focus?: string; onClose(): void;
+  bot: Pick<Bot, "id" | "name">; conversation?: ConversationWindow | null; unavailable?: boolean; focus?: string; onClose: () => void;
 }) {
   const current = conversation?.botId === bot.id ? conversation : undefined;
   // The history before the loaded window, read while the list is open, from the same cache the reply

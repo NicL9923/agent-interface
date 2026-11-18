@@ -23,7 +23,7 @@ const grantedText = (scope: ApprovalScope | undefined, name: string, scoped: boo
  */
 export function ApprovalCard({ approval, botId, userId, assistantName, disconnected, supported, unavailableReason, report, leaving = false }: {
   approval: Approval; botId: string; userId: string; assistantName: string; disconnected: boolean; supported: boolean; unavailableReason?: string;
-  report(message: string): void;
+  report: (message: string) => void;
   /** Hermes no longer lists it; the card folds away for a moment before it goes. */
   leaving?: boolean;
 }) {
@@ -135,7 +135,7 @@ export function ApprovalCard({ approval, botId, userId, assistantName, disconnec
 }
 
 /** Names exactly what "Always allow" saves: Hermes's pattern, for this assistant, in every conversation. */
-function AlwaysAllowConfirm({ name, patterns, command, onAllow, onClose }: { name: string; patterns: string[]; command: string; onAllow(): void; onClose(): void }) {
+function AlwaysAllowConfirm({ name, patterns, command, onAllow, onClose }: { name: string; patterns: string[]; command: string; onAllow: () => void; onClose: () => void }) {
   const titleId = useId(), detailId = useId();
   return <Dialog className="confirm-dialog always-allow-confirm" role="alertdialog" aria-labelledby={titleId} aria-describedby={detailId}
     initialFocus="[data-confirm-default]" onCancel={onClose} onClose={onClose}>

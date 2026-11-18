@@ -34,7 +34,7 @@ export function useTurnRetry({ botId, userId, canonical, blocked, resendable, re
   blocked: boolean;
   /** Hermes can look up a request by its ID, which sending the same request again relies on. */
   resendable: boolean;
-  report(message: string): void;
+  report: (message: string) => void;
 }) {
   const target = canonical?.botId === botId && !blocked ? retryTarget(canonical.messages, canonical.activity.state) : undefined;
   const runId = canonical?.activity.runId ?? "";

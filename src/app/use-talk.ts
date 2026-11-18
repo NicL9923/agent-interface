@@ -14,9 +14,9 @@ export interface Talk {
   /** Why Talk ended by itself, such as a quiet spell. */
   notice: string;
   start(): void;
-  end(): void;
-  toggleMute(): void;
-  dismiss(): void;
+  end: () => void;
+  toggleMute: () => void;
+  dismiss: () => void;
   /** Shows why Talk cannot start, without starting it. */
   explain(message: string): void;
 }

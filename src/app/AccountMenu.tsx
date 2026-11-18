@@ -17,7 +17,7 @@ export function AccountMenu({ user, status, disabled = false, onUsage, onSetting
   user: Bootstrap["user"]; status: "connected" | "reconnecting" | "offline";
   /** Shown but closed, as before bootstrap answers: every item in it needs the server. */
   disabled?: boolean;
-  onUsage(): void; onSettings(): void; onSignOut(): void;
+  onUsage: () => void; onSettings: () => void; onSignOut: () => void;
 }) {
   const { open, setOpen, wrap, trigger, menuId, keys, choose } = useMenu();
   // Read once the menu first opens; the server keeps one answer for a minute, so reopening is cheap.

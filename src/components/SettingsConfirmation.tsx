@@ -4,7 +4,7 @@ import { Button } from "./ui/button";
 
 export function SettingsConfirmation({ title, detail, confirmLabel, cancelLabel = "Keep editing", danger = false, busy, onConfirm, onCancel, fallbackFocus, className = "" }: {
   title: string; detail: string; confirmLabel: string; cancelLabel?: string; danger?: boolean; busy: boolean;
-  onConfirm(): void; onCancel(): void; fallbackFocus: DialogFocusTarget; className?: string;
+  onConfirm: () => void; onCancel: () => void; fallbackFocus: DialogFocusTarget; className?: string;
 }) {
   const titleId = useId(), detailId = useId();
   return <Dialog className={`confirm-dialog settings-confirmation ${className}`} role="alertdialog"

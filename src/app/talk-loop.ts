@@ -6,16 +6,16 @@ export type TalkPhase = "listening" | "thinking" | "working" | "speaking";
 export interface TalkCaptions { you: string; assistant: string }
 export interface TalkLoopHost {
   /** Sends one client event over the "oai-events" data channel. */
-  send(event: Record<string, unknown>): void;
+  send: (event: Record<string, unknown>) => void;
   /** POST /bots/:id/talk/ask. The same request ID never sends twice. `heard` names the progress lines already said. */
-  ask(requestId: string, request: string, signal: AbortSignal, heard: readonly string[]): Promise<TalkAnswer>;
-  phase(phase: TalkPhase): void;
-  captions(captions: TalkCaptions): void;
+  ask: (requestId: string, request: string, signal: AbortSignal, heard: readonly string[]) => Promise<TalkAnswer>;
+  phase: (phase: TalkPhase) => void;
+  captions: (captions: TalkCaptions) => void;
   /** The person spoke or the assistant answered, which keeps an idle Talk open. */
-  activity(): void;
+  activity: () => void;
   /** A Realtime error the person should see. Talk keeps going unless the host ends it. */
-  problem(message: string): void;
-  newId(): string;
+  problem: (message: string) => void;
+  newId: () => string;
 }
 // A run can take a while; Talk still ends on its own idle and hard limits.
 const MAX_FOLLOW_MS = 10 * 60_000;

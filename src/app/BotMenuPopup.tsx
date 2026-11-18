@@ -6,7 +6,7 @@ import type { Bot, Preferences } from "../shared/types";
 import { sectionOf } from "./preferences-editing";
 
 export type BotMenuProps = {
-  bot: Bot; preferences: Preferences; onPin(): void; onSettings(): void; onMove(sectionId: string | null): void; onNewSection(): void; children: ReactElement;
+  bot: Bot; preferences: Preferences; onPin: () => void; onSettings: () => void; onMove: (sectionId: string | null) => void; onNewSection: () => void; children: ReactElement;
   /** Where the gesture that loaded this menu happened; the menu opens there as soon as it mounts. */
   opensAt?: { x: number; y: number };
   /** The row had focus when it was swapped for this one, so focus returns to it. */
